@@ -548,6 +548,12 @@ static void test_scoped_primary_selection(void) {
   ArchbirdEngine *engine = NULL;
   ArchbirdProject *project = NULL;
   ArchbirdMergeSummary summary = {0};
+  char facts_a_bytes[4096];
+  char facts_b_bytes[4096];
+  char ledger_bytes[8192];
+  OutputBuffer facts_a = {facts_a_bytes, 0, sizeof(facts_a_bytes)};
+  OutputBuffer facts_b = {facts_b_bytes, 0, sizeof(facts_b_bytes)};
+  OutputBuffer ledger = {ledger_bytes, 0, sizeof(ledger_bytes)};
   const char *digest;
   char provider[2048];
   int length;
@@ -598,6 +604,28 @@ static void test_scoped_primary_selection(void) {
   if (summary.providers != 2 || summary.selections != 2 ||
       summary.selected_facts != 2 || summary.conflicts != 0) {
     fputs("FAIL exact-subject provider selection\n", stderr);
+    failures++;
+  }
+  expect("multi-render-a",
+         archbird_project_render_file_facts(engine, project, 0, write_output,
+                                            &facts_a),
+         ARCHBIRD_OK);
+  expect("multi-render-b",
+         archbird_project_render_file_facts(engine, project, 1, write_output,
+                                            &facts_b),
+         ARCHBIRD_OK);
+  expect("multi-render-ledger",
+         archbird_project_render_merge_ledger(engine, project, 0, write_output,
+                                              &ledger),
+         ARCHBIRD_OK);
+  if (!strstr(facts_a.data, "\"name\":\"a\"") ||
+      !strstr(facts_a.data, "\"name\":\"b\"") ||
+      !strstr(facts_b.data, "\"name\": \"a\"") ||
+      !strstr(facts_b.data, "\"name\": \"b\"") ||
+      !strstr(ledger.data, "\"selected_facts\":2") ||
+      !strstr(ledger.data, "\"fact_id\":\"symbol:a:0\"") ||
+      !strstr(ledger.data, "\"fact_id\":\"symbol:b:0\"")) {
+    fputs("FAIL primary-only merged fact rendering\n", stderr);
     failures++;
   }
 done:
@@ -822,6 +850,85 @@ static void test_builtin_provider_selection(void) {
       !strstr(output.data, "\"exports\":[\"run\"]") ||
       !strstr(output.data, "\"name\":\"run\"")) {
     fputs("FAIL Python lexical file-fact reduction\n", stderr);
+    failures++;
+  }
+done:
+  archbird_project_destroy(project);
+  archbird_engine_destroy(engine);
+}
+
+static void test_shared_public_header_names(void) {
+  static const char header[] = "int api_a(void);\nint api_b(void);\n";
+  static const char source_a[] = "int api_a(void) { return 1; }\n";
+  static const char source_b[] = "int api_b(void) { return 2; }\n";
+  static const char manifest[] =
+      "{\"artifact\":\"archbird-source-manifest\",\"files\":[{\"bytes\":34,"
+      "\"language\":\"c\",\"layer\":\"core\",\"path\":\"include/api.h\","
+      "\"roles\":[\"public-header\",\"source\"],\"sha256\":"
+      "\"0fbac5b4709336ed3627d580f479af459078b24b79c4a008d10053cb7d111292\"},"
+      "{\"bytes\":30,\"language\":\"c\",\"layer\":\"core\",\"path\":"
+      "\"src/a.c\",\"roles\":[\"source\"],\"sha256\":"
+      "\"fc8985fd2208b19b2191cc2ea9959cd7d2835fa8fcd9ccc1e61418e19f0a60b1\"},"
+      "{\"bytes\":30,\"language\":\"c\",\"layer\":\"core\",\"path\":"
+      "\"src/b.c\",\"roles\":[\"source\"],\"sha256\":"
+      "\"7dccd287d9d6f906bd05cbe36333afd185f861d896706dae2c468ae7cf15d7ec\"}],"
+      "\"producer\":{\"implementation_sha256\":"
+      "\"1111111111111111111111111111111111111111111111111111111111111111\","
+      "\"name\":\"fixture-host\",\"version\":\"1\"},\"project\":"
+      "\"public-header-cache\",\"schema_version\":1}";
+  ArchbirdEngineOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdProject *project = NULL;
+  char output_bytes[8192];
+  OutputBuffer output = {output_bytes, 0, sizeof(output_bytes)};
+
+  archbird_engine_options_init(&options);
+  expect("public-cache-engine", archbird_engine_create(&options, &engine),
+         ARCHBIRD_OK);
+  expect("public-cache-project",
+         archbird_project_create(engine, (const uint8_t *)manifest,
+                                 sizeof(manifest) - 1, &project),
+         ARCHBIRD_OK);
+  if (!project)
+    goto done;
+  expect("public-cache-header",
+         archbird_project_add_source(engine, project, "include/api.h", 13,
+                                     (const uint8_t *)header,
+                                     sizeof(header) - 1),
+         ARCHBIRD_OK);
+  expect("public-cache-source-a",
+         archbird_project_add_source(engine, project, "src/a.c", 7,
+                                     (const uint8_t *)source_a,
+                                     sizeof(source_a) - 1),
+         ARCHBIRD_OK);
+  expect("public-cache-source-b",
+         archbird_project_add_source(engine, project, "src/b.c", 7,
+                                     (const uint8_t *)source_b,
+                                     sizeof(source_b) - 1),
+         ARCHBIRD_OK);
+  expect("public-cache-finalize-sources",
+         archbird_project_finalize_sources(engine, project), ARCHBIRD_OK);
+  expect("public-cache-scan",
+         archbird_project_scan_builtin_provider(engine, project, "lexical:c", 9,
+                                                ARCHBIRD_PROVIDER_PRIMARY),
+         ARCHBIRD_OK);
+  if (archbird_project_provider_count(project) != 3) {
+    fputs("FAIL shared public-header provider count\n", stderr);
+    failures++;
+  }
+  expect("public-cache-finalize-providers",
+         archbird_project_finalize_providers(engine, project), ARCHBIRD_OK);
+  expect("public-cache-render",
+         archbird_project_render_file_facts(engine, project, 0, write_output,
+                                            &output),
+         ARCHBIRD_OK);
+  if (!strstr(output.data,
+              "\"kind\":\"function\",\"line\":1,\"name\":\"api_a\","
+              "\"scope\":\"public\"") ||
+      !strstr(output.data,
+              "\"kind\":\"function\",\"line\":1,\"name\":\"api_b\","
+              "\"scope\":\"public\"")) {
+    fputs("FAIL shared public-header names were not reused by layer\n", stderr);
     failures++;
   }
 done:
@@ -1113,6 +1220,7 @@ int main(int argc, char **argv) {
   test_scoped_primary_selection();
   test_anchor_correlation_and_name_enrichment();
   test_builtin_provider_selection();
+  test_shared_public_header_names();
   test_primary_inventory_and_augment_fallback();
   test_source_bound_provider_reuse();
   test_selective_builtin_provider_scan();

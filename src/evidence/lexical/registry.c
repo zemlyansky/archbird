@@ -23,6 +23,12 @@ typedef struct AbLexicalProvider {
   const char *implementation_sha256;
 } AbLexicalProvider;
 
+typedef struct AbPublicNameCache {
+  int has_layer;
+  AbString layer;
+  AbNameSet names;
+} AbPublicNameCache;
+
 static const AbLexicalProvider LEXICAL_PROVIDERS[] = {
     {"lexical:c", AB_LEXICAL_C, ARCHBIRD_LEXICAL_C_IMPLEMENTATION_SHA256},
     {"lexical:javascript", AB_LEXICAL_JAVASCRIPT,
@@ -177,7 +183,7 @@ static ArchbirdStatus
 scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
           const AbSourceManifest *manifest, size_t file_index,
           const AbLexicalProvider *provider, const uint8_t manifest_digest[32],
-          AbProviderBundle *out_bundle) {
+          const AbNameSet *cached_public_names, AbProviderBundle *out_bundle) {
   const AbManifestFile *file = &manifest->files[file_index];
   uint8_t provider_digest[32];
   implementation_digest(provider->implementation_sha256, provider_digest);
@@ -185,6 +191,11 @@ scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
     AbNameSet public_names = {0};
     size_t header_index;
     ArchbirdStatus status;
+    if (cached_public_names)
+      return ab_scan_c_file(engine, manifest, file,
+                            ab_project_source_bytes(project, file_index),
+                            file->byte_length, manifest_digest,
+                            cached_public_names, provider_digest, out_bundle);
     for (header_index = 0; header_index < manifest->file_count;
          header_index++) {
       const AbManifestFile *header = &manifest->files[header_index];
@@ -218,6 +229,64 @@ scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
                         file->byte_length, provider_digest, out_bundle);
 }
 
+static int public_name_cache_matches(const AbPublicNameCache *cache,
+                                     const AbManifestFile *file) {
+  return cache->has_layer == file->has_layer &&
+         (!file->has_layer || ab_string_equal(&cache->layer, &file->layer));
+}
+
+static ArchbirdStatus
+cached_public_names(ArchbirdEngine *engine, ArchbirdProject *project,
+                    const AbSourceManifest *manifest,
+                    const AbManifestFile *file, AbPublicNameCache **caches,
+                    size_t *cache_count, size_t *cache_capacity,
+                    const AbNameSet **out_names) {
+  AbPublicNameCache *cache;
+  size_t cache_index;
+  size_t header_index;
+  for (cache_index = 0; cache_index < *cache_count; cache_index++) {
+    if (public_name_cache_matches(&(*caches)[cache_index], file)) {
+      *out_names = &(*caches)[cache_index].names;
+      return ARCHBIRD_OK;
+    }
+  }
+  if (*cache_count == *cache_capacity) {
+    size_t capacity = *cache_capacity ? *cache_capacity * 2 : 8;
+    AbPublicNameCache *resized;
+    if (capacity < *cache_capacity || capacity > engine->options.max_values ||
+        capacity > SIZE_MAX / sizeof(*resized))
+      return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "public-header layer index is too large");
+    resized = (AbPublicNameCache *)ab_realloc(engine, *caches,
+                                              capacity * sizeof(*resized));
+    if (!resized)
+      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory indexing public-header layers");
+    *caches = resized;
+    *cache_capacity = capacity;
+  }
+  cache = &(*caches)[(*cache_count)++];
+  memset(cache, 0, sizeof(*cache));
+  cache->has_layer = file->has_layer;
+  if (file->has_layer)
+    cache->layer = file->layer;
+  for (header_index = 0; header_index < manifest->file_count; header_index++) {
+    const AbManifestFile *header = &manifest->files[header_index];
+    ArchbirdStatus status;
+    if (!c_language(header) || !public_header_for_layer(header, file))
+      continue;
+    status = ab_c_collect_public_names(
+        engine, ab_project_source_bytes(project, header_index),
+        header->byte_length, &cache->names);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  *out_names = &cache->names;
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
                                      ArchbirdProject *project,
                                      const AbLexicalProvider *selected,
@@ -225,6 +294,9 @@ static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
   const AbSourceManifest *manifest;
   const uint8_t *manifest_digest;
   AbProviderBundle *bundles = NULL;
+  AbPublicNameCache *public_name_caches = NULL;
+  size_t public_name_cache_count = 0;
+  size_t public_name_cache_capacity = 0;
   size_t bundle_count = 0;
   size_t file_index;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -252,10 +324,18 @@ static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
   for (file_index = 0; file_index < manifest->file_count; file_index++) {
     const AbManifestFile *file = &manifest->files[file_index];
     const AbLexicalProvider *provider = provider_for_file(file);
+    const AbNameSet *public_names = NULL;
     if (!provider || (selected && provider != selected))
       continue;
+    if (provider->kind == AB_LEXICAL_C) {
+      status = cached_public_names(
+          engine, project, manifest, file, &public_name_caches,
+          &public_name_cache_count, &public_name_cache_capacity, &public_names);
+      if (status != ARCHBIRD_OK)
+        goto done;
+    }
     status = scan_file(engine, project, manifest, file_index, provider,
-                       manifest_digest, &bundles[bundle_count]);
+                       manifest_digest, public_names, &bundles[bundle_count]);
     if (status != ARCHBIRD_OK)
       goto done;
     bundle_count++;
@@ -263,6 +343,9 @@ static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
   status = ab_project_take_provider_bundles(engine, project, mode, bundles,
                                             bundle_count);
 done:
+  for (file_index = 0; file_index < public_name_cache_count; file_index++)
+    ab_name_set_free(&public_name_caches[file_index].names);
+  ab_free(engine, public_name_caches);
   if (bundles) {
     for (file_index = 0; file_index < bundle_count; file_index++)
       ab_provider_bundle_free(engine, &bundles[file_index]);
@@ -325,7 +408,7 @@ ab_scan_lexical_provider_file(ArchbirdEngine *engine, ArchbirdProject *project,
                               ARCHBIRD_NO_OFFSET,
                               "provider does not support the selected file");
   status = scan_file(engine, project, manifest, file_index, provider,
-                     ab_project_manifest_sha256_bytes(project), &bundle);
+                     ab_project_manifest_sha256_bytes(project), NULL, &bundle);
   if (status == ARCHBIRD_OK)
     status = ab_project_take_provider_bundle(engine, project, mode, &bundle);
   ab_provider_bundle_free(engine, &bundle);

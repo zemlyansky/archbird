@@ -84,6 +84,7 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
   ArchbirdProject *project =
       create_project(engine, source, "src/sample.c", "c");
   ArchbirdMergeSummary summary = {0};
+  Output syntax_provider = {{0}, 0};
   Output facts = {{0}, 0};
   Output ledger = {{0}, 0};
   if (!project) {
@@ -100,6 +101,17 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
                                                 "syntax:tree-sitter:c", 20,
                                                 ARCHBIRD_PROVIDER_AUGMENT),
          ARCHBIRD_OK);
+  expect("syntax-clean-provider",
+         archbird_project_render_provider_facts(engine, project, 1, 0,
+                                                write_output, &syntax_provider),
+         ARCHBIRD_OK);
+  if (!strstr(syntax_provider.bytes, "\"error_nodes\":0") ||
+      !strstr(syntax_provider.bytes, "\"missing_nodes\":0") ||
+      strstr(syntax_provider.bytes, "\"recovery_nodes\":") ||
+      strstr(syntax_provider.bytes, "\"syntax_recovery\":")) {
+    fputs("FAIL clean syntax facts were marked as recovered\n", stderr);
+    failures++;
+  }
   expect("syntax-finalize",
          archbird_project_finalize_providers(engine, project), ARCHBIRD_OK);
   summary.struct_size = sizeof(summary);

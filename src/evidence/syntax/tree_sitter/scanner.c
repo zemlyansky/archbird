@@ -407,25 +407,28 @@ static int spans_intersect(size_t fact_start, size_t fact_end,
 
 static ArchbirdStatus mark_recovered_facts(AbTreeSitterScan *scan) {
   size_t fact_index;
+  size_t region_index = 0;
   ArchbirdStatus status = ARCHBIRD_OK;
+  if (!scan->recovery_count)
+    return ARCHBIRD_OK;
   for (fact_index = 0;
        status == ARCHBIRD_OK && fact_index < scan->builder->bundle.fact_count;
        fact_index++) {
     AbFact *fact = &scan->builder->bundle.facts[fact_index];
     size_t recovery_index;
-    size_t region_index;
     size_t fact_start = fact->span_start;
     size_t fact_end = fact->span_end;
     size_t intersections = 0;
     if (fact->span_start == fact->span_end)
       continue;
-    for (region_index = 0; region_index < scan->fact_region_count;
-         region_index++)
-      if (scan->fact_regions[region_index].fact_index == fact_index) {
-        fact_start = scan->fact_regions[region_index].start;
-        fact_end = scan->fact_regions[region_index].end;
-        break;
-      }
+    while (region_index < scan->fact_region_count &&
+           scan->fact_regions[region_index].fact_index < fact_index)
+      region_index++;
+    if (region_index < scan->fact_region_count &&
+        scan->fact_regions[region_index].fact_index == fact_index) {
+      fact_start = scan->fact_regions[region_index].start;
+      fact_end = scan->fact_regions[region_index].end;
+    }
     for (recovery_index = 0; recovery_index < scan->recovery_count;
          recovery_index++) {
       const AbTreeSitterRecovery *recovery = &scan->recoveries[recovery_index];
@@ -513,7 +516,19 @@ static ArchbirdStatus parse_and_extract(void *user_data) {
         break;
     }
     for (child_index = child_count; child_index > 0; child_index--) {
-      child_frame.node = ts_node_child(frame.node, child_index - 1);
+      TSNode child = ts_node_child(frame.node, child_index - 1);
+      if (!ts_node_is_named(child) && !ts_node_is_missing(child) &&
+          !ts_node_is_error(child) && ts_node_child_count(child) == 0) {
+        visited++;
+        if (visited > scan->engine->options.max_values) {
+          status = archbird_error_set(scan->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                      ARCHBIRD_NO_OFFSET,
+                                      "Tree-sitter node limit exceeded");
+          break;
+        }
+        continue;
+      }
+      child_frame.node = child;
       frames[frame_count++] = child_frame;
     }
   }

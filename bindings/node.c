@@ -105,6 +105,21 @@ static napi_value render_result(napi_env env, ArchbirdEngine *engine,
   return result;
 }
 
+static ArchbirdStatus input_engine(size_t input_length,
+                                   ArchbirdEngine **out_engine) {
+  ArchbirdEngineOptions options;
+  archbird_engine_options_init(&options);
+  if (input_length > options.max_input_bytes)
+    options.max_input_bytes = input_length;
+  if (input_length > options.max_values)
+    options.max_values = input_length;
+  return archbird_engine_create(&options, out_engine);
+}
+
+static size_t larger_input(size_t left, size_t right) {
+  return left > right ? left : right;
+}
+
 static void project_release(NodeProject *owned) {
   if (!owned)
     return;
@@ -673,7 +688,7 @@ static napi_value json_canonicalize(napi_env env, napi_callback_info info) {
     flags |= ARCHBIRD_JSON_PRETTY;
   if (trailing)
     flags |= ARCHBIRD_JSON_TRAILING_NEWLINE;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(input_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, input, input_length, flags,
                                         output_write, &output);
@@ -706,7 +721,7 @@ static napi_value discovery_plan(napi_env env, napi_callback_info info) {
                           "paths must be an array of strings");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(config_length, &engine);
   if (status == ARCHBIRD_OK)
     status =
         archbird_discovery_create(engine, config, config_length, &discovery);
@@ -798,7 +813,7 @@ static napi_value discovery_descend(napi_env env, napi_callback_info info) {
       return NULL;
     }
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(config_length, &engine);
   if (status == ARCHBIRD_OK)
     status =
         archbird_discovery_create(engine, config, config_length, &discovery);
@@ -914,7 +929,10 @@ static napi_value discovery_resolve(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[2], &inventory, &inventory_length) ||
       !get_optional_bool(env, argc, argv, 3, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status =
+      input_engine(larger_input(larger_input(config_length, request_length),
+                                inventory_length),
+                   &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_discovery_resolve(
         engine, config, config_length, request, request_length, inventory,
@@ -942,7 +960,7 @@ static napi_value map_query(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[1], &query, &query_length) ||
       !get_optional_bool(env, argc, argv, 2, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(map_length, query_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query(engine, map, map_length, query, query_length,
                                 pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
@@ -968,7 +986,7 @@ static napi_value map_markdown(napi_env env, napi_callback_info info) {
       !get_optional_bool(env, argc, argv, 1, 0, &full) ||
       !get_optional_size(env, argc, argv, 2, 0, "maxChars", &max_chars))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(map_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_render_markdown(engine, map, map_length, full,
                                           max_chars, output_write, &output);
@@ -995,7 +1013,7 @@ static napi_value map_markdown_view(napi_env env, napi_callback_info info) {
       !get_optional_size(env, argc, argv, 2, 1, "detail", &detail) ||
       !get_optional_size(env, argc, argv, 3, 0, "maxChars", &max_chars))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(map_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_render_markdown_view(
         engine, map, map_length, (ArchbirdMapView)view,
@@ -1022,7 +1040,7 @@ static napi_value map_query_markdown(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[1], &query, &query_length) ||
       !get_optional_size(env, argc, argv, 2, 0, "maxChars", &max_chars))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(map_length, query_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown(engine, map, map_length, query,
                                          query_length, max_chars, output_write,
@@ -1049,7 +1067,7 @@ static napi_value map_diff(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[1], &after, &after_length) ||
       !get_optional_bool(env, argc, argv, 2, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(before_length, after_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_diff(engine, before, before_length, after,
                                after_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
@@ -1076,7 +1094,7 @@ static napi_value map_freshness(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[1], &current, &current_length) ||
       !get_optional_bool(env, argc, argv, 2, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(snapshot_length, current_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_freshness(
         engine, snapshot, snapshot_length, current, current_length,
@@ -1165,7 +1183,7 @@ static napi_value map_export_graph(napi_env env, napi_callback_info info) {
   }
   options.max_nodes = max_nodes;
   options.max_edge_names = max_edge_names;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(map_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_export_graph(engine, map, map_length, &options,
                                        output_write, &output);
@@ -1220,7 +1238,7 @@ static napi_value okf_analyze(napi_env env, napi_callback_info info) {
     return NULL;
   }
   free(format);
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(source_length, query_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_okf_analyze(
         engine, source, source_length, query_length ? query : NULL,
@@ -1261,7 +1279,11 @@ static napi_value okf_publish(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[5], &normalization, &normalization_length) ||
       !get_optional_bool(env, argc, argv, 6, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input(larger_input(larger_input(map_length, verification_length),
+                                larger_input(proposal_length, contract_length)),
+                   larger_input(result_length, normalization_length)),
+      &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_okf_publish(
         engine, map, map_length, verification_length ? verification : NULL,
@@ -1290,7 +1312,7 @@ static napi_value workspace_plan(napi_env env, napi_callback_info info) {
   if (argc < 1 || !get_buffer(env, argv[0], &config, &config_length) ||
       !get_optional_bool(env, argc, argv, 1, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(config_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_workspace_plan(engine, config, config_length,
                                      pretty ? ARCHBIRD_JSON_PRETTY : 0,
@@ -1317,7 +1339,7 @@ static napi_value workspace_analyze(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[1], &maps, &maps_length) ||
       !get_optional_bool(env, argc, argv, 2, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(config_length, maps_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_workspace_analyze(
         engine, config, config_length, maps, maps_length,
@@ -1341,7 +1363,7 @@ static napi_value verification_plan(napi_env env, napi_callback_info info) {
   if (argc < 1 || !get_buffer(env, argv[0], &suite, &suite_length) ||
       !get_optional_bool(env, argc, argv, 1, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(suite_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_verification_plan(engine, suite, suite_length,
                                         pretty ? ARCHBIRD_JSON_PRETTY : 0,
@@ -1368,7 +1390,7 @@ static napi_value verification_analyze(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[1], &input, &input_length) ||
       !get_optional_bool(env, argc, argv, 2, 0, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(suite_length, input_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_verification_analyze(
         engine, suite, suite_length, input, input_length,
@@ -1426,7 +1448,7 @@ static napi_value verification_report(napi_env env, napi_callback_info info) {
     return NULL;
   }
   free(format);
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(suite_length, input_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_verification_analyze_report(
         engine, suite, suite_length, input, input_length, native_format,
@@ -1494,7 +1516,7 @@ static napi_value change_proposal(napi_env env, napi_callback_info info) {
                            "change proposal format must be json or markdown");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(verification_length, &engine);
   if (status == ARCHBIRD_OK && format_length == 4)
     status = archbird_change_proposal(engine, verification, verification_length,
                                       fingerprint, fingerprint_length,
@@ -1542,7 +1564,7 @@ static napi_value change_contract(napi_env env, napi_callback_info info) {
                            "change contract format must be json or markdown");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input(proposal_length, review_length), &engine);
   if (status == ARCHBIRD_OK && format_length == 4)
     status = archbird_change_contract(
         engine, proposal, proposal_length, review, review_length,
@@ -1603,7 +1625,10 @@ static napi_value change_verify(napi_env env, napi_callback_info info) {
     return NULL;
   }
   free(format);
-  status = archbird_engine_create(NULL, &engine);
+  status =
+      input_engine(larger_input(larger_input(proposal_length, contract_length),
+                                larger_input(before_length, after_length)),
+                   &engine);
   if (status == ARCHBIRD_OK && native_format == ARCHBIRD_CHANGE_JSON)
     status = archbird_change_verify(
         engine, proposal, proposal_length, contract, contract_length, before,

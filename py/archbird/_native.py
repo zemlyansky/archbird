@@ -103,6 +103,31 @@ class _GraphOptions(ctypes.Structure):
     ]
 
 
+class _EngineOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("max_input_bytes", ctypes.c_size_t),
+        ("max_depth", ctypes.c_size_t),
+        ("max_values", ctypes.c_size_t),
+        ("max_string_bytes", ctypes.c_size_t),
+        ("max_files", ctypes.c_size_t),
+        ("max_file_bytes", ctypes.c_size_t),
+        ("max_index_bytes", ctypes.c_size_t),
+        ("max_source_bytes", ctypes.c_size_t),
+        ("max_syntax_bytes", ctypes.c_size_t),
+        ("max_provider_bundles", ctypes.c_size_t),
+        ("max_facts", ctypes.c_size_t),
+        ("max_pattern_matches", ctypes.c_size_t),
+        ("regex_match_limit", ctypes.c_uint32),
+        ("regex_depth_limit", ctypes.c_uint32),
+        ("regex_heap_limit_kib", ctypes.c_uint32),
+        ("allocate", _POINTER),
+        ("reallocate", _POINTER),
+        ("deallocate", _POINTER),
+        ("allocator_user_data", _POINTER),
+    ]
+
+
 def _declare(name: str, arguments: Sequence[object], result=ctypes.c_int):
     function = getattr(_lib, name)
     function.argtypes = list(arguments)
@@ -112,6 +137,9 @@ def _declare(name: str, arguments: Sequence[object], result=ctypes.c_int):
 
 _engine_create = _declare(
     "archbird_engine_create", [_POINTER, ctypes.POINTER(_POINTER)]
+)
+_engine_options_init = _declare(
+    "archbird_engine_options_init", [ctypes.POINTER(_EngineOptions)], None
 )
 _engine_destroy = _declare("archbird_engine_destroy", [_POINTER], None)
 _engine_error = _declare("archbird_engine_error", [_POINTER], ctypes.c_char_p)
@@ -158,9 +186,15 @@ def _raise(engine: _POINTER, status: int) -> None:
     raise Error(f"{message} (status={status}, byte={offset})")
 
 
-def _new_engine() -> _POINTER:
+def _new_engine(input_budget: int = 0) -> _POINTER:
     engine = _POINTER()
-    _raise(engine, _engine_create(None, ctypes.byref(engine)))
+    options = _EngineOptions()
+    _engine_options_init(ctypes.byref(options))
+    if input_budget > options.max_input_bytes:
+        options.max_input_bytes = input_budget
+    if input_budget > options.max_values:
+        options.max_values = input_budget
+    _raise(engine, _engine_create(ctypes.byref(options), ctypes.byref(engine)))
     return engine
 
 
@@ -185,8 +219,10 @@ def _render(engine: _POINTER, call: Callable[[_WRITE], int]) -> bytes:
     return b"".join(chunks)
 
 
-def _one_shot(call: Callable[[_POINTER, _WRITE], int]) -> bytes:
-    engine = _new_engine()
+def _one_shot(
+    call: Callable[[_POINTER, _WRITE], int], *, input_budget: int = 0
+) -> bytes:
+    engine = _new_engine(input_budget)
     try:
         return _render(engine, lambda write: call(engine, write))
     finally:
@@ -531,7 +567,8 @@ def _simple_render(
             engine, *arguments, *suffix_values, *(
                 (flags, write, None) if include_flags else (write, None)
             )
-        )
+        ),
+        input_budget=max((len(value) for value in values), default=0),
     )
 
 
@@ -559,7 +596,7 @@ def discovery_plan(config: bytes, paths: Sequence[str], pretty=False) -> bytes:
         "archbird_discovery_render",
         [_POINTER, _POINTER, ctypes.c_uint32, _WRITE, _POINTER],
     )
-    engine = _new_engine()
+    engine = _new_engine(len(data))
     discovery = _POINTER()
     try:
         _raise(engine, create(engine, data, len(data), ctypes.byref(discovery)))
@@ -628,7 +665,7 @@ def discovery_descend(
             ctypes.POINTER(ctypes.c_int),
         ],
     )
-    engine = _new_engine()
+    engine = _new_engine(len(data))
     discovery = _POINTER()
     try:
         _raise(engine, create(engine, data, len(data), ctypes.byref(discovery)))

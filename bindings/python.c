@@ -116,6 +116,21 @@ static int parse_mode(const char *value, ArchbirdProviderMode *out) {
   return 1;
 }
 
+static ArchbirdStatus input_engine(size_t input_length,
+                                   ArchbirdEngine **out_engine) {
+  ArchbirdEngineOptions options;
+  archbird_engine_options_init(&options);
+  if (input_length > options.max_input_bytes)
+    options.max_input_bytes = input_length;
+  if (input_length > options.max_values)
+    options.max_values = input_length;
+  return archbird_engine_create(&options, out_engine);
+}
+
+static size_t larger_input(size_t left, size_t right) {
+  return left > right ? left : right;
+}
+
 static PyObject *py_project_create(PyObject *self, PyObject *args) {
   const char *manifest;
   Py_ssize_t manifest_length;
@@ -543,7 +558,7 @@ static PyObject *py_json_canonicalize(PyObject *self, PyObject *args,
     flags |= ARCHBIRD_JSON_PRETTY;
   if (trailing)
     flags |= ARCHBIRD_JSON_TRAILING_NEWLINE;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)input_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, (const uint8_t *)input,
                                         (size_t)input_length, flags,
@@ -575,7 +590,7 @@ static PyObject *py_discovery_plan(PyObject *self, PyObject *args,
   sequence = PySequence_Fast(paths, "paths must be a sequence of strings");
   if (!sequence)
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)config_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_discovery_create(engine, (const uint8_t *)config,
                                        (size_t)config_length, &discovery);
@@ -634,7 +649,10 @@ static PyObject *py_discovery_resolve(PyObject *self, PyObject *args,
                                    &request_length, &inventory,
                                    &inventory_length, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input(larger_input((size_t)config_length, (size_t)request_length),
+                   (size_t)inventory_length),
+      &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_discovery_resolve(
         engine, (const uint8_t *)config, (size_t)config_length,
@@ -691,7 +709,7 @@ static PyObject *py_discovery_descend(PyObject *self, PyObject *args) {
       return NULL;
     }
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)config_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_discovery_create(engine, (const uint8_t *)config,
                                        (size_t)config_length, &discovery);
@@ -784,7 +802,8 @@ static PyObject *py_map_query(PyObject *self, PyObject *args,
                                    &map, &map_length, &query, &query_length,
                                    &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input((size_t)map_length, (size_t)query_length),
+                        &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query(
         engine, (const uint8_t *)map, (size_t)map_length,
@@ -815,7 +834,7 @@ static PyObject *py_map_markdown(PyObject *self, PyObject *args,
                     "map max_chars must be a nonnegative integer");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)map_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_render_markdown(
         engine, (const uint8_t *)map, (size_t)map_length, full,
@@ -847,7 +866,7 @@ static PyObject *py_map_markdown_view(PyObject *self, PyObject *args,
                     "map max_chars must be a nonnegative integer");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)map_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_render_markdown_view(
         engine, (const uint8_t *)map, (size_t)map_length, (ArchbirdMapView)view,
@@ -879,7 +898,8 @@ static PyObject *py_map_query_markdown(PyObject *self, PyObject *args,
                     "query max_chars must be a nonnegative integer");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(larger_input((size_t)map_length, (size_t)query_length),
+                        &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown(
         engine, (const uint8_t *)map, (size_t)map_length,
@@ -906,7 +926,8 @@ static PyObject *py_map_diff(PyObject *self, PyObject *args, PyObject *kwargs) {
                                    &before, &before_length, &after,
                                    &after_length, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input((size_t)before_length, (size_t)after_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_diff(
         engine, (const uint8_t *)before, (size_t)before_length,
@@ -934,7 +955,8 @@ static PyObject *py_map_freshness(PyObject *self, PyObject *args,
                                    keywords, &snapshot, &snapshot_length,
                                    &current, &current_length, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input((size_t)snapshot_length, (size_t)current_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_freshness(
         engine, (const uint8_t *)snapshot, (size_t)snapshot_length,
@@ -1009,7 +1031,7 @@ static PyObject *py_map_export_graph(PyObject *self, PyObject *args,
   }
   options.max_nodes = (size_t)max_nodes;
   options.max_edge_names = (size_t)max_edge_names;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)map_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_export_graph(engine, (const uint8_t *)map,
                                        (size_t)map_length, &options,
@@ -1049,7 +1071,8 @@ static PyObject *py_okf_analyze(PyObject *self, PyObject *args,
     PyErr_SetString(PyExc_ValueError, "OKF format must be json or markdown");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input((size_t)source_length, (size_t)query_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_okf_analyze(
         engine, (const uint8_t *)source, (size_t)source_length,
@@ -1090,7 +1113,13 @@ static PyObject *py_okf_publish(PyObject *self, PyObject *args,
           &proposal_length, &contract, &contract_length, &change_result,
           &result_length, &normalization, &normalization_length, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input(
+          larger_input(
+              larger_input((size_t)map_length, (size_t)verification_length),
+              larger_input((size_t)proposal_length, (size_t)contract_length)),
+          larger_input((size_t)result_length, (size_t)normalization_length)),
+      &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_okf_publish(
         engine, (const uint8_t *)map, (size_t)map_length,
@@ -1125,7 +1154,7 @@ static PyObject *py_workspace_plan(PyObject *self, PyObject *args,
   if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|p:workspace_plan",
                                    keywords, &config, &config_length, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)config_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_workspace_plan(
         engine, (const uint8_t *)config, (size_t)config_length,
@@ -1152,7 +1181,8 @@ static PyObject *py_workspace_analyze(PyObject *self, PyObject *args,
                                    keywords, &config, &config_length, &maps,
                                    &maps_length, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input((size_t)config_length, (size_t)maps_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_workspace_analyze(
         engine, (const uint8_t *)config, (size_t)config_length,
@@ -1177,7 +1207,7 @@ static PyObject *py_verification_plan(PyObject *self, PyObject *args,
   if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|p:verification_plan",
                                    keywords, &suite, &suite_length, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)suite_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_verification_plan(
         engine, (const uint8_t *)suite, (size_t)suite_length,
@@ -1204,7 +1234,8 @@ static PyObject *py_verification_analyze(PyObject *self, PyObject *args,
                                    keywords, &suite, &suite_length, &input,
                                    &input_length, &pretty))
     return NULL;
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input((size_t)suite_length, (size_t)input_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_verification_analyze(
         engine, (const uint8_t *)suite, (size_t)suite_length,
@@ -1249,7 +1280,8 @@ static PyObject *py_verification_report(PyObject *self, PyObject *args,
                     "junit");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input((size_t)suite_length, (size_t)input_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_verification_analyze_report(
         engine, (const uint8_t *)suite, (size_t)suite_length,
@@ -1296,7 +1328,7 @@ static PyObject *py_change_proposal(PyObject *self, PyObject *args,
                     "change proposal format must be json or markdown");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine((size_t)verification_length, &engine);
   if (status == ARCHBIRD_OK && strcmp(format, "json") == 0)
     status = archbird_change_proposal(
         engine, (const uint8_t *)verification, (size_t)verification_length,
@@ -1335,7 +1367,8 @@ static PyObject *py_change_contract(PyObject *self, PyObject *args,
                     "change contract format must be json or markdown");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input((size_t)proposal_length, (size_t)review_length), &engine);
   if (status == ARCHBIRD_OK && strcmp(format, "json") == 0)
     status = archbird_change_contract(
         engine, (const uint8_t *)proposal, (size_t)proposal_length,
@@ -1389,7 +1422,11 @@ static PyObject *py_change_verify(PyObject *self, PyObject *args,
                     "junit");
     return NULL;
   }
-  status = archbird_engine_create(NULL, &engine);
+  status = input_engine(
+      larger_input(
+          larger_input((size_t)proposal_length, (size_t)contract_length),
+          larger_input((size_t)before_length, (size_t)after_length)),
+      &engine);
   if (status == ARCHBIRD_OK && native_format == ARCHBIRD_CHANGE_JSON)
     status = archbird_change_verify(
         engine, (const uint8_t *)proposal, (size_t)proposal_length,

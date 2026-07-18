@@ -571,6 +571,13 @@ static int map_counted_compare(const void *left_raw, const void *right_raw) {
   return ab_string_compare(left->name, right->name);
 }
 
+static int map_counted_name_compare(const void *left_raw,
+                                    const void *right_raw) {
+  const MapCountedName *left = (const MapCountedName *)left_raw;
+  const MapCountedName *right = (const MapCountedName *)right_raw;
+  return ab_string_compare(left->name, right->name);
+}
+
 static int map_hub_compare(const void *left_raw, const void *right_raw) {
   const MapCountedName *left = (const MapCountedName *)left_raw;
   const MapCountedName *right = (const MapCountedName *)right_raw;
@@ -1757,12 +1764,12 @@ static ArchbirdStatus map_render_package_edges(const MapReportContext *context,
 static ArchbirdStatus
 map_render_resolution_kind(const MapReportContext *context, const char *kind,
                            int full, AbBuffer *out) {
-  AbReportStringList names;
   MapCountedName *ranked = NULL;
   size_t index;
+  size_t match_count = 0;
+  size_t ranked_count = 0;
   size_t selected;
   ArchbirdStatus status = ARCHBIRD_OK;
-  ab_report_list_init(&names, context->engine);
   for (index = 0; index < context->resolutions->as.array.count; index++) {
     const AbValue *row = &context->resolutions->as.array.items[index];
     const AbString *row_kind = ab_report_string(row, "kind");
@@ -1772,15 +1779,11 @@ map_render_resolution_kind(const MapReportContext *context, const char *kind,
                                 "map.call_resolutions[] is malformed");
       goto cleanup;
     }
-    if (ab_report_string_equal(row_kind, kind)) {
-      status = ab_report_list_add(&names, name->data, name->length);
-      if (status != ARCHBIRD_OK)
-        goto cleanup;
-    }
+    if (ab_report_string_equal(row_kind, kind))
+      match_count++;
   }
-  ab_report_list_sort_unique(&names);
-  if (names.count) {
-    ranked = (MapCountedName *)ab_calloc(context->engine, names.count,
+  if (match_count) {
+    ranked = (MapCountedName *)ab_calloc(context->engine, match_count,
                                          sizeof(*ranked));
     if (!ranked) {
       status = archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
@@ -1789,23 +1792,33 @@ map_render_resolution_kind(const MapReportContext *context, const char *kind,
       goto cleanup;
     }
   }
-  for (index = 0; index < names.count; index++) {
-    size_t row_index;
-    ranked[index].name = &names.items[index];
-    for (row_index = 0; row_index < context->resolutions->as.array.count;
-         row_index++) {
-      const AbValue *row = &context->resolutions->as.array.items[row_index];
-      const AbString *row_kind = ab_report_string(row, "kind");
-      const AbString *name = ab_report_string(row, "name");
-      if (ab_report_string_equal(row_kind, kind) && name &&
-          ab_string_equal(name, ranked[index].name))
-        ranked[index].count += ab_report_size(row, "count", 0);
+  for (index = 0; index < context->resolutions->as.array.count; index++) {
+    const AbValue *row = &context->resolutions->as.array.items[index];
+    const AbString *row_kind = ab_report_string(row, "kind");
+    if (ab_report_string_equal(row_kind, kind)) {
+      ranked[ranked_count].name = ab_report_string(row, "name");
+      ranked[ranked_count].count = ab_report_size(row, "count", 0);
+      ranked_count++;
     }
   }
-  if (names.count > 1)
-    qsort(ranked, names.count, sizeof(*ranked), map_counted_compare);
-  selected = full || names.count < context->compact_edges
-                 ? names.count
+  if (ranked_count > 1)
+    qsort(ranked, ranked_count, sizeof(*ranked), map_counted_name_compare);
+  match_count = ranked_count;
+  ranked_count = 0;
+  for (index = 0; index < match_count; index++) {
+    if (ranked_count &&
+        ab_string_equal(ranked[ranked_count - 1].name, ranked[index].name)) {
+      ranked[ranked_count - 1].count += ranked[index].count;
+    } else {
+      if (ranked_count != index)
+        ranked[ranked_count] = ranked[index];
+      ranked_count++;
+    }
+  }
+  if (ranked_count > 1)
+    qsort(ranked, ranked_count, sizeof(*ranked), map_counted_compare);
+  selected = full || ranked_count < context->compact_edges
+                 ? ranked_count
                  : context->compact_edges;
   {
     AbReportStringList rows;
@@ -1816,8 +1829,8 @@ map_render_resolution_kind(const MapReportContext *context, const char *kind,
       status = ab_report_list_addf(
           &rows, "%.*s(%zu)", (int)ranked[index].name->length,
           ranked[index].name->data, ranked[index].count);
-    if (status == ARCHBIRD_OK && names.count > selected)
-      status = ab_report_list_addf(&rows, "…+%zu", names.count - selected);
+    if (status == ARCHBIRD_OK && ranked_count > selected)
+      status = ab_report_list_addf(&rows, "…+%zu", ranked_count - selected);
     if (status == ARCHBIRD_OK)
       status = ab_report_appendf(&prefix, "%s: ", kind);
     if (status == ARCHBIRD_OK)
@@ -1828,7 +1841,6 @@ map_render_resolution_kind(const MapReportContext *context, const char *kind,
   }
 cleanup:
   ab_free(context->engine, ranked);
-  ab_report_list_free(&names);
   return status;
 }
 

@@ -19,11 +19,16 @@ typedef struct AbSourceState {
   int supplied;
 } AbSourceState;
 
-typedef struct AbFactReference AbFactReference;
+typedef struct AbFactReference {
+  size_t provider_index;
+  AbFact *fact;
+} AbFactReference;
 
 typedef struct AbMergedFact {
   size_t provider_index;
   AbFact fact;
+  const AbFact *value;
+  AbFactReference primary_contributor;
   AbFactReference *contributors;
   size_t contributor_count;
 } AbMergedFact;
@@ -99,10 +104,23 @@ typedef struct AbDomainSelection {
   size_t audit_count;
 } AbDomainSelection;
 
-struct AbFactReference {
-  size_t provider_index;
-  AbFact *fact;
-};
+static ArchbirdStatus merged_fact_add_contributor(ArchbirdEngine *engine,
+                                                  AbMergedFact *merged,
+                                                  size_t capacity,
+                                                  AbFactReference contributor) {
+  if (merged->contributors == &merged->primary_contributor) {
+    AbFactReference *contributors =
+        (AbFactReference *)ab_calloc(engine, capacity, sizeof(*contributors));
+    if (!contributors)
+      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory storing provider witnesses");
+    contributors[0] = merged->primary_contributor;
+    merged->contributors = contributors;
+  }
+  merged->contributors[merged->contributor_count++] = contributor;
+  return ARCHBIRD_OK;
+}
 
 static int digest_write(void *user_data, const uint8_t *bytes, size_t length) {
   AbDigestWriter *writer = (AbDigestWriter *)user_data;
@@ -332,18 +350,22 @@ void archbird_project_destroy(ArchbirdProject *project) {
   for (index = 0; index < project->manifest.file_count; index++)
     ab_free(engine, project->sources ? project->sources[index].bytes : NULL);
   ab_free(engine, project->sources);
+  if (project->merged_facts)
+    for (index = 0; index < project->merged_fact_count; index++) {
+      if (project->merged_facts[index].value ==
+          &project->merged_facts[index].fact)
+        ab_fact_free(engine, &project->merged_facts[index].fact);
+      if (project->merged_facts[index].contributors !=
+          &project->merged_facts[index].primary_contributor)
+        ab_free(engine, project->merged_facts[index].contributors);
+    }
+  ab_free(engine, project->merged_facts);
+  ab_free(engine, project->merged_facts_by_path);
   for (index = 0; index < project->provider_count; index++)
     ab_provider_bundle_free(engine, &project->providers[index]);
   ab_free(engine, project->providers);
   ab_free(engine, project->provider_digest_index);
   ab_free(engine, project->provider_digest_occupied);
-  if (project->merged_facts)
-    for (index = 0; index < project->merged_fact_count; index++) {
-      ab_fact_free(engine, &project->merged_facts[index].fact);
-      ab_free(engine, project->merged_facts[index].contributors);
-    }
-  ab_free(engine, project->merged_facts);
-  ab_free(engine, project->merged_facts_by_path);
   ab_free(engine, project->merge_conflicts);
   ab_free(engine, project->merge_variations);
   for (index = 0; index < project->test_observation_count; index++)
@@ -812,7 +834,7 @@ const AbFact *ab_project_merged_fact(const ArchbirdProject *project,
                                      size_t index) {
   if (!project || index >= project->merged_fact_count)
     return NULL;
-  return &project->merged_facts[index].fact;
+  return project->merged_facts[index].value;
 }
 
 const AbProviderBundle *
@@ -1489,24 +1511,16 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
       AbMergedFact *merged =
           &project->merged_facts[project->merged_fact_count++];
       merged->provider_index = facts[selected].provider_index;
-      status = ab_fact_copy(engine, &merged->fact, facts[selected].fact);
-      if (status != ARCHBIRD_OK)
-        goto merge_failed;
+      merged->value = facts[selected].fact;
       if (end - cursor > SIZE_MAX / sizeof(*merged->contributors)) {
         status = archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
                                     ARCHBIRD_NO_OFFSET,
                                     "provider witness set is too large");
         goto merge_failed;
       }
-      merged->contributors = (AbFactReference *)ab_calloc(
-          engine, end - cursor, sizeof(*merged->contributors));
-      if (!merged->contributors) {
-        status = archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                                    ARCHBIRD_NO_OFFSET,
-                                    "out of memory storing provider witnesses");
-        goto merge_failed;
-      }
-      merged->contributors[merged->contributor_count++] = facts[selected];
+      merged->primary_contributor = facts[selected];
+      merged->contributors = &merged->primary_contributor;
+      merged->contributor_count = 1;
       project->merge_summary.contributed++;
       for (index = cursor; index < end; index++) {
         ArchbirdProviderMode mode =
@@ -1536,14 +1550,26 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
                           facts[selected].fact, facts[index].provider_index,
                           facts[index].fact);
         } else if (relation > 0) {
+          if (merged->value != &merged->fact) {
+            status = ab_fact_copy(engine, &merged->fact, merged->value);
+            if (status != ARCHBIRD_OK)
+              goto merge_failed;
+            merged->value = &merged->fact;
+          }
           status = ab_fact_merge_compatible(engine, &merged->fact,
                                             facts[index].fact);
           if (status != ARCHBIRD_OK)
             goto merge_failed;
-          merged->contributors[merged->contributor_count++] = facts[index];
+          status = merged_fact_add_contributor(engine, merged, end - cursor,
+                                               facts[index]);
+          if (status != ARCHBIRD_OK)
+            goto merge_failed;
           project->merge_summary.enriched++;
         } else {
-          merged->contributors[merged->contributor_count++] = facts[index];
+          status = merged_fact_add_contributor(engine, merged, end - cursor,
+                                               facts[index]);
+          if (status != ARCHBIRD_OK)
+            goto merge_failed;
           project->merge_summary.deduplicated++;
         }
       }
@@ -1572,7 +1598,7 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
     }
     for (fact_index = 0; fact_index < project->merged_fact_count; fact_index++)
       project->merged_facts_by_path[fact_index] =
-          &project->merged_facts[fact_index].fact;
+          project->merged_facts[fact_index].value;
     if (project->merged_fact_count > 1)
       qsort(project->merged_facts_by_path, project->merged_fact_count,
             sizeof(*project->merged_facts_by_path), fact_path_index_compare);
@@ -1590,8 +1616,12 @@ merge_failed:
   if (project->merged_facts)
     for (domain_index = 0; domain_index < project->merged_fact_count;
          domain_index++) {
-      ab_fact_free(engine, &project->merged_facts[domain_index].fact);
-      ab_free(engine, project->merged_facts[domain_index].contributors);
+      if (project->merged_facts[domain_index].value ==
+          &project->merged_facts[domain_index].fact)
+        ab_fact_free(engine, &project->merged_facts[domain_index].fact);
+      if (project->merged_facts[domain_index].contributors !=
+          &project->merged_facts[domain_index].primary_contributor)
+        ab_free(engine, project->merged_facts[domain_index].contributors);
     }
   ab_free(engine, project->merged_facts);
   ab_free(engine, project->merged_facts_by_path);
@@ -1921,6 +1951,7 @@ static ArchbirdStatus render_conflict(AbBuffer *buffer,
 static ArchbirdStatus render_occurrence(AbBuffer *buffer,
                                         const ArchbirdProject *project,
                                         const AbMergedFact *merged) {
+  const AbFact *fact = merged->value;
   size_t index;
   ArchbirdStatus status;
 #define RENDER_TRY(expression)                                                 \
@@ -1931,9 +1962,9 @@ static ArchbirdStatus render_occurrence(AbBuffer *buffer,
   } while (0)
   RENDER_TRY(ab_buffer_literal(buffer, "{\"canonical\":{"));
   RENDER_TRY(ab_buffer_literal(buffer, "\"claim\":"));
-  RENDER_TRY(json_string(buffer, &merged->fact.claim));
+  RENDER_TRY(json_string(buffer, &fact->claim));
   RENDER_TRY(ab_buffer_literal(buffer, ",\"fact_id\":"));
-  RENDER_TRY(json_string(buffer, &merged->fact.id));
+  RENDER_TRY(json_string(buffer, &fact->id));
   RENDER_TRY(ab_buffer_literal(buffer, ",\"provider\":"));
   RENDER_TRY(
       json_sha(buffer, project->providers[merged->provider_index].sha256_hex));
@@ -1952,17 +1983,17 @@ static ArchbirdStatus render_occurrence(AbBuffer *buffer,
     RENDER_TRY(ab_buffer_literal(buffer, "}"));
   }
   RENDER_TRY(ab_buffer_literal(buffer, "],\"domain\":"));
-  RENDER_TRY(json_string(buffer, &merged->fact.domain));
+  RENDER_TRY(json_string(buffer, &fact->domain));
   RENDER_TRY(ab_buffer_literal(buffer, ",\"end\":"));
-  RENDER_TRY(ab_buffer_u64(buffer, merged->fact.span_end));
+  RENDER_TRY(ab_buffer_u64(buffer, fact->span_end));
   RENDER_TRY(ab_buffer_literal(buffer, ",\"key\":"));
-  RENDER_TRY(json_string(buffer, &merged->fact.key));
+  RENDER_TRY(json_string(buffer, &fact->key));
   RENDER_TRY(ab_buffer_literal(buffer, ",\"kind\":"));
-  RENDER_TRY(json_string(buffer, &merged->fact.kind));
+  RENDER_TRY(json_string(buffer, &fact->kind));
   RENDER_TRY(ab_buffer_literal(buffer, ",\"path\":"));
-  RENDER_TRY(json_string(buffer, &merged->fact.path));
+  RENDER_TRY(json_string(buffer, &fact->path));
   RENDER_TRY(ab_buffer_literal(buffer, ",\"start\":"));
-  RENDER_TRY(ab_buffer_u64(buffer, merged->fact.span_start));
+  RENDER_TRY(ab_buffer_u64(buffer, fact->span_start));
   RENDER_TRY(ab_buffer_literal(buffer, "}"));
 #undef RENDER_TRY
   return ARCHBIRD_OK;

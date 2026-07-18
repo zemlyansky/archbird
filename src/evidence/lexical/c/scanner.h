@@ -13,6 +13,8 @@ typedef struct AbNameSet {
   AbNameRef *items;
   size_t count;
   size_t capacity;
+  size_t *index;
+  size_t index_capacity;
 } AbNameSet;
 
 void ab_name_set_free(AbNameSet *names);

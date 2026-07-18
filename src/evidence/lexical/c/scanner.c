@@ -31,21 +31,80 @@ static int name_equal(AbNameRef left, AbNameRef right) {
          (left.length == 0 || memcmp(left.data, right.data, left.length) == 0);
 }
 
+static size_t name_hash(AbNameRef name) {
+  size_t hash = (size_t)2166136261u;
+  size_t index;
+  for (index = 0; index < name.length; index++) {
+    hash ^= name.data[index];
+    hash *= (size_t)16777619u;
+  }
+  return hash;
+}
+
+static ArchbirdStatus name_set_reindex(ArchbirdEngine *engine, AbNameSet *names,
+                                       size_t capacity) {
+  size_t *index;
+  size_t item_index;
+  index = (size_t *)ab_calloc(engine, capacity, sizeof(*index));
+  if (!index)
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory indexing lexical names");
+  for (item_index = 0; item_index < names->count; item_index++) {
+    size_t slot = name_hash(names->items[item_index]) & (capacity - 1);
+    while (index[slot])
+      slot = (slot + 1) & (capacity - 1);
+    index[slot] = item_index + 1;
+  }
+  ab_free(engine, names->index);
+  names->index = index;
+  names->index_capacity = capacity;
+  return ARCHBIRD_OK;
+}
+
+static int name_set_contains(const AbNameSet *names, AbNameRef name) {
+  size_t slot;
+  if (!names->index_capacity)
+    return 0;
+  slot = name_hash(name) & (names->index_capacity - 1);
+  while (names->index[slot]) {
+    size_t item_index = names->index[slot] - 1;
+    if (name_equal(names->items[item_index], name))
+      return 1;
+    slot = (slot + 1) & (names->index_capacity - 1);
+  }
+  return 0;
+}
+
 static ArchbirdStatus name_set_add(ArchbirdEngine *engine, AbNameSet *names,
                                    AbNameRef name) {
   AbNameRef *resized;
-  size_t index;
+  ArchbirdStatus status;
+  size_t slot;
   if (!names->engine)
     names->engine = engine;
   else if (names->engine != engine)
     return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
                               "lexical name set belongs to another engine");
-  for (index = 0; index < names->count; index++) {
-    if (name_equal(names->items[index], name))
-      return ARCHBIRD_OK;
+  if (name_set_contains(names, name))
+    return ARCHBIRD_OK;
+  if (!names->index_capacity ||
+      names->count >= names->index_capacity - names->index_capacity / 4) {
+    size_t capacity = names->index_capacity ? names->index_capacity * 2 : 64;
+    if (capacity < names->index_capacity)
+      return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "lexical name index is too large");
+    status = name_set_reindex(engine, names, capacity);
+    if (status != ARCHBIRD_OK)
+      return status;
   }
   if (names->count == names->capacity) {
     size_t capacity = names->capacity ? names->capacity * 2 : 32;
+    if (capacity < names->capacity)
+      return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "lexical name set is too large");
     resized = (AbNameRef *)ab_realloc(engine, names->items,
                                       capacity * sizeof(*names->items));
     if (!resized)
@@ -56,22 +115,18 @@ static ArchbirdStatus name_set_add(ArchbirdEngine *engine, AbNameSet *names,
     names->capacity = capacity;
   }
   names->items[names->count++] = name;
+  slot = name_hash(name) & (names->index_capacity - 1);
+  while (names->index[slot])
+    slot = (slot + 1) & (names->index_capacity - 1);
+  names->index[slot] = names->count;
   return ARCHBIRD_OK;
-}
-
-static int name_set_contains(const AbNameSet *names, AbNameRef name) {
-  size_t index;
-  for (index = 0; index < names->count; index++) {
-    if (name_equal(names->items[index], name))
-      return 1;
-  }
-  return 0;
 }
 
 void ab_name_set_free(AbNameSet *names) {
   if (!names)
     return;
   ab_free(names->engine, names->items);
+  ab_free(names->engine, names->index);
   memset(names, 0, sizeof(*names));
 }
 
