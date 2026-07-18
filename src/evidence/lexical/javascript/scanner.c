@@ -1179,6 +1179,7 @@ static ArchbirdStatus scan_messages(JsContext *context) {
     size_t close;
     size_t key_index = SIZE_MAX;
     size_t body_open;
+    size_t body_close;
     size_t cursor;
     if (!ab_token_equals(context->tokens, index, "switch") ||
         !ab_token_equals(context->tokens, index + 1, "(") ||
@@ -1195,8 +1196,13 @@ static ArchbirdStatus scan_messages(JsContext *context) {
         !ab_token_equals(context->tokens, body_open, "{") ||
         context->brace_forward[body_open] == SIZE_MAX)
       continue;
-    for (cursor = body_open + 1; cursor + 1 < context->brace_forward[body_open];
-         cursor++) {
+    body_close = context->brace_forward[body_open];
+    for (cursor = body_open + 1; cursor + 1 < body_close; cursor++) {
+      if (ab_token_equals(context->tokens, cursor, "{") &&
+          context->brace_forward[cursor] != SIZE_MAX) {
+        cursor = context->brace_forward[cursor];
+        continue;
+      }
       if (ab_token_equals(context->tokens, cursor, "case") &&
           context->tokens->items[cursor + 1].kind == AB_TOKEN_STRING) {
         ArchbirdStatus status =

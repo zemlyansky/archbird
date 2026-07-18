@@ -224,6 +224,32 @@ def main() -> int:
             "anonymous class expression lost its assignment binding: "
             f"{sorted(anonymous_symbols)!r}"
         )
+    nested_switch_regression = subprocess.run(
+        [str(executable), "javascript", "src/nested-switch.js"],
+        input=(
+            "switch (token.type) {\n"
+            "case 'punc':\n"
+            "  switch (token.value) {\n"
+            "  case '{': open(); break;\n"
+            "  case '}': close(); break;\n"
+            "  }\n"
+            "  break;\n"
+            "case 'name': named(); break;\n"
+            "}\n"
+        ).encode(),
+        capture_output=True,
+        check=True,
+    )
+    nested_switch_receives = {
+        fact["name"]
+        for fact in json.loads(nested_switch_regression.stdout)["facts"]
+        if fact["domain"] == "messages" and fact["kind"] == "receive"
+    }
+    if nested_switch_receives != {"type:name", "type:punc", "value:{", "value:}"}:
+        raise AssertionError(
+            "nested switch cases leaked into the outer message selector: "
+            f"{sorted(nested_switch_receives)!r}"
+        )
     quoted_property_regression = subprocess.run(
         [str(executable), "javascript", "src/quoted-property.js"],
         input=(

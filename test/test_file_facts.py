@@ -16,6 +16,18 @@ exports.extra = run
 postMessage({type: 'done'})
 """
 
+NESTED_SWITCH_SOURCE = b"""
+switch (token.type) {
+case 'punc':
+  switch (token.value) {
+  case '{': open(); break;
+  case '}': close(); break;
+  }
+  break;
+case 'name': named(); break;
+}
+"""
+
 
 def main() -> int:
     if len(sys.argv) != 2:
@@ -45,6 +57,18 @@ def main() -> int:
         raise AssertionError(f"unexpected messages: {row['messages']!r}")
     if [symbol["name"] for symbol in row["symbols"]] != ["run"]:
         raise AssertionError(f"unexpected symbols: {row['symbols']!r}")
+    nested = subprocess.run(
+        [str(executable), "--file-facts", "javascript", "src/nested-switch.js"],
+        input=NESTED_SWITCH_SOURCE,
+        capture_output=True,
+        check=True,
+    )
+    nested_messages = json.loads(nested.stdout)["files"][0]["messages"]
+    if nested_messages != {
+        "receives": ["type:name", "type:punc", "value:{", "value:}"],
+        "sends": [],
+    }:
+        raise AssertionError(f"unexpected nested-switch messages: {nested_messages!r}")
     print("native compatibility file facts passed")
     return 0
 
