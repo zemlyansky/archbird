@@ -224,6 +224,58 @@ def main() -> int:
             "anonymous class expression lost its assignment binding: "
             f"{sorted(anonymous_symbols)!r}"
         )
+    implements_regression = subprocess.run(
+        [str(executable), "typescript", "src/implements-class.ts"],
+        input=(
+            "interface Service { run(): void }\n"
+            "const Bound = class implements Service { run() {} };\n"
+            "function outer() {\n"
+            "  const value = new class implements Service { run() {} };\n"
+            "  return class Returned implements Service { returnedRun() {} };\n"
+            "}\n"
+            "const Named = class ExpressionName implements Service { namedRun() {} };\n"
+        ).encode(),
+        capture_output=True,
+        check=True,
+    )
+    implements_symbols = {
+        fact["name"]
+        for fact in json.loads(implements_regression.stdout)["facts"]
+        if fact["domain"] == "symbols"
+    }
+    if not {"Bound.run", "Returned.returnedRun", "ExpressionName.namedRun"}.issubset(
+        implements_symbols
+    ) or any(
+        name == "implements" or name.startswith("implements.")
+        for name in implements_symbols
+    ):
+        raise AssertionError(
+            "anonymous implements clause became a lexical class name: "
+            f"{sorted(implements_symbols)!r}"
+        )
+    lexical_scope_regression = subprocess.run(
+        [str(executable), "typescript", "src/lexical-scopes.tsx"],
+        input=(
+            "class First { render() { return <div>Here's code</div>; } }\n"
+            "class Second { run() {} }\n"
+            "export const enum PluginFormat { Copilot }\n"
+            "const COPILOT_FORMAT = { parseHooks() {} };\n"
+        ).encode(),
+        capture_output=True,
+        check=True,
+    )
+    lexical_scope_symbols = {
+        fact["name"]
+        for fact in json.loads(lexical_scope_regression.stdout)["facts"]
+        if fact["domain"] == "symbols"
+    }
+    if not {"Second.run", "COPILOT_FORMAT.parseHooks"}.issubset(
+        lexical_scope_symbols
+    ) or {"First.run", "enum.parseHooks"}.intersection(lexical_scope_symbols):
+        raise AssertionError(
+            "TypeScript lexical scopes crossed JSX text or const enum: "
+            f"{sorted(lexical_scope_symbols)!r}"
+        )
     nested_switch_regression = subprocess.run(
         [str(executable), "javascript", "src/nested-switch.js"],
         input=(

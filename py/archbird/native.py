@@ -689,6 +689,13 @@ class Project:
     def map_json(self, *, pretty: bool = False) -> bytes:
         return _native.project_map(self._capsule, pretty=pretty)
 
+    def write_map_json(
+        self, sink: Callable[[bytes], object], *, pretty: bool = False
+    ) -> None:
+        """Write the canonical Map without retaining its complete byte output."""
+
+        _native.project_write_map(self._capsule, sink, pretty=pretty)
+
     def map(self) -> Mapping[str, object]:
         return json.loads(self.map_json())
 

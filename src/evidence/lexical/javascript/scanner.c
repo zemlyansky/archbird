@@ -26,6 +26,17 @@ static const char *const JS_CLASS_MODIFIERS[] = {
     "private",  "protected", "public", "readonly", "set", "static",
 };
 
+static const char *const JS_RESERVED_BINDING_WORDS[] = {
+    "await",     "break",    "case",       "catch",  "class",   "const",
+    "continue",  "debugger", "default",    "delete", "do",      "else",
+    "enum",      "export",   "extends",    "false",  "finally", "for",
+    "function",  "if",       "implements", "import", "in",      "instanceof",
+    "interface", "let",      "new",        "null",   "package", "private",
+    "protected", "public",   "return",     "static", "super",   "switch",
+    "this",      "throw",    "true",       "try",    "typeof",  "var",
+    "void",      "while",    "with",       "yield",
+};
+
 static const uint8_t *token_data(const AbTokenList *tokens, size_t index) {
   return tokens->source + tokens->items[index].start;
 }
@@ -47,6 +58,14 @@ static int token_in_words(const AbTokenList *tokens, size_t index,
 static int js_control(const AbTokenList *tokens, size_t index) {
   return token_in_words(tokens, index, JS_CONTROL_WORDS,
                         sizeof(JS_CONTROL_WORDS) / sizeof(JS_CONTROL_WORDS[0]));
+}
+
+static int js_binding_identifier(const AbTokenList *tokens, size_t index) {
+  return index < tokens->count &&
+         tokens->items[index].kind == AB_TOKEN_IDENTIFIER &&
+         !token_in_words(tokens, index, JS_RESERVED_BINDING_WORDS,
+                         sizeof(JS_RESERVED_BINDING_WORDS) /
+                             sizeof(JS_RESERVED_BINDING_WORDS[0]));
 }
 
 static ArchbirdStatus pair_forward(ArchbirdEngine *engine,
@@ -640,7 +659,8 @@ static ArchbirdStatus scan_declared_symbols(JsContext *context,
     } else if (ab_token_equals(context->tokens, index, "class") &&
                index + 1 < context->tokens->count &&
                context->tokens->items[index + 1].kind == AB_TOKEN_IDENTIFIER &&
-               !ab_token_equals(context->tokens, index + 1, "extends")) {
+               !ab_token_equals(context->tokens, index + 1, "extends") &&
+               !ab_token_equals(context->tokens, index + 1, "implements")) {
       ArchbirdStatus status = scan_class(context, index + 1, index);
       if (status != ARCHBIRD_OK)
         return status;
@@ -686,6 +706,10 @@ static ArchbirdStatus scan_top_level_bindings(JsContext *context) {
       size_t name_index = index + 1;
       size_t assignment = SIZE_MAX;
       size_t cursor = index + 2;
+      if (!js_binding_identifier(context->tokens, name_index)) {
+        index++;
+        continue;
+      }
       while (cursor < context->tokens->count &&
              !ab_token_equals(context->tokens, cursor, ";")) {
         if (ab_token_equals(context->tokens, cursor, "=")) {
@@ -697,8 +721,7 @@ static ArchbirdStatus scan_top_level_bindings(JsContext *context) {
           cursor = context->brace_forward[cursor];
         cursor++;
       }
-      if (context->tokens->items[name_index].kind == AB_TOKEN_IDENTIFIER &&
-          assignment != SIZE_MAX && assignment + 1 < context->tokens->count) {
+      if (assignment != SIZE_MAX && assignment + 1 < context->tokens->count) {
         size_t start = assignment + 1;
         if (ab_token_equals(context->tokens, start, "{") &&
             context->brace_forward[start] != SIZE_MAX) {
@@ -720,6 +743,7 @@ static ArchbirdStatus scan_top_level_bindings(JsContext *context) {
         } else if (ab_token_equals(context->tokens, start, "class") &&
                    start + 1 < context->tokens->count &&
                    (ab_token_equals(context->tokens, start + 1, "extends") ||
+                    ab_token_equals(context->tokens, start + 1, "implements") ||
                     ab_token_equals(context->tokens, start + 1, "{"))) {
           ArchbirdStatus status = scan_class(context, name_index, start);
           if (status != ARCHBIRD_OK)

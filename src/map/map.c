@@ -1903,6 +1903,23 @@ static ArchbirdStatus add_provider_diagnostics(AbMapState *state) {
   return status;
 }
 
+static ArchbirdStatus flush_compact_map(ArchbirdEngine *engine,
+                                        AbBuffer *buffer, uint32_t json_flags,
+                                        ArchbirdWriteFn write_fn,
+                                        void *user_data) {
+  if (json_flags != 0 || buffer->length == 0)
+    return ARCHBIRD_OK;
+  if (write_fn(user_data, buffer->data, buffer->length) != 0) {
+    if (engine->error_status != ARCHBIRD_OK)
+      return engine->error_status;
+    return archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
+                              "JSON output callback failed");
+  }
+  ab_buffer_free(buffer);
+  ab_buffer_init(buffer, engine);
+  return ARCHBIRD_OK;
+}
+
 ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
                                            const ArchbirdProject *project,
                                            uint32_t json_flags,
@@ -1952,13 +1969,17 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
   ab_map_diagnostics_sort_unique(&state);
   MAP_TRY(ab_buffer_literal(&buffer, "{\"artifact\":\"map\",\"artifacts\":"));
   MAP_TRY(ab_map_render_artifacts(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"builds\":"));
   MAP_TRY(ab_map_render_builds(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"call_resolutions\":"));
   MAP_TRY(render_resolutions(&buffer, &state.graph));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"components\":"));
   MAP_TRY(render_components(&buffer, engine, project, config, manifest,
                             &state.graph));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"description\":"));
   MAP_TRY(json_string(&buffer, &config->description));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"diagnostics\":"));
@@ -1994,8 +2015,10 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
     MAP_TRY(ab_buffer_json_string(&buffer, resolution_sha256, 64));
     MAP_TRY(ab_buffer_literal(&buffer, "}"));
   }
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"edges\":"));
   MAP_TRY(render_edges(&buffer, &state.graph));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer,
                             ",\"evidence\":{\"absolute_paths_included\":false,"
                             "\"config_sha256\":"));
@@ -2011,6 +2034,7 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
     MAP_TRY(ab_buffer_json_string(&buffer, resolution_digest, 64));
   }
   MAP_TRY(ab_buffer_literal(&buffer, "},\"files\":["));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   for (index = 0; index < manifest->file_count; index++) {
     if (!manifest->files[index].has_layer)
       continue;
@@ -2018,44 +2042,53 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
       MAP_TRY(ab_buffer_literal(&buffer, ","));
     MAP_TRY(ab_render_map_file_facts_row(&buffer, engine, project,
                                          &manifest->files[index]));
+    MAP_TRY(
+        flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
     rendered_files++;
   }
   MAP_TRY(ab_buffer_literal(&buffer, "],\"indexes\":"));
   MAP_TRY(ab_map_render_indexes(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"layers\":"));
   MAP_TRY(render_layers(&buffer, engine, project, config, manifest));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"limits\":{\"compact_edge_names\":"));
   MAP_TRY(ab_buffer_u64(&buffer, config->compact_edge_names));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"compact_symbols\":"));
   MAP_TRY(ab_buffer_u64(&buffer, config->compact_symbols));
   MAP_TRY(ab_buffer_literal(&buffer, "},\"named_entries\":"));
   MAP_TRY(ab_map_render_named_entries(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"packages\":"));
   MAP_TRY(ab_map_render_packages(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"parity\":"));
   MAP_TRY(ab_map_render_parity(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"project\":"));
   MAP_TRY(json_string(&buffer, &config->project));
   MAP_TRY(ab_buffer_literal(
       &buffer, ",\"schema_version\":" ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT
                ",\"surfaces\":"));
   MAP_TRY(ab_map_render_surfaces(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"symbol_calls\":"));
   MAP_TRY(ab_map_render_symbol_calls(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"symbol_references\":"));
   MAP_TRY(ab_map_render_symbol_references(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"tests\":"));
   MAP_TRY(ab_map_render_tests(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(
       &buffer,
       ",\"tool\":{"
       "\"implementation_sha256\":\"" ARCHBIRD_IMPLEMENTATION_SHA256
       "\",\"name\":\"archbird\",\"version\":\"" ARCHBIRD_VERSION "\"}}"));
   if (json_flags == 0) {
-    if (write_fn(user_data, buffer.data, buffer.length) != 0)
-      status =
-          archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
-                             "JSON output callback failed");
+    status =
+        flush_compact_map(engine, &buffer, json_flags, write_fn, user_data);
   } else {
     status = archbird_json_canonicalize(engine, buffer.data, buffer.length,
                                         json_flags, write_fn, user_data);

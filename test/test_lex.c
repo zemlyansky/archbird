@@ -42,6 +42,12 @@ int main(void) {
       "left",  "/", "right",   ";",
   };
   static const size_t js_lines[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+  static const char *const jsx_values[] = {
+      "<", "div", ">", "Here", "'",      "s",       "code", "<",
+      "/", "div", ">", ";",    "return", "'valid'", ";",
+  };
+  static const size_t jsx_lines[] = {1, 1, 1, 1, 1, 1, 1, 1,
+                                     1, 1, 1, 1, 1, 1, 1};
   ArchbirdEngineOptions options;
   ArchbirdEngine *engine = NULL;
   AbTokenList invalid;
@@ -57,6 +63,10 @@ int main(void) {
                 "input.replace(/https?:\\/\\//g, ''); left / right;",
                 AB_LEX_JAVASCRIPT, js_values, js_lines,
                 sizeof(js_values) / sizeof(js_values[0]));
+  expect_tokens(engine, "javascript-jsx-apostrophe",
+                "<div>Here's code</div>; return'valid';", AB_LEX_JAVASCRIPT,
+                jsx_values, jsx_lines,
+                sizeof(jsx_values) / sizeof(jsx_values[0]));
   if (ab_tokenize(engine, invalid_source, sizeof(invalid_source), 0,
                   &invalid) != ARCHBIRD_INVALID_SCHEMA) {
     fputs("FAIL invalid UTF-8 accepted\n", stderr);

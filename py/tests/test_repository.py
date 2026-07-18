@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
@@ -146,6 +147,16 @@ def main() -> int:
     second = project.map_json()
     if first != second:
         raise AssertionError("repository Map output is not repeatable")
+    streamed = io.BytesIO()
+    project.write_map_json(streamed.write)
+    if streamed.getvalue() != first:
+        raise AssertionError("streaming changed canonical Map output")
+    try:
+        project.write_map_json(lambda _chunk: 0)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("streaming accepted a short output write")
     if not any(
         project.provider_facts(index)["producer"]["name"].startswith(
             "archbird-tree-sitter-"

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import signal
 import stat
 import sys
+import tempfile
 import threading
 import time
 from typing import Optional, Sequence
@@ -573,6 +575,32 @@ def _write(encoded: bytes, output: str) -> None:
         sys.stdout.buffer.write(value)
     else:
         Path(output).write_bytes(value)
+
+
+def _write_project_map(project: Project, output: str, *, pretty: bool) -> None:
+    if output == "-":
+        project.write_map_json(sys.stdout.buffer.write, pretty=pretty)
+        sys.stdout.buffer.write(b"\n")
+        return
+    destination = Path(output)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            project.write_map_json(stream.write, pretty=pretty)
+            stream.write(b"\n")
+        if destination.exists():
+            temporary.chmod(stat.S_IMODE(destination.stat().st_mode))
+        else:
+            current_umask = os.umask(0)
+            os.umask(current_umask)
+            temporary.chmod(0o666 & ~current_umask)
+        os.replace(temporary, destination)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 class _Progress:
@@ -1392,6 +1420,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise ValueError("--pretty applies only to JSON")
         project = _project_from_args(args, progress)
         progress.emit({"phase": "rendering", "artifact": "canonical Map"})
+        if args.format == "json" and not args.check:
+            _write_project_map(project, args.output, pretty=args.pretty)
+            progress.finish()
+            return 0
         map_json = project.map_json(pretty=args.pretty and args.format == "json")
         document = json.loads(map_json)
         encoded = (

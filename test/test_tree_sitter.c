@@ -8,12 +8,14 @@
 typedef struct Output {
   char bytes[131072];
   size_t length;
+  size_t writes;
 } Output;
 
 static int failures;
 
 static int write_output(void *user_data, const uint8_t *bytes, size_t length) {
   Output *output = (Output *)user_data;
+  output->writes++;
   if (length > sizeof(output->bytes) - output->length - 1)
     return 1;
   memcpy(output->bytes + output->length, bytes, length);
@@ -84,9 +86,9 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
   ArchbirdProject *project =
       create_project(engine, source, "src/sample.c", "c");
   ArchbirdMergeSummary summary = {0};
-  Output syntax_provider = {{0}, 0};
-  Output facts = {{0}, 0};
-  Output ledger = {{0}, 0};
+  Output syntax_provider = {{0}, 0, 0};
+  Output facts = {{0}, 0, 0};
+  Output ledger = {{0}, 0, 0};
   if (!project) {
     fputs("FAIL create composed syntax project\n", stderr);
     failures++;
@@ -159,8 +161,8 @@ static void test_syntax_diagnostics(ArchbirdEngine *engine) {
       "\"name\":\"core\",\"language\":\"c\",\"globs\":[\"src/**\"]}]}";
   ArchbirdProject *project =
       create_project(engine, source, "src/broken.c", "c");
-  Output provider = {{0}, 0};
-  Output map = {{0}, 0};
+  Output provider = {{0}, 0, 0};
+  Output map = {{0}, 0, 0};
   if (!project) {
     fputs("FAIL create malformed syntax project\n", stderr);
     failures++;
@@ -190,6 +192,10 @@ static void test_syntax_diagnostics(ArchbirdEngine *engine) {
   expect("malformed-map-render",
          archbird_project_render_map(engine, project, 0, write_output, &map),
          ARCHBIRD_OK);
+  if (map.writes < 2) {
+    fputs("FAIL compact Map output was not streamed\n", stderr);
+    failures++;
+  }
   if (!strstr(map.bytes, "\"code\":\"tree-sitter-") ||
       !strstr(map.bytes, "\"span\":{\"end\":")) {
     fputs("FAIL Map dropped exact Tree-sitter recovery span\n", stderr);
@@ -202,7 +208,7 @@ static void test_vendor_role_is_bounded(ArchbirdEngine *engine) {
   static const char source[] = "int vendored(void) { return helper(); }\n";
   ArchbirdProject *project = create_project_in_layer(
       engine, source, "vendor/generated.c", "c", "vendor", "vendor");
-  Output provider = {{0}, 0};
+  Output provider = {{0}, 0, 0};
   if (!project) {
     fputs("FAIL create vendor syntax project\n", stderr);
     failures++;
@@ -232,7 +238,7 @@ static void test_resource_limit_is_evidence(void) {
   ArchbirdEngineOptions options;
   ArchbirdEngine *engine = NULL;
   ArchbirdProject *project = NULL;
-  Output provider = {{0}, 0};
+  Output provider = {{0}, 0, 0};
   archbird_engine_options_init(&options);
   options.max_syntax_bytes = 1;
   expect("limited-engine", archbird_engine_create(&options, &engine),
@@ -318,9 +324,9 @@ static void test_discovered_header_routing(ArchbirdEngine *engine) {
       engine, cpp_source, "include/demo.h", "c", "core", "source");
   ArchbirdProject *c_project = create_project_in_layer(
       engine, c_source, "include/demo.h", "c", "auto-c", "source");
-  Output cpp_provider = {{0}, 0};
-  Output configured_provider = {{0}, 0};
-  Output c_provider = {{0}, 0};
+  Output cpp_provider = {{0}, 0, 0};
+  Output configured_provider = {{0}, 0, 0};
+  Output c_provider = {{0}, 0, 0};
   if (!cpp_project || !configured_project || !c_project) {
     fputs("FAIL create discovered header routing projects\n", stderr);
     failures++;
@@ -377,6 +383,101 @@ done:
 }
 #endif
 
+#ifdef ARCHBIRD_TEST_TREE_SITTER_TYPESCRIPT
+static void test_typescript_class_scopes(ArchbirdEngine *engine) {
+  static const char source[] =
+      "interface Service {}\n"
+      "function outer() {\n"
+      "  const anonymous = new class implements Service { anonymousRun() {} "
+      "};\n"
+      "  class Inner implements Service { run() {} }\n"
+      "  return class Returned implements Service { returnedRun() {} };\n"
+      "}\n"
+      "const Bound = class implements Service { boundRun() {} };\n"
+      "const Named = class ExpressionName implements Service { namedRun() {} "
+      "};\n"
+      "export const enum PluginFormat { Copilot }\n"
+      "const COPILOT_FORMAT = { parseHooks() {} };\n";
+  ArchbirdProject *project =
+      create_project(engine, source, "src/scopes.ts", "typescript");
+  Output facts = {{0}, 0, 0};
+  if (!project) {
+    fputs("FAIL create TypeScript class-scope project\n", stderr);
+    failures++;
+    return;
+  }
+  expect("typescript-class-scope-lexical",
+         archbird_project_scan_builtin_provider(engine, project,
+                                                "lexical:javascript", 18,
+                                                ARCHBIRD_PROVIDER_AUGMENT),
+         ARCHBIRD_OK);
+  expect("typescript-class-scope-syntax",
+         archbird_project_scan_builtin_provider(engine, project,
+                                                "syntax:tree-sitter:typescript",
+                                                29, ARCHBIRD_PROVIDER_PRIMARY),
+         ARCHBIRD_OK);
+  expect("typescript-class-scope-finalize",
+         archbird_project_finalize_providers(engine, project), ARCHBIRD_OK);
+  expect("typescript-class-scope-facts",
+         archbird_project_render_file_facts(engine, project, 0, write_output,
+                                            &facts),
+         ARCHBIRD_OK);
+  if (!strstr(facts.bytes, "\"name\":\"Inner.run\"") ||
+      !strstr(facts.bytes, "\"name\":\"Bound.boundRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.anonymousRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"Returned.returnedRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"ExpressionName.namedRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"COPILOT_FORMAT.parseHooks\"") ||
+      strstr(facts.bytes, "\"name\":\"implements") ||
+      strstr(facts.bytes, "\"name\":\"enum.parseHooks\"") ||
+      strstr(facts.bytes, "\"name\":\"outer.Inner") ||
+      strstr(facts.bytes, "\"name\":\"outer.Returned")) {
+    fputs("FAIL TypeScript class scopes diverged across providers\n", stderr);
+    failures++;
+  }
+  archbird_project_destroy(project);
+}
+#endif
+
+#ifdef ARCHBIRD_TEST_TREE_SITTER_TSX
+static void test_tsx_class_scopes(ArchbirdEngine *engine) {
+  static const char source[] =
+      "class First { render() { return <div>Here's code</div>; } }\n"
+      "class Second { run() {} }\n";
+  ArchbirdProject *project =
+      create_project(engine, source, "src/scopes.tsx", "typescript");
+  Output facts = {{0}, 0, 0};
+  if (!project) {
+    fputs("FAIL create TSX class-scope project\n", stderr);
+    failures++;
+    return;
+  }
+  expect("tsx-class-scope-lexical",
+         archbird_project_scan_builtin_provider(engine, project,
+                                                "lexical:javascript", 18,
+                                                ARCHBIRD_PROVIDER_AUGMENT),
+         ARCHBIRD_OK);
+  expect("tsx-class-scope-syntax",
+         archbird_project_scan_builtin_provider(engine, project,
+                                                "syntax:tree-sitter:tsx", 22,
+                                                ARCHBIRD_PROVIDER_PRIMARY),
+         ARCHBIRD_OK);
+  expect("tsx-class-scope-finalize",
+         archbird_project_finalize_providers(engine, project), ARCHBIRD_OK);
+  expect("tsx-class-scope-facts",
+         archbird_project_render_file_facts(engine, project, 0, write_output,
+                                            &facts),
+         ARCHBIRD_OK);
+  if (!strstr(facts.bytes, "\"name\":\"First.render\"") ||
+      !strstr(facts.bytes, "\"name\":\"Second.run\"") ||
+      strstr(facts.bytes, "\"name\":\"First.run\"")) {
+    fputs("FAIL TSX text changed the following class scope\n", stderr);
+    failures++;
+  }
+  archbird_project_destroy(project);
+}
+#endif
+
 static void test_language_pack(ArchbirdEngine *engine, const char *name,
                                const char *provider_id, const char *language,
                                const char *path, const char *source,
@@ -384,8 +485,8 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
                                const char *expected_call,
                                const char *expected_import) {
   ArchbirdProject *project = create_project(engine, source, path, language);
-  Output first = {{0}, 0};
-  Output second = {{0}, 0};
+  Output first = {{0}, 0, 0};
+  Output second = {{0}, 0, 0};
   if (!project) {
     fprintf(stderr, "FAIL create %s syntax project\n", name);
     failures++;
@@ -523,6 +624,7 @@ int main(void) {
         "\"name\":\"Box.run\"", "\"name\":\"helper\"", "\"name\":\"./dep.js\"");
 #endif
 #ifdef ARCHBIRD_TEST_TREE_SITTER_TYPESCRIPT
+    test_typescript_class_scopes(engine);
     test_language_pack(
         engine, "typescript-pack", "syntax:tree-sitter:typescript",
         "typescript", "src/sample.ts",
@@ -533,6 +635,7 @@ int main(void) {
         "\"name\":\"Box.run\"", "\"name\":\"helper\"", "\"name\":\"./dep.js\"");
 #endif
 #ifdef ARCHBIRD_TEST_TREE_SITTER_TSX
+    test_tsx_class_scopes(engine);
     test_language_pack(engine, "tsx-pack", "syntax:tree-sitter:tsx",
                        "typescript", "src/sample.tsx",
                        "import React from 'react';\nexport const Box = () => "

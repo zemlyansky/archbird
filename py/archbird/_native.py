@@ -219,6 +219,34 @@ def _render(engine: _POINTER, call: Callable[[_WRITE], int]) -> bytes:
     return b"".join(chunks)
 
 
+def _render_to(
+    engine: _POINTER,
+    call: Callable[[_WRITE], int],
+    sink: Callable[[bytes], object],
+) -> None:
+    callback_error: list[BaseException] = []
+
+    @_WRITE
+    def write(_user, data, length):
+        try:
+            if length:
+                chunk = ctypes.string_at(data, length)
+                written = sink(chunk)
+                if written is not None and written != length:
+                    raise OSError(
+                        f"output sink wrote {written} of {length} bytes"
+                    )
+            return 0
+        except BaseException as error:  # callback exceptions cannot cross C
+            callback_error.append(error)
+            return 1
+
+    status = call(write)
+    if callback_error:
+        raise callback_error[0]
+    _raise(engine, status)
+
+
 def _one_shot(
     call: Callable[[_POINTER, _WRITE], int], *, input_budget: int = 0
 ) -> bytes:
@@ -511,6 +539,26 @@ def project_merge_conflicts(project: _Project, pretty: bool = False) -> bytes:
 
 def project_map(project: _Project, pretty: bool = False) -> bytes:
     return _project_render("archbird_project_render_map", project, pretty)
+
+
+def project_write_map(
+    project: _Project, sink: Callable[[bytes], object], pretty: bool = False
+) -> None:
+    function = _declare(
+        "archbird_project_render_map",
+        [_POINTER, _POINTER, ctypes.c_uint32, _WRITE, _POINTER],
+    )
+    _render_to(
+        project.engine,
+        lambda write: function(
+            project.engine,
+            project.project,
+            _JSON_PRETTY if pretty else 0,
+            write,
+            None,
+        ),
+        sink,
+    )
 
 
 def project_provider_facts(

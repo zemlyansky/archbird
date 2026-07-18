@@ -316,6 +316,30 @@ static size_t operator_end(const uint8_t *source, size_t length, size_t start) {
   }
 }
 
+static int js_embedded_apostrophe(const AbTokenList *tokens,
+                                  const uint8_t *source, size_t length,
+                                  size_t cursor) {
+  static const char *const string_prefixes[] = {
+      "await", "case",   "default", "delete",     "do", "else",
+      "from",  "import", "in",      "instanceof", "of", "return",
+      "throw", "typeof", "void",    "yield",
+  };
+  const AbToken *previous;
+  size_t index;
+  if (!cursor || cursor + 1 >= length ||
+      !identifier_continue(source[cursor - 1]) ||
+      !identifier_continue(source[cursor + 1]) || !tokens->count)
+    return 0;
+  previous = &tokens->items[tokens->count - 1];
+  if (previous->kind != AB_TOKEN_IDENTIFIER || previous->end != cursor)
+    return 0;
+  for (index = 0; index < sizeof(string_prefixes) / sizeof(string_prefixes[0]);
+       index++)
+    if (ab_token_equals(tokens, tokens->count - 1, string_prefixes[index]))
+      return 0;
+  return 1;
+}
+
 ArchbirdStatus ab_tokenize(ArchbirdEngine *engine, const uint8_t *source,
                            size_t source_length, uint32_t flags,
                            AbTokenList *out) {
@@ -402,7 +426,9 @@ ArchbirdStatus ab_tokenize(ArchbirdEngine *engine, const uint8_t *source,
       if (end)
         kind = AB_TOKEN_REGEX;
     }
-    if (!end && (value == '\'' || value == '"' || value == '`')) {
+    if (!end && (value == '\'' || value == '"' || value == '`') &&
+        !((flags & AB_LEX_JAVASCRIPT) && value == '\'' &&
+          js_embedded_apostrophe(out, source, source_length, cursor))) {
       end = (flags & AB_LEX_PYTHON)
                 ? python_quoted_end(source, source_length, cursor, value)
                 : quoted_end(source, source_length, cursor, value);

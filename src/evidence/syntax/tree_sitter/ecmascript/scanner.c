@@ -8,6 +8,7 @@
 static int identifier_node(const AbTreeSitterScan *scan, TSNode node) {
   return ab_tree_sitter_node_has_text(scan, node) &&
          (ab_tree_sitter_node_type(node, "identifier") ||
+          ab_tree_sitter_node_type(node, "type_identifier") ||
           ab_tree_sitter_node_type(node, "property_identifier") ||
           ab_tree_sitter_node_type(node, "private_property_identifier"));
 }
@@ -476,8 +477,15 @@ static ArchbirdStatus add_symbol(AbTreeSitterScan *scan,
                                  TSNode *out_name, AbFact **out_fact) {
   AbFact *fact;
   ArchbirdStatus status;
+  int named_class =
+      ab_tree_sitter_node_type(owner, "class_declaration") ||
+      ab_tree_sitter_node_type(owner, "abstract_class_declaration") ||
+      ab_tree_sitter_node_type(owner, "class") ||
+      ab_tree_sitter_node_type(owner, "class_expression");
+  int frame_qualifies = frame->has_enclosing && !named_class;
   static const char *const containers[] = {"class_declaration",
                                            "abstract_class_declaration",
+                                           "class",
                                            "class_expression",
                                            "function_declaration",
                                            "function_expression",
@@ -490,7 +498,7 @@ static ArchbirdStatus add_symbol(AbTreeSitterScan *scan,
   *out_fact = NULL;
   if (!identifier_node(scan, name))
     return ARCHBIRD_OK;
-  if (frame->has_enclosing) {
+  if (frame_qualifies) {
     size_t start;
     size_t end;
     AbBuffer qualified;
@@ -511,12 +519,12 @@ static ArchbirdStatus add_symbol(AbTreeSitterScan *scan,
   } else {
     status = ab_tree_sitter_add_qualified_fact(
         scan, "symbols", kind, owner, name, containers,
-        sizeof(containers) / sizeof(containers[0]), &fact);
+        named_class ? 0 : sizeof(containers) / sizeof(containers[0]), &fact);
   }
   if (status == ARCHBIRD_OK)
-    status = frame->has_enclosing ? ARCHBIRD_OK
-                                  : ab_tree_sitter_add_line(scan, fact, name);
-  if (status == ARCHBIRD_OK && !frame->has_enclosing)
+    status = frame_qualifies ? ARCHBIRD_OK
+                             : ab_tree_sitter_add_line(scan, fact, name);
+  if (status == ARCHBIRD_OK && !frame_qualifies)
     status = ab_fact_add_string_attribute(scan->engine, fact, "syntax_kind",
                                           (const uint8_t *)ts_node_type(owner),
                                           strlen(ts_node_type(owner)));
@@ -599,6 +607,15 @@ ArchbirdStatus ab_tree_sitter_visit_ecmascript(AbTreeSitterScan *scan,
   } else if (ab_tree_sitter_node_type(frame->node, "class_declaration") ||
              ab_tree_sitter_node_type(frame->node,
                                       "abstract_class_declaration")) {
+    status = add_symbol(scan, frame, frame->node,
+                        ab_tree_sitter_child(frame->node, "name"), "class",
+                        &name, &fact);
+    child_frame->context &= ~AB_TS_CONTEXT_FUNCTION;
+    child_frame->context |= AB_TS_CONTEXT_CLASS;
+    if (status == ARCHBIRD_OK && fact)
+      ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+  } else if (ab_tree_sitter_node_type(frame->node, "class") ||
+             ab_tree_sitter_node_type(frame->node, "class_expression")) {
     status = add_symbol(scan, frame, frame->node,
                         ab_tree_sitter_child(frame->node, "name"), "class",
                         &name, &fact);

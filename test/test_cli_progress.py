@@ -60,7 +60,9 @@ def verify_adaptive_terminal() -> None:
         raise AssertionError(f"TTY progress was not one updating line: {capture.value!r}")
 
 
-def run(root: Path, mode: str) -> subprocess.CompletedProcess[bytes]:
+def run(
+    root: Path, mode: str, *, check: bool = True
+) -> subprocess.CompletedProcess[bytes]:
     fixture = root / "test/fixtures/map_base"
     return subprocess.run(
         [
@@ -76,7 +78,7 @@ def run(root: Path, mode: str) -> subprocess.CompletedProcess[bytes]:
             "--no-cache",
             "--format",
             "json",
-            "--check",
+            *(["--check"] if check else []),
         ],
         check=True,
         cwd=root,
@@ -91,8 +93,11 @@ def main() -> int:
     root = Path(sys.argv[1]).resolve()
     always = run(root, "always")
     automatic = run(root, "auto")
+    streamed = run(root, "auto", check=False)
     if always.stdout != automatic.stdout:
         raise AssertionError("progress mode changed canonical Map bytes")
+    if streamed.stdout != always.stdout:
+        raise AssertionError("streaming changed canonical Map bytes")
     document = json.loads(always.stdout)
     if document["project"] != "map-base":
         raise AssertionError(document["project"])
