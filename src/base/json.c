@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define JSON_WRITE_BUFFER_SIZE 16384
+
 typedef struct JsonMember {
   yyjson_val *key;
   yyjson_val *value;
@@ -14,6 +16,8 @@ typedef struct JsonWriter {
   ArchbirdWriteFn write_fn;
   void *user_data;
   uint32_t flags;
+  uint8_t output[JSON_WRITE_BUFFER_SIZE];
+  size_t output_length;
 } JsonWriter;
 
 static void *yyjson_allocate(void *context, size_t size) {
@@ -250,13 +254,12 @@ ArchbirdStatus archbird_json_validate(ArchbirdEngine *engine,
   return status;
 }
 
-static ArchbirdStatus write_bytes(JsonWriter *writer, const void *bytes,
-                                  size_t length) {
+static ArchbirdStatus flush_output(JsonWriter *writer) {
   int callback_status;
-  if (length == 0)
+  if (writer->output_length == 0)
     return ARCHBIRD_OK;
-  callback_status =
-      writer->write_fn(writer->user_data, (const uint8_t *)bytes, length);
+  callback_status = writer->write_fn(writer->user_data, writer->output,
+                                     writer->output_length);
   if (callback_status != 0) {
     /* Internal writers report their precise allocator/limit failure through
        the shared engine. Preserve it instead of relabeling it as an external
@@ -268,6 +271,36 @@ static ArchbirdStatus write_bytes(JsonWriter *writer, const void *bytes,
                               ARCHBIRD_NO_OFFSET,
                               "JSON output callback failed");
   }
+  writer->output_length = 0;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus write_bytes(JsonWriter *writer, const void *bytes,
+                                  size_t length) {
+  ArchbirdStatus status;
+  if (length == 0)
+    return ARCHBIRD_OK;
+  if (length > sizeof(writer->output)) {
+    status = flush_output(writer);
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (writer->write_fn(writer->user_data, (const uint8_t *)bytes, length) !=
+        0) {
+      if (writer->engine->error_status != ARCHBIRD_OK)
+        return writer->engine->error_status;
+      return archbird_error_set(writer->engine, ARCHBIRD_WRITE_FAILED,
+                                ARCHBIRD_NO_OFFSET,
+                                "JSON output callback failed");
+    }
+    return ARCHBIRD_OK;
+  }
+  if (length > sizeof(writer->output) - writer->output_length) {
+    status = flush_output(writer);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  memcpy(writer->output + writer->output_length, bytes, length);
+  writer->output_length += length;
   return ARCHBIRD_OK;
 }
 
@@ -293,6 +326,7 @@ static ArchbirdStatus write_string(JsonWriter *writer, const char *string,
                                    size_t length) {
   static const char hex[] = "0123456789abcdef";
   size_t index;
+  size_t span_start = 0;
   ArchbirdStatus status = write_literal(writer, "\"");
   if (status != ARCHBIRD_OK)
     return status;
@@ -324,14 +358,25 @@ static ArchbirdStatus write_string(JsonWriter *writer, const char *string,
     default:
       break;
     }
+    if (!escape && byte >= 0x20)
+      continue;
+    if (index > span_start) {
+      status = write_bytes(writer, &string[span_start], index - span_start);
+      if (status != ARCHBIRD_OK)
+        return status;
+    }
     if (escape) {
       status = write_literal(writer, escape);
-    } else if (byte < 0x20) {
+    } else {
       char encoded[6] = {'\\', 'u', '0', '0', hex[byte >> 4], hex[byte & 0xf]};
       status = write_bytes(writer, encoded, sizeof(encoded));
-    } else {
-      status = write_bytes(writer, &string[index], 1);
     }
+    if (status != ARCHBIRD_OK)
+      return status;
+    span_start = index + 1;
+  }
+  if (span_start < length) {
+    status = write_bytes(writer, &string[span_start], length - span_start);
     if (status != ARCHBIRD_OK)
       return status;
   }
@@ -489,10 +534,15 @@ ArchbirdStatus archbird_json_canonicalize(ArchbirdEngine *engine,
   writer.write_fn = write_fn;
   writer.user_data = user_data;
   writer.flags = flags;
+  writer.output_length = 0;
   status = write_value(&writer, yyjson_doc_get_root(document), 0);
   if (status == ARCHBIRD_OK && (flags & ARCHBIRD_JSON_TRAILING_NEWLINE)) {
     status = write_literal(&writer, "\n");
   }
+  if (status == ARCHBIRD_OK)
+    status = flush_output(&writer);
   yyjson_doc_free(document);
   return status;
 }
+
+#undef JSON_WRITE_BUFFER_SIZE

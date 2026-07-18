@@ -8,6 +8,7 @@ typedef struct Buffer {
   char *data;
   size_t length;
   size_t capacity;
+  size_t write_calls;
   int fail;
 } Buffer;
 
@@ -21,6 +22,7 @@ static void fail(const char *name, const char *message) {
 static int buffer_write(void *user_data, const uint8_t *bytes, size_t length) {
   Buffer *buffer = (Buffer *)user_data;
   char *resized;
+  buffer->write_calls++;
   if (buffer->fail)
     return 1;
   if (length > SIZE_MAX - buffer->length - 1)
@@ -46,6 +48,7 @@ static int buffer_write(void *user_data, const uint8_t *bytes, size_t length) {
 
 static void buffer_reset(Buffer *buffer) {
   buffer->length = 0;
+  buffer->write_calls = 0;
   buffer->fail = 0;
   if (buffer->data)
     buffer->data[0] = '\0';
@@ -118,6 +121,16 @@ int main(void) {
   status = canonicalize(engine, &buffer, mixed, 0);
   expect_status("repeat-status", status, ARCHBIRD_OK);
   expect_text("repeat-output", &buffer, compact);
+
+  status = canonicalize(
+      engine, &buffer,
+      "\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"", 0);
+  expect_status("string-span-status", status, ARCHBIRD_OK);
+  expect_text(
+      "string-span-output", &buffer,
+      "\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"");
+  if (buffer.write_calls != 1)
+    fail("string-span-writes", "small JSON output was not written once");
 
   status = canonicalize(engine, &buffer, "{\"a\":1,\"\\u0061\":2}", 0);
   expect_status("escaped-duplicate", status, ARCHBIRD_DUPLICATE_KEY);
