@@ -29,6 +29,14 @@ def main() -> int:
         raise SystemExit("usage: test_ecmascript_modules.py EXTENSION")
     extension = load_extension(Path(sys.argv[1]).resolve())
     sources = {
+        "index.js": b"module.exports = {wrongRoot};\n",
+        "default-main/index.js": b"module.exports = {nestedDefault};\n",
+        "default-main/package.json": (
+            b'{"name":"default-main","version":"1.0.0"}'
+        ),
+        "missing-default/package.json": (
+            b'{"name":"missing-default","version":"1.0.0"}'
+        ),
         "cjs/index.js": b"""
 const api = {create};
 Object.defineProperties(api, {Tensor: {get() { return T; }}});
@@ -278,6 +286,22 @@ test('constructs PPO', () => { new PPO(); });
             "layer": "javascript",
         }
     )
+    config["packages"].extend(
+        [
+            {
+                "name": "default-main",
+                "kind": "npm",
+                "path": "default-main/package.json",
+                "layer": "javascript",
+            },
+            {
+                "name": "missing-default",
+                "kind": "npm",
+                "path": "missing-default/package.json",
+                "layer": "javascript",
+            },
+        ]
+    )
     project = extension.project_create(canonical(manifest))
     for path, raw in sorted(sources.items()):
         extension.project_add_source(project, path, raw)
@@ -313,6 +337,15 @@ test('constructs PPO', () => { new PPO(); });
     ], quoted_file["symbols"]
 
     by_package = {row["name"]: row for row in mapped["packages"]}
+    assert by_package["default-main"]["entrypoints"]["main"] == "index.js", (
+        by_package["default-main"]
+    )
+    assert by_package["default-main"]["entrypoint_surfaces"][0]["path"] == (
+        "default-main/index.js"
+    ), by_package["default-main"]
+    assert by_package["default-main"]["exports"] == ["nestedDefault"], by_package
+    assert by_package["missing-default"]["entrypoints"] == {}, by_package
+    assert by_package["missing-default"]["entrypoint_surfaces"] == [], by_package
     assert by_package["cjs"]["exports"] == ["Tensor", "create", "stats"], by_package
     assert by_package["callable"]["exports"] == ["default"], by_package
     callable_surface = by_package["callable"]["entrypoint_surfaces"][0]

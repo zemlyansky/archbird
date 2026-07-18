@@ -904,9 +904,49 @@ static ArchbirdStatus infer_python_entries(AbMapState *state,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus resolve_npm_entry(AbMapState *state,
+                                        const AbMapPackage *package,
+                                        const AbString *target,
+                                        const AbManifestFile **out_file) {
+  const AbManifestFile *manifest_file;
+  AbManifestFile source;
+  AbString relative;
+  char *relative_bytes = NULL;
+  ArchbirdStatus status;
+
+  *out_file = NULL;
+  if (!target || !target->length)
+    return ARCHBIRD_OK;
+  manifest_file = mapped_file(state, &package->manifest, NULL);
+  if (!manifest_file)
+    return ARCHBIRD_OK;
+  source = *manifest_file;
+  source.has_language = 1;
+  source.language.data = "javascript";
+  source.language.length = 10;
+  relative = *target;
+  if (target->data[0] != '.' && target->data[0] != '/') {
+    relative_bytes = (char *)ab_malloc(state->engine, target->length + 3);
+    if (!relative_bytes)
+      return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory resolving npm package entry");
+    relative_bytes[0] = '.';
+    relative_bytes[1] = '/';
+    memcpy(relative_bytes + 2, target->data, target->length);
+    relative_bytes[target->length + 2] = '\0';
+    relative.data = relative_bytes;
+    relative.length = target->length + 2;
+  }
+  status = ab_map_resolve_import(state->engine, state->manifest, state->config,
+                                 &source, &relative, out_file);
+  ab_free(state->engine, relative_bytes);
+  return status;
+}
+
 static ArchbirdStatus collect_entries(AbMapState *state,
                                       const AbConfigPackage *config,
-                                      const AbMapPackage *package,
+                                      AbMapPackage *package,
                                       AbStringArray *entries) {
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -937,46 +977,28 @@ static ArchbirdStatus collect_entries(AbMapState *state,
         break;
       }
     }
+    if (status == ARCHBIRD_OK && !package->npm_has_exports && !main_entry) {
+      static const AbString default_main = {(char *)"index.js", 8};
+      const AbManifestFile *file = NULL;
+      status = resolve_npm_entry(state, package, &default_main, &file);
+      if (status == ARCHBIRD_OK && file && file->has_layer) {
+        status = append_unique_pair(state->engine, &package->entrypoints,
+                                    &package->entrypoint_count, "main", 4,
+                                    default_main.data, default_main.length, 1);
+        if (status == ARCHBIRD_OK) {
+          main_entry = &package->entrypoints[package->entrypoint_count - 1];
+          target_count = 1;
+        }
+      }
+    }
     for (index = 0; status == ARCHBIRD_OK && index < target_count; index++) {
       const AbString *target = package->npm_has_exports
                                    ? &package->npm_runtime_entries.items[index]
                                : main_entry ? &main_entry->value
                                             : NULL;
-      const AbManifestFile *file =
-          target ? mapped_file(state, target, NULL) : NULL;
-      const AbManifestFile *manifest_file;
-      AbManifestFile source;
-      AbString relative;
-      char *relative_bytes = NULL;
-      if (target && !file && target->length &&
-          !(target->length >= 1 && target->data[0] == '/')) {
-        manifest_file = mapped_file(state, &package->manifest, NULL);
-        if (manifest_file) {
-          source = *manifest_file;
-          source.has_language = 1;
-          source.language.data = "javascript";
-          source.language.length = 10;
-          relative = *target;
-          if (target->data[0] != '.') {
-            relative_bytes =
-                (char *)ab_malloc(state->engine, target->length + 3);
-            if (!relative_bytes)
-              return archbird_error_set(
-                  state->engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
-                  "out of memory resolving npm package entry");
-            relative_bytes[0] = '.';
-            relative_bytes[1] = '/';
-            memcpy(relative_bytes + 2, target->data, target->length);
-            relative_bytes[target->length + 2] = '\0';
-            relative.data = relative_bytes;
-            relative.length = target->length + 2;
-          }
-          status =
-              ab_map_resolve_import(state->engine, state->manifest,
-                                    state->config, &source, &relative, &file);
-          ab_free(state->engine, relative_bytes);
-        }
-      }
+      const AbManifestFile *file = NULL;
+      if (target)
+        status = resolve_npm_entry(state, package, target, &file);
       if (file && file->has_layer)
         status = append_unique_string(state->engine, entries, file->path.data,
                                       file->path.length);

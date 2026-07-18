@@ -194,8 +194,7 @@ static int provider_digest_contains(const ArchbirdProject *project,
 }
 
 static void provider_digest_insert(uint8_t *digests, uint8_t *occupied,
-                                   size_t capacity,
-                                   const uint8_t digest[32]) {
+                                   size_t capacity, const uint8_t digest[32]) {
   size_t slot = provider_digest_slot(digests, occupied, capacity, digest);
   memcpy(digests + slot * 32, digest, 32);
   occupied[slot] = 1;
@@ -206,9 +205,8 @@ static ArchbirdStatus reserve_provider_digests(ArchbirdEngine *engine,
                                                size_t required) {
   uint8_t *digests;
   uint8_t *occupied;
-  size_t capacity = project->provider_digest_capacity
-                        ? project->provider_digest_capacity
-                        : 8;
+  size_t capacity =
+      project->provider_digest_capacity ? project->provider_digest_capacity : 8;
   size_t index;
   if (!required)
     return ARCHBIRD_OK;
@@ -734,9 +732,8 @@ ArchbirdStatus ab_project_take_provider_bundles(ArchbirdEngine *engine,
     if (status != ARCHBIRD_OK)
       return status;
     if (provider_digest_contains(project, bundle->sha256))
-      return archbird_error_set(
-          engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-          "provider bundle was supplied more than once");
+      return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+                                "provider bundle was supplied more than once");
   }
   if (bundle_count > 1) {
     if (bundle_count > SIZE_MAX / 32)
@@ -752,12 +749,11 @@ ArchbirdStatus ab_project_take_provider_bundles(ArchbirdEngine *engine,
       memcpy(batch_digests + index * 32, bundles[index].sha256, 32);
     qsort(batch_digests, bundle_count, 32, digest_compare);
     for (index = 1; index < bundle_count; index++) {
-      if (memcmp(batch_digests + (index - 1) * 32,
-                 batch_digests + index * 32, 32) == 0) {
+      if (memcmp(batch_digests + (index - 1) * 32, batch_digests + index * 32,
+                 32) == 0) {
         ab_free(engine, batch_digests);
-        return archbird_error_set(
-            engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-            "provider batch contains a duplicate bundle");
+        return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+                                  "provider batch contains a duplicate bundle");
       }
     }
   }
@@ -775,9 +771,9 @@ ArchbirdStatus ab_project_take_provider_bundles(ArchbirdEngine *engine,
     resized = (AbProviderBundle *)ab_realloc(
         engine, project->providers, capacity * sizeof(*project->providers));
     if (!resized)
-      status = archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                                  ARCHBIRD_NO_OFFSET,
-                                  "out of memory storing provider bundle");
+      status =
+          archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+                             "out of memory storing provider bundle");
     if (!resized) {
       ab_free(engine, batch_digests);
       return status;
@@ -792,10 +788,9 @@ ArchbirdStatus ab_project_take_provider_bundles(ArchbirdEngine *engine,
     return status;
   }
   for (index = 0; index < bundle_count; index++) {
-    provider_digest_insert(project->provider_digest_index,
-                           project->provider_digest_occupied,
-                           project->provider_digest_capacity,
-                           bundles[index].sha256);
+    provider_digest_insert(
+        project->provider_digest_index, project->provider_digest_occupied,
+        project->provider_digest_capacity, bundles[index].sha256);
     bundles[index].mode = mode;
     project->providers[project->provider_count++] = bundles[index];
     memset(&bundles[index], 0, sizeof(bundles[index]));

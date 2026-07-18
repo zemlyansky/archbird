@@ -88,8 +88,8 @@ static ArchbirdStatus add_discovery_path(ArchbirdEngine *engine,
   size_t index;
   while (first < last) {
     size_t middle = first + (last - first) / 2;
-    int comparison = ab_string_compare(&discovery->paths.items[middle],
-                                       &candidate);
+    int comparison =
+        ab_string_compare(&discovery->paths.items[middle], &candidate);
     if (comparison < 0)
       first = middle + 1;
     else
@@ -125,8 +125,7 @@ static ArchbirdStatus add_discovery_path(ArchbirdEngine *engine,
   if (ab_string_copy(engine, &copied, data, length) != ARCHBIRD_OK)
     return ARCHBIRD_OUT_OF_MEMORY;
   if (index < discovery->paths.count)
-    memmove(&discovery->paths.items[index + 1],
-            &discovery->paths.items[index],
+    memmove(&discovery->paths.items[index + 1], &discovery->paths.items[index],
             (discovery->paths.count - index) * sizeof(*discovery->paths.items));
   discovery->paths.items[index] = copied;
   discovery->paths.count++;
