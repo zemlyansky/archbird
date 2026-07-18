@@ -535,7 +535,7 @@ static ArchbirdStatus scan_class(JsContext *context, size_t class_index,
   ab_buffer_free(&signature);
   if (status != ARCHBIRD_OK)
     return status;
-  body_open = find_token(context->tokens, keyword_index + 2,
+  body_open = find_token(context->tokens, keyword_index + 1,
                          context->tokens->count, 20, "{");
   if (body_open == SIZE_MAX || context->brace_forward[body_open] == SIZE_MAX)
     return ARCHBIRD_OK;
@@ -639,7 +639,8 @@ static ArchbirdStatus scan_declared_symbols(JsContext *context,
       }
     } else if (ab_token_equals(context->tokens, index, "class") &&
                index + 1 < context->tokens->count &&
-               context->tokens->items[index + 1].kind == AB_TOKEN_IDENTIFIER) {
+               context->tokens->items[index + 1].kind == AB_TOKEN_IDENTIFIER &&
+               !ab_token_equals(context->tokens, index + 1, "extends")) {
       ArchbirdStatus status = scan_class(context, index + 1, index);
       if (status != ARCHBIRD_OK)
         return status;
@@ -714,6 +715,13 @@ static ArchbirdStatus scan_top_level_bindings(JsContext *context) {
               token_length(context->tokens, name_index), "function", "function",
               token_data(context->tokens, name_index),
               token_length(context->tokens, name_index));
+          if (status != ARCHBIRD_OK)
+            return status;
+        } else if (ab_token_equals(context->tokens, start, "class") &&
+                   start + 1 < context->tokens->count &&
+                   (ab_token_equals(context->tokens, start + 1, "extends") ||
+                    ab_token_equals(context->tokens, start + 1, "{"))) {
+          ArchbirdStatus status = scan_class(context, name_index, start);
           if (status != ARCHBIRD_OK)
             return status;
         }

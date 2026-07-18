@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 
 from archbird import _native
 from archbird.providers import python_ast as provider
@@ -27,6 +28,33 @@ def canonical(value: object) -> bytes:
 def main() -> int:
     raw = SOURCE.encode()
     path = "pkg/portable.py"
+    original_warning_parse = provider.ast.parse
+    original_warning_symtable = provider.symtable.symtable
+    try:
+
+        def parse_with_warning(*args, **kwargs):
+            warnings.warn("fixture AST warning", SyntaxWarning)
+            return original_warning_parse(*args, **kwargs)
+
+        def symtable_with_warning(*args, **kwargs):
+            warnings.warn("fixture symtable warning", SyntaxWarning)
+            return original_warning_symtable(*args, **kwargs)
+
+        provider.ast.parse = parse_with_warning
+        provider.symtable.symtable = symtable_with_warning
+        with warnings.catch_warnings(record=True) as emitted:
+            warnings.simplefilter("always")
+            provider.python_ast_provider_facts(
+                project="provider-applicability",
+                path=path,
+                text=SOURCE,
+            )
+    finally:
+        provider.ast.parse = original_warning_parse
+        provider.symtable.symtable = original_warning_symtable
+    leaked = [row for row in emitted if issubclass(row.category, SyntaxWarning)]
+    if leaked:
+        raise AssertionError(f"CPython parser warnings leaked: {leaked!r}")
     manifest = {
         "artifact": "archbird-source-manifest",
         "files": [

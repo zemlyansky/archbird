@@ -196,6 +196,34 @@ def main() -> int:
             "lexical arrow discovery escaped the direct initializer: "
             f"{sorted(initializer_symbols)!r}"
         )
+    anonymous_class_regression = subprocess.run(
+        [str(executable), "javascript", "src/anonymous-class.js"],
+        input=(
+            "const Plain = class { run() { return 1 } };\n"
+            "var AdamW = class extends Optimizer {\n"
+            "  constructor(params) { this.params = params }\n"
+            "  applyGradients(values) { return values }\n"
+            "};\n"
+        ).encode(),
+        capture_output=True,
+        check=True,
+    )
+    anonymous_symbols = {
+        fact["name"]
+        for fact in json.loads(anonymous_class_regression.stdout)["facts"]
+        if fact["domain"] == "symbols"
+    }
+    if anonymous_symbols != {
+        "AdamW",
+        "AdamW.applyGradients",
+        "AdamW.constructor",
+        "Plain",
+        "Plain.run",
+    }:
+        raise AssertionError(
+            "anonymous class expression lost its assignment binding: "
+            f"{sorted(anonymous_symbols)!r}"
+        )
     quoted_property_regression = subprocess.run(
         [str(executable), "javascript", "src/quoted-property.js"],
         input=(

@@ -41,6 +41,13 @@ class PPO {}
 if (typeof module !== 'undefined') module.exports = PPO;
 """,
         "callable/package.json": b'{"name":"callable","version":"1.0.0"}',
+        "anonymous/index.js": b"""
+const Plain = class { run() { return 1; } };
+var AdamW = class extends Optimizer {
+  constructor(params) { this.params = params; }
+  applyGradients(values) { return values; }
+};
+""",
         "bridge/index.js": b"module.exports = require('./target.sync');\n",
         "bridge/target.sync.js": b"module.exports = {run, stop};\n",
         "bridge/target.sync.py": b"run = 'wrong language candidate'\n",
@@ -290,6 +297,16 @@ test('constructs PPO', () => { new PPO(); });
     extension.project_finalize_providers(project)
     mapped = json.loads(extension.project_map(project))
 
+    anonymous_file = next(
+        row for row in mapped["files"] if row["path"] == "anonymous/index.js"
+    )
+    assert [row["name"] for row in anonymous_file["symbols"]] == [
+        "Plain",
+        "Plain.run",
+        "AdamW",
+        "AdamW.constructor",
+        "AdamW.applyGradients",
+    ], anonymous_file["symbols"]
     quoted_file = next(row for row in mapped["files"] if row["path"] == "quoted/index.js")
     assert [row["name"] for row in quoted_file["symbols"]] == [
         "component.watch.'output._messages'.handler"

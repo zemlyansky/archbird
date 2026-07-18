@@ -20,6 +20,7 @@ import struct
 import symtable
 import sys
 import unicodedata
+import warnings
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
@@ -1253,9 +1254,11 @@ def python_ast_provider_facts(
     facts = _Facts(project, path)
     diagnostics: List[Dict[str, object]] = []
     try:
-        tree = ast.parse(text, filename=path)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(text, filename=path)
+            table = symtable.symtable(text, path, "exec")
         source_tokens = _SourcePositions(text, raw, starts)
-        table = symtable.symtable(text, path, "exec")
         visitor = _PythonProviderVisitor(facts, starts, source_tokens, table, tree)
         visitor.visit(tree)
         selected, origins, origin_names, export_spans, imported = _top_level_exports(
