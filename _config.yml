@@ -1,0 +1,73 @@
+title: "Archbird"
+description: >
+  Map codebases. Verify architecture. Plan and check structural changes.
+url: "https://archbird.org"
+repository: "zemlyansky/archbird"
+
+show_excerpts: false
+
+header_pages:
+  - js/README.md
+  - py/README.md
+
+minima:
+  social_links:
+    github: zemlyansky/archbird
+
+remote_theme: "jseeio/minima@09f6ac8419e5db6fcc717fb340fc3d5ad36ef3dc"
+
+plugins:
+  - jekyll-remote-theme
+
+defaults:
+  - scope:
+      path: "README.md"
+    values:
+      layout: page
+      title: Archbird
+      show_title: false
+      permalink: /
+  - scope:
+      path: "js/README.md"
+    values:
+      layout: page
+      title: JavaScript
+      show_title: false
+      permalink: /js/
+  - scope:
+      path: "py/README.md"
+    values:
+      layout: page
+      title: Python
+      show_title: false
+      permalink: /py/
+
+exclude:
+  - .github/
+  - AGENTS.md
+  - CMakeLists.txt
+  - Gemfile
+  - Gemfile.lock
+  - Makefile
+  - archbird
+  - app/
+  - bindings/
+  - build/
+  - cmake/
+  - include/
+  - js/binding.gyp
+  - js/package-lock.json
+  - js/package.json
+  - js/scripts/
+  - js/src/
+  - js/test/
+  - py/MANIFEST.in
+  - py/archbird/
+  - py/pyproject.toml
+  - py/scripts/
+  - py/setup.py
+  - py/tests/
+  - src/
+  - test/
+  - tools/
+  - vendor/

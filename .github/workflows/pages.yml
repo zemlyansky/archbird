@@ -29,6 +29,12 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
       - name: Install pinned Emscripten SDK
         run: |
           git clone --branch 5.0.2 --depth 1 \
@@ -42,12 +48,28 @@ jobs:
           make app-test
 
       - name: Configure Pages
+        id: pages
         uses: actions/configure-pages@v5
+
+      - name: Render READMEs and add application
+        env:
+          JEKYLL_ENV: production
+        run: |
+          bundle exec jekyll build \
+            --baseurl "${{ steps.pages.outputs.base_path }}" \
+            --destination build/pages
+          mkdir -p build/pages/app
+          cp -R app/dist/. build/pages/app/
+          test -s build/pages/index.html
+          test -s build/pages/js/index.html
+          test -s build/pages/py/index.html
+          test -s build/pages/app/index.html
+          test ! -e build/pages/archbird
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: app/dist
+          path: build/pages
 
   deploy:
     environment:

@@ -12,6 +12,10 @@ and check that coordinated changes produced the required structural result.
 [![npm](https://img.shields.io/npm/v/archbird)](https://www.npmjs.com/package/archbird)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
+[JavaScript documentation](https://archbird.org/js/) ·
+[Python documentation](https://archbird.org/py/) ·
+[Open the browser app](https://archbird.org/app/)
+
 ```bash
 # Python 3.9+
 python -m pip install archbird
