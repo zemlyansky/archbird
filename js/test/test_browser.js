@@ -141,6 +141,24 @@ const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js
   assert.equal(virtualMap.tests[0].inventory_state, "candidate");
   assert.equal(virtualMap.tests[0].cases[0].selector, "test_main");
   virtual.dispose();
+  const virtualR = archbird.Project.fromFiles([
+    new archbird.Source(
+      "DESCRIPTION",
+      Buffer.from("Package: browserR\nVersion: 3.2.1\n"),
+    ),
+    new archbird.Source("NAMESPACE", Buffer.from("export(alpha, beta)\n")),
+    new archbird.Source(
+      "R/api.R",
+      Buffer.from("alpha <- function(x) x\nbeta <- function(x) alpha(x)\n"),
+    ),
+  ], { typescript: false });
+  const virtualRMap = virtualR.map();
+  assert.equal(virtualRMap.project, "browserR");
+  assert.equal(virtualRMap.packages.length, 1);
+  assert.equal(virtualRMap.packages[0].identity, "browserR");
+  assert.equal(virtualRMap.packages[0].version, "3.2.1");
+  assert.deepEqual(virtualRMap.packages[0].exports, ["alpha", "beta"]);
+  virtualR.dispose();
   console.log("packaged browser/Wasm Map passed");
 })().catch((error) => {
   console.error(error);

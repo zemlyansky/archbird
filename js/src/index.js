@@ -999,7 +999,7 @@ function repositoryInventory(
       seen.add(relative);
     }
   }
-  const documents = ["package.json", "pyproject.toml"]
+  const documents = ["package.json", "pyproject.toml", "DESCRIPTION"]
     .filter((relative) => paths.has(relative))
     .map((relative) => encodedInput(root, relative));
   return Buffer.from(JSON.stringify(canonicalForDigest({
@@ -1018,6 +1018,8 @@ function rootRows(root) {
     ".gitignore",
     ".ignore",
     "Makefile",
+    "DESCRIPTION",
+    "NAMESPACE",
     "package.json",
     "pyproject.toml",
   ]

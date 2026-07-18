@@ -248,7 +248,7 @@ async function createBrowserArchbird(moduleOptions = {}) {
         : [...byPath.keys()]
           .filter((pathname) => standardIgnore(pathname) && !customSet.has(pathname));
       const ignorePaths = [...standard, ...custom];
-      const documents = ["package.json", "pyproject.toml"]
+      const documents = ["package.json", "pyproject.toml", "DESCRIPTION"]
         .filter((pathname) => byPath.has(pathname))
         .map((pathname) => ({
           content_hex: byPath.get(pathname).data.toString("hex"),

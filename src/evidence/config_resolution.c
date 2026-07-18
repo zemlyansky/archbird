@@ -4,6 +4,7 @@
 #include "config.h"
 #include "gitignore.h"
 #include "json_value.h"
+#include "lexical/tokenizer.h"
 #include "path_match.h"
 #include "python_manifest.h"
 #include "render_internal.h"
@@ -69,7 +70,8 @@ typedef struct ResolutionState {
   const AbValue *pruned_directories;
   int has_package_json;
   int has_pyproject;
-  /* 1 = package.json, 2 = pyproject.toml. */
+  int has_description;
+  /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION. */
   int package_identity;
 } ResolutionState;
 
@@ -92,7 +94,8 @@ static const char default_config[] =
     "{\"globs\":[\"**/"
     "*.vue\"],\"language\":\"vue\",\"name\":\"auto-vue\",\"required\":false},"
     "{\"globs\":[\"**/*.R\",\"**/"
-    "*.r\"],\"language\":\"r\",\"name\":\"auto-r\",\"required\":false}"
+    "*.r\",\"NAMESPACE\"],\"language\":\"r\",\"name\":\"auto-r\","
+    "\"required\":false}"
     "],\"project\":\"repository\",\"schema_version\":1}";
 
 static int field_compare(const void *left_raw, const void *right_raw) {
@@ -623,6 +626,50 @@ static ArchbirdStatus parse_package_document(ResolutionState *state,
   return status;
 }
 
+static ArchbirdStatus parse_description_document(ResolutionState *state,
+                                                 const uint8_t *bytes,
+                                                 size_t length, AbString *name,
+                                                 AbString *version) {
+  size_t line_start = 0;
+  ArchbirdStatus status = ab_utf8_validate(state->engine, bytes, length);
+  while (status == ARCHBIRD_OK && line_start < length) {
+    size_t line_end = line_start;
+    size_t colon;
+    size_t value_start;
+    size_t value_end;
+    while (line_end < length && bytes[line_end] != '\n')
+      line_end++;
+    colon = line_start;
+    while (colon < line_end && bytes[colon] != ':')
+      colon++;
+    if (colon == line_end) {
+      line_start = line_end + 1;
+      continue;
+    }
+    value_start = colon + 1;
+    value_end = line_end;
+    while (value_start < value_end &&
+           (bytes[value_start] == ' ' || bytes[value_start] == '\t'))
+      value_start++;
+    while (value_end > value_start &&
+           (bytes[value_end - 1] == ' ' || bytes[value_end - 1] == '\t' ||
+            bytes[value_end - 1] == '\r'))
+      value_end--;
+    if (!name->length && colon - line_start == 7 &&
+        !memcmp(bytes + line_start, "Package", 7))
+      status =
+          ab_string_copy(state->engine, name, (const char *)bytes + value_start,
+                         value_end - value_start);
+    else if (!version->length && colon - line_start == 7 &&
+             !memcmp(bytes + line_start, "Version", 7))
+      status = ab_string_copy(state->engine, version,
+                              (const char *)bytes + value_start,
+                              value_end - value_start);
+    line_start = line_end + 1;
+  }
+  return status;
+}
+
 static ArchbirdStatus add_default_npm(ResolutionState *state,
                                       const AbString *name,
                                       const AbString *version) {
@@ -737,6 +784,44 @@ static ArchbirdStatus add_default_python(ResolutionState *state,
   return status;
 }
 
+static ArchbirdStatus add_default_r(ResolutionState *state,
+                                    const AbString *name,
+                                    const AbString *version) {
+  AbValue packages = {0};
+  AbValue package = {0};
+  AbObjectField *field = mutable_member(&state->effective, "packages");
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (field) {
+    packages = field->value;
+    memset(&field->value, 0, sizeof(field->value));
+  } else {
+    packages.kind = AB_VALUE_ARRAY;
+  }
+  package.kind = AB_VALUE_OBJECT;
+  status = object_set_string(state->engine, &package, "identity", name->data,
+                             name->length);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &package, "kind", "r", 1);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &package, "layer", "auto-r", 6);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &package, "name", "r-root", 6);
+  if (status == ARCHBIRD_OK)
+    status =
+        object_set_string(state->engine, &package, "path", "DESCRIPTION", 11);
+  if (status == ARCHBIRD_OK && version->length)
+    status = object_set_string(state->engine, &package, "version",
+                               version->data, version->length);
+  if (status == ARCHBIRD_OK)
+    status = array_append(state->engine, &packages, &package);
+  if (status == ARCHBIRD_OK)
+    status =
+        object_set(state->engine, &state->effective, "packages", &packages);
+  ab_value_free(state->engine, &package);
+  ab_value_free(state->engine, &packages);
+  return status;
+}
+
 static ArchbirdStatus add_default_make(ResolutionState *state) {
   AbObjectField *field = mutable_member(&state->effective, "builds");
   AbValue builds = {0};
@@ -763,12 +848,11 @@ static ArchbirdStatus add_default_make(ResolutionState *state) {
   return status;
 }
 
-static ArchbirdStatus decode_inventory(ResolutionState *state,
-                                       const uint8_t *json, size_t json_length,
-                                       AbString *package,
-                                       AbString *package_version,
-                                       AbPyprojectMetadata *pyproject,
-                                       int *has_make) {
+static ArchbirdStatus
+decode_inventory(ResolutionState *state, const uint8_t *json,
+                 size_t json_length, AbString *package,
+                 AbString *package_version, AbPyprojectMetadata *pyproject,
+                 AbString *r_package, AbString *r_version, int *has_make) {
   static const char *const fields[] = {
       "artifact",     "documents",          "files",
       "ignore_files", "pruned_directories", "schema_version"};
@@ -921,6 +1005,11 @@ static ArchbirdStatus decode_inventory(ResolutionState *state,
                ab_value_string_is(path, "pyproject.toml")) {
       state->has_pyproject = 1;
       status = ab_pyproject_metadata(state->engine, bytes, length, pyproject);
+    } else if (status == ARCHBIRD_OK &&
+               ab_value_string_is(path, "DESCRIPTION")) {
+      state->has_description = 1;
+      status = parse_description_document(state, bytes, length, r_package,
+                                          r_version);
     }
     ab_free(state->engine, bytes);
   }
@@ -1101,6 +1190,7 @@ static ArchbirdStatus
 prepare_effective(ResolutionState *state, const uint8_t *config_json,
                   size_t config_length, const AbString *package,
                   const AbString *version, const AbPyprojectMetadata *pyproject,
+                  const AbString *r_package, const AbString *r_version,
                   int has_make) {
   ArchbirdStatus status;
   status = ab_json_value_decode(
@@ -1109,8 +1199,10 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
       config_length ? config_length : sizeof(default_config) - 1,
       &state->effective);
   if (status == ARCHBIRD_OK && !state->configured && !state->request.project &&
-      (package->length || pyproject->name.length)) {
-    const AbString *identity = package->length ? package : &pyproject->name;
+      (package->length || pyproject->name.length || r_package->length)) {
+    const AbString *identity = package->length          ? package
+                               : pyproject->name.length ? &pyproject->name
+                                                        : r_package;
     const char *project_data;
     size_t project_length;
     if (portable_project_name(identity->data, identity->length, &project_data,
@@ -1118,13 +1210,18 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
       status = object_set_string(state->engine, &state->effective, "project",
                                  project_data, project_length);
       if (status == ARCHBIRD_OK)
-        state->package_identity = package->length ? 1 : 2;
+        state->package_identity = package->length          ? 1
+                                  : pyproject->name.length ? 2
+                                                           : 3;
     }
   }
   if (status == ARCHBIRD_OK && !state->configured && state->has_package_json)
     status = add_default_npm(state, package, version);
   if (status == ARCHBIRD_OK && !state->configured && state->has_pyproject)
     status = add_default_python(state, pyproject);
+  if (status == ARCHBIRD_OK && !state->configured && state->has_description &&
+      r_package->length)
+    status = add_default_r(state, r_package, r_version);
   if (status == ARCHBIRD_OK && !state->configured && has_make)
     status = add_default_make(state);
   if (status == ARCHBIRD_OK)
@@ -1702,6 +1799,7 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
     const char *evidence = state->request.project         ? "--project"
                            : state->package_identity == 1 ? "package.json"
                            : state->package_identity == 2 ? "pyproject.toml"
+                           : state->package_identity == 3 ? "DESCRIPTION"
                            : !state->configured ? "stable-literal:repository"
                                                 : NULL;
     status = render_origin(buffer, &first, "/project", source, evidence,
@@ -1884,6 +1982,8 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   ResolutionState state = {0};
   AbString package = {0};
   AbString package_version = {0};
+  AbString r_package = {0};
+  AbString r_version = {0};
   AbPyprojectMetadata pyproject = {0};
   AbBuffer effective_json;
   AbMapConfig validated = {0};
@@ -1901,12 +2001,13 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   ab_buffer_init(&effective_json, engine);
   status = decode_request(&state, request_json, request_length);
   if (status == ARCHBIRD_OK)
-    status =
-        decode_inventory(&state, inventory_json, inventory_length, &package,
-                         &package_version, &pyproject, &has_make);
+    status = decode_inventory(&state, inventory_json, inventory_length,
+                              &package, &package_version, &pyproject,
+                              &r_package, &r_version, &has_make);
   if (status == ARCHBIRD_OK)
     status = prepare_effective(&state, config_json, config_length, &package,
-                               &package_version, &pyproject, has_make);
+                               &package_version, &pyproject, &r_package,
+                               &r_version, has_make);
   if (status == ARCHBIRD_OK)
     status = render_value(engine, &state.effective, &effective_json);
   if (status == ARCHBIRD_OK)
@@ -1926,6 +2027,8 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   ab_buffer_free(&effective_json);
   ab_string_free(engine, &package);
   ab_string_free(engine, &package_version);
+  ab_string_free(engine, &r_package);
+  ab_string_free(engine, &r_version);
   ab_pyproject_metadata_free(engine, &pyproject);
   resolution_free(&state);
   return status;

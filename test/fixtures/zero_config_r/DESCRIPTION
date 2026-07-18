@@ -1,0 +1,5 @@
+Package: zeroR
+Version: 1.2.3
+Title: Zero-config R fixture
+Description: Exercises CRAN package discovery without project configuration.
+License: MIT

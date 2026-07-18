@@ -106,6 +106,14 @@ int main(void) {
       "{\"bytes\":91,\"path\":\"pyproject.toml\"},"
       "{\"bytes\":21,\"path\":\"src/demo_module/__init__.py\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
+  static const char r_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"5061636b6167653a207a65726f520a56657273696f6e3a"
+      "20312e322e330a\",\"path\":\"DESCRIPTION\"}],\"files\":["
+      "{\"bytes\":32,\"path\":\"DESCRIPTION\"},"
+      "{\"bytes\":20,\"path\":\"NAMESPACE\"},"
+      "{\"bytes\":24,\"path\":\"R/api.R\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
   static const char configured[] =
       "{\"layers\":[{\"globs\":[\"**/*.py\"],\"language\":\"python\","
       "\"name\":\"configured\"}],\"project\":\"base\",\"schema_version\":1}";
@@ -142,6 +150,7 @@ int main(void) {
   Output override = {{0}, 0};
   Output scoped = {{0}, 0};
   Output python = {{0}, 0};
+  Output r = {{0}, 0};
   Output index = {{0}, 0};
   Output vendor = {{0}, 0};
   ArchbirdDiscovery *discovery = NULL;
@@ -216,6 +225,16 @@ int main(void) {
       !contains(&python, "\"evidence\":[\"pyproject.toml\"]") ||
       !contains(&python, "\"selected\":2")) {
     fprintf(stderr, "zero-config Python package evidence is incorrect\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, r_inventory, &r) ||
+      !contains(&r, "\"project\":\"zeroR\"") ||
+      !contains(&r, "\"identity\":\"zeroR\"") ||
+      !contains(&r, "\"kind\":\"r\"") || !contains(&r, "\"name\":\"r-root\"") ||
+      !contains(&r, "\"path\":\"DESCRIPTION\"") ||
+      !contains(&r, "\"evidence\":[\"DESCRIPTION\"]") ||
+      !contains(&r, "\"selected\":3")) {
+    fprintf(stderr, "zero-config CRAN package evidence is incorrect\n");
     failed = 1;
   }
   if (!resolve(engine, index_config, request, index_inventory, &index) ||

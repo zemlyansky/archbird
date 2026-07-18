@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -29,7 +30,7 @@ def main() -> int:
     fixture = repository / "test/fixtures/zero_config"
     sys.path.insert(0, str(repository / "py"))
     load_extension(extension.resolve())
-    from archbird.native import resolve_discovery
+    from archbird.native import Project, resolve_discovery
 
     python_outputs = [
         resolve_discovery(fixture),
@@ -60,7 +61,37 @@ def main() -> int:
     node_outputs = [bytes.fromhex(row) for row in completed.stdout.decode().splitlines()]
     if node_outputs != python_outputs:
         raise AssertionError("Python and Node config-resolution artifacts differ")
-    print("Python/Node config-resolution parity passed for three request modes")
+    r_fixture = repository / "test/fixtures/zero_config_r"
+    r_resolution = resolve_discovery(r_fixture)
+    r_completed = subprocess.run(
+        [
+            str(node),
+            str(repository / "test/test_resolution_node.js"),
+            str(addon.resolve()),
+            str(repository),
+            str(r_fixture),
+            "default",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    if bytes.fromhex(r_completed.stdout.decode().strip()) != r_resolution:
+        raise AssertionError("Python and Node CRAN resolution artifacts differ")
+    r_project = Project.from_repository(r_fixture, jobs=1)
+    r_map = json.loads(r_project.map_json())
+    if r_map["project"] != "zeroR":
+        raise AssertionError(f"DESCRIPTION identity was lost: {r_map['project']!r}")
+    if len(r_map["packages"]) != 1:
+        raise AssertionError(f"CRAN package was not inferred: {r_map['packages']!r}")
+    r_package = r_map["packages"][0]
+    if (
+        r_package["identity"] != "zeroR"
+        or r_package["version"] != "1.2.3"
+        or r_package["manifest"] != "DESCRIPTION"
+        or r_package["exports"] != ["alpha", "beta"]
+    ):
+        raise AssertionError(f"CRAN package evidence is incorrect: {r_package!r}")
+    print("Python/Node config-resolution parity passed for npm, Python, and CRAN")
     return 0
 
 

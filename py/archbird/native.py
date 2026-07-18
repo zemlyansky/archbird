@@ -2176,6 +2176,8 @@ def _repository_inventory(
         documents.append(_encoded_input(root, "package.json"))
     if "pyproject.toml" in paths:
         documents.append(_encoded_input(root, "pyproject.toml"))
+    if "DESCRIPTION" in paths:
+        documents.append(_encoded_input(root, "DESCRIPTION"))
     return _canonical(
         {
             "artifact": "archbird-repository-inventory",
@@ -2194,6 +2196,8 @@ def _root_rows(root: Path) -> list[dict[str, object]]:
         ".gitignore",
         ".ignore",
         "Makefile",
+        "DESCRIPTION",
+        "NAMESPACE",
         "package.json",
         "pyproject.toml",
     )

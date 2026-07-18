@@ -699,13 +699,15 @@ static ArchbirdStatus parse_r_manifest(AbMapState *state,
   ExportCapture capture = {state, package, text};
   size_t matches = 0;
   ArchbirdStatus status = ARCHBIRD_OK;
+  int is_description;
   for (index = 0; index < config->path.length; index++) {
     if (config->path.data[index] == '/') {
       base = config->path.data + index + 1;
       base_length = config->path.length - index - 1;
     }
   }
-  if (base_length == 11 && memcmp(base, "DESCRIPTION", 11) == 0) {
+  is_description = base_length == 11 && memcmp(base, "DESCRIPTION", 11) == 0;
+  if (is_description) {
     size_t line_start = 0;
     while (line_start < length) {
       size_t line_end = line_start;
@@ -734,11 +736,40 @@ static ArchbirdStatus parse_r_manifest(AbMapState *state,
         return status;
       line_start = line_end + 1;
     }
+    if (status == ARCHBIRD_OK) {
+      AbBuffer namespace_path;
+      const AbManifestFile *namespace_file;
+      AbString namespace_name;
+      size_t namespace_index = 0;
+      size_t directory_length = config->path.length - base_length;
+      ab_buffer_init(&namespace_path, state->engine);
+      status = ab_buffer_append(&namespace_path, config->path.data,
+                                directory_length);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&namespace_path, "NAMESPACE");
+      namespace_name.data = (char *)namespace_path.data;
+      namespace_name.length = namespace_path.length;
+      namespace_file =
+          status == ARCHBIRD_OK
+              ? mapped_file(state, &namespace_name, &namespace_index)
+              : NULL;
+      if (namespace_file)
+        text = ab_project_source_bytes(state->project, namespace_index);
+      else
+        text = NULL;
+      length = namespace_file ? namespace_file->byte_length : 0;
+      capture.subject = text;
+      ab_buffer_free(&namespace_path);
+    }
   }
-  status = ab_pattern_compile(state->engine, &source, 1, &pattern);
+  if (status == ARCHBIRD_OK && text)
+    status = ab_utf8_validate(state->engine, text, length);
+  if (status == ARCHBIRD_OK && text)
+    status = ab_pattern_compile(state->engine, &source, 1, &pattern);
   if (status == ARCHBIRD_OK)
-    status = ab_pattern_scan(state->engine, pattern, text, length, 1,
-                             capture_exports, &capture, &matches);
+    status = pattern ? ab_pattern_scan(state->engine, pattern, text, length, 1,
+                                       capture_exports, &capture, &matches)
+                     : ARCHBIRD_OK;
   ab_pattern_free(pattern);
   return status;
 }
