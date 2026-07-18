@@ -2120,8 +2120,8 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
         break;
       }
     if (status == ARCHBIRD_OK &&
-        (!value_string_array_set_equal(reference_case->requires,
-                                       actual_case->requires) ||
+        (!value_string_array_set_equal(reference_case->required_capabilities,
+                                       actual_case->required_capabilities) ||
          !ab_value_equal(reference_case->requires_parameters,
                          actual_case->requires_parameters))) {
       AbBuffer key;

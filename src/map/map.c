@@ -1296,7 +1296,7 @@ static ArchbirdStatus build_graph(ArchbirdEngine *engine,
     if (status == ARCHBIRD_OK &&
         ((!strcmp(kind, "unique") && candidate_count == 1 &&
           candidates[0] != calls[index].file) ||
-         (!strcmp(kind, "external") && external_target))) {
+         external_target)) {
       const char *target =
           external_target ? external_target : candidates[0]->path.data;
       size_t target_length =

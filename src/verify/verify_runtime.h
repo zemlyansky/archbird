@@ -65,7 +65,7 @@ typedef struct AbVerifyAttestationCaseView {
   const AbString *id;
   const AbValue *requirements;
   const AbValue *input;
-  const AbValue *requires;
+  const AbValue *required_capabilities;
   const AbValue *requires_parameters;
   AbVerifyEqualityPolicy comparison;
   AbVerifyObservationView *observations;

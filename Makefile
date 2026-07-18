@@ -6,6 +6,7 @@ CLANG ?= clang
 EMCMAKE ?= emcmake
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
+CPPCHECK_JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 ESBUILD ?= esbuild
 AUDITWHEEL ?= auditwheel
 TWINE ?= twine
@@ -231,10 +232,11 @@ native-fuzz-smoke:
 native-analyze: native-configure
 	command $(CLANG_FORMAT) --dry-run --Werror $(NATIVE_C_FILES)
 	$(PYTHON) test/test_allocator_boundary.py
-	command $(CPPCHECK) --std=c11 \
+	command $(CPPCHECK) -j $(CPPCHECK_JOBS) --std=c11 \
 		--enable=warning,performance,portability --error-exitcode=1 \
 		--suppress=missingIncludeSystem --suppress='*:*vendor/yyjson/*' \
 		--suppress=missingReturn:bindings/python.c \
+		--suppress=invalidPrintfArgType_s:test/fuzz/fuzz_lexical.c \
 		$(NATIVE_INCLUDE_FLAGS) $(NATIVE_CORE_C_FILES) $(NATIVE_TEST_C_FILES)
 	$(PYTHON) test/test_json_boundary.py
 

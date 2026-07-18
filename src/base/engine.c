@@ -210,13 +210,6 @@ ArchbirdStatus archbird_engine_create(const ArchbirdEngineOptions *options,
   if ((resolved.allocate || resolved.reallocate || resolved.deallocate) &&
       !(resolved.allocate && resolved.reallocate && resolved.deallocate))
     return ARCHBIRD_INVALID_ARGUMENT;
-  if (!resolved.allocate) {
-    if (resolved.allocator_user_data)
-      return ARCHBIRD_INVALID_ARGUMENT;
-    resolved.allocate = default_allocate;
-    resolved.reallocate = default_reallocate;
-    resolved.deallocate = default_deallocate;
-  }
   if (resolved.max_input_bytes == 0 || resolved.max_depth == 0 ||
       resolved.max_values == 0 || resolved.max_string_bytes == 0 ||
       resolved.max_files == 0 || resolved.max_file_bytes == 0 ||
@@ -226,6 +219,13 @@ ArchbirdStatus archbird_engine_create(const ArchbirdEngineOptions *options,
       resolved.regex_match_limit == 0 || resolved.regex_depth_limit == 0 ||
       resolved.regex_heap_limit_kib == 0)
     return ARCHBIRD_INVALID_ARGUMENT;
+  if (!resolved.allocate) {
+    if (resolved.allocator_user_data)
+      return ARCHBIRD_INVALID_ARGUMENT;
+    resolved.allocate = default_allocate;
+    resolved.reallocate = default_reallocate;
+    resolved.deallocate = default_deallocate;
+  }
   engine = (ArchbirdEngine *)resolved.allocate(resolved.allocator_user_data,
                                                sizeof(*engine));
   if (!engine)

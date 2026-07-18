@@ -673,11 +673,11 @@ static ArchbirdStatus parse_attestation(AttestationParser *parser,
           parser, "attestation case.requirements: expected unique strings");
       break;
     }
-    case_view->requires = ab_value_member(row, "requires");
-    if (!case_view->requires) {
+    case_view->required_capabilities = ab_value_member(row, "requires");
+    if (!case_view->required_capabilities) {
       static const AbValue empty_array = {.kind = AB_VALUE_ARRAY};
-      case_view->requires = &empty_array;
-    } else if (!string_array_valid(case_view->requires)) {
+      case_view->required_capabilities = &empty_array;
+    } else if (!string_array_valid(case_view->required_capabilities)) {
       status = parser_invalid(
           parser, "attestation case.requires: expected unique strings");
       break;
@@ -1233,10 +1233,11 @@ int ab_verify_attestation_case_applicable(
   size_t index;
   if (!case_view || !attestation)
     return 0;
-  for (index = 0; index < case_view->requires->as.array.count; index++)
+  for (index = 0; index < case_view->required_capabilities->as.array.count;
+       index++)
     if (!array_contains_string(
             attestation->capabilities,
-            &case_view->requires->as.array.items[index].as.text))
+            &case_view->required_capabilities->as.array.items[index].as.text))
       return 0;
   for (index = 0; index < case_view->requires_parameters->as.object.count;
        index++) {
@@ -1565,7 +1566,7 @@ render_attestation_data_public(AbBuffer *buffer,
     AT_RENDER_TRY(ab_buffer_literal(buffer, "],\"requirements\":"));
     AT_RENDER_TRY(ab_value_render(buffer, row->requirements));
     AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"requires\":"));
-    AT_RENDER_TRY(ab_value_render(buffer, row->requires));
+    AT_RENDER_TRY(ab_value_render(buffer, row->required_capabilities));
     AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"requires_parameters\":"));
     AT_RENDER_TRY(ab_value_render(buffer, row->requires_parameters));
     AT_RENDER_TRY(ab_buffer_literal(buffer, "}"));
