@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 from bisect import bisect_right
 import builtins
+from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 import hashlib
@@ -84,16 +85,15 @@ def _framed(digest: "hashlib._Hash", value: bytes) -> None:
 
 
 def _fact_id(
-    project: str,
-    path: str,
+    prefix: "hashlib._Hash",
     domain: str,
     kind: str,
     start: int,
     end: int,
     key: str,
 ) -> str:
-    digest = hashlib.sha256()
-    for value in (project, path, domain, kind):
+    digest = prefix.copy()
+    for value in (domain, kind):
         _framed(digest, value.encode("utf-8"))
     digest.update(struct.pack(">Q", start))
     digest.update(struct.pack(">Q", end))
@@ -187,6 +187,9 @@ class _Facts:
         self.project = project
         self.path = path
         self.rows: List[Dict[str, object]] = []
+        self._id_prefix = hashlib.sha256()
+        for value in (project, path):
+            _framed(self._id_prefix, value.encode("utf-8"))
 
     def add(
         self,
@@ -201,9 +204,7 @@ class _Facts:
         row: Dict[str, object] = {
             "claim": "syntax-structure",
             "domain": domain,
-            "id": _fact_id(
-                self.project, self.path, domain, kind, start, end, key
-            ),
+            "id": _fact_id(self._id_prefix, domain, kind, start, end, key),
             "key": key,
             "kind": kind,
             "path": self.path,
@@ -258,17 +259,6 @@ class _ScopeImportCollector(ast.NodeVisitor):
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         del node
-
-
-def _scope_imports(statements: Sequence[ast.stmt]) -> Dict[str, Tuple[str, str, str]]:
-    collector = _ScopeImportCollector()
-    module = ast.Module(body=list(statements), type_ignores=[])
-    collector.visit(module)
-    return {
-        name: value
-        for name, value in collector.bindings.items()
-        if name not in collector.ambiguous
-    }
 
 
 def _attribute_chain(node: ast.Attribute) -> Optional[Tuple[str, Tuple[str, ...]]]:
@@ -336,7 +326,7 @@ def _receiver_expression_origin(node: ast.expr) -> Optional[Tuple[str, Tuple[str
     return root, attributes, "imported-call"
 
 
-class _ReceiverScopeCollector(ast.NodeVisitor):
+class _ReceiverScopeCollector(_ScopeImportCollector):
     """Find names with exactly one syntactically traceable assignment.
 
     Multiple writes, deletion, destructuring, loop targets, imports, and
@@ -345,6 +335,7 @@ class _ReceiverScopeCollector(ast.NodeVisitor):
     """
 
     def __init__(self, starts: Sequence[int]) -> None:
+        super().__init__()
         self.starts = starts
         self.writes: Dict[str, List[Optional[_ReceiverOrigin]]] = {}
 
@@ -393,10 +384,12 @@ class _ReceiverScopeCollector(ast.NodeVisitor):
         self.visit(node.value)
 
     def visit_Import(self, node: ast.Import) -> None:
+        super().visit_Import(node)
         for alias in node.names:
             self._write(alias.asname or alias.name.split(".", 1)[0])
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        super().visit_ImportFrom(node)
         for alias in node.names:
             if alias.name != "*":
                 self._write(alias.asname or alias.name)
@@ -422,13 +415,18 @@ class _ReceiverScopeCollector(ast.NodeVisitor):
         return _ReceiverScope(origins=origins, written=frozenset(self.writes))
 
 
-def _receiver_scope(
+def _scope_state(
     statements: Sequence[ast.stmt], starts: Sequence[int]
-) -> _ReceiverScope:
+) -> Tuple[Dict[str, Tuple[str, str, str]], _ReceiverScope]:
     collector = _ReceiverScopeCollector(starts)
     for statement in statements:
         collector.visit(statement)
-    return collector.result()
+    imports = {
+        name: value
+        for name, value in collector.bindings.items()
+        if name not in collector.ambiguous
+    }
+    return imports, collector.result()
 
 
 class _PythonProviderVisitor(ast.NodeVisitor):
@@ -445,18 +443,14 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self.tokens = tokens
         self.scope: List[Tuple[str, str]] = []
         self.tables: List[Optional[symtable.SymbolTable]] = [table]
-        self.imports: List[Dict[str, Tuple[str, str, str]]] = [
-            _scope_imports(tree.body)
-        ]
-        self.receivers: List[_ReceiverScope] = [_receiver_scope(tree.body, starts)]
+        imports, receivers = _scope_state(tree.body, starts)
+        self.imports: List[Dict[str, Tuple[str, str, str]]] = [imports]
+        self.receivers: List[_ReceiverScope] = [receivers]
         self.module_table = table
-        # Keep the SymbolTable objects themselves alive while walking the AST.
-        # Recording only ``id(child)`` lets CPython reuse an address after an
-        # exited nested scope is collected, which can make an unrelated later
-        # scope look "already used" and silently degrade its bindings to
-        # unknown.  SymbolTable objects are hashable, so retaining them gives
-        # us stable identity for the complete traversal.
-        self.used_tables: set[symtable.SymbolTable] = set()
+        self.child_tables: Dict[
+            symtable.SymbolTable,
+            Dict[Tuple[str, str, int], deque[symtable.SymbolTable]],
+        ] = {}
 
     def _child_table(
         self, kind: str, name: str, line: int
@@ -464,16 +458,15 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         parent = self.tables[-1]
         if parent is None:
             return None
-        for child in parent.get_children():
-            if (
-                child not in self.used_tables
-                and child.get_type() == kind
-                and child.get_name() == name
-                and child.get_lineno() == line
-            ):
-                self.used_tables.add(child)
-                return child
-        return None
+        index = self.child_tables.get(parent)
+        if index is None:
+            index = {}
+            for child in parent.get_children():
+                key = (child.get_type(), child.get_name(), child.get_lineno())
+                index.setdefault(key, deque()).append(child)
+            self.child_tables[parent] = index
+        matches = index.get((kind, name, line))
+        return matches.popleft() if matches else None
 
     @staticmethod
     def _bound_in_table(table: symtable.SymbolTable, name: str) -> bool:
@@ -800,8 +793,9 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self.scope.pop()
         self.scope.append((node.name, "class"))
         self.tables.append(self._child_table("class", node.name, node.lineno))
-        self.imports.append(_scope_imports(node.body))
-        self.receivers.append(_receiver_scope(node.body, self.starts))
+        imports, receivers = _scope_state(node.body, self.starts)
+        self.imports.append(imports)
+        self.receivers.append(receivers)
         for statement in node.body:
             self.visit(statement)
         self.receivers.pop()
@@ -842,8 +836,9 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self.scope.pop()
         self.scope.append((name, "function"))
         self.tables.append(self._child_table("function", name, node.lineno))
-        self.imports.append(_scope_imports(getattr(node, "body")))
-        self.receivers.append(_receiver_scope(getattr(node, "body"), self.starts))
+        imports, receivers = _scope_state(getattr(node, "body"), self.starts)
+        self.imports.append(imports)
+        self.receivers.append(receivers)
         for statement in getattr(node, "body"):
             self.visit(statement)
         self.receivers.pop()

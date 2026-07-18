@@ -51,6 +51,12 @@ int main(void) {
                     "src/lka/**", 1);
   expect_collection("collection-relative-prefix", "src/lka/run.py",
                     "./src/lka/*.py", 1);
+  expect_collection("collection-literal", "src/lka/run.py", "src/lka/run.py",
+                    1);
+  expect_collection("collection-literal-suffix-mismatch", "src/lka/run.js",
+                    "src/lka/**/*.py", 0);
+  expect_collection("collection-class-suffix", "src/lka/run.py",
+                    "src/lka/run.[pP]y", 1);
   if (failures)
     return 1;
   puts("native path-match tests passed");

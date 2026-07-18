@@ -152,6 +152,28 @@ static int collection_match(const char *pattern, size_t pattern_length,
       path_length, path_end < path_length ? path_end + 1 : path_end);
 }
 
+static int collection_literal_suffix_matches(const char *pattern,
+                                             size_t pattern_length,
+                                             const char *path,
+                                             size_t path_length) {
+  size_t suffix = 0;
+  size_t index;
+  for (index = pattern_length; index > 0; index--) {
+    char value = pattern[index - 1];
+    if (value == '*' || value == '?' || value == '[' || value == ']') {
+      suffix = index;
+      break;
+    }
+  }
+  if (suffix == pattern_length)
+    return 1;
+  if (pattern_length - suffix > path_length)
+    return 0;
+  return memcmp(pattern + suffix,
+                path + path_length - (pattern_length - suffix),
+                pattern_length - suffix) == 0;
+}
+
 int ab_map_collection_match(const AbString *path, const AbString *pattern) {
   const char *start = pattern->data;
   size_t length = pattern->length;
@@ -159,6 +181,9 @@ int ab_map_collection_match(const AbString *path, const AbString *pattern) {
     start += 2;
     length -= 2;
   }
+  if (!collection_literal_suffix_matches(start, length, path->data,
+                                         path->length))
+    return 0;
   return collection_match(start, length, 0, path->data, path->length, 0);
 }
 

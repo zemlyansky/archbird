@@ -19,6 +19,7 @@ struct ArchbirdDiscovery {
   ArchbirdEngine *engine;
   AbMapConfig config;
   AbStringArray paths;
+  size_t path_capacity;
   AbIgnoreSet ignores;
   int ignores_ready;
 };
@@ -77,6 +78,61 @@ static ArchbirdStatus append_unique(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus add_discovery_path(ArchbirdEngine *engine,
+                                         ArchbirdDiscovery *discovery,
+                                         const char *data, size_t length) {
+  AbString candidate = {(char *)data, length};
+  AbString copied = {0};
+  size_t first = 0;
+  size_t last = discovery->paths.count;
+  size_t index;
+  while (first < last) {
+    size_t middle = first + (last - first) / 2;
+    int comparison = ab_string_compare(&discovery->paths.items[middle],
+                                       &candidate);
+    if (comparison < 0)
+      first = middle + 1;
+    else
+      last = middle;
+  }
+  index = first;
+  if (index < discovery->paths.count &&
+      ab_string_equal(&discovery->paths.items[index], &candidate))
+    return ARCHBIRD_OK;
+  if (discovery->paths.count == discovery->path_capacity) {
+    AbString *resized;
+    size_t capacity = discovery->path_capacity ? discovery->path_capacity : 64;
+    if (discovery->path_capacity) {
+      if (capacity > SIZE_MAX / 2)
+        return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "discovery path capacity overflow");
+      capacity *= 2;
+    }
+    if (capacity > SIZE_MAX / sizeof(*resized))
+      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "discovery path capacity overflow");
+    resized = (AbString *)ab_realloc(engine, discovery->paths.items,
+                                     capacity * sizeof(*resized));
+    if (!resized)
+      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory collecting discovery paths");
+    discovery->paths.items = resized;
+    discovery->path_capacity = capacity;
+  }
+  if (ab_string_copy(engine, &copied, data, length) != ARCHBIRD_OK)
+    return ARCHBIRD_OUT_OF_MEMORY;
+  if (index < discovery->paths.count)
+    memmove(&discovery->paths.items[index + 1],
+            &discovery->paths.items[index],
+            (discovery->paths.count - index) * sizeof(*discovery->paths.items));
+  discovery->paths.items[index] = copied;
+  discovery->paths.count++;
+  return ARCHBIRD_OK;
+}
+
 static void string_array_free(ArchbirdEngine *engine, AbStringArray *array) {
   size_t index;
   for (index = 0; index < array->count; index++)
@@ -122,7 +178,7 @@ ArchbirdStatus archbird_discovery_add_path(ArchbirdEngine *engine,
     return archbird_error_set(
         engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
         "inventory path is not canonical and repository-relative");
-  return append_unique(engine, &discovery->paths, path, path_length);
+  return add_discovery_path(engine, discovery, path, path_length);
 }
 
 ArchbirdStatus archbird_discovery_add_ignore(
@@ -437,12 +493,14 @@ ArchbirdStatus archbird_discovery_render(ArchbirdEngine *engine,
   if (!engine || !discovery || !write_fn ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
-  if (discovery->paths.count > 1)
-    qsort(discovery->paths.items, discovery->paths.count,
-          sizeof(*discovery->paths.items), string_compare);
   ab_buffer_init(&buffer, engine);
   status = ab_buffer_literal(
-      &buffer, "{\"artifact\":\"archbird-discovery-plan\",\"files\":[");
+      &buffer,
+      "{\"artifact\":\"archbird-discovery-plan\",\"configuration_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(&buffer, discovery->config.sha256_hex, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"files\":[");
   for (index = 0; status == ARCHBIRD_OK && index < discovery->paths.count;
        index++) {
     DiscoveryRow row;
@@ -487,11 +545,7 @@ ArchbirdStatus archbird_discovery_render(ArchbirdEngine *engine,
     row_free(engine, &row);
   }
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, "],\"configuration_sha256\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(&buffer, discovery->config.sha256_hex, 64);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ",\"max_file_bytes\":");
+    status = ab_buffer_literal(&buffer, "],\"max_file_bytes\":");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_u64(&buffer, (uint64_t)discovery->config.max_file_bytes);
   if (status == ARCHBIRD_OK)
@@ -511,9 +565,18 @@ ArchbirdStatus archbird_discovery_render(ArchbirdEngine *engine,
                                    discovery->config.root.length);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, ",\"schema_version\":1}");
-  if (status == ARCHBIRD_OK)
-    status = archbird_json_canonicalize(engine, buffer.data, buffer.length,
-                                        json_flags, write_fn, user_data);
+  if (status == ARCHBIRD_OK) {
+    if (json_flags) {
+      status = archbird_json_canonicalize(engine, buffer.data, buffer.length,
+                                          json_flags, write_fn, user_data);
+    } else if (write_fn(user_data, buffer.data, buffer.length) != 0) {
+      status = engine->error_status != ARCHBIRD_OK
+                   ? engine->error_status
+                   : archbird_error_set(engine, ARCHBIRD_WRITE_FAILED,
+                                        ARCHBIRD_NO_OFFSET,
+                                        "JSON output callback failed");
+    }
+  }
   ab_buffer_free(&buffer);
   return status;
 }

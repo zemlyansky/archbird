@@ -1931,8 +1931,10 @@ def _inventory_state(
     *,
     include_standard_ignores: bool = False,
     ignore_files: Sequence[str] = (),
-) -> tuple[Tuple[str, ...], Tuple[str, ...]]:
+    collect_sizes: bool = False,
+) -> tuple[Tuple[str, ...], Tuple[str, ...], Tuple[Tuple[str, int], ...]]:
     files: list[str] = []
+    file_sizes: list[tuple[str, int]] = []
     pruned: list[str] = []
     pending: list[tuple[str, Path]] = [("", root)]
     standard_ignores: list[tuple[str, bytes]] = []
@@ -1949,12 +1951,26 @@ def _inventory_state(
                 with os.scandir(directory) as entries:
                     ordered = sorted(entries, key=lambda entry: entry.name.encode())
                     for entry in ordered:
-                        candidate = Path(entry.path)
-                        relative = candidate.relative_to(root).as_posix()
+                        relative = (
+                            f"{directory_relative}/{entry.name}"
+                            if directory_relative
+                            else entry.name
+                        )
                         if entry.is_dir(follow_symlinks=False):
-                            directories.append((relative, candidate))
+                            directories.append((relative, Path(entry.path)))
                         elif entry.is_file(follow_symlinks=False):
                             files.append(relative)
+                            if collect_sizes:
+                                try:
+                                    metadata = entry.stat(follow_symlinks=False)
+                                except FileNotFoundError:
+                                    continue
+                                except OSError as error:
+                                    raise ConfigError(
+                                        f"cannot stat repository file: {relative}: "
+                                        f"{error}"
+                                    ) from error
+                                file_sizes.append((relative, metadata.st_size))
                     if include_standard_ignores:
                         for name in (".gitignore", ".ignore", ".archbirdignore"):
                             relative = (
@@ -1993,7 +2009,11 @@ def _inventory_state(
             for (relative, _), should_descend in zip(directories, decisions)
             if not should_descend
         )
-    return tuple(sorted(files)), tuple(sorted(pruned))
+    return (
+        tuple(sorted(files)),
+        tuple(sorted(pruned)),
+        tuple(sorted(file_sizes)),
+    )
 
 
 def _inventory(config_json: bytes, root: Path) -> Tuple[str, ...]:
@@ -2079,16 +2099,16 @@ def _inventory_rows(
     include_standard_ignores: bool = False,
     ignore_files: Sequence[str] = (),
 ) -> tuple[list[dict[str, object]], Tuple[str, ...]]:
-    paths, pruned = _inventory_state(
+    _paths, pruned, file_sizes = _inventory_state(
         config_json,
         root,
         include_standard_ignores=include_standard_ignores,
         ignore_files=ignore_files,
+        collect_sizes=True,
     )
     return [
-        row
-        for path in paths
-        if (row := _file_row(root, path)) is not None
+        {"bytes": size, "path": path}
+        for path, size in file_sizes
     ], pruned
 
 
