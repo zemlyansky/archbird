@@ -270,6 +270,41 @@ def main() -> int:
             "lexical module fallback invented alias exports or lost routes: "
             f"exports={sorted(module_exports)!r} routes={sorted(module_routes)!r}"
         )
+    type_reexport_regression = subprocess.run(
+        [str(executable), "typescript", "src/type-reexports.ts"],
+        input=(
+            "export { type $RefinementCtx as RefinementCtx, type LocalType, "
+            "value as alias, type as literalType } from './core.js';\n"
+            "export { type TypeOnly, runtime };\n"
+        ).encode(),
+        capture_output=True,
+        check=True,
+    )
+    type_reexport_facts = [
+        fact
+        for fact in json.loads(type_reexport_regression.stdout)["facts"]
+        if fact["domain"] == "exports"
+    ]
+    type_reexports = {
+        fact["name"]: fact["attributes"].get("origin_name")
+        for fact in type_reexport_facts
+        if "origin" in fact["attributes"]
+    }
+    type_local_exports = {
+        fact["name"]
+        for fact in type_reexport_facts
+        if "origin" not in fact["attributes"]
+    }
+    if type_reexports != {
+        "RefinementCtx": "$RefinementCtx",
+        "LocalType": "LocalType",
+        "alias": "value",
+        "literalType": "type",
+    } or type_local_exports != {"TypeOnly", "runtime"}:
+        raise AssertionError(
+            "type-only export modifiers were treated as binding names: "
+            f"reexports={type_reexports!r} local={type_local_exports!r}"
+        )
     print(f"native JS/TS/Vue scanner parity passed: {len(CASES)} cases")
     return 0
 

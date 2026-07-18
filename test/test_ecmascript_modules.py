@@ -37,6 +37,9 @@ def main() -> int:
         "missing-default/package.json": (
             b'{"name":"missing-default","version":"1.0.0"}'
         ),
+        "type-reexports.ts": (
+            b'export { type $RefinementCtx as RefinementCtx } from "./core.js";\n'
+        ),
         "cjs/index.js": b"""
 const api = {create};
 Object.defineProperties(api, {Tensor: {get() { return T; }}});
@@ -209,6 +212,8 @@ test('constructs PPO', () => { new PPO(); });
         }
         if path.endswith(".js"):
             row.update(language="javascript", layer="javascript")
+        elif path.endswith(".ts"):
+            row.update(language="typescript", layer="typescript")
         files.append(row)
     manifest = {
         "artifact": "archbird-source-manifest",
@@ -230,7 +235,13 @@ test('constructs PPO', () => { new PPO(); });
                 "role": "frontend",
                 "language": "javascript",
                 "globs": ["**/*.js"],
-            }
+            },
+            {
+                "name": "typescript",
+                "role": "frontend",
+                "language": "typescript",
+                "globs": ["**/*.ts"],
+            },
         ],
         "packages": [
             {
@@ -309,6 +320,9 @@ test('constructs PPO', () => { new PPO(); });
     extension.project_set_config(project, canonical(config))
     extension.project_scan_builtin_provider(
         project, "syntax:tree-sitter:javascript", "primary"
+    )
+    extension.project_scan_builtin_provider(
+        project, "syntax:tree-sitter:typescript", "primary"
     )
     syntax_facts = []
     for index in range(extension.project_counts(project)["providers"]):

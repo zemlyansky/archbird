@@ -949,7 +949,14 @@ static ArchbirdStatus scan_esm_exports(JsContext *context) {
           size_t first = SIZE_MAX;
           size_t last = SIZE_MAX;
           int has_as = 0;
-          for (part_cursor = part_start; part_cursor < part_end;
+          size_t specifier_start = part_start;
+          if (part_start + 1 < part_end &&
+              ab_token_equals(context->tokens, part_start, "type") &&
+              !ab_token_equals(context->tokens, part_start + 1, "as") &&
+              context->tokens->items[part_start + 1].kind ==
+                  AB_TOKEN_IDENTIFIER)
+            specifier_start++;
+          for (part_cursor = specifier_start; part_cursor < part_end;
                part_cursor++) {
             if (context->tokens->items[part_cursor].kind ==
                 AB_TOKEN_IDENTIFIER) {
