@@ -1,0 +1,1 @@
+#define LOCAL_DUAL_VALUE 1

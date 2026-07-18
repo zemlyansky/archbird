@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "suite": "portable-verification",
+  "producer": {
+    "project": "reference",
+    "revision": "fixture-v1",
+    "map_input_sha256": "a3ac2a9e44118891de14fc4341688f8c6d866cb3ee7f7843326782b654366b7b",
+    "evidence": [
+      {
+        "role": "runner",
+        "path": "runner.py",
+        "sha256": "6d2bbb8f622eec7c13e84054e980fb7102e645c36dd69b24c24695d894d28649"
+      },
+      {
+        "role": "case_bundle",
+        "path": "cases.json",
+        "sha256": "712273728106f22cf6858045591be230cf227ecf35790eb505e6022e4a7dda98"
+      },
+      {
+        "role": "subject",
+        "path": "spec.py",
+        "sha256": "62d0ce51b80bbb6ebacdec7ac5d3cc11901dbe4ba3f1c6573ac54d5547b28f5a"
+      }
+    ],
+    "evidence_slice_sha256": "2a56171f88c7157bdeaca7b7f347bf3ffc3e6c6dfba8eed2e9cd18d332f3a5d4"
+  },
+  "profile": {
+    "id": "cpu-int32",
+    "capabilities": ["shape"],
+    "parameters": {"rank_limit": 8}
+  },
+  "cases": [
+    {
+      "id": "permute.valid",
+      "requirements": ["SHAPE-001"],
+      "input": {"shape": [2, 3], "axes": [1, 0]},
+      "requires": ["shape"],
+      "requires_parameters": {"rank_limit": 8},
+      "comparison": {"kind": "exact"},
+      "observations": [
+        {
+          "route": "reference",
+          "outcome": {
+            "phase": "runtime",
+            "kind": "ok",
+            "value": {"shape": [3, 2]}
+          }
+        }
+      ]
+    },
+    {
+      "id": "permute.invalid",
+      "requirements": ["SHAPE-001"],
+      "input": {"shape": [2, 3], "axes": [0, 0]},
+      "requires": ["shape"],
+      "comparison": {"kind": "exact"},
+      "observations": [
+        {
+          "route": "reference",
+          "outcome": {
+            "phase": "validation",
+            "kind": "rejected",
+            "type": "invalid-permutation"
+          }
+        }
+      ]
+    },
+    {
+      "id": "reduce.float",
+      "requirements": ["NUMERIC-001"],
+      "input": {"values": [0.1, 0.2]},
+      "comparison": {
+        "kind": "float",
+        "atol": 1e-9,
+        "rtol": 1e-9,
+        "max_ulp": 1000000,
+        "nan_equal": true,
+        "signed_zero_equal": false
+      },
+      "observations": [
+        {
+          "route": "reference",
+          "outcome": {
+            "phase": "runtime",
+            "kind": "ok",
+            "value": 0.3
+          }
+        }
+      ]
+    }
+  ]
+}

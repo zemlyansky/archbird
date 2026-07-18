@@ -1,0 +1,8 @@
+{
+  "name": "sample",
+  "version": "0.1.0",
+  "main": "js/index.js",
+  "exports": {".": "./js/index.js"},
+  "dependencies": {"@sample/dep": "^1.0.0"},
+  "scripts": {"test": "node test/test_api.js"}
+}

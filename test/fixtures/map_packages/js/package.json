@@ -1,0 +1,17 @@
+{
+  "name": "@archbird/example",
+  "version": "1.2.3",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./feature": {
+      "require": "./src/feature.js"
+    }
+  },
+  "bin": {"archbird-example": "./src/cli.js"},
+  "scripts": {"test": "node test.js", "number": 3},
+  "dependencies": {"alpha": "^1"},
+  "optionalDependencies": {"alpha": "ignored", "beta": "~2"},
+  "peerDependencies": {"gamma": "3"},
+  "devDependencies": {"delta": "4"}
+}

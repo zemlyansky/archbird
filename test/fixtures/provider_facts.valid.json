@@ -1,0 +1,49 @@
+{
+  "artifact": "archbird-provider-facts",
+  "capabilities": [
+    {
+      "claims": ["syntax-structure"],
+      "coverage": "complete",
+      "domain": "symbols"
+    }
+  ],
+  "diagnostics": [],
+  "facts": [
+    {
+      "attributes": {
+        "scope": "global",
+        "signature": "def answer()"
+      },
+      "claim": "syntax-structure",
+      "domain": "symbols",
+      "id": "symbol:answer:0",
+      "key": "answer",
+      "kind": "function",
+      "name": "answer",
+      "path": "py/sample.py",
+      "project": "sample",
+      "span": {"end": 10, "start": 0}
+    }
+  ],
+  "inputs": [
+    {
+      "project": "sample",
+      "source_manifest_sha256": "f618fb365595a31cc0dceb67cda907c545c6d9281eaf52fc99a1991511e1f9fc"
+    }
+  ],
+  "producer": {
+    "configuration_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "name": "archbird-python-ast",
+    "runtime": "cpython-3.13",
+    "version": "1"
+  },
+  "provenance": "derived",
+  "resolutions": [],
+  "schema_version": 1,
+  "subject": {
+    "path": "py/sample.py",
+    "project": "sample",
+    "scope": "file"
+  }
+}

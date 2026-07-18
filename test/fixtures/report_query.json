@@ -1,0 +1,131 @@
+{
+  "artifact": "query",
+  "evidence": {
+    "absolute_paths_included": false,
+    "config_sha256": "323749d4ad346494f4d82d334f9195d9bb4c63a14dc586241a886ddc3c46f411",
+    "input_sha256": "5c467154b51e9b5caffb2241a6817bf248300fa509fe6ea2a055f2155659e339"
+  },
+  "files": [
+    {
+      "distance": 0,
+      "language": "c",
+      "layer": "core",
+      "path": "src/core.c",
+      "sha256": "f1ed3eabe197a9d037015fc8aa335b400a7e966f6476c165d6c60ecd576bb379",
+      "symbols": [
+        {
+          "kind": "function",
+          "line": 5,
+          "name": "core_mul",
+          "scope": "public",
+          "signature": "int core_mul(int a, int b)"
+        },
+        {
+          "kind": "function",
+          "line": 3,
+          "name": "helper",
+          "scope": "local",
+          "signature": "static int helper(int value)"
+        }
+      ]
+    },
+    {
+      "distance": 1,
+      "language": "javascript",
+      "layer": "javascript",
+      "path": "test/test_api.js",
+      "sha256": "14175637ec1572ded214fb00acd1ee1400fa11e15bcc0e6e53db69e04f6b2e70",
+      "symbols": []
+    }
+  ],
+  "matched_symbols": [
+    {
+      "kind": "function",
+      "line": 5,
+      "name": "core_mul",
+      "path": "src/core.c",
+      "scope": "public"
+    }
+  ],
+  "project": "sample",
+  "query": {
+    "artifacts": [],
+    "components": [],
+    "depth": 1,
+    "direction": "both",
+    "focus": [],
+    "packages": [],
+    "paths": [],
+    "symbols": ["src/core.c:core_mul"],
+    "test_depth": 1
+  },
+  "schema_version": 7,
+  "source_tool": {
+    "implementation_sha256": "f06168c03fbf1d0d40d9994a770d79f338b270f67ea9fd6d902c0205a5a86ecf",
+    "name": "archbird",
+    "version": "0.0.1"
+  },
+  "symbol_calls": [
+    {
+      "candidates": [
+        {"line": 3, "path": "src/core.c", "symbol": "helper"}
+      ],
+      "evidence": [
+        {
+          "claim": "syntax-structure",
+          "fact_id": "f:04be39afdf700df7538b34d465ad8e51104293278d5a458679a8a3e9aa015944",
+          "line": 6,
+          "provider": "archbird-tree-sitter-c",
+          "span": {"end": 91, "start": 85}
+        }
+      ],
+      "name": "helper",
+      "resolution": "unique",
+      "source": {"path": "src/core.c", "symbol": "core_mul"}
+    },
+    {
+      "candidates": [],
+      "evidence": [
+        {
+          "claim": "lexical-occurrence",
+          "fact_id": "f:1ff4f0e62437b65e90955a48d7b2c3fabaa46b12b6c863617b012227744de77f",
+          "line": 7,
+          "provider": "archbird-c-lexical",
+          "span": {"end": 109, "start": 102}
+        }
+      ],
+      "name": "runtime_hook",
+      "resolution": "unresolved",
+      "source": {"path": "src/core.c", "symbol": "core_mul"}
+    },
+    {
+      "candidates": [],
+      "evidence": [
+        {
+          "claim": "syntax-structure",
+          "fact_id": "f:11c96b599cf4ee48607a16ea811544031d15200e53ef2ddf5d4437fbd4f9bb6f",
+          "line": 8,
+          "provider": "archbird-tree-sitter-c",
+          "span": {"end": 120, "start": 114}
+        }
+      ],
+      "name": "sizeof",
+      "resolution": "builtin",
+      "source": {"path": "src/core.c", "symbol": "core_mul"}
+    }
+  ],
+  "symbol_references": [],
+  "test_matches": [
+    {
+      "classification": "conservative",
+      "configured_targets": [],
+      "evidence": "static",
+      "group": "javascript",
+      "line": 3,
+      "path": "test/test_api.js",
+      "route": ["src/core.c"],
+      "route_evidence": [],
+      "selector": "api:add"
+    }
+  ]
+}

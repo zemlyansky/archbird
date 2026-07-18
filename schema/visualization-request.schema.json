@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/visualization-request.schema.json",
+  "title": "Archbird visualization host request envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "method", "payload", "protocol_version", "session"],
+  "properties": {
+    "id": {"$ref": "#/$defs/id"},
+    "method": {
+      "enum": [
+        "bootstrap",
+        "load",
+        "state",
+        "map",
+        "view",
+        "query",
+        "diff",
+        "source",
+        "verification",
+        "act-proposal",
+        "act-contract",
+        "act-result",
+        "snapshots",
+        "open-snapshot",
+        "dispose"
+      ]
+    },
+    "payload": {"type": "object"},
+    "protocol_version": {"const": 1},
+    "session": {"$ref": "#/$defs/id"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    }
+  }
+}

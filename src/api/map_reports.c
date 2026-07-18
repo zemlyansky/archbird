@@ -1,0 +1,121 @@
+#include <archbird/archbird.h>
+
+#include "archbird_internal.h"
+#include "json_value.h"
+#include "map_reports.h"
+#include "render_internal.h"
+
+#include <string.h>
+
+typedef struct AbMapReportCapture {
+  AbBuffer *buffer;
+  ArchbirdStatus status;
+} AbMapReportCapture;
+
+static int map_report_capture(void *user_data, const uint8_t *bytes,
+                              size_t length) {
+  AbMapReportCapture *capture = (AbMapReportCapture *)user_data;
+  capture->status = ab_buffer_append(capture->buffer, bytes, length);
+  return capture->status == ARCHBIRD_OK ? 0 : 1;
+}
+
+static ArchbirdStatus map_report_write(ArchbirdEngine *engine, AbBuffer *buffer,
+                                       ArchbirdWriteFn write_fn,
+                                       void *user_data) {
+  if (write_fn(user_data, buffer->data, buffer->length) != 0)
+    return archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
+                              "map report callback failed");
+  return ARCHBIRD_OK;
+}
+
+ArchbirdStatus
+archbird_map_render_markdown(ArchbirdEngine *engine, const uint8_t *map_json,
+                             size_t map_length, int full, size_t max_chars,
+                             ArchbirdWriteFn write_fn, void *user_data) {
+  AbValue map = {0};
+  AbBuffer report;
+  ArchbirdStatus status;
+  if (!engine || (!map_json && map_length) || !write_fn ||
+      (full != 0 && full != 1))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_build_identity_validate(engine);
+  if (status != ARCHBIRD_OK)
+    return status;
+  ab_buffer_init(&report, engine);
+  status = ab_json_value_decode(engine, map_json, map_length, &map);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_report_markdown(engine, &map, full, max_chars, &report);
+  if (status == ARCHBIRD_OK)
+    status = map_report_write(engine, &report, write_fn, user_data);
+  ab_buffer_free(&report);
+  ab_value_free(engine, &map);
+  return status;
+}
+
+ArchbirdStatus archbird_map_render_markdown_view(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    ArchbirdMapView view, ArchbirdReportDetail detail, size_t max_chars,
+    ArchbirdWriteFn write_fn, void *user_data) {
+  AbValue map = {0};
+  AbBuffer report;
+  ArchbirdStatus status;
+  if (!engine || (!map_json && map_length) || !write_fn ||
+      view < ARCHBIRD_MAP_VIEW_OVERVIEW || view > ARCHBIRD_MAP_VIEW_AUDIT ||
+      detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
+      detail > ARCHBIRD_REPORT_DETAIL_FULL)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_build_identity_validate(engine);
+  if (status != ARCHBIRD_OK)
+    return status;
+  ab_buffer_init(&report, engine);
+  status = ab_json_value_decode(engine, map_json, map_length, &map);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_report_markdown_view(engine, &map, view, detail, max_chars,
+                                         &report);
+  if (status == ARCHBIRD_OK)
+    status = map_report_write(engine, &report, write_fn, user_data);
+  ab_buffer_free(&report);
+  ab_value_free(engine, &map);
+  return status;
+}
+
+ArchbirdStatus
+archbird_map_query_markdown(ArchbirdEngine *engine, const uint8_t *map_json,
+                            size_t map_length, const uint8_t *query_json,
+                            size_t query_length, size_t max_chars,
+                            ArchbirdWriteFn write_fn, void *user_data) {
+  AbValue map = {0};
+  AbValue query = {0};
+  AbBuffer query_json_buffer;
+  AbBuffer report;
+  AbMapReportCapture capture;
+  ArchbirdStatus status;
+  if (!engine || (!map_json && map_length) || (!query_json && query_length) ||
+      !write_fn)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_build_identity_validate(engine);
+  if (status != ARCHBIRD_OK)
+    return status;
+  ab_buffer_init(&query_json_buffer, engine);
+  ab_buffer_init(&report, engine);
+  capture.buffer = &query_json_buffer;
+  capture.status = ARCHBIRD_OK;
+  status = archbird_map_query(engine, map_json, map_length, query_json,
+                              query_length, 0, map_report_capture, &capture);
+  if (status == ARCHBIRD_WRITE_FAILED && capture.status != ARCHBIRD_OK)
+    status = capture.status;
+  if (status == ARCHBIRD_OK)
+    status = ab_json_value_decode(engine, map_json, map_length, &map);
+  if (status == ARCHBIRD_OK)
+    status = ab_json_value_decode(engine, query_json_buffer.data,
+                                  query_json_buffer.length, &query);
+  if (status == ARCHBIRD_OK)
+    status = ab_query_report_markdown(engine, &map, &query, max_chars, &report);
+  if (status == ARCHBIRD_OK)
+    status = map_report_write(engine, &report, write_fn, user_data);
+  ab_value_free(engine, &query);
+  ab_value_free(engine, &map);
+  ab_buffer_free(&report);
+  ab_buffer_free(&query_json_buffer);
+  return status;
+}

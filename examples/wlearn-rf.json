@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "project": "wlearn-rf",
+  "description": "Random-forest C11 core with Python and JavaScript/WASM estimator surfaces.",
+  "root": ".",
+  "exclude": ["**/csrc/**", "js/wasm/**", "references/**"],
+  "layers": [
+    {"name": "core", "role": "core", "language": "c", "globs": ["src/**/*.c", "src/**/*.h"], "public_headers": ["src/rf.h"]},
+    {"name": "python", "role": "frontend", "language": "python", "globs": ["py/wlearn_rf/**/*.py"], "import_roots": ["py"]},
+    {"name": "javascript", "role": "frontend", "language": "javascript", "globs": ["js/src/**/*.js"]}
+  ],
+  "packages": [
+    {"name": "python", "kind": "python", "path": "py/pyproject.toml", "layer": "python", "entries": ["py/wlearn_rf/__init__.py"]},
+    {"name": "npm", "kind": "npm", "path": "js/package.json", "layer": "javascript", "entries": ["js/src/index.js"]}
+  ],
+  "builds": [
+    {"name": "make", "kind": "make", "path": "Makefile"},
+    {"name": "npm", "kind": "npm", "path": "js/package.json"}
+  ],
+  "bridges": [
+    {"name": "python-ctypes", "kind": "abi", "from": "python", "to": "core", "prefixes": ["rf_", "wl_rf_"]},
+    {"name": "javascript-wasm", "kind": "abi", "from": "javascript", "to": "core", "prefixes": ["wl_rf_"]}
+  ],
+  "tests": [
+    {"name": "c", "language": "c", "globs": ["test/*.c"], "route_to": ["core"]},
+    {"name": "python", "language": "python", "globs": ["test/test_*.py"], "route_to": ["python", "core"]},
+    {"name": "javascript", "language": "javascript", "globs": ["test/test*.js"], "route_to": ["javascript"]}
+  ],
+  "components": [
+    {"name": "model-core", "paths": ["src/rf.c"], "description": "forest training, inference, and serialization"},
+    {"name": "abi", "paths": ["src/wl_api.c", "src/rf.h"], "description": "stable C/WASM surface"},
+    {"name": "python", "paths": ["py/wlearn_rf/**/*.py"], "description": "Python estimator"},
+    {"name": "javascript", "paths": ["js/src/**/*.js"], "description": "Node/browser estimator"}
+  ],
+  "parity": [
+    {
+      "name": "python-js-package-api",
+      "members": [
+        {"label": "python", "source": "package", "package": "python"},
+        {"label": "javascript", "source": "package", "package": "npm"}
+      ],
+      "case": "snake",
+      "enforce": false
+    }
+  ],
+  "checks": {"files": ["src/rf.c", "src/rf.h", "py/wlearn_rf/__init__.py", "js/src/index.js"]}
+}

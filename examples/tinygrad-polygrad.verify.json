@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "suite": "tinygrad-polygrad-uops",
+  "description": "Pinned tinygrad-to-Polygrad structural obligations. Project roots are supplied locally; all reference and port semantics remain in this suite.",
+  "projects": {
+    "reference": {
+      "config": "tinygrad.json",
+      "revision": "40de90ab19ff623ef6fcb8e375a5e6ee209ad812",
+      "source_lock": {
+        "tinygrad/uop/__init__.py": "6218635e6939c5d40fe33b40de51275447edd7390b9311b1066fc4831758621e"
+      }
+    },
+    "subject": {
+      "config": "polygrad.json"
+    }
+  },
+  "extractors": {
+    "reference.ops": {
+      "kind": "python_enum",
+      "project": "reference",
+      "path": "tinygrad/uop/__init__.py",
+      "class": "Ops"
+    },
+    "subject.ops": {
+      "kind": "c_enum",
+      "project": "subject",
+      "path": "src/polygrad.h",
+      "name": "PolyOps",
+      "strip_prefix": "POLY_OP_"
+    },
+    "subject.op_values": {
+      "kind": "c_designated_initializer",
+      "project": "subject",
+      "path": "src/ops.c",
+      "name": "op_values",
+      "strip_prefix": "POLY_OP_"
+    },
+    "reference.binary": {
+      "kind": "python_set",
+      "project": "reference",
+      "path": "tinygrad/uop/__init__.py",
+      "class": "GroupOp",
+      "attribute": "Binary"
+    },
+    "subject.binary": {
+      "kind": "c_macro_set",
+      "project": "subject",
+      "path": "src/ops.c",
+      "call": "SET",
+      "selector": "POLY_GROUP_BINARY",
+      "strip_prefix": "POLY_OP_"
+    },
+    "reference.irreducible": {
+      "kind": "python_set",
+      "project": "reference",
+      "path": "tinygrad/uop/__init__.py",
+      "class": "GroupOp",
+      "attribute": "Irreducible"
+    },
+    "subject.irreducible": {
+      "kind": "c_macro_set",
+      "project": "subject",
+      "path": "src/ops.c",
+      "call": "SET",
+      "selector": "POLY_GROUP_IRREDUCIBLE",
+      "strip_prefix": "POLY_OP_"
+    },
+    "reference.movement": {
+      "kind": "python_set",
+      "project": "reference",
+      "path": "tinygrad/uop/__init__.py",
+      "class": "GroupOp",
+      "attribute": "Movement"
+    },
+    "subject.movement": {
+      "kind": "c_macro_set",
+      "project": "subject",
+      "path": "src/ops.c",
+      "call": "SET",
+      "selector": "POLY_GROUP_MOVEMENT",
+      "strip_prefix": "POLY_OP_"
+    },
+    "subject.permute_test_routes": {
+      "kind": "test_routes",
+      "project": "subject",
+      "selectors": ["*permute*"]
+    }
+  },
+  "mappings": {
+    "legacy-c-group-aliases": {
+      "actual_to_expected": {
+        "IDIV": "CDIV",
+        "MOD": "CMOD"
+      }
+    }
+  },
+  "checks": [
+    {
+      "id": "TG-UOP-SET-001",
+      "assert": "required_subset",
+      "severity": "error",
+      "owner": "compiler-core",
+      "rationale": "The port must implement every pinned reference operation; reviewed subject aliases, sentinels, and private extensions remain valid superset members.",
+      "requirement": "https://github.com/tinygrad/tinygrad/blob/40de90ab19ff623ef6fcb8e375a5e6ee209ad812/tinygrad/uop/__init__.py#L11-L105",
+      "expected": "reference.ops",
+      "actual": "subject.ops"
+    },
+    {
+      "id": "TG-UOP-VALUE-001",
+      "assert": "required_values",
+      "severity": "error",
+      "owner": "compiler-core",
+      "rationale": "Polygrad declares poly_op_value as the reference Ops.value order, so every reference value must match while subject-only values remain valid.",
+      "requirement": "polygrad:poly_op_value-contract",
+      "expected": "reference.ops",
+      "actual": "subject.op_values"
+    },
+    {
+      "id": "TG-GROUP-BINARY-001",
+      "assert": "required_subset",
+      "severity": "error",
+      "owner": "compiler-core",
+      "rationale": "Binary operation membership must match after the explicitly declared C compatibility aliases are normalized.",
+      "requirement": "tinygrad:GroupOp.Binary",
+      "expected": "reference.binary",
+      "actual": "subject.binary",
+      "mapping": "legacy-c-group-aliases"
+    },
+    {
+      "id": "TG-GROUP-IRREDUCIBLE-001",
+      "assert": "required_subset",
+      "severity": "error",
+      "owner": "compiler-core",
+      "rationale": "Irreducible operation membership controls graph termination and must be mapped explicitly.",
+      "requirement": "tinygrad:GroupOp.Irreducible",
+      "expected": "reference.irreducible",
+      "actual": "subject.irreducible",
+      "mapping": "legacy-c-group-aliases"
+    },
+    {
+      "id": "TG-GROUP-MOVEMENT-001",
+      "assert": "required_subset",
+      "severity": "error",
+      "owner": "compiler-core",
+      "rationale": "Movement operation membership must match the pinned reference.",
+      "requirement": "tinygrad:GroupOp.Movement",
+      "expected": "reference.movement",
+      "actual": "subject.movement"
+    },
+    {
+      "id": "TG-PERMUTE-ROUTES-001",
+      "assert": "min_test_routes",
+      "severity": "error",
+      "owner": "frontends",
+      "rationale": "Static permute-related tests must remain connected to the C core, Python, JavaScript, and configured browser path; this is a routing floor, not behavioral conformance.",
+      "requirement": "polygrad:permute-route-floor",
+      "actual": "subject.permute_test_routes",
+      "min": 4,
+      "required_routes": [
+        "src/shape.c",
+        "src/placer.c",
+        "py/polygrad/tensor.py",
+        "js/src/tensor.js"
+      ]
+    }
+  ]
+}

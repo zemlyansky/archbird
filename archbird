@@ -1,0 +1,32 @@
+#!/bin/sh
+# Source-checkout launcher. Public installations provide their own `archbird`
+# entrypoint; this file runs the in-place Python frontend from py/.
+set -eu
+
+repository=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+python=${PYTHON:-python}
+
+if ! command -v "$python" >/dev/null 2>&1; then
+  echo "archbird: Python executable not found: $python" >&2
+  exit 127
+fi
+
+library=
+for candidate in \
+  "$repository/build/libarchbird.so" \
+  "$repository/build/libarchbird.dylib" \
+  "$repository/build/archbird.dll"; do
+  if [ -f "$candidate" ]; then
+    library=$candidate
+    break
+  fi
+done
+if [ -z "$library" ]; then
+  echo "archbird: the local C core is not built" >&2
+  echo "run: make -C $repository build-py" >&2
+  exit 1
+fi
+
+ARCHBIRD_LIB="$library" \
+  PYTHONPATH="$repository/py${PYTHONPATH:+:$PYTHONPATH}" \
+  exec "$python" -m archbird "$@"

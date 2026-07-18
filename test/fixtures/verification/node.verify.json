@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "suite": "node-host-verification",
+  "description": "Reviewed static verification path supported by the npm host.",
+  "projects": {
+    "subject": {
+      "config": "../map_base/archbird.json",
+      "root": "../map_base"
+    }
+  },
+  "extractors": {
+    "expected": {
+      "kind": "literal_set",
+      "values": ["map", "verify"]
+    },
+    "actual": {
+      "kind": "literal_set",
+      "values": ["map", "verify"]
+    }
+  },
+  "checks": [
+    {
+      "id": "NODE-VERIFY-PUBLIC",
+      "assert": "set_equal",
+      "severity": "error",
+      "owner": "test",
+      "rationale": "The Node host must load and evaluate a reviewed suite through the native core.",
+      "expected": "expected",
+      "actual": "actual"
+    }
+  ]
+}

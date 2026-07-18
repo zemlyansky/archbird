@@ -1,0 +1,6 @@
+{
+  "name": "@sample/dep",
+  "version": "1.0.0",
+  "main": "js/index.js",
+  "exports": {".": "./js/index.js"}
+}

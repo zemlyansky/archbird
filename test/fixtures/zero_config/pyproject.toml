@@ -1,0 +1,6 @@
+[project]
+name = "zero-python"
+version = "2.0.0"
+
+[tool.flit.module]
+name = "zero_python"

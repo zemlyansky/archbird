@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "project": "wlearn-sym",
+  "description": "Symbolic-model C11 core with Python, JavaScript/WASM, Polygrad, and verifier paths.",
+  "root": ".",
+  "exclude": ["**/csrc/**", "js/wasm/**", "references/**", ".emscripten-cache/**"],
+  "layers": [
+    {"name": "core", "role": "core", "language": "c", "globs": ["src/**/*.c", "src/**/*.h"], "public_headers": ["src/sym.h"]},
+    {"name": "python", "role": "frontend", "language": "python", "globs": ["py/wlearn_sym/**/*.py"], "import_roots": ["py"]},
+    {"name": "javascript", "role": "frontend", "language": "javascript", "globs": ["js/src/**/*.js"]}
+  ],
+  "packages": [
+    {"name": "python", "kind": "python", "path": "py/pyproject.toml", "layer": "python", "entries": ["py/wlearn_sym/__init__.py"]},
+    {"name": "npm", "kind": "npm", "path": "js/package.json", "layer": "javascript", "entries": ["js/src/index.js"]}
+  ],
+  "builds": [
+    {"name": "make", "kind": "make", "path": "Makefile"},
+    {"name": "npm", "kind": "npm", "path": "js/package.json"}
+  ],
+  "bridges": [
+    {"name": "python-ctypes", "kind": "abi", "from": "python", "to": "core", "prefixes": ["wl_sym_"]},
+    {"name": "javascript-wasm", "kind": "abi", "from": "javascript", "to": "core", "prefixes": ["wl_sym_"]}
+  ],
+  "tests": [
+    {"name": "c", "language": "c", "globs": ["test/test_c.c"], "route_to": ["core"]},
+    {"name": "python", "language": "python", "globs": ["py/tests/**/*.py", "test/test_*.py"], "route_to": ["python", "core"]},
+    {"name": "javascript", "language": "javascript", "globs": ["test/test*.js"], "route_to": ["javascript"]}
+  ],
+  "components": [
+    {"name": "model-core", "paths": ["src/sym.c"], "description": "symbolic search, inference, and serialization"},
+    {"name": "abi", "paths": ["src/wl_api.c", "src/sym.h"], "description": "stable C/WASM surface"},
+    {"name": "python", "paths": ["py/wlearn_sym/**/*.py"], "description": "Python estimator, verifier, and Polygrad route"},
+    {"name": "javascript", "paths": ["js/src/**/*.js"], "description": "Node/browser estimator, verifier, and Polygrad route"}
+  ],
+  "parity": [
+    {
+      "name": "python-js-package-api",
+      "members": [
+        {"label": "python", "source": "package", "package": "python"},
+        {"label": "javascript", "source": "package", "package": "npm"}
+      ],
+      "case": "snake",
+      "enforce": false
+    }
+  ],
+  "checks": {"files": ["src/sym.c", "src/sym.h", "py/wlearn_sym/__init__.py", "js/src/polygrad.js"]}
+}

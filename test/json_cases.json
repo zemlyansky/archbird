@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "suite": "archbird-native-json",
+  "generated": {"seed": 1095911234, "count": 128, "max_depth": 3},
+  "cases": [
+    {"id": "null", "json": "null"},
+    {"id": "true", "json": "true"},
+    {"id": "negative-zero", "json": "-0"},
+    {"id": "huge-integer", "json": "1234567890123456789012345678901234567890"},
+    {"id": "empty-array", "json": "[]"},
+    {"id": "empty-object", "json": "{}"},
+    {"id": "nested-order", "json": "[3,2,1,{\"z\":0,\"a\":1}]"},
+    {"id": "unicode-key-order", "json": "{\"é\":\"accent\",\"a\":\"ascii\",\"𝄞\":\"astral\"}"},
+    {"id": "control-escapes", "json": "{\"control\":\"\\b\\f\\n\\r\\t\\u0000\\u001f\"}"},
+    {"id": "punctuation-escapes", "json": "{\"slash\":\"/\",\"quote\":\"\\\"\",\"backslash\":\"\\\\\"}"},
+    {"id": "nested-containers", "json": "{\"nested\":{\"b\":[{\"d\":4,\"c\":3}],\"a\":[]}}"},
+    {"id": "escaped-key", "json": "{\"escaped-key\":1,\"\\u0061\":2}"}
+  ]
+}

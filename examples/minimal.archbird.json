@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "project": "demo",
+  "layers": [
+    {
+      "name": "core",
+      "role": "core",
+      "language": "c",
+      "globs": ["include/**/*.h", "src/**/*.c"],
+      "public_headers": ["include/demo.h"]
+    },
+    {
+      "name": "javascript",
+      "role": "frontend",
+      "language": "typescript",
+      "globs": ["js/src/**/*.ts"]
+    }
+  ],
+  "components": [
+    {"name": "native-core", "paths": ["include/**", "src/**"]},
+    {"name": "javascript-api", "paths": ["js/src/**"]}
+  ]
+}

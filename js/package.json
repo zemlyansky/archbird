@@ -1,0 +1,60 @@
+{
+  "name": "archbird",
+  "version": "0.0.1",
+  "description": "Map codebase architecture, check its rules, and verify coordinated changes",
+  "author": "Anton Zemlyansky",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "bin": {
+    "archbird": "src/cli.js"
+  },
+  "exports": {
+    ".": {
+      "require": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./browser": "./src/browser.js",
+    "./serve": "./src/serve.js",
+    "./wasm": "./src/wasm.js",
+    "./wasm-sync": "./src/wasm-sync.js",
+    "./worker": "./src/worker.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "gypfile": false,
+  "scripts": {
+    "build:native": "node-gyp rebuild"
+  },
+  "dependencies": {
+    "buffer": "6.0.3",
+    "typescript": "6.0.3"
+  },
+  "files": [
+    "binding.gyp",
+    "app",
+    "csrc",
+    "src",
+    "native",
+    "wasm",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "architecture",
+    "static-analysis",
+    "agents"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zemlyansky/archbird.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zemlyansky/archbird/issues"
+  },
+  "homepage": "https://github.com/zemlyansky/archbird#readme"
+}

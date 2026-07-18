@@ -1,0 +1,1 @@
+#define ROOT_DUAL_VALUE 2

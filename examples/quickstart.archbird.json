@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "project": "demo",
+  "description": "Native core with Python and TypeScript frontends.",
+  "root": ".",
+  "exclude": ["dist/**", "build/**"],
+  "layers": [
+    {
+      "name": "core",
+      "role": "core",
+      "language": "c",
+      "globs": ["include/**/*.h", "src/**/*.c"],
+      "public_headers": ["include/demo.h"],
+      "import_roots": ["include", "src"]
+    },
+    {
+      "name": "python",
+      "role": "frontend",
+      "language": "python",
+      "globs": ["python/demo/**/*.py"],
+      "import_roots": ["python"]
+    },
+    {
+      "name": "javascript",
+      "role": "frontend",
+      "language": "typescript",
+      "globs": ["js/src/**/*.ts"],
+      "import_roots": ["js/src"]
+    },
+    {
+      "name": "python-tests",
+      "role": "test",
+      "language": "python",
+      "globs": ["python/tests/**/*.py"],
+      "import_roots": ["python"]
+    },
+    {
+      "name": "javascript-tests",
+      "role": "test",
+      "language": "typescript",
+      "globs": ["js/test/**/*.ts"],
+      "import_roots": ["js/src"]
+    }
+  ],
+  "packages": [
+    {
+      "name": "python",
+      "kind": "python",
+      "path": "python/pyproject.toml",
+      "layer": "python",
+      "entries": ["python/demo/__init__.py"]
+    },
+    {
+      "name": "npm",
+      "kind": "npm",
+      "path": "js/package.json",
+      "layer": "javascript",
+      "entries": ["js/src/index.ts"]
+    }
+  ],
+  "builds": [
+    {"name": "make", "kind": "make", "path": "Makefile"},
+    {"name": "npm", "kind": "npm", "path": "js/package.json"}
+  ],
+  "tests": [
+    {
+      "name": "python",
+      "language": "python",
+      "globs": ["python/tests/test_*.py"],
+      "route_to": ["python", "core"],
+      "case_routes": [
+        {
+          "selector": "test_client_open",
+          "paths": ["python/tests/test_client.py"],
+          "to": "src/core.c",
+          "target_symbols": ["demo_open"]
+        }
+      ]
+    },
+    {
+      "name": "javascript",
+      "language": "typescript",
+      "globs": ["js/test/**/*.test.ts"],
+      "route_to": ["javascript", "core"]
+    }
+  ],
+  "components": [
+    {"name": "native-core", "paths": ["include/**", "src/**"]},
+    {"name": "python-api", "paths": ["python/demo/**"]},
+    {"name": "javascript-api", "paths": ["js/src/**"]}
+  ]
+}

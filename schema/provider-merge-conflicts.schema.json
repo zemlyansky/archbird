@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/provider-merge-conflicts.schema.json",
+  "title": "Archbird compact provider merge conflict ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "project",
+    "source_manifest_sha256",
+    "providers",
+    "conflicts",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-provider-merge-conflicts"},
+    "project": {
+      "$ref": "provider-merge.schema.json#/$defs/id"
+    },
+    "source_manifest_sha256": {
+      "$ref": "provider-merge.schema.json#/$defs/sha256"
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "$ref": "provider-merge.schema.json#/$defs/provider"
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "provider-merge.schema.json#/$defs/conflict"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conflicts",
+        "providers_in_conflicts",
+        "providers_total"
+      ],
+      "properties": {
+        "conflicts": {"type": "integer", "minimum": 0},
+        "providers_in_conflicts": {"type": "integer", "minimum": 0},
+        "providers_total": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

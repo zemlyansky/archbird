@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "project": "tranfi",
+  "description": "Streaming ETL C11 core with Python, Node, WASM, and Vue worker application surfaces.",
+  "root": ".",
+  "exclude": ["**/csrc/**", "js/wasm/**", "js/app/assets/**", "references/**", "third_party/**", "temp/**", "corpus/**"],
+  "layers": [
+    {"name": "core", "role": "core", "language": "c", "globs": ["src/**/*.c", "src/**/*.h"], "public_headers": ["src/tranfi.h"]},
+    {"name": "python", "role": "frontend", "language": "python", "globs": ["py/tranfi/**/*.py"], "import_roots": ["py"]},
+    {"name": "node", "role": "frontend", "language": "javascript", "globs": ["js/src/**/*.js"]},
+    {"name": "native_bridge", "role": "bridge", "language": "c", "globs": ["js/napi_api.c"]},
+    {"name": "browser_js", "role": "frontend", "language": "javascript", "globs": ["app/src/**/*.js"]},
+    {"name": "browser_vue", "role": "frontend", "language": "vue", "globs": ["app/src/**/*.vue"]}
+  ],
+  "packages": [
+    {"name": "python", "kind": "python", "path": "py/pyproject.toml", "layer": "python", "entries": ["py/tranfi/__init__.py"]},
+    {"name": "npm", "kind": "npm", "path": "js/package.json", "layer": "node", "entries": ["js/src/index.js"]},
+    {"name": "app", "kind": "npm", "path": "app/package.json", "layer": "browser_js", "entries": ["app/src/main.js"]}
+  ],
+  "builds": [
+    {"name": "make", "kind": "make", "path": "Makefile"},
+    {"name": "npm", "kind": "npm", "path": "js/package.json"},
+    {"name": "app", "kind": "npm", "path": "app/package.json"}
+  ],
+  "bridges": [
+    {"name": "python-ctypes", "kind": "abi", "from": "python", "to": "core", "prefixes": ["tf_"]},
+    {"name": "node-napi", "kind": "binding", "from": "node", "to": "native_bridge"},
+    {"name": "node-wasm", "kind": "abi", "from": "node", "to": "core", "prefixes": ["wasm_"]},
+    {"name": "browser-wasm", "kind": "abi", "from": ["browser_js", "browser_vue"], "to": "core", "prefixes": ["wasm_"]},
+    {"name": "browser-worker", "kind": "message", "from": ["browser_js", "browser_vue"], "to": ["browser_js", "browser_vue"], "message_keys": ["type"], "bidirectional": true}
+  ],
+  "tests": [
+    {"name": "c", "language": "c", "globs": ["test/test_*.c", "test/fuzz_*.c"], "route_to": ["core", "native_bridge"]},
+    {"name": "python", "language": "python", "globs": ["test/test_*.py"], "route_to": ["python", "core"]},
+    {"name": "javascript", "language": "javascript", "globs": ["test/test_*.js", "app/test/**/*.js"], "route_to": ["node", "browser_js", "browser_vue"]}
+  ],
+  "components": [
+    {"name": "codecs", "paths": ["src/codec_*.c"], "description": "byte streams to typed batches and encoders"},
+    {"name": "ir", "paths": ["src/ir*.c", "src/compiler.c", "src/dsl.c", "src/expr.c"], "description": "pipeline IR, DSL, validation, and SQL lowering"},
+    {"name": "operations", "paths": ["src/op_*.c"], "description": "typed pipeline operations"},
+    {"name": "runtime", "paths": ["src/pipeline.c", "src/batch.c", "src/buffer.c", "src/spill.c", "src/wasm_api.c"], "description": "streaming execution and host boundaries"},
+    {"name": "python", "paths": ["py/tranfi/**/*.py"], "description": "Python builder and ctypes runtime"},
+    {"name": "node", "paths": ["js/src/**/*.js", "js/napi_api.c"], "description": "Node builder and native/WASM runtime"},
+    {"name": "browser", "paths": ["app/src/**/*.js", "app/src/**/*.vue"], "description": "Vue editor and Web Worker execution"}
+  ],
+  "parity": [
+    {
+      "name": "python-js-builders",
+      "members": [
+        {"label": "python", "source": "symbols", "layer": "python", "include": ["^(codec|ops|io)\\."], "kinds": ["method"]},
+        {"label": "javascript", "source": "symbols", "layer": "node", "include": ["^(codec|ops|io)\\."], "kinds": ["method"]}
+      ],
+      "case": "snake",
+      "aliases": {"ops.assert_": "ops.assert"},
+      "enforce": true
+    }
+  ],
+  "checks": {"files": ["src/tranfi.h", "src/pipeline.c", "py/tranfi/__init__.py", "js/src/index.js", "app/src/lib/tranfi-worker.js"]}
+}

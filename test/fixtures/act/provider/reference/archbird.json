@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "project": "provider-reference",
+  "description": "Reference side of a cross-language provider rename.",
+  "root": ".",
+  "layers": [
+    {"name": "core", "role": "core", "language": "c", "globs": ["src/*.c", "src/*.h"], "public_headers": ["src/core.h"]},
+    {"name": "python", "role": "frontend", "language": "python", "globs": ["py/*.py"]},
+    {"name": "javascript", "role": "frontend", "language": "javascript", "globs": ["js/*.js"]}
+  ],
+  "bridges": [
+    {
+      "name": "ffi",
+      "kind": "abi",
+      "from": ["python", "javascript"],
+      "to": "core",
+      "prefixes": ["core_"],
+      "providers": [
+        {
+          "kind": "make_variable",
+          "path": "Makefile",
+          "variable": "WASM_EXPORTS",
+          "pattern": "_?(core_[A-Za-z0-9_]+)"
+        },
+        {
+          "kind": "file_pattern",
+          "path": "src/core.h",
+          "pattern": "\\b(core_[A-Za-z0-9_]+)\\s*\\("
+        }
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "name": "python",
+      "language": "python",
+      "globs": ["py/test_*.py"],
+      "route_to": ["python", "core"],
+      "case_routes": [
+        {"selector": "test_add", "paths": ["py/test_api.py"], "to": ["py/api.py", "src/core.c"]}
+      ]
+    },
+    {
+      "name": "javascript",
+      "language": "javascript",
+      "globs": ["js/test_*.js"],
+      "route_to": ["javascript", "core"],
+      "case_routes": [
+        {"selector": "add", "paths": ["js/test_api.js"], "to": ["js/runtime.js", "src/core.c"]}
+      ]
+    }
+  ],
+  "components": [
+    {"name": "core", "paths": ["src/**"]},
+    {"name": "frontends", "paths": ["py/**", "js/**"]}
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "project": "verify-reference",
+  "description": "Reference fixture for typed architecture verification.",
+  "root": ".",
+  "layers": [
+    {
+      "name": "reference",
+      "role": "core",
+      "language": "python",
+      "globs": ["spec.py", "runner.py"],
+      "required": true
+    }
+  ],
+  "components": [
+    {"name": "core", "paths": ["spec.py"], "required": true},
+    {"name": "runner", "paths": ["runner.py"], "required": true}
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "artifact": "archbird-source-manifest",
+  "files": [
+    {
+      "bytes": 25,
+      "language": "python",
+      "layer": "python",
+      "path": "py/sample.py",
+      "roles": ["source"],
+      "sha256": "83b2b630c73b47a9eb36112f6c5ca9d8e6dd0f2fe1b5f69d23dc0f288b51c81b"
+    },
+    {
+      "bytes": 31,
+      "language": "c",
+      "layer": "core",
+      "path": "src/sample.c",
+      "roles": ["source", "test-input"],
+      "sha256": "2750f8f4b701a755a3e9ce1e04ca481c50fd2d2ee20b4bade0e28489874b34a7"
+    }
+  ],
+  "producer": {
+    "implementation_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "name": "fixture-host",
+    "version": "1"
+  },
+  "project": "sample",
+  "schema_version": 1
+}

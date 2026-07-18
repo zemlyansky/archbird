@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "project": "tinygrad-reference",
+  "description": "Canonical tinygrad Python compiler/runtime sources used as a Polygrad architecture reference.",
+  "root": ".",
+  "exclude": [
+    "tinygrad/runtime/autogen/**",
+    "tinygrad/viz/assets/**",
+    "**/__pycache__/**"
+  ],
+  "layers": [
+    {
+      "name": "core",
+      "role": "reference",
+      "language": "python",
+      "globs": ["tinygrad/**/*.py"],
+      "import_roots": ["."]
+    }
+  ],
+  "packages": [
+    {
+      "name": "python",
+      "kind": "python",
+      "path": "tinygrad/__init__.py",
+      "layer": "core",
+      "identity": "tinygrad",
+      "entries": ["tinygrad/__init__.py"]
+    }
+  ],
+  "components": [
+    {"name": "ir", "paths": ["tinygrad/uop/**/*.py"], "description": "UOp IR, patterns, validation, and symbolic algebra"},
+    {"name": "tensor", "paths": ["tinygrad/tensor.py", "tinygrad/function.py", "tinygrad/mixin/**/*.py"], "description": "tensor API and operation mixins"},
+    {"name": "autograd", "paths": ["tinygrad/mixin/gradient.py"], "description": "gradient construction"},
+    {"name": "schedule", "paths": ["tinygrad/schedule/**/*.py"], "description": "schedule and range/index lowering"},
+    {"name": "realize", "paths": ["tinygrad/engine/realize.py"], "description": "schedule execution and realization"},
+    {"name": "codegen", "paths": ["tinygrad/codegen/**/*.py", "tinygrad/renderer/**/*.py"], "description": "optimization, linearization, and rendering"},
+    {"name": "runtime", "paths": ["tinygrad/device.py", "tinygrad/runtime/*.py", "tinygrad/runtime/graph/**/*.py", "tinygrad/runtime/support/**/*.py"], "description": "device and runtime execution"},
+    {"name": "jit", "paths": ["tinygrad/engine/jit.py"], "description": "capture and replay"},
+    {"name": "frontends", "paths": ["tinygrad/__init__.py", "tinygrad/nn/**/*.py"], "description": "public Python and neural-network surfaces"}
+  ],
+  "checks": {
+    "files": ["tinygrad/uop/ops.py", "tinygrad/tensor.py", "tinygrad/engine/realize.py", "tinygrad/engine/jit.py"],
+    "symbols": [
+      {"layer": "core", "name": "Tensor"},
+      {"layer": "core", "name": "UOp"}
+    ]
+  }
+}

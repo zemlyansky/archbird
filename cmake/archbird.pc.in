@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: Archbird
+Description: Deterministic architecture evidence, verification, and change contracts
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -larchbird
+Cflags: -I${includedir}

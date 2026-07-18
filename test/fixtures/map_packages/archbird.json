@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "project": "map-packages",
+  "layers": [
+    {
+      "name": "core",
+      "role": "core",
+      "language": "c",
+      "globs": ["src/**/*.c", "include/**/*.h"]
+    },
+    {
+      "name": "javascript",
+      "role": "frontend",
+      "language": "javascript",
+      "globs": ["js/src/**/*.js"]
+    },
+    {
+      "name": "python",
+      "role": "frontend",
+      "language": "python",
+      "globs": ["py/**/*.py"],
+      "import_roots": ["py"]
+    },
+    {
+      "name": "r",
+      "role": "frontend",
+      "language": "r",
+      "globs": ["r/R/**/*.R"]
+    },
+    {
+      "name": "worker",
+      "role": "frontend",
+      "language": "javascript",
+      "globs": ["js/worker/**/*.js"]
+    }
+  ],
+  "packages": [
+    {
+      "name": "npm",
+      "kind": "npm",
+      "path": "js/package.json",
+      "layer": "javascript",
+      "entries": ["js/src/index.js"]
+    },
+    {
+      "name": "python-modern",
+      "kind": "python",
+      "path": "py/pyproject.toml",
+      "layer": "python",
+      "entries": ["py/pkg/__init__.py"]
+    },
+    {
+      "name": "python-legacy",
+      "kind": "python",
+      "path": "legacy/setup.py",
+      "layer": "python",
+      "entries": ["py/legacy/__init__.py"]
+    },
+    {
+      "name": "r",
+      "kind": "r",
+      "path": "r/NAMESPACE",
+      "layer": "r",
+      "entries": ["r/R/package.R"]
+    }
+  ],
+  "builds": [
+    {"name": "make", "kind": "make", "path": "Makefile"},
+    {"name": "npm", "kind": "npm", "path": "js/package.json"}
+  ],
+  "artifacts": [
+    {
+      "name": "native",
+      "output": "build/libexample.so",
+      "inputs": ["js/src/**"],
+      "loaded_by": [
+        {"paths": ["Makefile"], "pattern": "libexample\\.so"}
+      ],
+      "builds": [{"source": "Makefile", "target": "all"}]
+    },
+    {
+      "name": "bundle",
+      "output": "build/bundle.js",
+      "inputs": ["Makefile"],
+      "loaded_by": [
+        {"paths": ["js/package.json"], "pattern": "src/index\\.js"}
+      ],
+      "builds": [{"source": "Makefile", "target": "browser"}]
+    }
+  ],
+  "bridges": [
+    {
+      "name": "python-c",
+      "kind": "abi",
+      "from": "python",
+      "to": "core",
+      "prefixes": ["poly_"],
+      "ignore": ["poly_ignore"],
+      "providers": [
+        {
+          "kind": "make_variable",
+          "path": "Makefile",
+          "variable": "WASM_EXPORTS",
+          "pattern": "(_?poly_[A-Za-z0-9_]+)"
+        }
+      ]
+    },
+    {
+      "name": "python-js",
+      "kind": "binding",
+      "from": "python",
+      "to": "javascript",
+      "providers": [{"kind": "exports", "path": "js/src/**"}]
+    },
+    {
+      "name": "browser-worker",
+      "kind": "message",
+      "from": "javascript",
+      "to": "worker",
+      "bidirectional": true,
+      "message_keys": ["type", "status"]
+    }
+  ],
+  "tests": [
+    {
+      "name": "c",
+      "language": "c",
+      "globs": ["test/test_*.c"],
+      "route_to": ["core"]
+    },
+    {
+      "name": "python",
+      "language": "python",
+      "globs": ["test/test_*.py"],
+      "route_to": ["python", "core"]
+    },
+    {
+      "name": "javascript",
+      "language": "javascript",
+      "globs": ["test/test_*.js"],
+      "route_to": ["javascript"],
+      "case_routes": [
+        {"selector": "configured case", "to": "src/core.c"}
+      ]
+    },
+    {
+      "name": "r",
+      "language": "r",
+      "globs": ["test/test_*.R"],
+      "route_to": ["r"]
+    }
+  ],
+  "named_entries": [
+    {
+      "name": "entrypoints",
+      "kind": "call_string_arg",
+      "functions": ["poly_register_entrypoint"],
+      "argument": 1,
+      "globs": ["src/**/*.c"]
+    }
+  ],
+  "parity": [
+    {
+      "name": "core-bridge",
+      "members": [
+        {
+          "label": "core",
+          "source": "symbols",
+          "layer": "core",
+          "include": ["^poly_"],
+          "kinds": ["function"]
+        },
+        {"label": "bridge", "source": "bridge", "bridge": "python-c"}
+      ],
+      "strip_prefixes": ["poly_"],
+      "case": "snake",
+      "enforce": true
+    }
+  ],
+  "checks": {
+    "files": ["src/core.c", "py/pkg/api.py", "js/src/index.js"],
+    "symbols": [{"layer": "core", "name": "poly_add"}],
+    "edges": [
+      {
+        "kind": "bridge:*",
+        "from": "py/**/*.py",
+        "to": "src/**/*.c",
+        "name": "poly_*"
+      }
+    ],
+    "bridges": ["browser-worker"],
+    "entrypoints": [
+      {"package": "npm", "route": "main", "target": "src/index.js"}
+    ],
+    "test_routes": [{"group": "c", "to": "src/core.c"}],
+    "surfaces": [{"bridge": "python-c", "declared": ["poly_add"]}],
+    "forbid_paths": ["legacy-forbidden/**"],
+    "forbid_symbols": [{"layer": "core", "name": "forbidden_symbol"}]
+  }
+}

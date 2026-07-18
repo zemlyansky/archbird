@@ -1,0 +1,1 @@
+{"checks":[{"actual":"actual","assert":"set_equal","expected":"expected","id":"FUZZ-SET","owner":"fuzz","rationale":"Exercise native verification."}],"extractors":{"actual":{"kind":"literal_set","values":["B"]},"expected":{"kind":"literal_set","values":["A"]}},"projects":{"subject":{"map":"subject.json"}},"schema_version":1,"suite":"fuzz"}

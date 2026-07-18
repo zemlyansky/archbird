@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/evaluation-comparison.schema.json",
+  "title": "Archbird historical-change evaluation comparison",
+  "description": "Deterministic metric deltas between two immutable evaluation runs, with changed cases marked incomparable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "evaluator",
+    "before_run_sha256",
+    "after_run_sha256",
+    "corpus_relation",
+    "cases",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-evaluation-comparison"},
+    "provenance": {"const": "derived"},
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_sha256"],
+      "properties": {
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "before_run_sha256": {"$ref": "#/$defs/sha256"},
+    "after_run_sha256": {"$ref": "#/$defs/sha256"},
+    "corpus_relation": {"enum": ["same", "changed"]},
+    "cases": {"type": "array", "items": {"type": "object"}},
+    "summary": {"type": "object"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

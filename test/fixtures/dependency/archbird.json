@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "project": "dependency",
+  "description": "Workspace dependency fixture.",
+  "root": ".",
+  "layers": [
+    {"name": "javascript", "role": "core", "language": "javascript", "globs": ["js/**/*.js"]}
+  ],
+  "packages": [
+    {"name": "npm", "kind": "npm", "path": "package.json", "layer": "javascript", "entries": ["js/index.js"]}
+  ],
+  "components": [
+    {"name": "api", "paths": ["js/index.js"]}
+  ],
+  "checks": {
+    "files": ["js/index.js"],
+    "symbols": [{"layer": "javascript", "name": "dep"}],
+    "entrypoints": [{"package": "npm", "route": "main", "target": "js/index.js"}]
+  }
+}

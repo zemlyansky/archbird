@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/change-result.schema.json",
+  "title": "Archbird derived architecture change result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "tool",
+    "proposal_sha256",
+    "contract_sha256",
+    "before_verification_sha256",
+    "after_verification_sha256",
+    "freshness",
+    "status",
+    "outcomes",
+    "diagnostics",
+    "sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "change-result"},
+    "provenance": {"const": "derived"},
+    "tool": {"$ref": "#/$defs/tool"},
+    "proposal_sha256": {"$ref": "#/$defs/sha256"},
+    "contract_sha256": {"$ref": "#/$defs/sha256"},
+    "before_verification_sha256": {"$ref": "#/$defs/sha256"},
+    "after_verification_sha256": {"$ref": "#/$defs/sha256"},
+    "freshness": {
+      "enum": ["current", "context_drift", "stale", "superseded"]
+    },
+    "status": {"$ref": "#/$defs/status"},
+    "outcomes": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/outcome"}
+    },
+    "diagnostics": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "status": {
+      "enum": [
+        "satisfied",
+        "missing",
+        "unexpected",
+        "unknown",
+        "stale",
+        "superseded"
+      ]
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "project",
+        "path",
+        "line",
+        "sha256",
+        "detail"
+      ],
+      "properties": {
+        "provenance": {"enum": ["derived", "asserted", "observed"]},
+        "project": {"type": "string"},
+        "path": {"type": "string"},
+        "line": {"type": "integer", "minimum": 0},
+        "sha256": {
+          "oneOf": [
+            {"const": ""},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        },
+        "detail": {"type": "string"}
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "message", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "kind": {"$ref": "#/$defs/id"},
+        "status": {"$ref": "#/$defs/status"},
+        "message": {"type": "string", "minLength": 1},
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    }
+  }
+}

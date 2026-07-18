@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "project": "jsee",
+  "description": "Schema-driven JavaScript/browser runtime with a parallel Python server/runtime and Vue templates.",
+  "root": ".",
+  "exclude": ["dist/**", "apps/**", "load/**"],
+  "layers": [
+    {"name": "runtime_js", "role": "core", "language": "javascript", "globs": ["src/**/*.js"]},
+    {"name": "runtime_py", "role": "core", "language": "python", "globs": ["py/jsee/**/*.py"], "import_roots": ["py"]},
+    {"name": "template_js", "role": "frontend", "language": "javascript", "globs": ["templates/**/*.js"]},
+    {"name": "template_vue", "role": "frontend", "language": "vue", "globs": ["templates/**/*.vue"]}
+  ],
+  "packages": [
+    {"name": "npm", "kind": "npm", "path": "package.json", "layer": "runtime_js", "entries": ["src/cli.js", "src/main.js"]},
+    {"name": "python", "kind": "python", "path": "py/setup.py", "layer": "runtime_py", "entries": ["py/jsee/__init__.py"]}
+  ],
+  "builds": [
+    {"name": "npm", "kind": "npm", "path": "package.json"}
+  ],
+  "bridges": [
+    {"name": "worker-protocol", "kind": "message", "from": "runtime_js", "to": "runtime_js", "message_keys": ["_cmd", "_status", "type"], "bidirectional": true}
+  ],
+  "tests": [
+    {"name": "javascript", "language": "javascript", "globs": ["test/**/*.js", "test/**/*.mjs"], "route_to": ["runtime_js", "template_js", "template_vue"]},
+    {"name": "python", "language": "python", "globs": ["py/test/**/*.py"], "route_to": ["runtime_py"]}
+  ],
+  "components": [
+    {"name": "schema-runtime", "paths": ["src/main.js", "src/utils.js"], "description": "schema normalization, model loading, and execution"},
+    {"name": "worker", "paths": ["src/worker.js"], "description": "isolated browser model execution"},
+    {"name": "ui", "paths": ["src/app.js", "src/overlay.js", "templates/**/*.js", "templates/**/*.vue"], "description": "Vue schema-derived interface and output rendering"},
+    {"name": "cli", "paths": ["src/cli.js", "src/browser-bundle-node.js"], "description": "CLI, serving, packaging, and one-shot execution"},
+    {"name": "python-runtime", "paths": ["py/jsee/**/*.py"], "description": "Python schema generation and serving"}
+  ],
+  "checks": {"files": ["src/main.js", "src/worker.js", "src/app.js", "src/cli.js", "py/jsee/jsee.py", "templates/minimal-app.vue"]}
+}

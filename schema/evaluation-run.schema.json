@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/evaluation-run.schema.json",
+  "title": "Archbird historical-change evaluation run",
+  "description": "Immutable observed metrics from one Archbird executable over one frozen evaluation corpus.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "corpus_sha256",
+    "label",
+    "evaluator",
+    "host",
+    "tool",
+    "cases",
+    "aggregate"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-evaluation-run"},
+    "provenance": {"const": "observed"},
+    "corpus_sha256": {"$ref": "#/$defs/sha256"},
+    "label": {"type": "string", "minLength": 1},
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_sha256"],
+      "properties": {
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "host": {"type": "object"},
+    "tool": {"type": "object"},
+    "cases": {"type": "array", "items": {"type": "object"}},
+    "aggregate": {"type": "object"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

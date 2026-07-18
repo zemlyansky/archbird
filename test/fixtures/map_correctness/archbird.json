@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "project": "map-correctness",
+  "root": ".",
+  "layers": [
+    {
+      "name": "python",
+      "role": "core",
+      "language": "python",
+      "globs": ["py/**/*.py", "csrc/version.py"],
+      "import_roots": ["."]
+    },
+    {
+      "name": "c-unrelated",
+      "role": "core",
+      "language": "c",
+      "globs": ["unrelated/**/*.h"],
+      "import_roots": ["unrelated"]
+    },
+    {
+      "name": "c-tests",
+      "role": "tests",
+      "language": "c",
+      "globs": ["test/**/*.c", "test/**/*.h"],
+      "import_roots": ["csrc"]
+    },
+    {
+      "name": "c-core",
+      "role": "core",
+      "language": "c",
+      "globs": ["csrc/**/*.c", "csrc/**/*.h"]
+    }
+  ],
+  "packages": [
+    {
+      "name": "python-public",
+      "kind": "python",
+      "path": "py/publicpkg/__init__.py",
+      "layer": "python",
+      "entries": ["py/publicpkg/__init__.py"],
+      "identity": "py",
+      "aliases": ["py"]
+    },
+    {
+      "name": "python-star-public",
+      "kind": "python",
+      "path": "py/starpublic/__init__.py",
+      "layer": "python",
+      "entries": ["py/starpublic/__init__.py"],
+      "identity": "starpublic",
+      "aliases": ["starpublic"]
+    }
+  ],
+  "components": [
+    {
+      "name": "python-recursive",
+      "paths": ["py/**"]
+    },
+    {
+      "name": "python-top-level",
+      "paths": ["py/*.py"]
+    }
+  ],
+  "tests": [
+    {
+      "name": "c",
+      "language": "c",
+      "globs": ["test/**/*.c"],
+      "route_to": ["python", "c-core"],
+      "case_routes": [
+        {
+          "selector": "sched.2d_e2e",
+          "paths": ["test/test_cases.c"],
+          "to": ["py/helper.py"],
+          "target_symbols": ["helper"]
+        }
+      ],
+      "case_extractors": [
+        {
+          "kind": "c_macro",
+          "call": "TEST_COMMON",
+          "selector_arguments": [0, 1],
+          "separator": "."
+        },
+        {
+          "kind": "named_dispatch",
+          "name": "CASES",
+          "selector_argument": 0
+        }
+      ],
+      "generated_files": [
+        {
+          "globs": ["test/generated.c"],
+          "sources": ["test/test_cases.c"]
+        }
+      ]
+    },
+    {
+      "name": "python",
+      "language": "python",
+      "globs": ["py/dispatch.py", "py/test_*.py"],
+      "route_to": ["python"],
+      "case_extractors": [
+        {
+          "kind": "named_dispatch",
+          "name": "CASES"
+        }
+      ]
+    }
+  ]
+}

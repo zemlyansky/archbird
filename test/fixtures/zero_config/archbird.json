@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "project": "configured-fixture",
+  "layers": [
+    {
+      "name": "configured-python",
+      "language": "python",
+      "globs": ["**/*.py"],
+      "required": false
+    }
+  ],
+  "exclude": ["generated/**"]
+}

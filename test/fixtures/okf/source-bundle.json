@@ -1,0 +1,51 @@
+{
+  "artifact": "okf-source-bundle",
+  "diagnostics": [],
+  "documents": [
+    {
+      "body": "# Component\n",
+      "byte_length": 32,
+      "casefold": {
+        "tags": ["core"],
+        "text": "component\ncomponent\n# component\n",
+        "type": "component"
+      },
+      "frontmatter": {
+        "tags": ["core"],
+        "title": "Component",
+        "type": "Component"
+      },
+      "links": [],
+      "path": "component.md",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "state": "current"
+    },
+    {
+      "body": "# Bundle\n",
+      "byte_length": 16,
+      "casefold": {
+        "tags": [],
+        "text": "\n\n\n# bundle\n",
+        "type": ""
+      },
+      "frontmatter": {
+        "okf_version": "0.1"
+      },
+      "links": [],
+      "path": "index.md",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "state": "current"
+    }
+  ],
+  "known_paths": [
+    "component.md",
+    "index.md"
+  ],
+  "producer": {
+    "implementation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "name": "archbird-fixture-okf",
+    "runtime": "fixture-1",
+    "version": "1"
+  },
+  "schema_version": 1
+}

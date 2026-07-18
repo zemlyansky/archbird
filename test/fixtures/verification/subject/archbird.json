@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "project": "verify-subject",
+  "description": "Subject fixture for typed architecture verification.",
+  "root": ".",
+  "layers": [
+    {
+      "name": "core",
+      "role": "core",
+      "language": "c",
+      "globs": ["src/*.c", "src/*.h"],
+      "public_headers": ["src/core.h"],
+      "required": true
+    },
+    {
+      "name": "runner",
+      "role": "test-runner",
+      "language": "python",
+      "globs": ["runner.py"],
+      "required": true
+    }
+  ],
+  "tests": [
+    {
+      "name": "c",
+      "language": "c",
+      "globs": ["test/*.c"],
+      "route_to": ["core"],
+      "required": true
+    }
+  ],
+  "components": [
+    {"name": "core", "paths": ["src/**"], "required": true},
+    {"name": "runner", "paths": ["runner.py"], "required": true}
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/visualization-event.schema.json",
+  "title": "Archbird visualization host event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "payload", "protocol_version", "session", "type"],
+  "properties": {
+    "event_id": {"type": "integer", "minimum": 0},
+    "generation": {"$ref": "#/$defs/sha256"},
+    "payload": {"type": "object"},
+    "protocol_version": {"const": 1},
+    "session": {"$ref": "#/$defs/id"},
+    "type": {
+      "enum": [
+        "scan-started",
+        "progress",
+        "candidate-failed",
+        "snapshot-ready",
+        "verification-ready"
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    }
+  }
+}

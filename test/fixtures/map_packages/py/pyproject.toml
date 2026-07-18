@@ -1,0 +1,13 @@
+[project]
+name = "archbird-modern"
+version = "2.3.4"
+dependencies = [
+  "requests>=2",
+  "typing-extensions; python_version < '3.11'"
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+archbird-modern = "pkg:main"

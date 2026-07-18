@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/change-contract.schema.json",
+  "title": "Archbird asserted architecture change contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "tool",
+    "proposal_sha256",
+    "origin",
+    "objective",
+    "owner",
+    "rationale",
+    "postconditions",
+    "preserved_checks",
+    "selected_candidates",
+    "acknowledged_unknowns",
+    "sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "change-contract"},
+    "provenance": {"const": "asserted"},
+    "tool": {"$ref": "#/$defs/tool"},
+    "proposal_sha256": {"$ref": "#/$defs/sha256"},
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "fingerprint"],
+      "properties": {
+        "check": {"$ref": "#/$defs/id"},
+        "fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "objective": {"type": "string", "minLength": 1},
+    "owner": {"type": "string", "minLength": 1},
+    "rationale": {"type": "string", "minLength": 1},
+    "postconditions": {"$ref": "#/$defs/strings"},
+    "preserved_checks": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/preservedCheck"}
+    },
+    "selected_candidates": {"$ref": "#/$defs/strings"},
+    "acknowledged_unknowns": {"$ref": "#/$defs/strings"},
+    "sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "strings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "preservedCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "sha256"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "status": {
+          "enum": ["pass", "fail", "unknown", "waived", "not_applicable"]
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

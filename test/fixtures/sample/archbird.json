@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "project": "sample",
+  "description": "Integration fixture.",
+  "root": ".",
+  "layers": [
+    {"name": "core", "role": "core", "language": "c", "globs": ["src/**/*.c", "src/**/*.h"], "public_headers": ["src/core.h"]},
+    {"name": "python", "role": "frontend", "language": "python", "globs": ["py/sample/**/*.py"], "import_roots": ["py"]},
+    {"name": "javascript", "role": "frontend", "language": "javascript", "globs": ["js/**/*.js"]},
+    {"name": "vue", "role": "frontend", "language": "vue", "globs": ["ui/**/*.vue"]},
+    {"name": "native", "role": "bridge", "language": "c", "globs": ["native/**/*.c"]}
+  ],
+  "packages": [
+    {"name": "python", "kind": "python", "path": "pyproject.toml", "layer": "python", "entries": ["py/sample/__init__.py"]},
+    {"name": "npm", "kind": "npm", "path": "package.json", "layer": "javascript", "entries": ["js/index.js"]}
+  ],
+  "builds": [
+    {"name": "make", "kind": "make", "path": "Makefile"},
+    {"name": "npm", "kind": "npm", "path": "package.json"}
+  ],
+  "artifacts": [
+    {
+      "name": "browser-bundle",
+      "output": "dist/sample.js",
+      "inputs": ["js/index.js", "js/runtime.js"],
+      "loaded_by": [
+        {"paths": ["ui/index.html"], "pattern": "dist/sample\\.js"}
+      ],
+      "builds": [{"source": "Makefile", "target": "dist/sample.js"}]
+    }
+  ],
+  "bridges": [
+    {"name": "python-abi", "kind": "abi", "from": "python", "to": "core", "prefixes": ["core_"]},
+    {
+      "name": "js-abi",
+      "kind": "abi",
+      "from": "javascript",
+      "to": "core",
+      "prefixes": ["core_"],
+      "providers": [
+        {
+          "kind": "make_variable",
+          "path": "Makefile",
+          "variable": "WASM_EXPORTS",
+          "pattern": "_?(core_[A-Za-z0-9_]+)"
+        },
+        {
+          "kind": "file_pattern",
+          "path": "src/core.h",
+          "pattern": "\\b(core_[A-Za-z0-9_]+)\\s*\\("
+        }
+      ]
+    },
+    {
+      "name": "js-binding",
+      "kind": "binding",
+      "from": "javascript",
+      "to": "native",
+      "prefixes": ["core_"],
+      "providers": [
+        {"kind": "exports", "path": "native/addon.c"}
+      ]
+    },
+    {"name": "worker", "kind": "message", "from": "javascript", "to": "javascript", "message_keys": ["type", "status"], "bidirectional": true}
+  ],
+  "tests": [
+    {"name": "c", "language": "c", "globs": ["test/*.c"], "route_to": ["core"]},
+    {"name": "python", "language": "python", "globs": ["test/*.py"], "route_to": ["python", "core"]},
+    {"name": "javascript", "language": "javascript", "globs": ["test/*.js"], "route_to": ["javascript"]}
+  ],
+  "components": [
+    {"name": "core", "paths": ["src/**"]},
+    {"name": "frontends", "paths": ["py/**", "js/**", "ui/**"]}
+  ],
+  "named_entries": [
+    {"name": "entries", "kind": "call_string_arg", "functions": ["core_register"], "argument": 1, "globs": ["src/**/*.c"]}
+  ],
+  "parity": [
+    {
+      "name": "package-api",
+      "members": [
+        {"label": "python", "source": "package", "package": "python"},
+        {"label": "javascript", "source": "package", "package": "npm"}
+      ],
+      "case": "snake",
+      "enforce": true
+    }
+  ],
+  "checks": {
+    "files": ["src/core.c", "src/core.h", "py/sample/api.py", "js/runtime.js", "ui/Widget.vue"],
+    "symbols": [
+      {"layer": "core", "name": "core_add"},
+      {"layer": "python", "name": "Ops.add"},
+      {"layer": "javascript", "name": "ops.nested.mul"}
+    ],
+    "edges": [
+      {"kind": "import", "from": "js/main.js", "to": "js/worker.js", "name": "./worker.js"},
+      {"kind": "bridge:python-abi", "from": "py/**", "to": "src/core.c", "name": "core_add"}
+    ],
+    "bridges": ["python-abi", "js-abi", "js-binding", "worker"],
+    "entrypoints": [
+      {"package": "npm", "route": "main", "target": "js/index.js"}
+    ],
+    "test_routes": [
+      {"group": "c", "to": "src/core.c"},
+      {"group": "python", "to": "py/**"}
+    ],
+    "surfaces": [
+      {
+        "bridge": "js-abi",
+        "declared": ["core_add", "core_mul", "core_unused"],
+        "forbid_unregistered": true,
+        "forbid_unresolved": true,
+        "forbid_ambiguous": true
+      },
+      {
+        "bridge": "js-binding",
+        "declared": ["core_add", "core_mul"],
+        "forbid_unregistered": true,
+        "forbid_unresolved": true,
+        "forbid_ambiguous": true
+      }
+    ],
+    "forbid_paths": ["js/legacy*.js"],
+    "forbid_symbols": [
+      {"layer": "core", "name": "legacy_core"}
+    ]
+  }
+}

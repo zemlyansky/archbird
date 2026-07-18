@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "suite": "provider-transition",
+  "description": "Cross-language provider rename and routed frontend-test fixture.",
+  "projects": {
+    "reference": {
+      "config": "reference/archbird.json",
+      "revision": "provider-v1"
+    },
+    "subject": {
+      "config": "subject/archbird.json",
+      "revision": "provider-v1"
+    }
+  },
+  "extractors": {
+    "reference.ffi": {
+      "kind": "provider_surface",
+      "project": "reference",
+      "name": "ffi"
+    },
+    "subject.ffi": {
+      "kind": "provider_surface",
+      "project": "subject",
+      "name": "ffi"
+    },
+    "subject.test_routes": {
+      "kind": "test_routes",
+      "project": "subject"
+    }
+  },
+  "mappings": {
+    "provider-names": {
+      "actual_to_expected": {
+        "core_add": "core_sum"
+      }
+    }
+  },
+  "checks": [
+    {
+      "id": "PROVIDER-RENAME",
+      "assert": "mapped_values_equal",
+      "severity": "error",
+      "owner": "bindings",
+      "rationale": "The physical provider name and its declaration/use/implementation state must match the reviewed reference.",
+      "requirement": "FFI-RENAME-001",
+      "expected": "reference.ffi",
+      "actual": "subject.ffi",
+      "mapping": "provider-names"
+    },
+    {
+      "id": "PROVIDER-TEST-ROUTES",
+      "assert": "min_test_routes",
+      "severity": "error",
+      "owner": "bindings",
+      "rationale": "Python and JavaScript frontend test routes must remain connected.",
+      "actual": "subject.test_routes",
+      "min": 2
+    }
+  ]
+}

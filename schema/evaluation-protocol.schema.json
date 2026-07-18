@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/evaluation-protocol.schema.json",
+  "title": "Archbird historical-change evaluation protocol",
+  "description": "The asserted case-selection, seeded-routing, metric, and split policy frozen into every evaluation corpus.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "id",
+    "case_selection",
+    "analysis",
+    "metrics",
+    "split_policy"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-evaluation-protocol"},
+    "provenance": {"const": "asserted"},
+    "id": {"$ref": "#/$defs/id"},
+    "case_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order",
+        "single_parent",
+        "max_changed_files",
+        "require_product_source",
+        "require_tests",
+        "excluded_subject_prefixes"
+      ],
+      "properties": {
+        "order": {"const": "reverse_chronological_first_eligible"},
+        "single_parent": {"const": true},
+        "max_changed_files": {"type": "integer", "minimum": 1},
+        "require_product_source": {"const": true},
+        "require_tests": {"const": true},
+        "excluded_subject_prefixes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["track", "selector_policy", "depth", "test_depth", "configuration"],
+      "properties": {
+        "track": {"const": "seeded_routing"},
+        "selector_policy": {"const": "task_explicit_identity"},
+        "depth": {"type": "integer", "minimum": 0, "maximum": 16},
+        "test_depth": {"type": "integer", "minimum": 0, "maximum": 16},
+        "configuration": {"const": "zero_config"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "retrieval",
+        "context",
+        "performance",
+        "split_aggregation",
+        "introduced_tests_role"
+      ],
+      "properties": {
+        "retrieval": {"$ref": "#/$defs/strings"},
+        "context": {"$ref": "#/$defs/strings"},
+        "performance": {"const": "observational_single_sample"},
+        "split_aggregation": {"const": "separate"},
+        "introduced_tests_role": {"const": "act_only"}
+      }
+    },
+    "split_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "development",
+        "validation",
+        "held_out",
+        "held_out_open_once",
+        "tuning_after_held_out_open"
+      ],
+      "properties": {
+        "development": {"const": "tuning_allowed"},
+        "validation": {"const": "open_after_reservation"},
+        "held_out": {"const": "sealed_until_protocol_frozen"},
+        "held_out_open_once": {"const": true},
+        "tuning_after_held_out_open": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+    "strings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

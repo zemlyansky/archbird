@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/map-freshness.schema.json",
+  "title": "Archbird saved-artifact freshness audit",
+  "description": "A deterministic comparison of a saved Map or Query snapshot against a freshly derived current Map.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact",
+    "schema_version",
+    "status",
+    "snapshot",
+    "current",
+    "comparisons",
+    "files",
+    "tool"
+  ],
+  "properties": {
+    "artifact": {"const": "map-freshness"},
+    "schema_version": {"const": 1},
+    "status": {
+      "enum": ["current", "context-drift", "stale", "unknown", "not-applicable"]
+    },
+    "snapshot": {"$ref": "#/$defs/identity"},
+    "current": {"$ref": "#/$defs/identity"},
+    "comparisons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "source", "configuration", "discovery", "producer"],
+      "properties": {
+        "project": {"enum": ["current", "changed"]},
+        "source": {"$ref": "#/$defs/comparison"},
+        "configuration": {"$ref": "#/$defs/comparison"},
+        "discovery": {"$ref": "#/$defs/comparison"},
+        "producer": {"$ref": "#/$defs/comparison"}
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "added",
+        "changed",
+        "missing",
+        "unchanged",
+        "unattributed_input_drift"
+      ],
+      "properties": {
+        "scope": {"enum": ["mapped-inventory", "selected-snapshot-files"]},
+        "added": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/path"}
+        },
+        "changed": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/changedFile"}
+        },
+        "missing": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/path"}
+        },
+        "unchanged": {"type": "integer", "minimum": 0},
+        "unattributed_input_drift": {"type": "boolean"}
+      }
+    },
+    "tool": {"$ref": "#/$defs/tool"}
+  },
+  "$defs": {
+    "comparison": {"enum": ["current", "changed", "unknown"]},
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "project", "input_sha256"],
+      "properties": {
+        "artifact": {"enum": ["map", "query"]},
+        "project": {"type": "string", "minLength": 1},
+        "input_sha256": {"$ref": "#/$defs/sha256"},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "discovery_sha256": {"$ref": "#/$defs/sha256"},
+        "tool_implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "changedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "before_sha256", "after_sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "before_sha256": {"$ref": "#/$defs/sha256"},
+        "after_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

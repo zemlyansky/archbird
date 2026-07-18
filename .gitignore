@@ -1,0 +1,57 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+node_modules/
+build/
+dist/
+*.egg-info/
+*.so
+*.pyd
+*.node
+py/csrc/
+py/LICENSE
+py/NOTICE
+py/.csrc-*/
+js/native/
+js/csrc/
+js/wasm/
+js/app/
+js/src/generated/
+js/LICENSE
+js/NOTICE
+app/public/archbird.wasm
+py/archbird/app/
+src.zip
+
+# Markdown is local project state unless it is a README.
+*.md
+!README.md
+!**/README.md
+
+# Downloaded research corpora stay external/local.
+references/
+
+# Maintainer-local multi-checkout topology; public examples are individually
+# portable, but this workspace binds their relative sibling locations.
+examples/workspace.json
+
+# Generated maps are reproducible outputs, not source.
+ARCHBIRD.md
+ARCHBIRD.json
+*.archbird.md
+*.archbird.json
+!examples/*.archbird.json
+*.scip
+
+# libFuzzer expands these two maintained seeds into hash-named working
+# corpora. Keep the generated coverage corpus local; source control owns only
+# the deliberate entry seed for each target.
+test/fuzz/corpus/syntax/*
+!test/fuzz/corpus/syntax/basic
+test/fuzz/corpus/scip/*
+!test/fuzz/corpus/scip/malformed

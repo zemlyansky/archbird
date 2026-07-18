@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/file-facts.schema.json",
+  "title": "Archbird compatibility file facts",
+  "description": "Deterministic schema-6-compatible file evidence reduced from merged provider occurrences.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "project",
+    "source_manifest_sha256",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-file-facts"},
+    "project": {"$ref": "#/$defs/id"},
+    "source_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "files": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/file"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+$"
+    },
+    "strings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "countMap": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 1}
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "stringArrayMap": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/strings"}
+    },
+    "symbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "scope", "line", "signature"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "scope": {"type": "string"},
+        "line": {"type": "integer", "minimum": 1},
+        "signature": {"type": "string"},
+        "syntax_recovery": {"const": "intersects"}
+      }
+    },
+    "messages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sends", "receives"],
+      "properties": {
+        "sends": {"$ref": "#/$defs/strings"},
+        "receives": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "layer",
+        "language",
+        "bytes",
+        "sha256",
+        "symbols",
+        "calls",
+        "call_counts",
+        "method_calls",
+        "method_call_counts",
+        "imports",
+        "imported_names",
+        "exports",
+        "export_origins",
+        "reexport_candidates",
+        "messages"
+      ],
+      "properties": {
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "layer": {"type": "string"},
+        "language": {"type": "string"},
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "symbols": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/symbol"}
+        },
+        "calls": {"$ref": "#/$defs/strings"},
+        "call_counts": {"$ref": "#/$defs/countMap"},
+        "method_calls": {"$ref": "#/$defs/strings"},
+        "method_call_counts": {"$ref": "#/$defs/countMap"},
+        "imports": {"$ref": "#/$defs/strings"},
+        "imported_names": {"$ref": "#/$defs/stringArrayMap"},
+        "exports": {"$ref": "#/$defs/strings"},
+        "export_origins": {"$ref": "#/$defs/stringMap"},
+        "reexport_candidates": {"$ref": "#/$defs/strings"},
+        "messages": {"$ref": "#/$defs/messages"}
+      }
+    }
+  }
+}

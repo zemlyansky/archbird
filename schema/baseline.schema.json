@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/baseline.schema.json",
+  "title": "Archbird explicit verification and coverage baseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "suite",
+    "suite_sha256",
+    "tool",
+    "owner",
+    "rationale",
+    "active",
+    "resolved",
+    "coverage"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "verification-baseline"},
+    "suite": {"type": "string", "minLength": 1},
+    "suite_sha256": {"$ref": "#/$defs/sha256"},
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "owner": {"type": "string", "minLength": 1},
+    "rationale": {"type": "string", "minLength": 1},
+    "active": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/finding"}
+    },
+    "resolved": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/sha256"}
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "check", "comparison", "key"],
+      "properties": {
+        "fingerprint": {"$ref": "#/$defs/sha256"},
+        "check": {"type": "string", "minLength": 1},
+        "comparison": {
+          "enum": ["equal", "missing", "extra", "different"]
+        },
+        "key": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

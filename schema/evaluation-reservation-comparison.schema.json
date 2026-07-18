@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/evaluation-reservation-comparison.schema.json",
+  "title": "Archbird evaluation repository reservation comparison",
+  "description": "A deterministic comparison between two immutable repository reservation snapshots.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact", "provenance", "evaluator", "before_reservation_sha256", "after_reservation_sha256", "added", "removed", "changed", "unchanged"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-evaluation-reservation-comparison"},
+    "provenance": {"const": "derived"},
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_sha256"],
+      "properties": {"implementation_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "before_reservation_sha256": {"$ref": "#/$defs/sha256"},
+    "after_reservation_sha256": {"$ref": "#/$defs/sha256"},
+    "added": {"$ref": "#/$defs/ids"},
+    "removed": {"$ref": "#/$defs/ids"},
+    "changed": {"$ref": "#/$defs/ids"},
+    "unchanged": {"$ref": "#/$defs/ids"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"}
+    }
+  }
+}
