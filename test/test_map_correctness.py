@@ -25,6 +25,17 @@ def canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def check_package_export_lookup_index(repository: Path) -> None:
+    source = (repository / "src/map/map_packages.c").read_text(encoding="utf-8")
+    start = source.index("static int entry_defines_export")
+    end = source.index("\nstatic ArchbirdStatus ensure_export_origin", start)
+    implementation = source[start:end]
+    if "ab_project_merged_fact_range" not in implementation:
+        raise AssertionError("package export lookup bypasses the fact range index")
+    if "ab_project_merged_fact_count" in implementation:
+        raise AssertionError("package export lookup scans the complete fact inventory")
+
+
 def check_c_test_function_candidates(extension) -> None:
     source = b"""\
 static void *test_allocate(void *opaque, unsigned long size) {
@@ -127,6 +138,7 @@ def main() -> int:
     extension = load_module("archbird._native", Path(sys.argv[1]).resolve())
     repository = Path(sys.argv[2]).resolve()
     fixture = Path(sys.argv[3]).resolve()
+    check_package_export_lookup_index(repository)
     provider = load_module(
         "archbird_map_correctness_python_ast",
         repository / "py/archbird/providers/python_ast.py",

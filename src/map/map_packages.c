@@ -1049,13 +1049,13 @@ static int fact_domain(const AbFact *fact, const char *domain) {
 
 static int entry_defines_export(const AbMapState *state, const AbString *entry,
                                 const AbString *name) {
-  size_t fact_index;
-  for (fact_index = 0;
-       fact_index < ab_project_merged_fact_count(state->project);
-       fact_index++) {
-    const AbFact *fact = ab_project_merged_fact(state->project, fact_index);
-    if (!fact->has_name || !ab_string_equal(&fact->path, entry) ||
-        !fact_domain(fact, "symbols") || !ab_string_equal(&fact->name, name) ||
+  size_t start;
+  size_t end;
+  size_t index;
+  ab_project_merged_fact_range(state->project, entry, "symbols", &start, &end);
+  for (index = start; index < end; index++) {
+    const AbFact *fact = ab_project_merged_fact_by_path(state->project, index);
+    if (!fact->has_name || !ab_string_equal(&fact->name, name) ||
         string_literal(&fact->kind, "declaration"))
       continue;
     return 1;
