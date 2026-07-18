@@ -71,6 +71,8 @@ typedef struct ResolutionState {
   int has_package_json;
   int has_pyproject;
   int has_description;
+  int has_c_translation_unit;
+  int has_cpp_translation_unit;
   /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION. */
   int package_identity;
 } ResolutionState;
@@ -297,6 +299,12 @@ static int portable_project_name(const char *data, size_t length,
   *out_data = data + start;
   *out_length = length - start;
   return 1;
+}
+
+static int string_has_suffix(const AbString *value, const char *suffix) {
+  size_t length = strlen(suffix);
+  return value->length >= length &&
+         !memcmp(value->data + value->length - length, suffix, length);
 }
 
 static int string_array(const AbValue *value) {
@@ -926,6 +934,12 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
     state->files[index].bytes = (size_t)number;
     if (ab_value_string_is(path, "Makefile"))
       *has_make = 1;
+    if (string_has_suffix(&path->as.text, ".c"))
+      state->has_c_translation_unit = 1;
+    if (string_has_suffix(&path->as.text, ".cc") ||
+        string_has_suffix(&path->as.text, ".cpp") ||
+        string_has_suffix(&path->as.text, ".cxx"))
+      state->has_cpp_translation_unit = 1;
   }
   if (status == ARCHBIRD_OK && state->file_count > 1) {
     qsort(state->files, state->file_count, sizeof(*state->files),
@@ -1186,6 +1200,42 @@ static ArchbirdStatus render_value(ArchbirdEngine *engine, const AbValue *value,
 
 static ArchbirdStatus scope_discovered_records(ResolutionState *state);
 
+static ArchbirdStatus prefer_cpp_headers(ResolutionState *state) {
+  AbValue *c_globs = NULL;
+  AbValue *cpp_globs = NULL;
+  AbObjectField *layers = mutable_member(&state->effective, "layers");
+  size_t layer_index;
+  size_t glob_index;
+  if (!layers || layers->value.kind != AB_VALUE_ARRAY)
+    return ARCHBIRD_INVALID_SCHEMA;
+  for (layer_index = 0; layer_index < layers->value.as.array.count;
+       layer_index++) {
+    AbValue *layer = &layers->value.as.array.items[layer_index];
+    const AbValue *name = ab_value_member(layer, "name");
+    AbObjectField *globs = mutable_member(layer, "globs");
+    if (!globs || globs->value.kind != AB_VALUE_ARRAY)
+      return ARCHBIRD_INVALID_SCHEMA;
+    if (ab_value_string_is(name, "auto-c"))
+      c_globs = &globs->value;
+    else if (ab_value_string_is(name, "auto-cpp"))
+      cpp_globs = &globs->value;
+  }
+  if (!c_globs || !cpp_globs)
+    return ARCHBIRD_INVALID_SCHEMA;
+  for (glob_index = 0; glob_index < c_globs->as.array.count; glob_index++) {
+    AbValue *glob = &c_globs->as.array.items[glob_index];
+    if (!ab_value_string_is(glob, "**/*.h"))
+      continue;
+    ab_value_free(state->engine, glob);
+    memmove(glob, glob + 1,
+            (c_globs->as.array.count - glob_index - 1) * sizeof(*glob));
+    c_globs->as.array.count--;
+    memset(&c_globs->as.array.items[c_globs->as.array.count], 0, sizeof(*glob));
+    return array_append_string(state->engine, cpp_globs, "**/*.h", 6);
+  }
+  return ARCHBIRD_INVALID_SCHEMA;
+}
+
 static ArchbirdStatus
 prepare_effective(ResolutionState *state, const uint8_t *config_json,
                   size_t config_length, const AbString *package,
@@ -1198,6 +1248,9 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
       config_length ? config_json : (const uint8_t *)default_config,
       config_length ? config_length : sizeof(default_config) - 1,
       &state->effective);
+  if (status == ARCHBIRD_OK && !state->configured &&
+      state->has_cpp_translation_unit && !state->has_c_translation_unit)
+    status = prefer_cpp_headers(state);
   if (status == ARCHBIRD_OK && !state->configured && !state->request.project &&
       (package->length || pyproject->name.length || r_package->length)) {
     const AbString *identity = package->length          ? package

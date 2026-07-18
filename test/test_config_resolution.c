@@ -114,6 +114,17 @@ int main(void) {
       "{\"bytes\":20,\"path\":\"NAMESPACE\"},"
       "{\"bytes\":24,\"path\":\"R/api.R\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
+  static const char cpp_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
+      "\"files\":[{\"bytes\":20,\"path\":\"include/api.h\"},"
+      "{\"bytes\":20,\"path\":\"src/api.cc\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
+  static const char mixed_c_cpp_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
+      "\"files\":[{\"bytes\":20,\"path\":\"include/api.h\"},"
+      "{\"bytes\":20,\"path\":\"src/api.c\"},"
+      "{\"bytes\":20,\"path\":\"src/api.cc\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
   static const char configured[] =
       "{\"layers\":[{\"globs\":[\"**/*.py\"],\"language\":\"python\","
       "\"name\":\"configured\"}],\"project\":\"base\",\"schema_version\":1}";
@@ -151,6 +162,8 @@ int main(void) {
   Output scoped = {{0}, 0};
   Output python = {{0}, 0};
   Output r = {{0}, 0};
+  Output cpp = {{0}, 0};
+  Output mixed_c_cpp = {{0}, 0};
   Output index = {{0}, 0};
   Output vendor = {{0}, 0};
   ArchbirdDiscovery *discovery = NULL;
@@ -235,6 +248,20 @@ int main(void) {
       !contains(&r, "\"evidence\":[\"DESCRIPTION\"]") ||
       !contains(&r, "\"selected\":3")) {
     fprintf(stderr, "zero-config CRAN package evidence is incorrect\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, cpp_inventory, &cpp) ||
+      !contains(&cpp, "\"language\":\"cpp\",\"layer\":\"auto-cpp\","
+                      "\"path\":\"include/api.h\"") ||
+      contains(&cpp, "\"language\":\"c\",\"layer\":\"auto-c\","
+                     "\"path\":\"include/api.h\"")) {
+    fprintf(stderr, "unambiguous C++ header inference is incorrect\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, mixed_c_cpp_inventory, &mixed_c_cpp) ||
+      !contains(&mixed_c_cpp, "\"language\":\"c\",\"layer\":\"auto-c\","
+                              "\"path\":\"include/api.h\"")) {
+    fprintf(stderr, "mixed C/C++ header inference is not conservative\n");
     failed = 1;
   }
   if (!resolve(engine, index_config, request, index_inventory, &index) ||
