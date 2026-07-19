@@ -249,6 +249,9 @@ def main() -> int:
         "nested/dist/package.whl",
         "node_modules/pkg/index.js",
         "nested/node_modules/pkg/index.js",
+        "venv/bin/python.py",
+        ".venv/bin/python.py",
+        "pkg/.venv/bin/python.py",
         "__pycache__/root.pyc",
         "pkg/__pycache__/module.pyc",
         ".pytest_cache/state",
@@ -256,14 +259,21 @@ def main() -> int:
     ]
     default_plan = json.loads(
         extension.discovery_plan(
-            default_exclude_config, ["pkg/main.py", *debris]
+            default_exclude_config,
+            ["pkg/main.py", "pkg/venv/__init__.py", *debris],
         )
     )
     selected_paths = [row["path"] for row in default_plan["files"]]
-    if selected_paths != ["pkg/main.py"]:
+    if selected_paths != ["pkg/main.py", "pkg/venv/__init__.py"]:
         raise AssertionError(
             f"built-in excludes leaked generated repository debris: {selected_paths}"
         )
+    descend = extension.discovery_descend(
+        default_exclude_config,
+        ["venv", "pkg/venv", ".venv", "pkg/.venv"],
+    )
+    if descend != [False, True, False, False]:
+        raise AssertionError(f"built-in venv descent policy is incorrect: {descend}")
     print(
         f"native discovery parity passed: {profiles} profiles, "
         f"{selected} selected files; built-in excludes passed"

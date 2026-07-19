@@ -106,6 +106,12 @@ int main(void) {
       "{\"bytes\":91,\"path\":\"pyproject.toml\"},"
       "{\"bytes\":21,\"path\":\"src/demo_module/__init__.py\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
+  static const char venv_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
+      "\"files\":[{\"bytes\":12,\"path\":\"venv/bin/activate.py\"},"
+      "{\"bytes\":12,\"path\":\"Lib/venv/__init__.py\"},"
+      "{\"bytes\":12,\"path\":\"Lib/.venv/hidden.py\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
   static const char r_inventory[] =
       "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
       "{\"content_hex\":\"5061636b6167653a207a65726f520a56657273696f6e3a"
@@ -161,6 +167,7 @@ int main(void) {
   Output override = {{0}, 0};
   Output scoped = {{0}, 0};
   Output python = {{0}, 0};
+  Output venv = {{0}, 0};
   Output r = {{0}, 0};
   Output cpp = {{0}, 0};
   Output mixed_c_cpp = {{0}, 0};
@@ -169,6 +176,9 @@ int main(void) {
   ArchbirdDiscovery *discovery = NULL;
   int descend_temp = 1;
   int descend_src = 0;
+  int descend_root_venv = 1;
+  int descend_nested_venv = 0;
+  int descend_nested_dot_venv = 1;
   int failed = 0;
   if (archbird_engine_create(NULL, &engine) != ARCHBIRD_OK)
     return 2;
@@ -182,7 +192,15 @@ int main(void) {
                                         &descend_temp) != ARCHBIRD_OK ||
       archbird_discovery_should_descend(engine, discovery, "src", 3,
                                         &descend_src) != ARCHBIRD_OK ||
-      descend_temp || !descend_src) {
+      archbird_discovery_should_descend(engine, discovery, "venv", 4,
+                                        &descend_root_venv) != ARCHBIRD_OK ||
+      archbird_discovery_should_descend(engine, discovery, "Lib/venv", 8,
+                                        &descend_nested_venv) != ARCHBIRD_OK ||
+      archbird_discovery_should_descend(engine, discovery, "Lib/.venv", 9,
+                                        &descend_nested_dot_venv) !=
+          ARCHBIRD_OK ||
+      descend_temp || !descend_src || descend_root_venv ||
+      !descend_nested_venv || descend_nested_dot_venv) {
     fprintf(stderr, "incremental ignore descent is incorrect\n");
     failed = 1;
   }
@@ -238,6 +256,13 @@ int main(void) {
       !contains(&python, "\"evidence\":[\"pyproject.toml\"]") ||
       !contains(&python, "\"selected\":2")) {
     fprintf(stderr, "zero-config Python package evidence is incorrect\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, venv_inventory, &venv) ||
+      contains(&venv, "\"path\":\"venv/bin/activate.py\"") ||
+      !contains(&venv, "\"path\":\"Lib/venv/__init__.py\"") ||
+      contains(&venv, "\"path\":\"Lib/.venv/hidden.py\"")) {
+    fprintf(stderr, "ambiguous nested venv discovery is incorrect\n");
     failed = 1;
   }
   if (!resolve(engine, "", request, r_inventory, &r) ||
