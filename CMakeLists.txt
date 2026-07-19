@@ -1191,6 +1191,14 @@ if(Python3_Development.Module_FOUND)
                 ${CMAKE_CURRENT_SOURCE_DIR}/test/test_ecmascript_modules.py
                 $<TARGET_FILE:archbird_python>
       )
+      add_test(
+        NAME archbird_native_ecmascript_identity
+        COMMAND ${CMAKE_COMMAND} -E env
+                ${ARCHBIRD_REPOSITORY_TEST_ENV}
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_ecmascript_identity.py
+                $<TARGET_FILE:archbird_python>
+      )
     endif()
     add_test(
       NAME archbird_native_verify_source_lock

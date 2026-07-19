@@ -391,15 +391,19 @@ static void test_typescript_class_scopes(ArchbirdEngine *engine) {
       "  const anonymous = new class implements Service { anonymousRun() {} "
       "};\n"
       "  class Inner implements Service { run() {} }\n"
+      "  const Bound = class implements Service { boundRun() {} };\n"
+      "  const Named = class Internal implements Service { namedRun() {} };\n"
+      "  let Rebound; Rebound = class PrivateBound { reboundRun() {} };\n"
       "  return class Returned implements Service { returnedRun() {} };\n"
       "}\n"
-      "const Bound = class implements Service { boundRun() {} };\n"
-      "const Named = class ExpressionName implements Service { namedRun() {} "
-      "};\n"
+      "function second() { class Inner { run() {} } }\n"
+      "class Top { method() { class Local { nested() {} } return Local; } }\n"
+      "let Assigned; Assigned = class Private { assignedRun() {} };\n"
       "export const enum PluginFormat { Copilot }\n"
       "const COPILOT_FORMAT = { parseHooks() {} };\n";
   ArchbirdProject *project =
       create_project(engine, source, "src/scopes.ts", "typescript");
+  Output syntax = {{0}, 0, 0};
   Output facts = {{0}, 0, 0};
   if (!project) {
     fputs("FAIL create TypeScript class-scope project\n", stderr);
@@ -416,22 +420,35 @@ static void test_typescript_class_scopes(ArchbirdEngine *engine) {
                                                 "syntax:tree-sitter:typescript",
                                                 29, ARCHBIRD_PROVIDER_PRIMARY),
          ARCHBIRD_OK);
+  expect("typescript-class-scope-syntax-facts",
+         archbird_project_render_provider_facts(engine, project, 1, 0,
+                                                write_output, &syntax),
+         ARCHBIRD_OK);
   expect("typescript-class-scope-finalize",
          archbird_project_finalize_providers(engine, project), ARCHBIRD_OK);
   expect("typescript-class-scope-facts",
          archbird_project_render_file_facts(engine, project, 0, write_output,
                                             &facts),
          ARCHBIRD_OK);
-  if (!strstr(facts.bytes, "\"name\":\"Inner.run\"") ||
-      !strstr(facts.bytes, "\"name\":\"Bound.boundRun\"") ||
-      !strstr(facts.bytes, "\"name\":\"outer.anonymousRun\"") ||
-      !strstr(facts.bytes, "\"name\":\"Returned.returnedRun\"") ||
-      !strstr(facts.bytes, "\"name\":\"ExpressionName.namedRun\"") ||
+  if (!strstr(syntax.bytes, "\"name\":\"outer.Inner\"") ||
+      !strstr(syntax.bytes, "\"name\":\"outer.Bound\"") ||
+      !strstr(syntax.bytes, "\"internal_name\":\"Internal\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.Inner.run\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.Bound.boundRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.Named.namedRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.Rebound.reboundRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.Returned.returnedRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"second.Inner.run\"") ||
+      !strstr(facts.bytes, "\"name\":\"Top.method.Local.nested\"") ||
+      !strstr(facts.bytes, "\"name\":\"Assigned.assignedRun\"") ||
+      !strstr(syntax.bytes, "@anonymous-class:") ||
+      !strstr(syntax.bytes, "\"identity_state\":\"partial\"") ||
       !strstr(facts.bytes, "\"name\":\"COPILOT_FORMAT.parseHooks\"") ||
       strstr(facts.bytes, "\"name\":\"implements") ||
       strstr(facts.bytes, "\"name\":\"enum.parseHooks\"") ||
-      strstr(facts.bytes, "\"name\":\"outer.Inner") ||
-      strstr(facts.bytes, "\"name\":\"outer.Returned")) {
+      strstr(facts.bytes, "\"name\":\"Inner.run\"") ||
+      strstr(facts.bytes, "\"name\":\"Internal.namedRun\"") ||
+      strstr(facts.bytes, "\"name\":\"outer.anonymousRun\"")) {
     fputs("FAIL TypeScript class scopes diverged across providers\n", stderr);
     failures++;
   }

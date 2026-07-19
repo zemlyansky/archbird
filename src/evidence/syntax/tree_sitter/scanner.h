@@ -23,9 +23,14 @@ typedef struct AbTreeSitterFrame {
   size_t enclosing_length;
   unsigned context;
   int has_enclosing;
+  int identity_partial;
 } AbTreeSitterFrame;
 
-enum { AB_TS_CONTEXT_FUNCTION = 1u << 0, AB_TS_CONTEXT_CLASS = 1u << 1 };
+enum {
+  AB_TS_CONTEXT_FUNCTION = 1u << 0,
+  AB_TS_CONTEXT_CLASS = 1u << 1,
+  AB_TS_CONTEXT_CLASS_BINDING = 1u << 2
+};
 
 typedef struct AbTreeSitterCapabilitySpec {
   const char *domain;

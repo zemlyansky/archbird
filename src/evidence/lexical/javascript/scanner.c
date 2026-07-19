@@ -68,6 +68,52 @@ static int js_binding_identifier(const AbTokenList *tokens, size_t index) {
                              sizeof(JS_RESERVED_BINDING_WORDS[0]));
 }
 
+/* A named class expression has an internal self-name, not a declaration in
+   the surrounding lexical scope.  Do not turn that self-name into a competing
+   bare symbol; a bound expression is attributed to its outer binding by the
+   binding pass, while syntax evidence retains unbound/internal identity. */
+static int js_class_expression_context(const AbTokenList *tokens,
+                                       size_t keyword_index) {
+  size_t previous;
+  if (!keyword_index)
+    return 0;
+  previous = keyword_index - 1;
+  if (ab_token_equals(tokens, previous, "default") && previous > 0 &&
+      ab_token_equals(tokens, previous - 1, "export"))
+    return 0;
+  return ab_token_equals(tokens, previous, "=") ||
+         ab_token_equals(tokens, previous, "return") ||
+         ab_token_equals(tokens, previous, "new") ||
+         ab_token_equals(tokens, previous, "(") ||
+         ab_token_equals(tokens, previous, "[") ||
+         ab_token_equals(tokens, previous, ",") ||
+         ab_token_equals(tokens, previous, ":") ||
+         ab_token_equals(tokens, previous, "?") ||
+         ab_token_equals(tokens, previous, "=>") ||
+         ab_token_equals(tokens, previous, "yield") ||
+         ab_token_equals(tokens, previous, "extends");
+}
+
+static int js_function_expression_context(const AbTokenList *tokens,
+                                          size_t keyword_index) {
+  size_t previous;
+  if (!keyword_index)
+    return 0;
+  previous = keyword_index - 1;
+  if (ab_token_equals(tokens, previous, "default") && previous > 0 &&
+      ab_token_equals(tokens, previous - 1, "export"))
+    return 0;
+  return ab_token_equals(tokens, previous, "=") ||
+         ab_token_equals(tokens, previous, "return") ||
+         ab_token_equals(tokens, previous, "(") ||
+         ab_token_equals(tokens, previous, "[") ||
+         ab_token_equals(tokens, previous, ",") ||
+         ab_token_equals(tokens, previous, ":") ||
+         ab_token_equals(tokens, previous, "?") ||
+         ab_token_equals(tokens, previous, "=>") ||
+         ab_token_equals(tokens, previous, "yield");
+}
+
 static ArchbirdStatus pair_forward(ArchbirdEngine *engine,
                                    const AbTokenList *tokens,
                                    const char *opening, const char *closing,
@@ -209,11 +255,10 @@ static void unquoted_token(const AbTokenList *tokens, size_t index,
   *out_length = token->end - token->start - trim * 2;
 }
 
-static ArchbirdStatus add_symbol(JsContext *context, size_t token_index,
-                                 const uint8_t *name, size_t name_length,
-                                 const char *kind, const char *scope,
-                                 const uint8_t *signature,
-                                 size_t signature_length) {
+static ArchbirdStatus add_symbol_with_identity(
+    JsContext *context, size_t token_index, const uint8_t *name,
+    size_t name_length, const char *kind, const char *scope,
+    const uint8_t *signature, size_t signature_length, int identity_partial) {
   const AbToken *token = &context->tokens->items[token_index];
   AbFact *fact;
   ArchbirdStatus status = ab_bundle_builder_add_fact(
@@ -230,9 +275,22 @@ static ArchbirdStatus add_symbol(JsContext *context, size_t token_index,
     status =
         ab_fact_add_string_attribute(context->builder->engine, fact,
                                      "signature", signature, signature_length);
+  if (status == ARCHBIRD_OK && identity_partial)
+    status = ab_fact_add_string_attribute(context->builder->engine, fact,
+                                          "identity_state",
+                                          (const uint8_t *)"partial", 7);
   if (status == ARCHBIRD_OK)
     context->definition_indices[token_index] = 1;
   return status;
+}
+
+static ArchbirdStatus add_symbol(JsContext *context, size_t token_index,
+                                 const uint8_t *name, size_t name_length,
+                                 const char *kind, const char *scope,
+                                 const uint8_t *signature,
+                                 size_t signature_length) {
+  return add_symbol_with_identity(context, token_index, name, name_length, kind,
+                                  scope, signature, signature_length, 0);
 }
 
 static ArchbirdStatus add_simple_symbol(JsContext *context, size_t token_index,
@@ -244,6 +302,21 @@ static ArchbirdStatus add_simple_symbol(JsContext *context, size_t token_index,
                         token_data(context->tokens, token_index),
                         token_length(context->tokens, token_index), kind, scope,
                         signature.data, signature.length);
+  ab_buffer_free(&signature);
+  return status;
+}
+
+static ArchbirdStatus add_partial_simple_symbol(JsContext *context,
+                                                size_t token_index,
+                                                const char *kind,
+                                                const char *scope) {
+  AbBuffer signature;
+  ArchbirdStatus status = js_signature(context, token_index, &signature);
+  if (status == ARCHBIRD_OK)
+    status = add_symbol_with_identity(
+        context, token_index, token_data(context->tokens, token_index),
+        token_length(context->tokens, token_index), kind, scope, signature.data,
+        signature.length, 1);
   ab_buffer_free(&signature);
   return status;
 }
@@ -505,8 +578,8 @@ static ArchbirdStatus scan_interface_methods(JsContext *context,
 
 static ArchbirdStatus add_qualified_method(JsContext *context,
                                            size_t class_index,
-                                           size_t method_index,
-                                           int arrow_field) {
+                                           size_t method_index, int arrow_field,
+                                           int identity_partial) {
   AbBuffer qualified;
   AbBuffer signature;
   ArchbirdStatus status = qualified_name(
@@ -526,15 +599,16 @@ static ArchbirdStatus add_qualified_method(JsContext *context,
     ab_buffer_init(&signature, context->builder->engine);
   }
   if (status == ARCHBIRD_OK)
-    status = add_symbol(context, method_index, qualified.data, qualified.length,
-                        "method", "method", signature.data, signature.length);
+    status = add_symbol_with_identity(
+        context, method_index, qualified.data, qualified.length, "method",
+        "method", signature.data, signature.length, identity_partial);
   ab_buffer_free(&qualified);
   ab_buffer_free(&signature);
   return status;
 }
 
 static ArchbirdStatus scan_class(JsContext *context, size_t class_index,
-                                 size_t keyword_index) {
+                                 size_t keyword_index, int identity_partial) {
   AbBuffer signature;
   size_t body_open;
   size_t body_close;
@@ -547,10 +621,10 @@ static ArchbirdStatus scan_class(JsContext *context, size_t class_index,
         ab_buffer_append(&signature, token_data(context->tokens, class_index),
                          token_length(context->tokens, class_index));
   if (status == ARCHBIRD_OK)
-    status = add_symbol(context, class_index,
-                        token_data(context->tokens, class_index),
-                        token_length(context->tokens, class_index), "class",
-                        "class", signature.data, signature.length);
+    status = add_symbol_with_identity(
+        context, class_index, token_data(context->tokens, class_index),
+        token_length(context->tokens, class_index), "class", "class",
+        signature.data, signature.length, identity_partial);
   ab_buffer_free(&signature);
   if (status != ARCHBIRD_OK)
     return status;
@@ -579,7 +653,8 @@ static ArchbirdStatus scan_class(JsContext *context, size_t class_index,
       size_t body = js_method_body(context, context->paren_forward[after_name],
                                    body_close);
       if (body != SIZE_MAX) {
-        status = add_qualified_method(context, class_index, method_index, 0);
+        status = add_qualified_method(context, class_index, method_index, 0,
+                                      identity_partial);
         if (status != ARCHBIRD_OK)
           return status;
         cursor = context->brace_forward[body] + 1;
@@ -613,7 +688,8 @@ static ArchbirdStatus scan_class(JsContext *context, size_t class_index,
         scan++;
       }
       if (saw_arrow) {
-        status = add_qualified_method(context, class_index, method_index, 1);
+        status = add_qualified_method(context, class_index, method_index, 1,
+                                      identity_partial);
         if (status != ARCHBIRD_OK)
           return status;
       }
@@ -629,7 +705,8 @@ static ArchbirdStatus scan_declared_symbols(JsContext *context,
                                             const size_t *brace_depths) {
   size_t index;
   for (index = 0; index < context->tokens->count; index++) {
-    if (ab_token_equals(context->tokens, index, "function")) {
+    if (ab_token_equals(context->tokens, index, "function") &&
+        !js_function_expression_context(context->tokens, index)) {
       size_t name_index = index + 1;
       if (name_index < context->tokens->count &&
           ab_token_equals(context->tokens, name_index, "*"))
@@ -637,7 +714,11 @@ static ArchbirdStatus scan_declared_symbols(JsContext *context,
       if (name_index < context->tokens->count &&
           context->tokens->items[name_index].kind == AB_TOKEN_IDENTIFIER) {
         ArchbirdStatus status =
-            add_simple_symbol(context, name_index, "function", "function");
+            brace_depths[index] > 0
+                ? add_partial_simple_symbol(context, name_index, "function",
+                                            "function")
+                : add_simple_symbol(context, name_index, "function",
+                                    "function");
         if (status != ARCHBIRD_OK)
           return status;
       }
@@ -657,11 +738,13 @@ static ArchbirdStatus scan_declared_symbols(JsContext *context,
           return status;
       }
     } else if (ab_token_equals(context->tokens, index, "class") &&
+               !js_class_expression_context(context->tokens, index) &&
                index + 1 < context->tokens->count &&
                context->tokens->items[index + 1].kind == AB_TOKEN_IDENTIFIER &&
                !ab_token_equals(context->tokens, index + 1, "extends") &&
                !ab_token_equals(context->tokens, index + 1, "implements")) {
-      ArchbirdStatus status = scan_class(context, index + 1, index);
+      ArchbirdStatus status =
+          scan_class(context, index + 1, index, brace_depths[index] > 0);
       if (status != ARCHBIRD_OK)
         return status;
     }
@@ -741,11 +824,9 @@ static ArchbirdStatus scan_top_level_bindings(JsContext *context) {
           if (status != ARCHBIRD_OK)
             return status;
         } else if (ab_token_equals(context->tokens, start, "class") &&
-                   start + 1 < context->tokens->count &&
-                   (ab_token_equals(context->tokens, start + 1, "extends") ||
-                    ab_token_equals(context->tokens, start + 1, "implements") ||
-                    ab_token_equals(context->tokens, start + 1, "{"))) {
-          ArchbirdStatus status = scan_class(context, name_index, start);
+                   find_token(context->tokens, start + 1,
+                              context->tokens->count, 20, "{") != SIZE_MAX) {
+          ArchbirdStatus status = scan_class(context, name_index, start, 0);
           if (status != ARCHBIRD_OK)
             return status;
         }

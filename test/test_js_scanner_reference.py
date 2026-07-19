@@ -168,7 +168,12 @@ def main() -> int:
         for fact in json.loads(regression.stdout)["facts"]
         if fact["domain"] == "symbols"
     }
-    if regression_symbols != {"User.index", "User.named", "inner"}:
+    # ``inner`` is the private self-name of the named function expression; it
+    # is not a declaration in the surrounding module.  The property binding is
+    # the public structural identity.  The immutable Python scanner emitted
+    # both, so retain this as an intentional native semantic correction rather
+    # than weakening the syntax provider to preserve oracle parity.
+    if regression_symbols != {"User.index", "User.named"}:
         raise AssertionError(
             "object function properties produced false lexical symbols: "
             f"{sorted(regression_symbols)!r}"
@@ -243,12 +248,12 @@ def main() -> int:
         for fact in json.loads(implements_regression.stdout)["facts"]
         if fact["domain"] == "symbols"
     }
-    if not {"Bound.run", "Returned.returnedRun", "ExpressionName.namedRun"}.issubset(
+    if not {"Bound.run", "Named.namedRun"}.issubset(
         implements_symbols
     ) or any(
         name == "implements" or name.startswith("implements.")
         for name in implements_symbols
-    ):
+    ) or "ExpressionName.namedRun" in implements_symbols:
         raise AssertionError(
             "anonymous implements clause became a lexical class name: "
             f"{sorted(implements_symbols)!r}"

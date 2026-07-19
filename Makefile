@@ -134,6 +134,8 @@ test-py: build-py
 		$(PYTHON_NATIVE) $(CURDIR) $(CURDIR)/test/fixtures/map_correctness
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_modules.py \
 		$(PYTHON_NATIVE)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_identity.py \
+		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_verify_source_lock.py \
 		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_freshness.py $(PYTHON_NATIVE)

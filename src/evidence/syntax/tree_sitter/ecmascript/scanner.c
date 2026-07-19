@@ -32,6 +32,11 @@ static int function_value(TSNode node) {
          ab_tree_sitter_node_type(node, "generator_function");
 }
 
+static int class_value(TSNode node) {
+  return ab_tree_sitter_node_type(node, "class") ||
+         ab_tree_sitter_node_type(node, "class_expression");
+}
+
 typedef struct EcmaName {
   const uint8_t *data;
   size_t length;
@@ -421,6 +426,9 @@ static ArchbirdStatus add_explicit_symbol(AbTreeSitterScan *scan,
                                           strlen(ts_node_type(owner)));
   if (status == ARCHBIRD_OK && frame->has_enclosing)
     status = ab_tree_sitter_add_enclosing(scan, fact, frame);
+  if (status == ARCHBIRD_OK && frame->identity_partial)
+    status = ab_fact_add_string_attribute(scan->engine, fact, "identity_state",
+                                          (const uint8_t *)"partial", 7);
   if (status == ARCHBIRD_OK)
     *out_fact = fact;
   return status;
@@ -471,18 +479,30 @@ static ArchbirdStatus add_pair_function(AbTreeSitterScan *scan,
                     out_fact);
 }
 
+static ArchbirdStatus add_class_binding_attributes(AbTreeSitterScan *scan,
+                                                   AbFact *fact, TSNode value,
+                                                   const char *binding_kind) {
+  TSNode internal_name = ab_tree_sitter_child(value, "name");
+  size_t start;
+  size_t end;
+  ArchbirdStatus status = ab_fact_add_string_attribute(
+      scan->engine, fact, "binding_kind", (const uint8_t *)binding_kind,
+      strlen(binding_kind));
+  if (status == ARCHBIRD_OK && identifier_node(scan, internal_name) &&
+      ab_tree_sitter_node_slice(scan, internal_name, &start, &end) &&
+      start < end)
+    status = ab_fact_add_string_attribute(scan->engine, fact, "internal_name",
+                                          scan->source + start, end - start);
+  return status;
+}
+
 static ArchbirdStatus add_symbol(AbTreeSitterScan *scan,
                                  const AbTreeSitterFrame *frame, TSNode owner,
                                  TSNode name, const char *kind,
                                  TSNode *out_name, AbFact **out_fact) {
   AbFact *fact;
   ArchbirdStatus status;
-  int named_class =
-      ab_tree_sitter_node_type(owner, "class_declaration") ||
-      ab_tree_sitter_node_type(owner, "abstract_class_declaration") ||
-      ab_tree_sitter_node_type(owner, "class") ||
-      ab_tree_sitter_node_type(owner, "class_expression");
-  int frame_qualifies = frame->has_enclosing && !named_class;
+  int frame_qualifies = frame->has_enclosing;
   static const char *const containers[] = {"class_declaration",
                                            "abstract_class_declaration",
                                            "class",
@@ -519,7 +539,7 @@ static ArchbirdStatus add_symbol(AbTreeSitterScan *scan,
   } else {
     status = ab_tree_sitter_add_qualified_fact(
         scan, "symbols", kind, owner, name, containers,
-        named_class ? 0 : sizeof(containers) / sizeof(containers[0]), &fact);
+        sizeof(containers) / sizeof(containers[0]), &fact);
   }
   if (status == ARCHBIRD_OK)
     status = frame_qualifies ? ARCHBIRD_OK
@@ -548,6 +568,100 @@ static ArchbirdStatus add_variable_function(AbTreeSitterScan *scan,
   }
   return add_symbol(scan, frame, frame->node, name, "function", out_name,
                     out_fact);
+}
+
+static ArchbirdStatus add_variable_class(AbTreeSitterScan *scan,
+                                         const AbTreeSitterFrame *frame,
+                                         TSNode *out_name, AbFact **out_fact) {
+  TSNode value = ab_tree_sitter_child(frame->node, "value");
+  TSNode name = ab_tree_sitter_child(frame->node, "name");
+  ArchbirdStatus status;
+  if (!class_value(value)) {
+    *out_name = (TSNode){0};
+    *out_fact = NULL;
+    return ARCHBIRD_OK;
+  }
+  status =
+      add_symbol(scan, frame, frame->node, name, "class", out_name, out_fact);
+  if (status == ARCHBIRD_OK && *out_fact)
+    status = add_class_binding_attributes(scan, *out_fact, value, "variable");
+  return status;
+}
+
+static ArchbirdStatus add_assignment_class(AbTreeSitterScan *scan,
+                                           const AbTreeSitterFrame *frame,
+                                           TSNode *out_name,
+                                           AbFact **out_fact) {
+  TSNode value = ab_tree_sitter_child(frame->node, "right");
+  TSNode left = ab_tree_sitter_child(frame->node, "left");
+  TSNode anchor = left;
+  AbBuffer name;
+  int supported = 1;
+  ArchbirdStatus status;
+  *out_name = (TSNode){0};
+  *out_fact = NULL;
+  if (!class_value(value))
+    return ARCHBIRD_OK;
+  if (identifier_node(scan, left)) {
+    status =
+        add_symbol(scan, frame, frame->node, left, "class", out_name, out_fact);
+    if (status == ARCHBIRD_OK && *out_fact)
+      status =
+          add_class_binding_attributes(scan, *out_fact, value, "assignment");
+    return status;
+  }
+  if (ab_tree_sitter_node_type(left, "member_expression"))
+    anchor = ab_tree_sitter_child(left, "property");
+  else if (ab_tree_sitter_node_type(left, "subscript_expression"))
+    anchor = ab_tree_sitter_child(left, "index");
+  ab_buffer_init(&name, scan->engine);
+  status = append_static_reference(scan, left, &name, &supported);
+  if (status == ARCHBIRD_OK && supported)
+    status = add_explicit_symbol(scan, frame, frame->node, anchor, &name,
+                                 "class", out_fact);
+  if (status == ARCHBIRD_OK && *out_fact)
+    status = add_class_binding_attributes(scan, *out_fact, value, "assignment");
+  if (status == ARCHBIRD_OK && *out_fact)
+    *out_name = anchor;
+  ab_buffer_free(&name);
+  return status;
+}
+
+static ArchbirdStatus add_anonymous_class(AbTreeSitterScan *scan,
+                                          const AbTreeSitterFrame *frame,
+                                          AbFact **out_fact) {
+  size_t start;
+  size_t end;
+  AbBuffer name;
+  ArchbirdStatus status;
+  *out_fact = NULL;
+  if (!ab_tree_sitter_node_slice(scan, frame->node, &start, &end) ||
+      start == end)
+    return ARCHBIRD_OK;
+  ab_buffer_init(&name, scan->engine);
+  status = ARCHBIRD_OK;
+  if (frame->has_enclosing) {
+    status = ab_buffer_append(&name, frame->enclosing, frame->enclosing_length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&name, ".");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&name, "@anonymous-class:");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(&name, start);
+  if (status == ARCHBIRD_OK)
+    status = add_explicit_symbol(scan, frame, frame->node, frame->node, &name,
+                                 "class", out_fact);
+  if (status == ARCHBIRD_OK && *out_fact)
+    status =
+        ab_fact_add_string_attribute(scan->engine, *out_fact, "binding_kind",
+                                     (const uint8_t *)"anonymous", 9);
+  if (status == ARCHBIRD_OK && *out_fact && !frame->identity_partial)
+    status =
+        ab_fact_add_string_attribute(scan->engine, *out_fact, "identity_state",
+                                     (const uint8_t *)"partial", 7);
+  ab_buffer_free(&name);
+  return status;
 }
 
 static ArchbirdStatus add_call(AbTreeSitterScan *scan,
@@ -616,13 +730,29 @@ ArchbirdStatus ab_tree_sitter_visit_ecmascript(AbTreeSitterScan *scan,
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
   } else if (ab_tree_sitter_node_type(frame->node, "class") ||
              ab_tree_sitter_node_type(frame->node, "class_expression")) {
-    status = add_symbol(scan, frame, frame->node,
-                        ab_tree_sitter_child(frame->node, "name"), "class",
-                        &name, &fact);
+    int anonymous = 0;
+    if (frame->context & AB_TS_CONTEXT_CLASS_BINDING) {
+      name = ab_tree_sitter_child(frame->node, "name");
+    } else if (identifier_node(scan,
+                               ab_tree_sitter_child(frame->node, "name"))) {
+      status = add_symbol(scan, frame, frame->node,
+                          ab_tree_sitter_child(frame->node, "name"), "class",
+                          &name, &fact);
+      if (status == ARCHBIRD_OK && fact)
+        status = ab_fact_add_string_attribute(
+            scan->engine, fact, "binding_kind", (const uint8_t *)"internal", 8);
+    } else {
+      anonymous = 1;
+      status = add_anonymous_class(scan, frame, &fact);
+    }
     child_frame->context &= ~AB_TS_CONTEXT_FUNCTION;
+    child_frame->context &= ~AB_TS_CONTEXT_CLASS_BINDING;
     child_frame->context |= AB_TS_CONTEXT_CLASS;
-    if (status == ARCHBIRD_OK && fact)
+    if (status == ARCHBIRD_OK && fact) {
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      if (anonymous)
+        child_frame->identity_partial = 1;
+    }
   } else if (ab_tree_sitter_node_type(frame->node, "function_declaration") ||
              ab_tree_sitter_node_type(frame->node,
                                       "generator_function_declaration")) {
@@ -642,17 +772,25 @@ ArchbirdStatus ab_tree_sitter_visit_ecmascript(AbTreeSitterScan *scan,
     if (status == ARCHBIRD_OK && fact)
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
   } else if (ab_tree_sitter_node_type(frame->node, "variable_declarator")) {
-    status = add_variable_function(scan, frame, &name, &fact);
+    int is_class = class_value(ab_tree_sitter_child(frame->node, "value"));
+    status = is_class ? add_variable_class(scan, frame, &name, &fact)
+                      : add_variable_function(scan, frame, &name, &fact);
     if (status == ARCHBIRD_OK && fact) {
-      child_frame->context &= ~AB_TS_CONTEXT_CLASS;
-      child_frame->context |= AB_TS_CONTEXT_FUNCTION;
+      child_frame->context &= ~(AB_TS_CONTEXT_CLASS | AB_TS_CONTEXT_FUNCTION |
+                                AB_TS_CONTEXT_CLASS_BINDING);
+      child_frame->context |=
+          is_class ? AB_TS_CONTEXT_CLASS_BINDING : AB_TS_CONTEXT_FUNCTION;
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
     }
   } else if (ab_tree_sitter_node_type(frame->node, "assignment_expression")) {
-    status = add_assignment_function(scan, frame, &name, &fact);
+    int is_class = class_value(ab_tree_sitter_child(frame->node, "right"));
+    status = is_class ? add_assignment_class(scan, frame, &name, &fact)
+                      : add_assignment_function(scan, frame, &name, &fact);
     if (status == ARCHBIRD_OK && fact) {
-      child_frame->context &= ~AB_TS_CONTEXT_CLASS;
-      child_frame->context |= AB_TS_CONTEXT_FUNCTION;
+      child_frame->context &= ~(AB_TS_CONTEXT_CLASS | AB_TS_CONTEXT_FUNCTION |
+                                AB_TS_CONTEXT_CLASS_BINDING);
+      child_frame->context |=
+          is_class ? AB_TS_CONTEXT_CLASS_BINDING : AB_TS_CONTEXT_FUNCTION;
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
     }
   } else if (ab_tree_sitter_node_type(frame->node, "pair")) {

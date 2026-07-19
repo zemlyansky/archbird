@@ -657,7 +657,7 @@ static void test_anchor_correlation_and_name_enrichment(void) {
   length = make_named_symbol_provider(
       provider, sizeof(provider), manifest, "anchor-primary",
       "1111111111111111111111111111111111111111111111111111111111111111",
-      "syntax-structure", "symbol:parse:primary", "parse", "parse");
+      "syntax-structure", "symbol:inner:primary", "outer.Inner", "outer.Inner");
   expect("anchor-primary",
          archbird_project_add_provider_facts(
              engine, project, ARCHBIRD_PROVIDER_PRIMARY,
@@ -666,7 +666,7 @@ static void test_anchor_correlation_and_name_enrichment(void) {
   length = make_named_symbol_provider(
       provider, sizeof(provider), manifest, "anchor-augment",
       "2222222222222222222222222222222222222222222222222222222222222222",
-      "lexical-occurrence", "symbol:parse:augment", "Box.parse", "Box.parse");
+      "lexical-occurrence", "symbol:inner:augment", "Inner", "Inner");
   expect("anchor-augment",
          archbird_project_add_provider_facts(
              engine, project, ARCHBIRD_PROVIDER_AUGMENT,
@@ -683,8 +683,8 @@ static void test_anchor_correlation_and_name_enrichment(void) {
          ARCHBIRD_OK);
   if (summary.selected_facts != 1 || summary.enriched != 1 ||
       summary.conflicts != 0 ||
-      strstr(facts.data, "\"name\":\"Box.parse\"") == NULL ||
-      strstr(facts.data, "\"name\":\"parse\"") != NULL) {
+      strstr(facts.data, "\"name\":\"outer.Inner\"") == NULL ||
+      strstr(facts.data, "\"name\":\"Inner\"") != NULL) {
     fprintf(stderr,
             "FAIL exact anchors did not correlate qualified symbol names: "
             "selected=%zu enriched=%zu conflicts=%zu facts=%s\n",
