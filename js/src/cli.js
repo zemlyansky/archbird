@@ -786,6 +786,7 @@ function supportMain(argv) {
   const options = parse(argv, { help: COMMON.help, pretty: COMMON.pretty });
   if (options.help) { process.stdout.write(usage("support")); return 0; }
   const report = {
+    core_implementation_sha256: archbird.IMPLEMENTATION_SHA256,
     engine: archbird.ENGINE,
     native_abi_version: archbird.NATIVE_ABI_VERSION,
     pattern: {
@@ -796,6 +797,12 @@ function supportMain(argv) {
       unicode: archbird.PATTERN_UNICODE,
     },
     providers: archbird.PROVIDER_SUPPORT,
+    runtime: {
+      executable: path.resolve(process.execPath),
+      implementation: "Node.js",
+      kind: "node",
+      version: process.version,
+    },
     version: archbird.VERSION,
   };
   write(Buffer.from(JSON.stringify(report, null, options.pretty ? 2 : 0)));

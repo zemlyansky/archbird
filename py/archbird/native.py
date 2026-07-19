@@ -2089,7 +2089,7 @@ def _map_request(
 def _file_row(root: Path, path: str) -> Optional[dict[str, object]]:
     candidate = root.joinpath(*PurePosixPath(path).parts)
     try:
-        metadata = candidate.stat(follow_symlinks=False)
+        metadata = candidate.lstat()
     except FileNotFoundError:
         return None
     except OSError as error:
@@ -2290,7 +2290,7 @@ def _read_sources(root: Path, plan: Mapping[str, object]) -> Tuple[Source, ...]:
         limit_name = "max_index_bytes" if is_index else "max_file_bytes"
         candidate = root / path
         try:
-            metadata = candidate.stat(follow_symlinks=False)
+            metadata = candidate.lstat()
         except OSError as error:
             raise ConfigError(f"cannot stat selected source: {path}: {error}") from error
         if not stat.S_ISREG(metadata.st_mode):

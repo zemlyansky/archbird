@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import platform
 import signal
 import stat
 import sys
@@ -14,7 +15,8 @@ import threading
 import time
 from typing import Optional, Sequence
 
-from . import __version__
+from . import __version__, implementation_digest
+from . import _native
 from .errors import ConfigError
 from .provider_cache import default_provider_cache_dir
 from .native import (
@@ -35,6 +37,75 @@ from .native import (
     resolve_discovery,
 )
 from .adapters.okf.parser import okf_query_input, parse_okf_bundle
+
+
+_PORTABLE_PROVIDERS = (
+    "lexical:c",
+    "lexical:javascript",
+    "lexical:python",
+    "lexical:r",
+    "syntax:tree-sitter:c",
+    "syntax:tree-sitter:cpp",
+    "syntax:tree-sitter:python",
+    "syntax:tree-sitter:javascript",
+    "syntax:tree-sitter:typescript",
+    "syntax:tree-sitter:tsx",
+    "syntax:tree-sitter:r",
+    "semantic:scip",
+)
+
+
+def _support_main(arguments: Sequence[str]) -> int:
+    support = argparse.ArgumentParser(
+        prog="archbird support",
+        description="Report the active frontend, core, and evidence providers.",
+    )
+    support.add_argument("--pretty", action="store_true", help="pretty JSON")
+    args = support.parse_args(arguments)
+    report = {
+        "core_implementation_sha256": _native.IMPLEMENTATION_SHA256,
+        "engine": {"kind": "native", "source": "python-abi"},
+        "frontend_implementation_sha256": implementation_digest(),
+        "native_abi_version": _native.NATIVE_ABI_VERSION,
+        "pattern": {
+            "contract": _native.PATTERN_CONTRACT,
+            "contract_version": _native.PATTERN_CONTRACT_VERSION,
+            "engine": _native.PATTERN_ENGINE,
+            "options": _native.PATTERN_OPTIONS,
+            "unicode": _native.PATTERN_UNICODE,
+        },
+        "providers": {
+            "host": ["ast:cpython"],
+            "portable": list(_PORTABLE_PROVIDERS),
+            "precision": {
+                "c": "tree-sitter+lexical",
+                "cpp": "tree-sitter+lexical",
+                "javascript": "tree-sitter+lexical",
+                "python": "cpython-ast+tree-sitter+lexical",
+                "r": "tree-sitter+lexical",
+                "tsx": "tree-sitter+lexical",
+                "typescript": "tree-sitter+lexical",
+                "vue": "lexical",
+            },
+        },
+        "runtime": {
+            "executable": str(Path(sys.executable).resolve()),
+            "implementation": platform.python_implementation(),
+            "kind": "python",
+            "version": platform.python_version(),
+        },
+        "version": __version__,
+    }
+    print(
+        json.dumps(
+            report,
+            ensure_ascii=True,
+            indent=2 if args.pretty else None,
+            separators=None if args.pretty else (",", ":"),
+            sort_keys=True,
+        )
+    )
+    return 0
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1399,6 +1470,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _serve_main(arguments[1:])
     if arguments and arguments[0] == "config":
         return _config_main(arguments[1:])
+    if arguments and arguments[0] == "support":
+        return _support_main(arguments[1:])
     args = parser().parse_args(arguments)
     progress = _Progress(args.progress)
     try:

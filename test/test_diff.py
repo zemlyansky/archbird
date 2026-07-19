@@ -228,6 +228,30 @@ def main() -> int:
             "target_symbol": "target",
         }
     ]
+    reordered_before = copy.deepcopy(schema7_before)
+    for section in ("symbol_calls", "symbol_references"):
+        reordered_before[section][0]["candidates"].append(
+            {"path": "src/alternate.c", "symbol": "alternate"}
+        )
+        reordered_before[section][0]["evidence"].append(
+            {
+                "claim": "lexical-occurrence",
+                "fact_id": f"{section}-alternate",
+                "line": 3,
+                "provider": "fixture-lexical",
+                "span": {"end": 13, "start": 7},
+            }
+        )
+    reordered_after = copy.deepcopy(reordered_before)
+    for section in ("symbol_calls", "symbol_references"):
+        reordered_after[section][0]["candidates"].reverse()
+        reordered_after[section][0]["evidence"].reverse()
+    reordered = json.loads(
+        extension.map_diff(canonical(reordered_before), canonical(reordered_after))
+    )
+    for section in ("symbol_calls", "symbol_references"):
+        if any(reordered["sections"][section].values()):
+            raise AssertionError({section: reordered["sections"][section]})
     schema7_after = copy.deepcopy(schema7_before)
     schema7_after["symbol_calls"][0]["evidence"][0]["line"] = 5
     schema7_after["symbol_references"][0]["resolution"] = "unique"

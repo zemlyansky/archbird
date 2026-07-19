@@ -80,6 +80,13 @@ typedef struct ArchbirdEngineOptions {
   void *allocator_user_data;
 } ArchbirdEngineOptions;
 
+/* One-shot frontend engines must opt into the larger saved-artifact budget.
+ * Raw byte length never becomes a semantic value-count limit. */
+typedef enum ArchbirdInputProfile {
+  ARCHBIRD_INPUT_DEFAULT = 0,
+  ARCHBIRD_INPUT_SAVED_ARTIFACT = 1
+} ArchbirdInputProfile;
+
 typedef enum ArchbirdProviderMode {
   ARCHBIRD_PROVIDER_PRIMARY = 0,
   ARCHBIRD_PROVIDER_AUGMENT = 1,
@@ -168,6 +175,10 @@ typedef struct ArchbirdGraphOptions {
 } ArchbirdGraphOptions;
 
 ARCHBIRD_API void archbird_engine_options_init(ArchbirdEngineOptions *options);
+
+ARCHBIRD_API ArchbirdStatus archbird_engine_options_init_for_input(
+    ArchbirdEngineOptions *options, ArchbirdInputProfile profile,
+    size_t input_length);
 
 ARCHBIRD_API void archbird_graph_options_init(ArchbirdGraphOptions *options);
 

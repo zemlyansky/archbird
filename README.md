@@ -405,8 +405,8 @@ archbird export mermaid --map .archbird/map.json \
 
 The complete commands are `map`, `config show|init`, `query`, `impact`,
 `freshness`, `diff`, `workspace`, `verify`, `plan`, `contract`, `verify-plan`,
-`export json|graphml|mermaid`, and `serve`; Python adds filesystem
-`okf validate|index|query` and `export okf`, while npm adds `support`. Use
+`export json|graphml|mermaid`, `serve`, and `support`; Python adds filesystem
+`okf validate|index|query` and `export okf`. Use
 `archbird COMMAND --help` for flags. Exit status is 0 for success, 1 when
 requested `--check` blocks, and 2 for invalid input/configuration.
 

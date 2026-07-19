@@ -143,7 +143,109 @@ def _identifier_byte(value: int) -> bool:
 
 class _SourcePositions:
     def __init__(self, text: str, raw: bytes, starts: Sequence[int]) -> None:
+        self._text = text
         self._raw = raw
+        self._starts = starts
+        self._tokens: Optional[List[Tuple[int, str, int, int]]] = None
+
+    def _source_tokens(self) -> Sequence[Tuple[int, str, int, int]]:
+        if self._tokens is not None:
+            return self._tokens
+        lines = self._text.splitlines(keepends=True)
+        tokens: List[Tuple[int, str, int, int]] = []
+        ignored = {
+            tokenize.COMMENT,
+            tokenize.DEDENT,
+            tokenize.ENCODING,
+            tokenize.ENDMARKER,
+            tokenize.INDENT,
+            tokenize.NEWLINE,
+            tokenize.NL,
+        }
+        for token in tokenize.generate_tokens(io.StringIO(self._text).readline):
+            if token.type in ignored:
+                continue
+            start_line, start_column = token.start
+            end_line, end_column = token.end
+            if not (
+                1 <= start_line <= len(self._starts)
+                and 1 <= end_line <= len(self._starts)
+            ):
+                continue
+            start_text = lines[start_line - 1] if start_line <= len(lines) else ""
+            end_text = lines[end_line - 1] if end_line <= len(lines) else ""
+            start = self._starts[start_line - 1] + len(
+                start_text[:start_column].encode("utf-8")
+            )
+            end = self._starts[end_line - 1] + len(
+                end_text[:end_column].encode("utf-8")
+            )
+            tokens.append((token.type, token.string, start, end))
+        self._tokens = tokens
+        return tokens
+
+    def import_aliases(self, node: ast.AST) -> Tuple[Tuple[int, int], ...]:
+        """Return exact import-alias spans on every supported CPython.
+
+        CPython 3.9 gives ``ast.alias`` nodes no positions.  Token evidence is
+        used only for that missing child-node metadata and is validated against
+        the parsed alias names; the enclosing import must still have an exact
+        AST span.
+        """
+
+        names = getattr(node, "names", ())
+        if all(
+            all(
+                isinstance(getattr(alias, attribute, None), int)
+                for attribute in ("lineno", "col_offset", "end_lineno", "end_col_offset")
+            )
+            for alias in names
+        ):
+            return tuple(_absolute_span(alias, self._starts) for alias in names)
+        start, end = _absolute_span(node, self._starts)
+        selected = [
+            token
+            for token in self._source_tokens()
+            if token[2] >= start and token[3] <= end
+        ]
+        import_index = next(
+            (
+                index
+                for index, token in enumerate(selected)
+                if token[0] == tokenize.NAME and token[1] == "import"
+            ),
+            None,
+        )
+        if import_index is None:
+            raise ValueError("cannot locate import keyword in Python AST span")
+        selected = selected[import_index + 1 :]
+        if selected and selected[0][1] == "(":
+            selected = selected[1:]
+        if selected and selected[-1][1] == ")":
+            selected = selected[:-1]
+        groups: List[List[Tuple[int, str, int, int]]] = [[]]
+        for token in selected:
+            if token[1] == ",":
+                if groups[-1]:
+                    groups.append([])
+                continue
+            groups[-1].append(token)
+        groups = [group for group in groups if group]
+        if len(groups) != len(names):
+            raise ValueError("cannot align Python import aliases with source tokens")
+        spans: List[Tuple[int, int]] = []
+        for alias, group in zip(names, groups):
+            parts = [token[1] for token in group]
+            try:
+                as_index = parts.index("as")
+            except ValueError:
+                as_index = len(parts)
+            imported = "".join(parts[:as_index])
+            renamed = "".join(parts[as_index + 1 :]) if as_index < len(parts) else None
+            if imported != alias.name or renamed != alias.asname:
+                raise ValueError("Python import alias tokens disagree with AST")
+            spans.append((group[0][2], group[-1][3]))
+        return tuple(spans)
 
     def named(
         self,
@@ -1071,8 +1173,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self._visit_comprehension(node, "dictcomp", (node.key, node.value))
 
     def visit_Import(self, node: ast.Import) -> None:
-        for alias in node.names:
-            span = _absolute_span(alias, self.starts)
+        for alias, span in zip(node.names, self.tokens.import_aliases(node)):
             local = alias.asname or alias.name.split(".", 1)[0]
             bound_module = alias.name if alias.asname else local
             self.facts.add(
@@ -1108,7 +1209,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self.facts.add(
             "imported-name-groups", "module", node_span, prefix, prefix
         )
-        for alias in node.names:
+        for alias, span in zip(node.names, self.tokens.import_aliases(node)):
             if alias.name == "*":
                 self.facts.add(
                     "module-reexports",
@@ -1118,7 +1219,6 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                     prefix,
                 )
                 continue
-            span = _absolute_span(alias, self.starts)
             self.facts.add(
                 "imported-names",
                 "member",
@@ -1163,20 +1263,18 @@ def _top_level_exports(
     for node in tree.body:
         if isinstance(node, ast.ImportFrom):
             prefix = "." * node.level + (node.module or "")
-            for alias in node.names:
+            for alias, span in zip(node.names, tokens.import_aliases(node)):
                 local_name = alias.asname or alias.name
                 if local_name == "*":
                     continue
-                span = _absolute_span(alias, starts)
                 imported.append(local_name)
                 imported_occurrences.append((local_name, span))
                 origins[local_name] = prefix
                 origin_names[local_name] = alias.name
                 spans[local_name] = span
         elif isinstance(node, ast.Import):
-            for alias in node.names:
+            for alias, span in zip(node.names, tokens.import_aliases(node)):
                 local_name = alias.asname or alias.name.split(".")[0]
-                span = _absolute_span(alias, starts)
                 imported.append(local_name)
                 imported_occurrences.append((local_name, span))
                 origins[local_name] = alias.name

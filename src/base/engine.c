@@ -7,6 +7,8 @@
 #define ARCHBIRD_DEFAULT_MAX_INPUT_BYTES ((size_t)64 * 1024 * 1024)
 #define ARCHBIRD_DEFAULT_MAX_DEPTH ((size_t)64)
 #define ARCHBIRD_DEFAULT_MAX_VALUES ((size_t)4000000)
+#define ARCHBIRD_SAVED_ARTIFACT_MAX_INPUT_BYTES ((size_t)512 * 1024 * 1024)
+#define ARCHBIRD_SAVED_ARTIFACT_MAX_VALUES ((size_t)16 * 1024 * 1024)
 #define ARCHBIRD_DEFAULT_MAX_STRING_BYTES ((size_t)16 * 1024 * 1024)
 #define ARCHBIRD_DEFAULT_MAX_FILES ((size_t)1000000)
 #define ARCHBIRD_DEFAULT_MAX_FILE_BYTES ((size_t)64 * 1024 * 1024)
@@ -192,6 +194,25 @@ void archbird_engine_options_init(ArchbirdEngineOptions *options) {
   options->reallocate = NULL;
   options->deallocate = NULL;
   options->allocator_user_data = NULL;
+}
+
+ArchbirdStatus
+archbird_engine_options_init_for_input(ArchbirdEngineOptions *options,
+                                       ArchbirdInputProfile profile,
+                                       size_t input_length) {
+  if (!options)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  archbird_engine_options_init(options);
+  if (profile == ARCHBIRD_INPUT_DEFAULT)
+    return input_length <= options->max_input_bytes ? ARCHBIRD_OK
+                                                    : ARCHBIRD_LIMIT_EXCEEDED;
+  if (profile != ARCHBIRD_INPUT_SAVED_ARTIFACT)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  if (input_length > ARCHBIRD_SAVED_ARTIFACT_MAX_INPUT_BYTES)
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  options->max_input_bytes = ARCHBIRD_SAVED_ARTIFACT_MAX_INPUT_BYTES;
+  options->max_values = ARCHBIRD_SAVED_ARTIFACT_MAX_VALUES;
+  return ARCHBIRD_OK;
 }
 
 ArchbirdStatus archbird_engine_create(const ArchbirdEngineOptions *options,

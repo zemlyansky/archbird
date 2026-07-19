@@ -167,16 +167,30 @@ static ArchbirdProviderMode provider_mode(uint32_t mode, int *valid) {
   return ARCHBIRD_PROVIDER_PRIMARY;
 }
 
+static ArchbirdStatus
+stateless_begin_input_profile(size_t input_length, ArchbirdInputProfile profile,
+                              ArchbirdEngine **out_engine) {
+  ArchbirdEngineOptions options;
+  ArchbirdStatus status;
+  result_reset();
+  status =
+      archbird_engine_options_init_for_input(&options, profile, input_length);
+  if (status != ARCHBIRD_OK)
+    return status;
+  return archbird_engine_create(&options, out_engine);
+}
+
 static ArchbirdStatus stateless_begin_input(size_t input_length,
                                             ArchbirdEngine **out_engine) {
-  ArchbirdEngineOptions options;
-  result_reset();
-  archbird_engine_options_init(&options);
-  if (input_length > options.max_input_bytes)
-    options.max_input_bytes = input_length;
-  if (input_length > options.max_values)
-    options.max_values = input_length;
-  return archbird_engine_create(&options, out_engine);
+  return stateless_begin_input_profile(input_length, ARCHBIRD_INPUT_DEFAULT,
+                                       out_engine);
+}
+
+static ArchbirdStatus
+stateless_begin_saved_artifact(size_t input_length,
+                               ArchbirdEngine **out_engine) {
+  return stateless_begin_input_profile(
+      input_length, ARCHBIRD_INPUT_SAVED_ARTIFACT, out_engine);
 }
 
 static size_t larger_input(size_t left, size_t right) {
@@ -665,7 +679,7 @@ AB_WASM_EXPORT int ab_wasm_json_canonicalize(const uint8_t *input,
 AB_WASM_EXPORT int ab_wasm_map_markdown(const uint8_t *map, size_t map_length,
                                         int full, size_t max_chars) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(map_length, &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(map_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_render_markdown(
         engine, map, map_length, full, max_chars, output_write, &wasm_output);
@@ -676,7 +690,7 @@ AB_WASM_EXPORT int ab_wasm_map_markdown_view(const uint8_t *map,
                                              size_t map_length, int view,
                                              int detail, size_t max_chars) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(map_length, &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(map_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_render_markdown_view(
         engine, map, map_length, (ArchbirdMapView)view,
@@ -688,8 +702,8 @@ AB_WASM_EXPORT int ab_wasm_map_query(const uint8_t *map, size_t map_length,
                                      const uint8_t *query, size_t query_length,
                                      uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status =
-      stateless_begin_input(larger_input(map_length, query_length), &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(map_length, query_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query(engine, map, map_length, query, query_length,
                                 flags, output_write, &wasm_output);
@@ -702,8 +716,8 @@ AB_WASM_EXPORT int ab_wasm_map_query_markdown(const uint8_t *map,
                                               size_t query_length,
                                               size_t max_chars) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status =
-      stateless_begin_input(larger_input(map_length, query_length), &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(map_length, query_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown(engine, map, map_length, query,
                                          query_length, max_chars, output_write,
@@ -715,8 +729,8 @@ AB_WASM_EXPORT int ab_wasm_map_diff(const uint8_t *before, size_t before_length,
                                     const uint8_t *after, size_t after_length,
                                     uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status =
-      stateless_begin_input(larger_input(before_length, after_length), &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(before_length, after_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_diff(engine, before, before_length, after,
                                after_length, flags, output_write, &wasm_output);
@@ -729,7 +743,7 @@ AB_WASM_EXPORT int ab_wasm_map_freshness(const uint8_t *snapshot,
                                          size_t current_length,
                                          uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(
+  ArchbirdStatus status = stateless_begin_saved_artifact(
       larger_input(snapshot_length, current_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_freshness(engine, snapshot, snapshot_length, current,
@@ -745,7 +759,7 @@ AB_WASM_EXPORT int ab_wasm_map_export_graph(const uint8_t *map,
                                             size_t max_edge_names) {
   ArchbirdEngine *engine = NULL;
   ArchbirdGraphOptions options;
-  ArchbirdStatus status = stateless_begin_input(map_length, &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(map_length, &engine);
   if (format > (uint32_t)ARCHBIRD_GRAPH_JSON ||
       view > (uint32_t)ARCHBIRD_GRAPH_SYMBOLS ||
       direction > (uint32_t)ARCHBIRD_GRAPH_BT)
@@ -788,7 +802,7 @@ AB_WASM_EXPORT int ab_wasm_okf_publish(
     const uint8_t *change_result, size_t result_length,
     const uint8_t *normalization, size_t normalization_length, uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(
+  ArchbirdStatus status = stateless_begin_saved_artifact(
       larger_input(larger_input(larger_input(map_length, verification_length),
                                 larger_input(proposal_length, contract_length)),
                    larger_input(result_length, normalization_length)),
@@ -821,8 +835,8 @@ AB_WASM_EXPORT int ab_wasm_workspace_analyze(const uint8_t *config,
                                              size_t maps_length,
                                              uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status =
-      stateless_begin_input(larger_input(config_length, maps_length), &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(config_length, maps_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_workspace_analyze(engine, config, config_length, maps,
                                         maps_length, flags, output_write,
@@ -847,8 +861,8 @@ AB_WASM_EXPORT int ab_wasm_verification_analyze(const uint8_t *suite,
                                                 size_t input_length,
                                                 uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status =
-      stateless_begin_input(larger_input(suite_length, input_length), &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(suite_length, input_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_verification_analyze(engine, suite, suite_length, input,
                                            input_length, flags, output_write,
@@ -860,8 +874,8 @@ AB_WASM_EXPORT int ab_wasm_verification_report(
     const uint8_t *suite, size_t suite_length, const uint8_t *input,
     size_t input_length, uint32_t format, size_t max_findings, uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status =
-      stateless_begin_input(larger_input(suite_length, input_length), &engine);
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(suite_length, input_length), &engine);
   if (format == (uint32_t)ARCHBIRD_VERIFICATION_JSON ||
       format > (uint32_t)ARCHBIRD_VERIFICATION_JUNIT)
     status = ARCHBIRD_INVALID_ARGUMENT;
@@ -879,7 +893,8 @@ ab_wasm_change_proposal(const uint8_t *verification, size_t verification_length,
                         uint32_t format, int full, size_t max_candidates,
                         uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(verification_length, &engine);
+  ArchbirdStatus status =
+      stateless_begin_saved_artifact(verification_length, &engine);
   if (format > 1)
     status = ARCHBIRD_INVALID_ARGUMENT;
   if (status == ARCHBIRD_OK && format == 0)
@@ -899,7 +914,7 @@ AB_WASM_EXPORT int ab_wasm_change_contract(const uint8_t *proposal,
                                            size_t review_length,
                                            uint32_t format, uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(
+  ArchbirdStatus status = stateless_begin_saved_artifact(
       larger_input(proposal_length, review_length), &engine);
   if (format > 1)
     status = ARCHBIRD_INVALID_ARGUMENT;
@@ -921,7 +936,7 @@ ab_wasm_change_verify(const uint8_t *proposal, size_t proposal_length,
                       const uint8_t *after, size_t after_length,
                       uint32_t format, uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(
+  ArchbirdStatus status = stateless_begin_saved_artifact(
       larger_input(larger_input(proposal_length, contract_length),
                    larger_input(before_length, after_length)),
       &engine);

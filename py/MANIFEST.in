@@ -3,7 +3,6 @@ include LICENSE
 include setup.py
 recursive-include archbird *.py
 recursive-include archbird/app *
-recursive-include csrc *.c *.h *.json
-recursive-include csrc/vendor LICENSE
+recursive-include csrc *
 prune scripts
 prune tests

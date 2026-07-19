@@ -141,6 +141,10 @@ _engine_create = _declare(
 _engine_options_init = _declare(
     "archbird_engine_options_init", [ctypes.POINTER(_EngineOptions)], None
 )
+_engine_options_init_for_input = _declare(
+    "archbird_engine_options_init_for_input",
+    [ctypes.POINTER(_EngineOptions), ctypes.c_int, ctypes.c_size_t],
+)
 _engine_destroy = _declare("archbird_engine_destroy", [_POINTER], None)
 _engine_error = _declare("archbird_engine_error", [_POINTER], ctypes.c_char_p)
 _engine_error_offset = _declare(
@@ -186,14 +190,15 @@ def _raise(engine: _POINTER, status: int) -> None:
     raise Error(f"{message} (status={status}, byte={offset})")
 
 
-def _new_engine(input_budget: int = 0) -> _POINTER:
+def _new_engine(input_budget: int = 0, *, saved_artifact: bool = False) -> _POINTER:
     engine = _POINTER()
     options = _EngineOptions()
-    _engine_options_init(ctypes.byref(options))
-    if input_budget > options.max_input_bytes:
-        options.max_input_bytes = input_budget
-    if input_budget > options.max_values:
-        options.max_values = input_budget
+    _raise(
+        engine,
+        _engine_options_init_for_input(
+            ctypes.byref(options), int(saved_artifact), input_budget
+        ),
+    )
     _raise(engine, _engine_create(ctypes.byref(options), ctypes.byref(engine)))
     return engine
 
@@ -248,9 +253,12 @@ def _render_to(
 
 
 def _one_shot(
-    call: Callable[[_POINTER, _WRITE], int], *, input_budget: int = 0
+    call: Callable[[_POINTER, _WRITE], int],
+    *,
+    input_budget: int = 0,
+    saved_artifact: bool = False,
 ) -> bytes:
-    engine = _new_engine(input_budget)
+    engine = _new_engine(input_budget, saved_artifact=saved_artifact)
     try:
         return _render(engine, lambda write: call(engine, write))
     finally:
@@ -598,6 +606,7 @@ def _simple_render(
     flags: int = 0,
     include_flags: bool = True,
     nullable_empty_indices: Sequence[int] = (),
+    saved_artifact: bool = False,
 ) -> bytes:
     arguments = []
     types = [_POINTER]
@@ -617,6 +626,7 @@ def _simple_render(
             )
         ),
         input_budget=max((len(value) for value in values), default=0),
+        saved_artifact=saved_artifact,
     )
 
 
@@ -758,6 +768,7 @@ def map_query(map: bytes, query: bytes, pretty: bool = False) -> bytes:
         "archbird_map_query",
         [_bytes(map), _bytes(query)],
         flags=_json_flags(pretty),
+        saved_artifact=True,
     )
 
 
@@ -770,6 +781,7 @@ def map_markdown(map: bytes, full=False, max_chars=0) -> bytes:
         suffix_types=(ctypes.c_int, ctypes.c_size_t),
         suffix_values=(int(bool(full)), max_chars),
         include_flags=False,
+        saved_artifact=True,
     )
 
 
@@ -782,6 +794,7 @@ def map_markdown_view(map: bytes, view: int, detail: int, max_chars=0) -> bytes:
         suffix_types=(ctypes.c_int, ctypes.c_int, ctypes.c_size_t),
         suffix_values=(view, detail, max_chars),
         include_flags=False,
+        saved_artifact=True,
     )
 
 
@@ -794,6 +807,7 @@ def map_query_markdown(map: bytes, query: bytes, max_chars=0) -> bytes:
         suffix_types=(ctypes.c_size_t,),
         suffix_values=(max_chars,),
         include_flags=False,
+        saved_artifact=True,
     )
 
 
@@ -802,6 +816,7 @@ def map_diff(before: bytes, after: bytes, pretty=False) -> bytes:
         "archbird_map_diff",
         [_bytes(before), _bytes(after)],
         flags=_json_flags(pretty),
+        saved_artifact=True,
     )
 
 
@@ -810,6 +825,7 @@ def map_freshness(snapshot: bytes, current: bytes, pretty=False) -> bytes:
         "archbird_map_freshness",
         [_bytes(snapshot), _bytes(current)],
         flags=_json_flags(pretty),
+        saved_artifact=True,
     )
 
 
@@ -857,7 +873,9 @@ def map_export_graph(
     return _one_shot(
         lambda engine, write: function(
             engine, artifact, len(artifact), ctypes.byref(options), write, None
-        )
+        ),
+        input_budget=len(artifact),
+        saved_artifact=True,
     )
 
 
@@ -923,6 +941,7 @@ def okf_publish(
         values,
         flags=_json_flags(pretty, True),
         nullable_empty_indices=(1, 2, 3, 4, 5),
+        saved_artifact=True,
     )
 
 
@@ -937,6 +956,7 @@ def workspace_analyze(config: bytes, maps: bytes, pretty=False) -> bytes:
         "archbird_workspace_analyze",
         [_bytes(config), _bytes(maps)],
         flags=_json_flags(pretty),
+        saved_artifact=True,
     )
 
 
@@ -951,6 +971,7 @@ def verification_analyze(suite: bytes, input: bytes, pretty=False) -> bytes:
         "archbird_verification_analyze",
         [_bytes(suite), _bytes(input)],
         flags=_json_flags(pretty),
+        saved_artifact=True,
     )
 
 
@@ -976,6 +997,7 @@ def verification_report(
             _SIZE_MAX if max_findings < 0 else max_findings,
         ),
         flags=_json_flags(pretty, native_format == 2),
+        saved_artifact=True,
     )
 
 
@@ -1015,7 +1037,9 @@ def change_proposal(
                 _json_flags(pretty),
                 write,
                 None,
-            )
+            ),
+            input_budget=len(document),
+            saved_artifact=True,
         )
     if format != "markdown":
         raise ValueError("change proposal format must be json or markdown")
@@ -1044,7 +1068,9 @@ def change_proposal(
             max_candidates,
             write,
             None,
-        )
+        ),
+        input_budget=len(document),
+        saved_artifact=True,
     )
 
 
@@ -1054,12 +1080,14 @@ def change_contract(proposal: bytes, review: bytes, format="json", pretty=False)
             "archbird_change_contract",
             [_bytes(proposal), _bytes(review)],
             flags=_json_flags(pretty),
+            saved_artifact=True,
         )
     if format == "markdown":
         return _simple_render(
             "archbird_change_contract_report",
             [_bytes(proposal), _bytes(review)],
             include_flags=False,
+            saved_artifact=True,
         )
     raise ValueError("change contract format must be json or markdown")
 
@@ -1075,7 +1103,10 @@ def change_verify(
     values = [_bytes(value) for value in (proposal, contract, before, after)]
     if format == "json":
         return _simple_render(
-            "archbird_change_verify", values, flags=_json_flags(pretty)
+            "archbird_change_verify",
+            values,
+            flags=_json_flags(pretty),
+            saved_artifact=True,
         )
     try:
         native_format = {"markdown": 1, "sarif": 2, "junit": 3}[format]
@@ -1089,4 +1120,5 @@ def change_verify(
         suffix_types=(ctypes.c_int,),
         suffix_values=(native_format,),
         flags=_json_flags(pretty, native_format == 2),
+        saved_artifact=True,
     )

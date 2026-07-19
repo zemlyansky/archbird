@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import warnings
@@ -26,6 +27,25 @@ def canonical(value: object) -> bytes:
 
 
 def main() -> int:
+    import_source = "import a, b.c as d\nfrom .x import (y,\n z as q,)\n"
+    import_raw = import_source.encode("utf-8")
+    import_tree = ast.parse(import_source)
+    expected_alias_spans = [((7, 8), (10, 18)), ((35, 36), (39, 45))]
+    for statement in import_tree.body:
+        for alias in statement.names:
+            alias.lineno = None
+            alias.col_offset = None
+            alias.end_lineno = None
+            alias.end_col_offset = None
+    positions = provider._SourcePositions(
+        import_source, import_raw, provider._line_starts(import_raw)
+    )
+    actual_alias_spans = [
+        positions.import_aliases(statement) for statement in import_tree.body
+    ]
+    if actual_alias_spans != expected_alias_spans:
+        raise AssertionError((actual_alias_spans, expected_alias_spans))
+
     encoded_raw = (
         b"# coding: iso-8859-1\n"
         b"label = 'caf\xe9'\n"

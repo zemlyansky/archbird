@@ -80,6 +80,20 @@ import json, os, pathlib, sys
 if sys.argv[1:] == ['--version']:
   print('0.test')
   raise SystemExit(0)
+if sys.argv[1:] == ['support']:
+  print(json.dumps({
+    'core_implementation_sha256':'2'*64,
+    'engine':{'kind':'fixture','source':'test'},
+    'frontend_implementation_sha256':'3'*64,
+    'runtime':{
+      'executable':str(pathlib.Path(sys.executable).resolve()),
+      'implementation':'CPython',
+      'kind':'python',
+      'version':'.'.join(map(str, sys.version_info[:3])),
+    },
+    'version':'0.test',
+  }, separators=(',', ':'), sort_keys=True))
+  raise SystemExit(0)
 out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 out.parent.mkdir(parents=True, exist_ok=True)
 if sys.argv[1] == 'map':
@@ -224,6 +238,14 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     first_run = json.loads((root / "state.json").read_text())["current_run_sha256"]
     first = json.loads((root / f"runs/{first_run}/result.json").read_text())
     assert first["cases"][0]["metrics"]["relevant_file_recall_all"] == 0.0
+    assert first["tool"]["launcher"] == {
+        "path": str(fake.resolve()),
+        "sha256": __import__("hashlib").sha256(fake.read_bytes()).hexdigest(),
+    }
+    support = first["tool"]["support"]
+    assert support["status"] == "available"
+    assert support["report"]["runtime"]["kind"] == "python"
+    assert support["report"]["runtime"]["executable"] == str(Path(sys.executable).resolve())
 
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "good"
     run("run", "--archbird", str(fake), "--label", "good", environment=environment)

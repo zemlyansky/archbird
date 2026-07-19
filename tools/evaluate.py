@@ -1357,6 +1357,31 @@ def run_evaluation(root: Path, archbird: Path, label: str, corpus_sha256: str | 
     version = subprocess.run(
         [str(archbird), "--version"], check=True, capture_output=True, text=True
     ).stdout.strip()
+    support_process = subprocess.run(
+        [str(archbird), "support"], capture_output=True, text=True
+    )
+    support: Mapping[str, Any]
+    if support_process.returncode == 0:
+        try:
+            support_value = json.loads(support_process.stdout)
+        except json.JSONDecodeError as error:
+            raise EvaluationError(
+                f"Archbird support output is invalid JSON: {error}"
+            ) from error
+        if not isinstance(support_value, dict):
+            raise EvaluationError("Archbird support output must be an object")
+        support = {"report": support_value, "status": "available"}
+    else:
+        support = {
+            "returncode": support_process.returncode,
+            "status": "unavailable",
+            "stderr_sha256": sha256_bytes(support_process.stderr.encode("utf-8")),
+            "stdout_sha256": sha256_bytes(support_process.stdout.encode("utf-8")),
+        }
+    launcher = {
+        "path": str(archbird),
+        "sha256": sha256_file(archbird),
+    }
     stage = Path(tempfile.mkdtemp(prefix=".run-", dir=root / "work"))
     try:
         cases = []
@@ -1390,7 +1415,12 @@ def run_evaluation(root: Path, archbird: Path, label: str, corpus_sha256: str | 
             "label": label,
             "provenance": "observed",
             "schema_version": SCHEMA_VERSION,
-            "tool": {"cli_version": version, "map_tool": tool_evidence},
+            "tool": {
+                "cli_version": version,
+                "launcher": launcher,
+                "map_tool": tool_evidence,
+                "support": support,
+            },
         }
         encoded = canonical(result) + b"\n"
         run_sha256 = sha256_bytes(encoded)

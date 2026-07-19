@@ -236,6 +236,40 @@ static ArchbirdStatus render_sorted_values(DiffContext *context,
   return status;
 }
 
+/* Relation candidates and evidence are set-valued in the Map schema. Their
+ * serialized order may change when provider merge order changes, but that is
+ * not an architectural change. Other arrays remain order-sensitive. */
+static ArchbirdStatus render_relation_row(DiffContext *context,
+                                          AbBuffer *buffer,
+                                          const AbValue *row) {
+  size_t field;
+  ArchbirdStatus status;
+  if (!row || row->kind != AB_VALUE_OBJECT)
+    return diff_error(context, "symbol relation must be an object");
+  status = ab_buffer_literal(buffer, "{");
+  for (field = 0; status == ARCHBIRD_OK && field < row->as.object.count;
+       field++) {
+    const AbObjectField *member = &row->as.object.fields[field];
+    if (field)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_buffer_json_string(buffer, member->name.data, member->name.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ":");
+    if (status != ARCHBIRD_OK)
+      break;
+    if (string_is(&member->name, "candidates") ||
+        string_is(&member->name, "evidence"))
+      status = render_sorted_values(context, buffer, &member->value);
+    else
+      status = ab_value_render(buffer, &member->value);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  return status;
+}
+
 static ArchbirdStatus key_parts(AbBuffer *buffer, const AbString **parts,
                                 size_t count) {
   size_t index;
@@ -462,7 +496,7 @@ static ArchbirdStatus relation_index(DiffContext *context, const AbValue *map,
     ab_buffer_init(&value, context->engine);
     status = key_parts(&key, parts, 6);
     if (status == ARCHBIRD_OK)
-      status = ab_value_render(&value, row);
+      status = render_relation_row(context, &value, row);
     if (status == ARCHBIRD_OK)
       status = add_buffers(context, &grouped, &key, &value);
     ab_buffer_free(&value);

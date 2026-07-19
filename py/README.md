@@ -321,7 +321,8 @@ Python source sets; worker count cannot change canonical output.
 
 The commands are `map`, `config show|init`, `query`, `impact`, `freshness`,
 `diff`, `workspace`, `verify`, `plan`, `contract`, `verify-plan`,
-`export json|graphml|mermaid|okf`, `okf validate|index|query`, and `serve`. Use
+`export json|graphml|mermaid|okf`, `okf validate|index|query`, `serve`, and
+`support`. Use
 `archbird COMMAND --help` for flags. Exit status is 0 for success, 1 when
 requested `--check` blocks, and 2 for invalid input/configuration.
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from pathlib import PurePosixPath
 import tarfile
 from typing import Iterable, Iterator, Tuple
@@ -66,6 +68,8 @@ def check_archive(
     c_source_code_members: list[PurePosixPath] = []
     c_source_licenses: set[str] = set()
     c_source_manifests = 0
+    c_source_manifest: bytes | None = None
+    c_source_files: dict[str, bytes] = {}
     for name, data in _members(path):
         count += 1
         member_path = PurePosixPath(name)
@@ -73,10 +77,17 @@ def check_archive(
         if "csrc" in parts:
             csrc_index = parts.index("csrc")
             relative = parts[csrc_index + 1 :]
+            relative_name = PurePosixPath(*relative).as_posix()
+            if relative_name in c_source_files:
+                raise ValueError(
+                    f"{path}: duplicate C snapshot member: {relative_name}"
+                )
+            c_source_files[relative_name] = data
             if relative == (".archbird-manifest.json",):
                 c_source_manifests += 1
+                c_source_manifest = data
                 c_source_code_members.append(member_path)
-            elif member_path.suffix in {".c", ".h"}:
+            elif member_path.suffix in {".c", ".h", ".sources"}:
                 c_source_code_members.append(member_path)
             if (
                 len(relative) == 3
@@ -98,6 +109,42 @@ def check_archive(
                 f"{path}: expected one content-hashed C snapshot manifest, "
                 f"found {c_source_manifests}"
             )
+        try:
+            snapshot = json.loads((c_source_manifest or b"").decode("utf-8"))
+            rows = snapshot["files"]
+            generated_rows = snapshot.get("generated", [])
+        except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"{path}: invalid C snapshot manifest") from error
+        if not isinstance(rows, list) or not isinstance(generated_rows, list):
+            raise ValueError(f"{path}: invalid C snapshot file inventory")
+        expected: dict[str, tuple[int, str]] = {}
+        for row in (*rows, *generated_rows):
+            if (
+                not isinstance(row, dict)
+                or not isinstance(row.get("path"), str)
+                or not isinstance(row.get("bytes"), int)
+                or not isinstance(row.get("sha256"), str)
+            ):
+                raise ValueError(f"{path}: invalid C snapshot file row")
+            relative = PurePosixPath(row["path"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"{path}: unsafe C snapshot path: {relative}")
+            name = relative.as_posix()
+            if name in expected:
+                raise ValueError(f"{path}: duplicate C snapshot path: {name}")
+            expected[name] = (row["bytes"], row["sha256"])
+        actual_names = set(c_source_files) - {".archbird-manifest.json"}
+        expected_names = set(expected)
+        if actual_names != expected_names:
+            raise ValueError(
+                f"{path}: C snapshot inventory differs: "
+                f"missing={sorted(expected_names - actual_names)!r} "
+                f"extra={sorted(actual_names - expected_names)!r}"
+            )
+        for name, (expected_size, expected_sha256) in expected.items():
+            data = c_source_files[name]
+            if len(data) != expected_size or hashlib.sha256(data).hexdigest() != expected_sha256:
+                raise ValueError(f"{path}: C snapshot content differs: {name}")
         if c_source_licenses != EXPECTED_C_SOURCE_LICENSES:
             raise ValueError(
                 f"{path}: C snapshot license inventory differs: "

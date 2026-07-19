@@ -33,6 +33,11 @@ function run(arguments_, { expected = 0 } = {}) {
 assert.equal(run(["--version"]).trim(), "0.0.1");
 const support = JSON.parse(run(["support"]));
 assert.equal(support.engine.kind, engine);
+assert.equal(support.core_implementation_sha256.length, 64);
+assert.equal(support.runtime.kind, "node");
+assert.equal(support.runtime.implementation, "Node.js");
+assert.equal(support.runtime.version, process.version);
+assert.equal(support.runtime.executable, path.resolve(process.execPath));
 assert.deepEqual(support.providers.host, ["compiler:typescript"]);
 assert.deepEqual(support.providers.portable, [
   "lexical:c",

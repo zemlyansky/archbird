@@ -104,6 +104,41 @@ int main(void) {
                                          '\"', 0xc0, 0xaf, '\"', '}'};
 
   archbird_engine_options_init(&options);
+  {
+    ArchbirdEngineOptions saved;
+    size_t ordinary_limit = options.max_input_bytes;
+    size_t ordinary_values = options.max_values;
+    expect_status(
+        "input-profile-null",
+        archbird_engine_options_init_for_input(NULL, ARCHBIRD_INPUT_DEFAULT, 0),
+        ARCHBIRD_INVALID_ARGUMENT);
+    expect_status("input-profile-invalid",
+                  archbird_engine_options_init_for_input(
+                      &saved, (ArchbirdInputProfile)99, 0),
+                  ARCHBIRD_INVALID_ARGUMENT);
+    expect_status("ordinary-input-profile",
+                  archbird_engine_options_init_for_input(
+                      &saved, ARCHBIRD_INPUT_DEFAULT, ordinary_limit),
+                  ARCHBIRD_OK);
+    expect_status("ordinary-input-profile-limit",
+                  archbird_engine_options_init_for_input(
+                      &saved, ARCHBIRD_INPUT_DEFAULT, ordinary_limit + 1),
+                  ARCHBIRD_LIMIT_EXCEEDED);
+    expect_status(
+        "saved-artifact-input-profile",
+        archbird_engine_options_init_for_input(
+            &saved, ARCHBIRD_INPUT_SAVED_ARTIFACT, ordinary_limit + 1),
+        ARCHBIRD_OK);
+    if (saved.max_input_bytes <= ordinary_limit ||
+        saved.max_values <= ordinary_values ||
+        saved.max_values == ordinary_limit + 1)
+      fail("saved-artifact-input-profile",
+           "saved-artifact limits are not fixed and distinct");
+    expect_status("saved-artifact-input-profile-limit",
+                  archbird_engine_options_init_for_input(
+                      &saved, ARCHBIRD_INPUT_SAVED_ARTIFACT, SIZE_MAX),
+                  ARCHBIRD_LIMIT_EXCEEDED);
+  }
   expect_status("engine-create", archbird_engine_create(&options, &engine),
                 ARCHBIRD_OK);
   if (!engine)
