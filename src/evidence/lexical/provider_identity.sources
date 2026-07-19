@@ -1,0 +1,12 @@
+src/evidence/lexical/tokenizer.c
+src/evidence/lexical/tokenizer.h
+src/base/utf8.c
+src/base/utf8.h
+src/evidence/fact_builder.c
+src/evidence/fact_builder.h
+src/base/model.c
+src/base/model.h
+src/base/render.c
+src/base/render_internal.h
+src/base/sha256.c
+src/base/sha256.h

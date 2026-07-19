@@ -75,6 +75,7 @@
         {"source": "lexical-r", "kind": "*", "target": "base"},
         {"source": "lexical-r", "kind": "*", "target": "evidence"},
         {"source": "lexical-r", "kind": "*", "target": "lexical-common"},
+        {"source": "manifest-readers", "kind": "*", "target": "base"},
         {"source": "semantic-scip", "kind": "*", "target": "base"},
         {"source": "semantic-scip", "kind": "*", "target": "evidence"},
         {"source": "syntax", "kind": "*", "target": "base"},
@@ -85,6 +86,7 @@
         {"source": "map", "kind": "*", "target": "base"},
         {"source": "map", "kind": "*", "target": "evidence"},
         {"source": "map", "kind": "*", "target": "lexical-common"},
+        {"source": "map", "kind": "*", "target": "manifest-readers"},
         {"source": "map", "kind": "*", "target": "json-parser"},
         {"source": "verify", "kind": "*", "target": "abi"},
         {"source": "verify", "kind": "*", "target": "base"},
@@ -119,6 +121,7 @@
         {"source": "core-tests", "kind": "*", "target": "regex-engine"},
         {"source": "core-tests", "kind": "*", "target": "provider-registry"},
         {"source": "core-tests", "kind": "*", "target": "lexical-common"},
+        {"source": "core-tests", "kind": "*", "target": "manifest-readers"},
         {"source": "python-tests", "kind": "*", "target": "python-host"},
         {"source": "javascript-tests", "kind": "*", "target": "javascript-host"}
       ]

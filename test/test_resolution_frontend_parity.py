@@ -91,7 +91,54 @@ def main() -> int:
         or r_package["exports"] != ["alpha", "beta"]
     ):
         raise AssertionError(f"CRAN package evidence is incorrect: {r_package!r}")
-    print("Python/Node config-resolution parity passed for npm, Python, and CRAN")
+    autoconf_fixture = repository / "test/fixtures/zero_config_autoconf"
+    autoconf_resolution = resolve_discovery(autoconf_fixture)
+    autoconf_completed = subprocess.run(
+        [
+            str(node),
+            str(repository / "test/test_resolution_node.js"),
+            str(addon.resolve()),
+            str(repository),
+            str(autoconf_fixture),
+            "default",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    if (
+        bytes.fromhex(autoconf_completed.stdout.decode().strip())
+        != autoconf_resolution
+    ):
+        raise AssertionError("Python and Node Autoconf resolution artifacts differ")
+    autoconf_project = Project.from_repository(autoconf_fixture, jobs=1)
+    autoconf_map = json.loads(autoconf_project.map_json())
+    if autoconf_map["project"] != "native-demo":
+        raise AssertionError(
+            f"AC_INIT identity was lost: {autoconf_map['project']!r}"
+        )
+    if len(autoconf_map["packages"]) != 1:
+        raise AssertionError(
+            f"Autoconf package was not inferred: {autoconf_map['packages']!r}"
+        )
+    autoconf_package = autoconf_map["packages"][0]
+    if (
+        autoconf_package["identity"] != "native-demo"
+        or autoconf_package["version"] != "2.4"
+        or autoconf_package["manifest"] != "configure.ac"
+        or autoconf_package["kind"] != "generic"
+    ):
+        raise AssertionError(
+            f"Autoconf package evidence is incorrect: {autoconf_package!r}"
+        )
+    routes = {route["name"]: route for route in autoconf_map["builds"]}
+    if routes["autoreconf"]["command"] != "autoreconf -i" or routes[
+        "configure"
+    ]["paths"] != ["Makefile", "config.h", "config.status", "src/Makefile"]:
+        raise AssertionError(f"Autoconf build routes are incorrect: {routes!r}")
+    print(
+        "Python/Node config-resolution parity passed for npm, Python, CRAN, "
+        "and Autoconf"
+    )
     return 0
 
 

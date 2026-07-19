@@ -106,6 +106,15 @@ int main(void) {
       "{\"bytes\":91,\"path\":\"pyproject.toml\"},"
       "{\"bytes\":21,\"path\":\"src/demo_module/__init__.py\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
+  static const char autoconf_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"6d345f646566696e65285b56455253494f4e5d2c205b322e"
+      "345d290a41435f494e4954285b6e61746976652d64656d6f5d2c205b56455253494f"
+      "4e5d290a41435f434f4e4649475f46494c4553285b4d616b6566696c655d290a4143"
+      "5f4f55545055540a\",\"path\":\"configure.ac\"}],\"files\":["
+      "{\"bytes\":100,\"path\":\"configure.ac\"},"
+      "{\"bytes\":20,\"path\":\"src/main.c\"}],\"ignore_files\":[],"
+      "\"schema_version\":1}";
   static const char venv_inventory[] =
       "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
       "\"files\":[{\"bytes\":12,\"path\":\"venv/bin/activate.py\"},"
@@ -167,6 +176,7 @@ int main(void) {
   Output override = {{0}, 0};
   Output scoped = {{0}, 0};
   Output python = {{0}, 0};
+  Output autoconf = {{0}, 0};
   Output venv = {{0}, 0};
   Output r = {{0}, 0};
   Output cpp = {{0}, 0};
@@ -256,6 +266,18 @@ int main(void) {
       !contains(&python, "\"evidence\":[\"pyproject.toml\"]") ||
       !contains(&python, "\"selected\":2")) {
     fprintf(stderr, "zero-config Python package evidence is incorrect\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, autoconf_inventory, &autoconf) ||
+      !contains(&autoconf, "\"project\":\"native-demo\"") ||
+      !contains(&autoconf, "\"identity\":\"native-demo\"") ||
+      !contains(&autoconf, "\"kind\":\"generic\"") ||
+      !contains(&autoconf, "\"name\":\"autoconf-root\"") ||
+      !contains(&autoconf, "\"version\":\"2.4\"") ||
+      !contains(&autoconf, "\"kind\":\"autoconf\"") ||
+      !contains(&autoconf, "\"path\":\"configure.ac\"") ||
+      !contains(&autoconf, "\"selected\":2")) {
+    fprintf(stderr, "zero-config Autoconf evidence is incorrect\n");
     failed = 1;
   }
   if (!resolve(engine, "", request, venv_inventory, &venv) ||

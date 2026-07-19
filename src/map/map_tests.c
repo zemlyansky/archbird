@@ -5,6 +5,7 @@
 #include "json_value.h"
 #include "lexical/tokenizer.h"
 #include "sha256.h"
+#include "utf8.h"
 
 #include <ctype.h>
 #include <stdlib.h>

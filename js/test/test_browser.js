@@ -141,6 +141,30 @@ const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js
   assert.equal(virtualMap.tests[0].inventory_state, "candidate");
   assert.equal(virtualMap.tests[0].cases[0].selector, "test_main");
   virtual.dispose();
+  const virtualAutoconf = archbird.Project.fromFiles([
+    new archbird.Source(
+      "configure.ac",
+      Buffer.from(
+        "AC_INIT([browser-native], [4.2])\n" +
+        "AC_CONFIG_HEADERS([config.h])\n" +
+        "AC_CONFIG_FILES([Makefile])\n" +
+        "AC_OUTPUT\n",
+      ),
+    ),
+    new archbird.Source(
+      "src/core.c",
+      Buffer.from("int browser_native(void) { return 1; }\n"),
+    ),
+  ], { typescript: false });
+  const virtualAutoconfMap = virtualAutoconf.map();
+  assert.equal(virtualAutoconfMap.project, "browser-native");
+  assert.equal(virtualAutoconfMap.packages[0].identity, "browser-native");
+  assert.equal(virtualAutoconfMap.packages[0].version, "4.2");
+  assert.deepEqual(
+    virtualAutoconfMap.builds.map((route) => route.name),
+    ["autoreconf", "configure"],
+  );
+  virtualAutoconf.dispose();
   const virtualR = archbird.Project.fromFiles([
     new archbird.Source(
       "DESCRIPTION",

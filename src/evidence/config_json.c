@@ -946,7 +946,7 @@ static ArchbirdStatus parse_package(ArchbirdEngine *engine, yyjson_val *value,
 static ArchbirdStatus parse_build(ArchbirdEngine *engine, yyjson_val *value,
                                   void *out_raw) {
   static const char *const fields[] = {"kind", "name", "path"};
-  static const char *const kinds[] = {"make", "npm"};
+  static const char *const kinds[] = {"autoconf", "make", "npm"};
   AbConfigBuild *out = (AbConfigBuild *)out_raw;
   ArchbirdStatus status =
       object_shape(engine, value, "builds[]", fields, 3, fields, 3);
@@ -956,7 +956,7 @@ static ArchbirdStatus parse_build(ArchbirdEngine *engine, yyjson_val *value,
   if (status == ARCHBIRD_OK)
     status = copy_string(engine, member(value, "kind"), "builds[].kind", 0,
                          &out->kind);
-  if (status == ARCHBIRD_OK && !string_one_of(&out->kind, kinds, 2))
+  if (status == ARCHBIRD_OK && !string_one_of(&out->kind, kinds, 3))
     status = config_error(engine, "builds[].kind is unsupported");
   if (status == ARCHBIRD_OK)
     status = copy_string(engine, member(value, "path"), "builds[].path", 0,

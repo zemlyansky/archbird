@@ -4,11 +4,12 @@
 #include "config.h"
 #include "gitignore.h"
 #include "json_value.h"
-#include "lexical/tokenizer.h"
+#include "manifests/autoconf_manifest.h"
+#include "manifests/pyproject_manifest.h"
 #include "path_match.h"
-#include "python_manifest.h"
 #include "render_internal.h"
 #include "sha256.h"
+#include "utf8.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,9 +72,10 @@ typedef struct ResolutionState {
   int has_package_json;
   int has_pyproject;
   int has_description;
+  int has_autoconf;
   int has_c_translation_unit;
   int has_cpp_translation_unit;
-  /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION. */
+  /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION, 4 = configure.ac. */
   int package_identity;
 } ResolutionState;
 
@@ -856,11 +858,84 @@ static ArchbirdStatus add_default_make(ResolutionState *state) {
   return status;
 }
 
+static ArchbirdStatus add_default_autoconf(ResolutionState *state,
+                                           const AbAutoconfMetadata *metadata) {
+  AbObjectField *field;
+  AbValue packages = {0};
+  AbValue builds = {0};
+  AbValue package = {0};
+  AbValue build = {0};
+  const char *layer = state->has_c_translation_unit     ? "auto-c"
+                      : state->has_cpp_translation_unit ? "auto-cpp"
+                                                        : NULL;
+  size_t layer_length = layer ? strlen(layer) : 0;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  field = mutable_member(&state->effective, "packages");
+  if (field) {
+    packages = field->value;
+    memset(&field->value, 0, sizeof(field->value));
+  } else {
+    packages.kind = AB_VALUE_ARRAY;
+  }
+  field = mutable_member(&state->effective, "builds");
+  if (field) {
+    builds = field->value;
+    memset(&field->value, 0, sizeof(field->value));
+  } else {
+    builds.kind = AB_VALUE_ARRAY;
+  }
+  package.kind = AB_VALUE_OBJECT;
+  build.kind = AB_VALUE_OBJECT;
+  if (metadata->package.length && layer)
+    status =
+        object_set_string(state->engine, &package, "identity",
+                          metadata->package.data, metadata->package.length);
+  if (status == ARCHBIRD_OK && metadata->package.length && layer)
+    status = object_set_string(state->engine, &package, "kind", "generic", 7);
+  if (status == ARCHBIRD_OK && metadata->package.length && layer)
+    status = object_set_string(state->engine, &package, "layer", layer,
+                               layer_length);
+  if (status == ARCHBIRD_OK && metadata->package.length && layer)
+    status =
+        object_set_string(state->engine, &package, "name", "autoconf-root", 13);
+  if (status == ARCHBIRD_OK && metadata->package.length && layer)
+    status =
+        object_set_string(state->engine, &package, "path", "configure.ac", 12);
+  if (status == ARCHBIRD_OK && metadata->package.length && layer &&
+      metadata->version.length)
+    status =
+        object_set_string(state->engine, &package, "version",
+                          metadata->version.data, metadata->version.length);
+  if (status == ARCHBIRD_OK && metadata->package.length && layer)
+    status = array_append(state->engine, &packages, &package);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &build, "kind", "autoconf", 8);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &build, "name", "autoconf", 8);
+  if (status == ARCHBIRD_OK)
+    status =
+        object_set_string(state->engine, &build, "path", "configure.ac", 12);
+  if (status == ARCHBIRD_OK)
+    status = array_append(state->engine, &builds, &build);
+  if (status == ARCHBIRD_OK && (packages.as.array.count ||
+                                mutable_member(&state->effective, "packages")))
+    status =
+        object_set(state->engine, &state->effective, "packages", &packages);
+  if (status == ARCHBIRD_OK)
+    status = object_set(state->engine, &state->effective, "builds", &builds);
+  ab_value_free(state->engine, &package);
+  ab_value_free(state->engine, &build);
+  ab_value_free(state->engine, &packages);
+  ab_value_free(state->engine, &builds);
+  return status;
+}
+
 static ArchbirdStatus
 decode_inventory(ResolutionState *state, const uint8_t *json,
                  size_t json_length, AbString *package,
                  AbString *package_version, AbPyprojectMetadata *pyproject,
-                 AbString *r_package, AbString *r_version, int *has_make) {
+                 AbString *r_package, AbString *r_version,
+                 AbAutoconfMetadata *autoconf, int *has_make) {
   static const char *const fields[] = {
       "artifact",     "documents",          "files",
       "ignore_files", "pruned_directories", "schema_version"};
@@ -934,6 +1009,8 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
     state->files[index].bytes = (size_t)number;
     if (ab_value_string_is(path, "Makefile"))
       *has_make = 1;
+    if (ab_value_string_is(path, "configure.ac"))
+      state->has_autoconf = 1;
     if (string_has_suffix(&path->as.text, ".c"))
       state->has_c_translation_unit = 1;
     if (string_has_suffix(&path->as.text, ".cc") ||
@@ -1024,6 +1101,10 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
       state->has_description = 1;
       status = parse_description_document(state, bytes, length, r_package,
                                           r_version);
+    } else if (status == ARCHBIRD_OK &&
+               ab_value_string_is(path, "configure.ac")) {
+      state->has_autoconf = 1;
+      status = ab_autoconf_metadata(state->engine, bytes, length, autoconf);
     }
     ab_free(state->engine, bytes);
   }
@@ -1241,7 +1322,7 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
                   size_t config_length, const AbString *package,
                   const AbString *version, const AbPyprojectMetadata *pyproject,
                   const AbString *r_package, const AbString *r_version,
-                  int has_make) {
+                  const AbAutoconfMetadata *autoconf, int has_make) {
   ArchbirdStatus status;
   status = ab_json_value_decode(
       state->engine,
@@ -1252,10 +1333,12 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
       state->has_cpp_translation_unit && !state->has_c_translation_unit)
     status = prefer_cpp_headers(state);
   if (status == ARCHBIRD_OK && !state->configured && !state->request.project &&
-      (package->length || pyproject->name.length || r_package->length)) {
+      (package->length || pyproject->name.length || r_package->length ||
+       autoconf->package.length)) {
     const AbString *identity = package->length          ? package
                                : pyproject->name.length ? &pyproject->name
-                                                        : r_package;
+                               : r_package->length      ? r_package
+                                                        : &autoconf->package;
     const char *project_data;
     size_t project_length;
     if (portable_project_name(identity->data, identity->length, &project_data,
@@ -1265,7 +1348,8 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
       if (status == ARCHBIRD_OK)
         state->package_identity = package->length          ? 1
                                   : pyproject->name.length ? 2
-                                                           : 3;
+                                  : r_package->length      ? 3
+                                                           : 4;
     }
   }
   if (status == ARCHBIRD_OK && !state->configured && state->has_package_json)
@@ -1275,6 +1359,8 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
   if (status == ARCHBIRD_OK && !state->configured && state->has_description &&
       r_package->length)
     status = add_default_r(state, r_package, r_version);
+  if (status == ARCHBIRD_OK && !state->configured && state->has_autoconf)
+    status = add_default_autoconf(state, autoconf);
   if (status == ARCHBIRD_OK && !state->configured && has_make)
     status = add_default_make(state);
   if (status == ARCHBIRD_OK)
@@ -1853,6 +1939,7 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
                            : state->package_identity == 1 ? "package.json"
                            : state->package_identity == 2 ? "pyproject.toml"
                            : state->package_identity == 3 ? "DESCRIPTION"
+                           : state->package_identity == 4 ? "configure.ac"
                            : !state->configured ? "stable-literal:repository"
                                                 : NULL;
     status = render_origin(buffer, &first, "/project", source, evidence,
@@ -2038,6 +2125,7 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   AbString r_package = {0};
   AbString r_version = {0};
   AbPyprojectMetadata pyproject = {0};
+  AbAutoconfMetadata autoconf = {0};
   AbBuffer effective_json;
   AbMapConfig validated = {0};
   int has_make = 0;
@@ -2056,11 +2144,11 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   if (status == ARCHBIRD_OK)
     status = decode_inventory(&state, inventory_json, inventory_length,
                               &package, &package_version, &pyproject,
-                              &r_package, &r_version, &has_make);
+                              &r_package, &r_version, &autoconf, &has_make);
   if (status == ARCHBIRD_OK)
     status = prepare_effective(&state, config_json, config_length, &package,
                                &package_version, &pyproject, &r_package,
-                               &r_version, has_make);
+                               &r_version, &autoconf, has_make);
   if (status == ARCHBIRD_OK)
     status = render_value(engine, &state.effective, &effective_json);
   if (status == ARCHBIRD_OK)
@@ -2083,6 +2171,7 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   ab_string_free(engine, &r_package);
   ab_string_free(engine, &r_version);
   ab_pyproject_metadata_free(engine, &pyproject);
+  ab_autoconf_metadata_free(engine, &autoconf);
   resolution_free(&state);
   return status;
 }

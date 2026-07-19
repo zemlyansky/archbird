@@ -1,5 +1,7 @@
 #include "python/tokens.h"
 
+#include "utf8.h"
+
 AbPythonNameRef ab_python_token_ref(const AbTokenList *tokens, size_t index) {
   const AbToken *token = &tokens->items[index];
   AbPythonNameRef result = {tokens->source + token->start,

@@ -90,6 +90,41 @@ void ab_map_symbol_leaf(const AbFact *fact, const char **out_leaf,
   *out_length = fact->name.length - index;
 }
 
+int ab_map_symbol_definition_compare(const AbFact *left, const AbFact *right) {
+  const AbString *left_recovery;
+  const AbString *right_recovery;
+  uint64_t left_nodes = 0;
+  uint64_t right_nodes = 0;
+  int compared;
+  if (!left || !right)
+    return (left == NULL) - (right == NULL);
+  left_recovery = ab_map_fact_string_attribute(left, "syntax_recovery");
+  right_recovery = ab_map_fact_string_attribute(right, "syntax_recovery");
+  if ((left_recovery != NULL) != (right_recovery != NULL))
+    return left_recovery ? 1 : -1;
+  if (left_recovery) {
+    compared = ab_string_compare(left_recovery, right_recovery);
+    if (compared)
+      return compared;
+  }
+  (void)ab_map_fact_u64_attribute(left, "recovery_nodes", &left_nodes);
+  (void)ab_map_fact_u64_attribute(right, "recovery_nodes", &right_nodes);
+  if (left_nodes != right_nodes)
+    return left_nodes < right_nodes ? -1 : 1;
+  if (left->span_start != right->span_start)
+    return left->span_start < right->span_start ? -1 : 1;
+  if (left->span_end != right->span_end)
+    return left->span_end < right->span_end ? -1 : 1;
+  compared = ab_string_compare(&left->kind, &right->kind);
+  if (compared)
+    return compared;
+  compared = ab_string_compare(&left->claim, &right->claim);
+  if (compared)
+    return compared;
+  compared = ab_string_compare(&left->key, &right->key);
+  return compared ? compared : ab_string_compare(&left->id, &right->id);
+}
+
 int ab_map_symbol_reference_compare(const void *left_raw,
                                     const void *right_raw) {
   const AbMapSymbolReference *left = (const AbMapSymbolReference *)left_raw;
@@ -114,7 +149,7 @@ int ab_map_symbol_reference_compare(const void *left_raw,
   compared = ab_string_compare(&left->fact->name, &right->fact->name);
   if (compared)
     return compared;
-  return ab_string_compare(&left->fact->id, &right->fact->id);
+  return ab_map_symbol_definition_compare(left->fact, right->fact);
 }
 
 static int reference_key_compare(const AbMapSymbolReference *symbol,

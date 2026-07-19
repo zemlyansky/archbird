@@ -130,6 +130,138 @@ int main(void) {
         raise AssertionError(test)
 
 
+def check_stable_duplicate_reference_witness(extension) -> None:
+    source = (
+        b"int duplicate(void) { return 1; }\n"
+        b"int (*selected)(void) = duplicate;\n"
+        b"int duplicate(void) { return 2; }\n"
+    )
+    path = "duplicate.c"
+    manifest = {
+        "artifact": "archbird-source-manifest",
+        "files": [
+            {
+                "bytes": len(source),
+                "language": "c",
+                "layer": "c",
+                "path": path,
+                "roles": ["source"],
+                "sha256": hashlib.sha256(source).hexdigest(),
+            }
+        ],
+        "producer": {
+            "implementation_sha256": "5" * 64,
+            "name": "duplicate-reference-fixture",
+            "version": "1",
+        },
+        "project": "duplicate-reference-witness",
+        "schema_version": 1,
+    }
+    config = {
+        "layers": [
+            {"globs": [path], "language": "c", "name": "c"},
+        ],
+        "project": "duplicate-reference-witness",
+        "schema_version": 1,
+    }
+    project = extension.project_create(canonical(manifest))
+    extension.project_add_source(project, path, source)
+    extension.project_finalize_sources(project)
+    extension.project_set_config(project, canonical(config))
+    early = source.index(b"duplicate")
+    reference = source.index(b"duplicate", early + len("duplicate"))
+    late = source.index(b"duplicate", reference + len("duplicate"))
+    facts = []
+    for fact_id, start, line in (
+        ("z-early-definition", early, 1),
+        ("a-late-definition", late, 3),
+    ):
+        facts.append(
+            {
+                "attributes": {"line": line, "scope": "global"},
+                "claim": "syntax-structure",
+                "domain": "symbols",
+                "id": fact_id,
+                "key": fact_id,
+                "kind": "function",
+                "name": "duplicate",
+                "path": path,
+                "project": "duplicate-reference-witness",
+                "span": {"end": start + len("duplicate"), "start": start},
+            }
+        )
+    facts.append(
+        {
+            "attributes": {"context": "initializer", "line": 2},
+            "claim": "syntax-structure",
+            "domain": "symbol-references",
+            "id": "reference",
+            "key": "reference",
+            "kind": "value",
+            "name": "duplicate",
+            "path": path,
+            "project": "duplicate-reference-witness",
+            "span": {
+                "end": reference + len("duplicate"),
+                "start": reference,
+            },
+        }
+    )
+    facts.sort(key=lambda row: row["id"])
+    extension.project_add_provider(
+        project,
+        "primary",
+        canonical(
+            {
+                "artifact": "archbird-provider-facts",
+                "capabilities": [
+                    {
+                        "boundary": "initializer reference",
+                        "claims": ["syntax-structure"],
+                        "coverage": "complete",
+                        "domain": "symbol-references",
+                    },
+                    {
+                        "boundary": "duplicate definitions",
+                        "claims": ["syntax-structure"],
+                        "coverage": "complete",
+                        "domain": "symbols",
+                    },
+                ],
+                "diagnostics": [],
+                "facts": facts,
+                "inputs": [
+                    {
+                        "project": "duplicate-reference-witness",
+                        "source_manifest_sha256": extension.project_manifest_sha256(
+                            project
+                        ),
+                    }
+                ],
+                "producer": {
+                    "configuration_sha256": "6" * 64,
+                    "implementation_sha256": "7" * 64,
+                    "name": "duplicate-reference-provider",
+                    "version": "1",
+                },
+                "provenance": "derived",
+                "resolutions": [],
+                "schema_version": 1,
+                "subject": {
+                    "project": "duplicate-reference-witness",
+                    "scope": "project",
+                },
+            }
+        ),
+    )
+    extension.project_finalize_providers(project)
+    references = json.loads(extension.project_map(project))["symbol_references"]
+    if len(references) != 1 or references[0]["candidates"] != [
+        {"line": 1, "path": path, "symbol": "duplicate"}
+    ]:
+        raise AssertionError(references)
+
+
 def check_external_call_namespace(extension) -> None:
     source = b"def run():\n    return vendor_fetch()\n"
     path = "py/client.py"
@@ -1952,6 +2084,7 @@ def main() -> int:
     ):
         raise AssertionError(proposal_evidence)
     check_c_test_function_candidates(extension)
+    check_stable_duplicate_reference_witness(extension)
     check_external_call_namespace(extension)
     print(
         "typed calls, preprocessing-token selectors, named dispatch, and "

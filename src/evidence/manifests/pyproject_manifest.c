@@ -1,4 +1,4 @@
-#include "python_manifest.h"
+#include "manifests/pyproject_manifest.h"
 
 #include "archbird_internal.h"
 

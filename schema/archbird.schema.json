@@ -135,7 +135,7 @@
       "required": ["name", "kind", "path"],
       "properties": {
         "name": {"type": "string", "minLength": 1},
-        "kind": {"enum": ["make", "npm"]},
+        "kind": {"enum": ["autoconf", "make", "npm"]},
         "path": {"type": "string", "minLength": 1}
       }
     },

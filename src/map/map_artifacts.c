@@ -1,8 +1,8 @@
 #include "map_internal.h"
 
 #include "archbird_internal.h"
-#include "lexical/tokenizer.h"
 #include "pattern.h"
+#include "utf8.h"
 
 #include <stdio.h>
 #include <stdlib.h>

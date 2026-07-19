@@ -1,10 +1,10 @@
 #include "map_internal.h"
 
 #include "archbird_internal.h"
-#include "lexical/tokenizer.h"
+#include "manifests/pyproject_manifest.h"
 #include "package_json.h"
 #include "pattern.h"
-#include "python_manifest.h"
+#include "utf8.h"
 
 #include <ctype.h>
 #include <stdio.h>

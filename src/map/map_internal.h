@@ -19,6 +19,7 @@ void ab_map_symbol_leaf(const AbFact *fact, const char **out_leaf,
                         size_t *out_length);
 int ab_map_symbol_reference_compare(const void *left_raw,
                                     const void *right_raw);
+int ab_map_symbol_definition_compare(const AbFact *left, const AbFact *right);
 void ab_map_symbol_reference_range(const AbMapSymbolReference *symbols,
                                    size_t symbol_count,
                                    const AbManifestFile *source,

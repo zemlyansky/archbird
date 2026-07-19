@@ -297,17 +297,9 @@ add_library(archbird_native STATIC
   $<TARGET_OBJECTS:archbird_pcre2>
 )
 
-set(ARCHBIRD_LEXICAL_COMMON_FILES
-  src/evidence/lexical/tokenizer.c
-  src/evidence/lexical/tokenizer.h
-  src/evidence/fact_builder.c
-  src/evidence/fact_builder.h
-  src/base/model.c
-  src/base/model.h
-  src/base/render.c
-  src/base/render_internal.h
-  src/base/sha256.c
-  src/base/sha256.h
+file(STRINGS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/evidence/lexical/provider_identity.sources"
+  ARCHBIRD_LEXICAL_COMMON_FILES
 )
 set(ARCHBIRD_LEXICAL_COMMON_MATERIAL "")
 foreach(ARCHBIRD_LEXICAL_COMMON_FILE IN LISTS ARCHBIRD_LEXICAL_COMMON_FILES)

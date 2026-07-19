@@ -15,6 +15,7 @@ import tempfile
 REPOSITORY = Path(__file__).resolve().parents[1]
 FIXED_MTIME = 946684800
 MANIFEST = ".archbird-manifest.json"
+LEXICAL_COMMON_IDENTITY = "src/evidence/lexical/provider_identity.sources"
 TREE_SITTER_PACKS = (
     ("C", "c"),
     ("CPP", "cpp"),
@@ -151,7 +152,7 @@ def _repository_files(binding: str) -> tuple[str, ...]:
         "vendor/tree-sitter/lib/src/**/*.h",
         "vendor/tree-sitter/LICENSE",
     )
-    paths = {binding, *VENDOR_FILE_MAP}
+    paths = {binding, LEXICAL_COMMON_IDENTITY, *VENDOR_FILE_MAP}
     for pattern in patterns:
         paths.update(
             path.relative_to(REPOSITORY).as_posix()
@@ -170,18 +171,15 @@ def _implementation_digests(
     paths: tuple[str, ...],
 ) -> tuple[str, dict[str, str], dict[str, str], str]:
     source_digest = {path: _digest(_source_path(path)) for path in paths}
-    common = (
-        "src/evidence/lexical/tokenizer.c",
-        "src/evidence/lexical/tokenizer.h",
-        "src/evidence/fact_builder.c",
-        "src/evidence/fact_builder.h",
-        "src/base/model.c",
-        "src/base/model.h",
-        "src/base/render.c",
-        "src/base/render_internal.h",
-        "src/base/sha256.c",
-        "src/base/sha256.h",
+    common = tuple(
+        line.strip()
+        for line in (REPOSITORY / LEXICAL_COMMON_IDENTITY)
+        .read_text(encoding="ascii")
+        .splitlines()
+        if line.strip()
     )
+    if len(common) != len(set(common)) or any(path not in source_digest for path in common):
+        raise RuntimeError("invalid lexical provider identity source manifest")
     common_material = "".join(source_digest[path] for path in common)
     python_syntax_material = "".join(
         source_digest[path]

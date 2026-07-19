@@ -178,7 +178,7 @@ Configuration can additionally declare:
 
 | Section | Purpose |
 | --- | --- |
-| `packages`, `builds`, `artifacts` | manifests, public entrypoints, Make/npm routes, logical outputs and loaders |
+| `packages`, `builds`, `artifacts` | manifests, public entrypoints, Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
 | `tests` | static cases, reviewed `case_routes`, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |

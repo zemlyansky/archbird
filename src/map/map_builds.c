@@ -1,8 +1,9 @@
 #include "map_internal.h"
 
 #include "archbird_internal.h"
-#include "lexical/tokenizer.h"
+#include "manifests/autoconf_manifest.h"
 #include "package_json.h"
+#include "utf8.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -945,6 +946,92 @@ static ArchbirdStatus add_npm_routes(AbMapState *state,
   return status;
 }
 
+static ArchbirdStatus copy_route_identity(AbMapState *state,
+                                          AbMapBuildRoute *route,
+                                          const AbConfigBuild *config,
+                                          const char *name,
+                                          const char *command) {
+  ArchbirdStatus status = ab_string_copy(
+      state->engine, &route->source, config->path.data, config->path.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_string_copy(state->engine, &route->name, name, strlen(name));
+  if (status == ARCHBIRD_OK)
+    status = ab_string_copy(state->engine, &route->command, command,
+                            strlen(command));
+  return status;
+}
+
+static ArchbirdStatus append_autoconf_paths(ArchbirdEngine *engine,
+                                            AbStringArray *target,
+                                            const AbStringArray *source) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0; status == ARCHBIRD_OK && index < source->count; index++)
+    status = append_unique(engine, target, source->items[index].data,
+                           source->items[index].length);
+  return status;
+}
+
+static ArchbirdStatus add_autoconf_routes(AbMapState *state,
+                                          const AbConfigBuild *config,
+                                          const uint8_t *text, size_t length) {
+  AbAutoconfMetadata metadata = {0};
+  AbMapBuildRoute *autoreconf = NULL;
+  AbMapBuildRoute *configure = NULL;
+  size_t index;
+  ArchbirdStatus status =
+      ab_autoconf_metadata(state->engine, text, length, &metadata);
+  if (status == ARCHBIRD_OK)
+    status = reserve_build(state, &autoreconf);
+  if (status == ARCHBIRD_OK)
+    state->build_count++;
+  if (status == ARCHBIRD_OK)
+    status = copy_route_identity(state, autoreconf, config, "autoreconf",
+                                 "autoreconf -i");
+  if (status == ARCHBIRD_OK)
+    status = append_unique(state->engine, &autoreconf->paths, "configure", 9);
+  if (status == ARCHBIRD_OK)
+    status = reserve_build(state, &configure);
+  if (status == ARCHBIRD_OK)
+    state->build_count++;
+  if (status == ARCHBIRD_OK)
+    status = copy_route_identity(state, configure, config, "configure",
+                                 "./configure");
+  if (status == ARCHBIRD_OK)
+    status = append_unique(state->engine, &configure->deps, "autoreconf", 10);
+  if (status == ARCHBIRD_OK)
+    status =
+        append_unique(state->engine, &configure->paths, "config.status", 13);
+  if (status == ARCHBIRD_OK)
+    status = append_autoconf_paths(state->engine, &configure->paths,
+                                   &metadata.files);
+  if (status == ARCHBIRD_OK)
+    status = append_autoconf_paths(state->engine, &configure->paths,
+                                   &metadata.headers);
+  for (index = 0;
+       status == ARCHBIRD_OK && index < metadata.subdirectories.count;
+       index++) {
+    AbBuffer path;
+    ab_buffer_init(&path, state->engine);
+    status = ab_buffer_append(&path, metadata.subdirectories.items[index].data,
+                              metadata.subdirectories.items[index].length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&path, "/configure");
+    if (status == ARCHBIRD_OK)
+      status = append_unique(state->engine, &configure->deps,
+                             (const char *)path.data, path.length);
+    ab_buffer_free(&path);
+  }
+  if (status == ARCHBIRD_OK && configure->deps.count > 1)
+    qsort(configure->deps.items, configure->deps.count,
+          sizeof(*configure->deps.items), string_compare);
+  if (status == ARCHBIRD_OK && configure->paths.count > 1)
+    qsort(configure->paths.items, configure->paths.count,
+          sizeof(*configure->paths.items), string_compare);
+  ab_autoconf_metadata_free(state->engine, &metadata);
+  return status;
+}
+
 ArchbirdStatus ab_map_analyze_builds(AbMapState *state) {
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -984,7 +1071,9 @@ ArchbirdStatus ab_map_analyze_builds(AbMapState *state) {
       archbird_error_clear(state->engine);
       continue;
     }
-    if (string_literal(&config->kind, "make"))
+    if (string_literal(&config->kind, "autoconf"))
+      status = add_autoconf_routes(state, config, text, file->byte_length);
+    else if (string_literal(&config->kind, "make"))
       status = add_make_routes(state, config, text, file->byte_length);
     else
       status = add_npm_routes(state, config, text, file->byte_length);

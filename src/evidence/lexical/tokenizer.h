@@ -39,9 +39,6 @@ ArchbirdStatus ab_tokenize(ArchbirdEngine *engine, const uint8_t *source,
                            size_t source_length, uint32_t flags,
                            AbTokenList *out);
 
-ArchbirdStatus ab_utf8_validate(ArchbirdEngine *engine, const uint8_t *source,
-                                size_t source_length);
-
 void ab_token_list_free(AbTokenList *tokens);
 
 int ab_token_equals(const AbTokenList *tokens, size_t index,

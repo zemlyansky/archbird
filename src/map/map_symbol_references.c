@@ -149,10 +149,17 @@ static ArchbirdStatus add_candidate(ArchbirdEngine *engine,
   size_t index;
   AbSymbolReferenceCandidate *resized;
   *added = 0;
-  for (index = 0; index < row->candidate_count; index++)
+  for (index = 0; index < row->candidate_count; index++) {
     if (ab_string_equal(row->candidates[index].path, path) &&
-        ab_string_equal(row->candidates[index].symbol, symbol))
+        ab_string_equal(row->candidates[index].symbol, symbol)) {
+      if (ab_map_symbol_definition_compare(
+              definition, row->candidates[index].definition) < 0) {
+        row->candidates[index].definition = definition;
+        *added = 1;
+      }
       return ARCHBIRD_OK;
+    }
+  }
   if (row->candidate_count == row->candidate_capacity) {
     size_t next = row->candidate_capacity ? row->candidate_capacity * 2 : 4;
     if (next > engine->options.max_values)

@@ -999,7 +999,7 @@ function repositoryInventory(
       seen.add(relative);
     }
   }
-  const documents = ["package.json", "pyproject.toml", "DESCRIPTION"]
+  const documents = ["package.json", "pyproject.toml", "DESCRIPTION", "configure.ac"]
     .filter((relative) => paths.has(relative))
     .map((relative) => encodedInput(root, relative));
   return Buffer.from(JSON.stringify(canonicalForDigest({
@@ -1020,6 +1020,7 @@ function rootRows(root) {
     "Makefile",
     "DESCRIPTION",
     "NAMESPACE",
+    "configure.ac",
     "package.json",
     "pyproject.toml",
   ]

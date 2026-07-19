@@ -138,18 +138,18 @@ def _require_sha256(name: str, value: str) -> str:
     return value
 
 
-lexical_common_identity = (
-    "src/evidence/lexical/tokenizer.c",
-    "src/evidence/lexical/tokenizer.h",
-    "src/evidence/fact_builder.c",
-    "src/evidence/fact_builder.h",
-    "src/base/model.c",
-    "src/base/model.h",
-    "src/base/render.c",
-    "src/base/render_internal.h",
-    "src/base/sha256.c",
-    "src/base/sha256.h",
+lexical_common_identity = tuple(
+    line.strip()
+    for line in (CSRC / "src/evidence/lexical/provider_identity.sources")
+    .read_text(encoding="ascii")
+    .splitlines()
+    if line.strip()
 )
+duplicate_identity_path = len(lexical_common_identity) != len(
+    set(lexical_common_identity)
+)
+if duplicate_identity_path or any(path not in paths for path in lexical_common_identity):
+    raise RuntimeError("invalid lexical provider identity source manifest")
 lexical_common_material = "".join(
     _source_digest(path) for path in lexical_common_identity
 )
