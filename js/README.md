@@ -65,6 +65,11 @@ Canonical JSON methods return stable artifact bytes or decoded objects;
 Markdown and graph views are derived presentations and are not verification
 inputs.
 
+Saved-Map functions `queryMap()` and `queryMapMarkdown()` accept
+`producerPolicy: "compatible"` (default) or `"current"`. The current policy
+rejects a missing or different core producer digest; it is independent of the
+live-source comparison performed by `auditMapFreshness()`.
+
 ### Browser API
 
 ```js
@@ -103,6 +108,11 @@ npx archbird query --map .archbird/map.json \
 npx archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
 ```
+
+Unchecked saved-Map queries accept supported older producers. Add `--check`
+when the result will drive a decision; the shared core then requires the saved
+producer digest to match the active core. Use `freshness` separately to compare
+the saved source/config evidence with a newly derived live Map.
 
 The default is an architecture-first overview. Canonical JSON contains every
 selected file and mapped fact; Markdown is only a human projection:

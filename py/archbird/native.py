@@ -1189,6 +1189,7 @@ def _query_request(
     artifacts: Sequence[str] = (),
     context: Optional[Mapping[str, object]] = None,
     direction: str = "both",
+    producer_policy: str = "compatible",
     depth: int = 1,
     test_depth: int = 8,
 ) -> bytes:
@@ -1200,6 +1201,7 @@ def _query_request(
         "focus": list(focus),
         "packages": list(packages),
         "paths": list(paths),
+        "producer_policy": producer_policy,
         "symbols": list(symbols),
         "test_depth": test_depth,
     }
@@ -1219,6 +1221,7 @@ def query_map_json(
     artifacts: Sequence[str] = (),
     context: Optional[Mapping[str, object]] = None,
     direction: str = "both",
+    producer_policy: str = "compatible",
     depth: int = 1,
     test_depth: int = 8,
     pretty: bool = False,
@@ -1232,6 +1235,7 @@ def query_map_json(
         packages=packages,
         artifacts=artifacts,
         direction=direction,
+        producer_policy=producer_policy,
         depth=depth,
         test_depth=test_depth,
     )
@@ -1276,6 +1280,7 @@ def query_map_markdown(
     artifacts: Sequence[str] = (),
     context: Optional[Mapping[str, object]] = None,
     direction: str = "both",
+    producer_policy: str = "compatible",
     depth: int = 1,
     test_depth: int = 8,
     max_chars: int = 0,
@@ -1293,6 +1298,7 @@ def query_map_markdown(
         packages=packages,
         artifacts=artifacts,
         direction=direction,
+        producer_policy=producer_policy,
         depth=depth,
         test_depth=test_depth,
     )

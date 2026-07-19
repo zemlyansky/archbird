@@ -18,6 +18,7 @@ const {
   IMPLEMENTATION_SHA256,
   Project,
   publishOkfBundle,
+  queryMap,
   queryMapMarkdown,
   renderMapMarkdown,
   resolveDiscovery,
@@ -521,6 +522,31 @@ assert.deepEqual(
 assert.equal(repositoryProject.map().project, "map-base");
 assert.deepEqual(repositoryProject.mapJson(), repositoryProject.mapJson());
 const repositoryMapJson = repositoryProject.mapJson();
+const currentProducerQuery = JSON.parse(queryMap(repositoryMapJson, {
+  paths: ["py/pkg"],
+  depth: 0,
+  producerPolicy: "current",
+}));
+assert.equal(currentProducerQuery.query.producer_policy, "current");
+assert.equal(currentProducerQuery.query.producer_compatibility, "current");
+const differentProducerMap = JSON.parse(repositoryMapJson);
+differentProducerMap.tool.implementation_sha256 = "0".repeat(64);
+const compatibleProducerQuery = JSON.parse(queryMap(
+  Buffer.from(JSON.stringify(differentProducerMap)),
+  { paths: ["py/pkg"], depth: 0, producerPolicy: "compatible" },
+));
+assert.equal(
+  compatibleProducerQuery.query.producer_compatibility,
+  "different",
+);
+assert.throws(
+  () => queryMap(Buffer.from(JSON.stringify(differentProducerMap)), {
+    paths: ["py/pkg"],
+    depth: 0,
+    producerPolicy: "current",
+  }),
+  (error) => error.code === "ARCHBIRD_STATUS_10",
+);
 const cacheRoot = path.resolve(
   process.argv[3],
   "build/test-provider-cache-node",

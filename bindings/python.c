@@ -54,15 +54,45 @@ static PyObject *raise_status(ArchbirdEngine *engine, ArchbirdStatus status) {
   const char *message = engine ? archbird_engine_error(engine) : NULL;
   size_t offset =
       engine ? archbird_engine_error_offset(engine) : ARCHBIRD_NO_OFFSET;
+  PyObject *detail = NULL;
+  PyObject *exception = NULL;
+  PyObject *status_value = NULL;
+  PyObject *offset_value = NULL;
   if (status == ARCHBIRD_OUT_OF_MEMORY)
     return PyErr_NoMemory();
   if (!message || !message[0])
     message = "native Archbird operation failed";
   if (offset == ARCHBIRD_NO_OFFSET)
-    PyErr_Format(archbird_error_type, "%s (status=%d)", message, (int)status);
+    detail = PyUnicode_FromFormat("%s (status=%d)", message, (int)status);
   else
-    PyErr_Format(archbird_error_type, "%s (status=%d, byte=%zu)", message,
-                 (int)status, offset);
+    detail = PyUnicode_FromFormat("%s (status=%d, byte=%zu)", message,
+                                  (int)status, offset);
+  if (!detail)
+    return NULL;
+  exception = PyObject_CallFunctionObjArgs(archbird_error_type, detail, NULL);
+  Py_DECREF(detail);
+  if (!exception)
+    return NULL;
+  status_value = PyLong_FromLong((long)status);
+  if (!status_value ||
+      PyObject_SetAttrString(exception, "status", status_value) < 0)
+    goto failed;
+  if (offset != ARCHBIRD_NO_OFFSET) {
+    offset_value = PyLong_FromSize_t(offset);
+    if (!offset_value ||
+        PyObject_SetAttrString(exception, "offset", offset_value) < 0)
+      goto failed;
+  }
+  PyErr_SetObject(archbird_error_type, exception);
+  Py_XDECREF(offset_value);
+  Py_DECREF(status_value);
+  Py_DECREF(exception);
+  return NULL;
+
+failed:
+  Py_XDECREF(offset_value);
+  Py_XDECREF(status_value);
+  Py_DECREF(exception);
   return NULL;
 }
 

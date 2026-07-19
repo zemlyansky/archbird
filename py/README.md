@@ -57,6 +57,11 @@ Canonical JSON methods return stable artifact bytes or decoded objects;
 Markdown and graph views are derived presentations and are not verification
 inputs.
 
+Saved-Map helpers `query_map_json()` and `query_map_markdown()` accept
+`producer_policy="compatible"` (default) or `"current"`. The current policy
+rejects a missing or different core producer digest; it is independent of the
+live-source comparison performed by `audit_map_freshness()`.
+
 Workspace, Verification, ChangeProposal, ChangeContract, change-result,
 graph-view, freshness, diff, OKF, and report functions use the same canonical
 schemas as the CLI and C core.
@@ -76,6 +81,11 @@ archbird query --map .archbird/map.json \
 archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
 ```
+
+Unchecked saved-Map queries accept supported older producers. Add `--check`
+when the result will drive a decision; the shared core then requires the saved
+producer digest to match the active core. Use `freshness` separately to compare
+the saved source/config evidence with a newly derived live Map.
 
 The default is an architecture-first overview. Canonical JSON contains every
 selected file and mapped fact; Markdown is only a human projection:

@@ -17,6 +17,7 @@ typedef struct QueryRequest {
   const AbValue *artifacts;
   const AbValue *context;
   const AbString *direction;
+  const AbString *producer_policy;
   size_t depth;
   size_t test_depth;
 } QueryRequest;
@@ -127,6 +128,7 @@ typedef struct QueryContext {
   size_t component_count;
   const AbValue *symbol_calls;
   const AbValue *symbol_references;
+  const char *producer_compatibility;
   int exact_symbol_scope;
 } QueryContext;
 
@@ -134,6 +136,17 @@ static int string_literal(const AbString *value, const char *literal) {
   size_t length = strlen(literal);
   return value && value->length == length &&
          (!length || memcmp(value->data, literal, length) == 0);
+}
+
+static int valid_sha256(const AbString *value) {
+  size_t index;
+  if (!value || value->length != 64)
+    return 0;
+  for (index = 0; index < value->length; index++)
+    if (!((value->data[index] >= '0' && value->data[index] <= '9') ||
+          (value->data[index] >= 'a' && value->data[index] <= 'f')))
+      return 0;
+  return 1;
 }
 
 static int selected_symbol_identity(const QueryContext *context,
@@ -331,6 +344,8 @@ static ArchbirdStatus decode_request(QueryContext *context,
   const AbValue *test_depth;
   uint64_t number;
   static const AbString both = {(char *)"both", 4};
+  static const AbString compatible = {(char *)"compatible", 10};
+  const AbValue *producer_policy;
   if (!request || request->kind != AB_VALUE_OBJECT)
     return query_error(context, "query request must be an object");
   context->request.focus = optional_array(request, "focus");
@@ -358,6 +373,17 @@ static ArchbirdStatus decode_request(QueryContext *context,
       !string_literal(context->request.direction, "both"))
     return query_error(
         context, "query.direction must be one of both, downstream, upstream");
+  producer_policy = ab_value_member(request, "producer_policy");
+  if (producer_policy && producer_policy->kind != AB_VALUE_STRING)
+    return query_error(context, "query.producer_policy must be a string");
+  context->request.producer_policy =
+      producer_policy && producer_policy->kind == AB_VALUE_STRING
+          ? &producer_policy->as.text
+          : &compatible;
+  if (!string_literal(context->request.producer_policy, "compatible") &&
+      !string_literal(context->request.producer_policy, "current"))
+    return query_error(context,
+                       "query.producer_policy must be compatible or current");
   context->request.depth = 1;
   depth = ab_value_member(request, "depth");
   if (depth) {
@@ -379,6 +405,31 @@ static ArchbirdStatus decode_request(QueryContext *context,
       !context->request.packages->as.array.count &&
       !context->request.artifacts->as.array.count)
     return query_error(context, "query requires at least one focus selector");
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus validate_producer_policy(QueryContext *context) {
+  const AbValue *tool = ab_value_member(context->map, "tool");
+  const AbValue *digest = tool && tool->kind == AB_VALUE_OBJECT
+                              ? ab_value_member(tool, "implementation_sha256")
+                              : NULL;
+  const AbString *value =
+      digest && digest->kind == AB_VALUE_STRING ? &digest->as.text : NULL;
+  int current = valid_sha256(value) &&
+                string_literal(value, ARCHBIRD_IMPLEMENTATION_SHA256);
+  context->producer_compatibility =
+      current ? "current" : (valid_sha256(value) ? "different" : "unknown");
+  if (!string_literal(context->request.producer_policy, "current"))
+    return ARCHBIRD_OK;
+  if (!valid_sha256(value))
+    return archbird_error_set(
+        context->engine, ARCHBIRD_POLICY_REJECTED, ARCHBIRD_NO_OFFSET,
+        "saved Map core implementation digest is missing or invalid");
+  if (!current)
+    return archbird_error_set(
+        context->engine, ARCHBIRD_POLICY_REJECTED, ARCHBIRD_NO_OFFSET,
+        "saved Map core %.*s does not match active core %s", (int)value->length,
+        value->data, ARCHBIRD_IMPLEMENTATION_SHA256);
   return ARCHBIRD_OK;
 }
 
@@ -3487,6 +3538,15 @@ static ArchbirdStatus render_query_metadata(AbBuffer *buffer,
   if (status == ARCHBIRD_OK)
     status = render_focus_labels(buffer, context);
   if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"producer_compatibility\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, context->producer_compatibility,
+                                   strlen(context->producer_compatibility));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"producer_policy\":");
+  if (status == ARCHBIRD_OK)
+    status = render_string(buffer, context->request.producer_policy);
+  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"seeds\":[");
   for (index = 0; status == ARCHBIRD_OK && index < context->file_count;
        index++) {
@@ -3664,6 +3724,8 @@ ArchbirdStatus archbird_map_query(ArchbirdEngine *engine,
                               "schema " ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT);
   if (status == ARCHBIRD_OK)
     status = decode_request(&context, &request);
+  if (status == ARCHBIRD_OK)
+    status = validate_producer_policy(&context);
   if (status == ARCHBIRD_OK)
     status = build_files(&context);
   if (status == ARCHBIRD_OK)

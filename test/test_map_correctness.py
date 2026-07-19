@@ -25,6 +25,66 @@ def canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def check_query_producer_policy(extension, map_json: bytes) -> None:
+    current = json.loads(map_json)
+    request = {
+        "depth": 0,
+        "paths": ["py"],
+        "producer_policy": "current",
+        "test_depth": 0,
+    }
+    current_query = json.loads(extension.map_query(map_json, canonical(request)))
+    if current_query["query"]["producer_policy"] != "current" or current_query[
+        "query"
+    ]["producer_compatibility"] != "current":
+        raise AssertionError(current_query["query"])
+
+    different = copy.deepcopy(current)
+    different["tool"]["implementation_sha256"] = "0" * 64
+    compatible_request = dict(request, producer_policy="compatible")
+    cross_version = json.loads(
+        extension.map_query(canonical(different), canonical(compatible_request))
+    )
+    if cross_version["query"]["producer_compatibility"] != "different":
+        raise AssertionError(cross_version["query"])
+    try:
+        extension.map_query(canonical(different), canonical(request))
+    except extension.Error as error:
+        if getattr(error, "status", None) != 10:
+            raise AssertionError(error) from error
+    else:
+        raise AssertionError("current producer policy accepted a different core")
+
+    missing = copy.deepcopy(current)
+    del missing["tool"]["implementation_sha256"]
+    try:
+        extension.map_query(canonical(missing), canonical(request))
+    except extension.Error as error:
+        if getattr(error, "status", None) != 10:
+            raise AssertionError(error) from error
+    else:
+        raise AssertionError("current producer policy accepted unknown identity")
+
+    try:
+        extension.map_query(
+            map_json, canonical(dict(request, producer_policy="invented"))
+        )
+    except extension.Error as error:
+        if getattr(error, "status", None) != 8:
+            raise AssertionError(error) from error
+    else:
+        raise AssertionError("unknown producer policy was accepted")
+    try:
+        extension.map_query(
+            map_json, canonical(dict(request, producer_policy=True))
+        )
+    except extension.Error as error:
+        if getattr(error, "status", None) != 8:
+            raise AssertionError(error) from error
+    else:
+        raise AssertionError("non-string producer policy was accepted")
+
+
 def check_package_export_lookup_index(repository: Path) -> None:
     source = (repository / "src/map/map_packages.c").read_text(encoding="utf-8")
     start = source.index("static int entry_defines_export")
@@ -665,6 +725,7 @@ def main() -> int:
         if extension.project_map(project) != first_map:
             raise AssertionError("repeated Map output is not byte-identical")
     mapped = json.loads(first_map)
+    check_query_producer_policy(extension, first_map)
     packages = {row["name"]: row for row in mapped["packages"]}
     star_package = packages["python-star-public"]
     if (

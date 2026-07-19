@@ -49,7 +49,8 @@ typedef enum ArchbirdStatus {
   ARCHBIRD_UNSUPPORTED_NUMBER = 6,
   ARCHBIRD_WRITE_FAILED = 7,
   ARCHBIRD_INVALID_SCHEMA = 8,
-  ARCHBIRD_CONFLICT = 9
+  ARCHBIRD_CONFLICT = 9,
+  ARCHBIRD_POLICY_REJECTED = 10
 } ArchbirdStatus;
 
 typedef void *(*ArchbirdAllocateFn)(void *user_data, size_t size);
@@ -352,6 +353,10 @@ ARCHBIRD_API ArchbirdStatus archbird_map_render_markdown_view(
     ArchbirdMapView view, ArchbirdReportDetail detail, size_t max_chars,
     ArchbirdWriteFn write_fn, void *user_data);
 
+/* Query requests accept producer_policy="compatible" (the default) to read
+ * any supported Map schema, or producer_policy="current" to require the
+ * saved Map's core implementation digest to equal the active core. This
+ * producer policy is separate from live source/config freshness. */
 ARCHBIRD_API ArchbirdStatus archbird_map_query(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
     const uint8_t *query_json, size_t query_length, uint32_t json_flags,

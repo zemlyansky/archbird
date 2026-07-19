@@ -1149,6 +1149,7 @@ function queryRequest(
     artifacts = [],
     context = null,
     direction = "both",
+    producerPolicy = "compatible",
     depth = 1,
     testDepth = 8,
   } = {},
@@ -1161,6 +1162,7 @@ function queryRequest(
     focus,
     packages,
     paths,
+    producer_policy: producerPolicy,
     symbols,
     test_depth: testDepth,
   };

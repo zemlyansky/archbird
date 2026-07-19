@@ -18,6 +18,13 @@ from typing import Callable, Iterable, Optional, Sequence
 class Error(RuntimeError):
     """Native Archbird failure."""
 
+    def __init__(
+        self, message: str, *, status: int | None = None, offset: int | None = None
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.offset = offset
+
 
 NATIVE_ABI_VERSION = 0
 PATTERN_CONTRACT_VERSION = 1
@@ -186,8 +193,12 @@ def _raise(engine: _POINTER, status: int) -> None:
     message = raw.decode("utf-8", "replace") if raw else "native operation failed"
     offset = _engine_error_offset(engine) if engine else _SIZE_MAX
     if offset == _SIZE_MAX:
-        raise Error(f"{message} (status={status})")
-    raise Error(f"{message} (status={status}, byte={offset})")
+        raise Error(f"{message} (status={status})", status=status)
+    raise Error(
+        f"{message} (status={status}, byte={offset})",
+        status=status,
+        offset=offset,
+    )
 
 
 def _new_engine(input_budget: int = 0, *, saved_artifact: bool = False) -> _POINTER:

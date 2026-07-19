@@ -86,7 +86,9 @@ Plain saved-Map queries accept every supported Map schema even when another
 Archbird core produced the artifact. Add `--check` when the result will drive a
 decision: it also requires the saved producer digest to match the active core.
 That producer check does not establish live-source freshness; use `freshness`
-for a new Map-to-repository comparison.
+for a new Map-to-repository comparison. C/API query requests use
+`producer_policy: "compatible"|"current"`; every Query records the effective
+policy and its `current`, `different`, or `unknown` producer classification.
 
 Progress is adaptive: `--progress auto` updates one terminal line only when an
 analysis takes long enough to notice and stays silent for pipes and agents.

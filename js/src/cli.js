@@ -159,17 +159,6 @@ function hasErrors(document) {
   return (document.diagnostics || []).some((row) => row.severity === "error");
 }
 
-function savedMapProducerError(document) {
-  const digest = document?.tool?.implementation_sha256;
-  if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
-    return "saved Map core implementation digest is missing or invalid";
-  }
-  if (digest !== archbird.IMPLEMENTATION_SHA256) {
-    return `saved Map core ${digest} does not match active core ${archbird.IMPLEMENTATION_SHA256}`;
-  }
-  return null;
-}
-
 class Progress {
   constructor(mode) {
     if (!["auto", "always", "never"].includes(mode)) {
@@ -505,14 +494,6 @@ function queryMain(argv, command) {
     source = current.mapJson();
   }
   const sourceDocument = JSON.parse(source);
-  const producerError = options.map
-    ? savedMapProducerError(sourceDocument)
-    : null;
-  if (options.check && producerError) {
-    progress.clear();
-    process.stderr.write(`archbird: check failed: ${producerError}\n`);
-    return 1;
-  }
   const queryOptions = {
     artifacts: options.artifact,
     components: options.component,
@@ -521,6 +502,7 @@ function queryMain(argv, command) {
     focus: options.focus,
     packages: options.package,
     paths: options.path,
+    producerPolicy: options.check && options.map ? "current" : "compatible",
     symbols: options.symbol,
     testDepth: options.testDepth,
   };
@@ -538,14 +520,23 @@ function queryMain(argv, command) {
   if (Object.keys(quotas).length) context.quotas = quotas;
   if (Object.keys(offsets).length) context.offsets = offsets;
   if (Object.keys(context).length) queryOptions.context = context;
-  if (options.format === "json") {
-    if (options.maxChars) throw new Error("--max-chars applies only to Markdown");
-    progress.finish();
-    write(archbird.queryMap(source, { ...queryOptions, pretty: options.pretty }), options.output);
-  } else if (options.format === "markdown") {
-    progress.finish();
-    write(archbird.queryMapMarkdown(source, { ...queryOptions, maxChars: options.maxChars }), options.output);
-  } else throw new Error("--format must be json or markdown");
+  try {
+    if (options.format === "json") {
+      if (options.maxChars) throw new Error("--max-chars applies only to Markdown");
+      progress.finish();
+      write(archbird.queryMap(source, { ...queryOptions, pretty: options.pretty }), options.output);
+    } else if (options.format === "markdown") {
+      progress.finish();
+      write(archbird.queryMapMarkdown(source, { ...queryOptions, maxChars: options.maxChars }), options.output);
+    } else throw new Error("--format must be json or markdown");
+  } catch (error) {
+    if (options.check && error?.code === "ARCHBIRD_STATUS_10") {
+      progress.clear();
+      process.stderr.write(`archbird: check failed: ${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
   return options.check && hasErrors(sourceDocument) ? 1 : 0;
 }
 
