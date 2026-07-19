@@ -776,10 +776,16 @@ static ArchbirdStatus imported_name_use_routes(
   if (status != ARCHBIRD_OK || !resolution.target ||
       !route_file_allowed(spec, resolution.target))
     return status;
-  return add_evidenced_route(state, routes, route_count, evidence,
-                             evidence_count, &resolution.target->path,
-                             resolution.target_symbol, fact, provider,
-                             resolution.relation, evidence_scope);
+  status =
+      add_evidenced_route(state, routes, route_count, evidence, evidence_count,
+                          &resolution.target->path, resolution.target_symbol,
+                          fact, provider, resolution.relation, evidence_scope);
+  if (status == ARCHBIRD_OK && resolution.callable_fact)
+    status = add_route_evidence(
+        state, evidence, evidence_count, &resolution.target->path,
+        &resolution.callable_fact->name, fact, provider,
+        "constructor-candidate", evidence_scope, "derived", NULL, 0);
+  return status;
 }
 
 static ArchbirdStatus imported_attribute_call_routes(

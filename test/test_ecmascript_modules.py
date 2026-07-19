@@ -63,6 +63,15 @@ var AdamW = class extends Optimizer {
         "bridge/target.sync.js": b"module.exports = {run, stop};\n",
         "bridge/target.sync.py": b"run = 'wrong language candidate'\n",
         "bridge/package.json": b'{"name":"bridge","version":"1.0.0"}',
+        "expressish/index.js": b"module.exports = require('./lib/express');\n",
+        "expressish/lib/express.js": b"""
+function createApplication() { return {}; }
+function json() { return 'json'; }
+exports = module.exports = createApplication;
+const app = exports = module.exports;
+app.json = json;
+""",
+        "expressish/package.json": b'{"name":"expressish","version":"1.0.0"}',
         "esm/index.js": b"""
 import base, {helper as localHelper} from './feature.js';
 export default base;
@@ -259,6 +268,7 @@ test('constructs PPO', () => { new PPO(); });
                 "descriptor-dynamic",
                 "dynamic",
                 "esm",
+                "expressish",
                 "getter",
                 "namespace",
             )
@@ -404,6 +414,14 @@ test('constructs PPO', () => { new PPO(); });
         "run": ["bridge/target.sync.js"],
         "stop": ["bridge/target.sync.js"],
     }
+    assert by_package["expressish"]["entrypoints"]["main"] == "index.js"
+    assert by_package["expressish"]["exports"] == ["default", "json"], (
+        by_package["expressish"]
+    )
+    assert by_package["expressish"]["export_origins"] == {
+        "default": ["expressish/lib/express.js"],
+        "json": ["expressish/lib/express.js"],
+    }, by_package["expressish"]
     assert by_package["esm"]["export_origins"]["renamed"] == [
         "esm/feature.js"
     ]
@@ -427,6 +445,7 @@ test('constructs PPO', () => { new PPO(); });
     assert sorted(routes) == [
         ("commonjs-require", "./base"),
         ("commonjs-require", "./base.js"),
+        ("commonjs-require", "./lib/express"),
         ("commonjs-require", "./target.sync"),
         ("esm-star", "./star.js"),
     ], routes

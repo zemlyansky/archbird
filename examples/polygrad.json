@@ -356,7 +356,7 @@
       "name": "python",
       "language": "python",
       "globs": ["py/tests/**/*.py", "test/test_*.py"],
-      "route_to": ["python", "core"],
+      "route_to": ["python", "python_examples", "core"],
       "case_routes": [
         {
           "selector": "*permute*",

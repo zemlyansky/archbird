@@ -647,6 +647,10 @@ static ArchbirdStatus process_expression(JsModule *module, TSNode node,
   if (ts_node_is_null(node))
     return ARCHBIRD_OK;
   type = ts_node_type(node);
+  if (module_exports(module, node)) {
+    *out_object = module->root;
+    return ARCHBIRD_OK;
+  }
   if (identifier(module->scan, node, &name)) {
     if (slice_literal(&name, "exports"))
       *out_object = module->exports_alias;

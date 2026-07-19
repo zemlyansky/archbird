@@ -430,8 +430,19 @@ def main() -> int:
             },
             "py/shadow.py": {"bool": "project"},
             "py/test_builtin.py": {"bool": "builtin"},
+            "py/test_inheritance.py": {
+                "Ambiguous": "imported",
+                "Child": "imported",
+                "ExternalChild": "imported",
+                "Override": "imported",
+                "run": "local",
+            },
             "py/test_member.py": {"Receiver": "imported", "object": "builtin"},
             "py/test_other.py": {"other": "imported"},
+            "py/test_public_member.py": {
+                "Alias": "imported",
+                "Gadget": "imported",
+            },
             "py/widget.py": {"cls": "local"},
         }.get(relative, {})
         if bindings != expected:
@@ -1331,7 +1342,11 @@ def main() -> int:
         for row in reassigned_case["route_evidence"]
     ):
         raise AssertionError(reassigned_case)
-    public_member_case = tests["py/test_public_member.py"]["cases"][0]
+    public_member_case = next(
+        case
+        for case in tests["py/test_public_member.py"]["cases"]
+        if case["selector"] == "test_reexported_member"
+    )
     public_member_evidence = [
         row
         for row in public_member_case["route_evidence"]
@@ -1355,6 +1370,48 @@ def main() -> int:
         "relation"
     ] != "imported-member-call":
         raise AssertionError(alias_member_case)
+    for selector in ("test_reexported_constructor", "test_aliased_constructor"):
+        constructor_case = next(
+            case
+            for case in tests["py/test_public_member.py"]["cases"]
+            if case["selector"] == selector
+        )
+        constructor_evidence = [
+            row
+            for row in constructor_case["route_evidence"]
+            if row["target_symbol"] == "Gadget.__init__"
+        ]
+        if len(constructor_evidence) != 1 or constructor_evidence[0][
+            "relation"
+        ] != "constructor-candidate":
+            raise AssertionError(constructor_case)
+    inheritance_cases = {
+        case["selector"]: case for case in tests["py/test_inheritance.py"]["cases"]
+    }
+    inherited_expectations = {
+        "test_closed_over_inherited_step": ("py/inheritance.py", "Base.step"),
+        "test_inherited_step": ("py/inheritance.py", "Base.step"),
+        "test_overridden_step": ("py/inheritance.py", "Override.step"),
+        "test_imported_inherited_step": (
+            "py/inheritance_base.py",
+            "ExternalBase.step",
+        ),
+    }
+    for selector, (target, target_symbol) in inherited_expectations.items():
+        rows = [
+            row
+            for row in inheritance_cases[selector]["route_evidence"]
+            if row["target"] == target and row["target_symbol"] == target_symbol
+        ]
+        if len(rows) != 1 or rows[0]["relation"] != (
+            "inferred-receiver-candidate"
+        ):
+            raise AssertionError(inheritance_cases[selector])
+    if any(
+        row["target_symbol"] in {"Base.step", "Other.step"}
+        for row in inheritance_cases["test_ambiguous_step"]["route_evidence"]
+    ):
+        raise AssertionError(inheritance_cases["test_ambiguous_step"])
     public_attribute_case = tests["py/test_public_attribute.py"]["cases"][0]
     public_attribute_evidence = [
         row
@@ -1759,6 +1816,83 @@ def main() -> int:
         "symbol:py/methods.py:Box.bool"
     ]:
         raise AssertionError(qualified_method_query["query"])
+
+    constructor_query = json.loads(
+        extension.map_query(
+            canonical(mapped),
+            canonical(
+                {
+                    "symbols": ["py/publicpkg/impl.py:Gadget.__init__"],
+                    "direction": "both",
+                    "depth": 0,
+                    "test_depth": 0,
+                }
+            ),
+        )
+    )
+    constructor_matches = {
+        row["selector"]: row
+        for row in constructor_query["test_matches"]
+        if row["classification"] == "candidate"
+    }
+    if set(constructor_matches) != {
+        "test_aliased_constructor",
+        "test_reexported_constructor",
+    } or any(
+        row["target"]
+        != {"path": "py/publicpkg/impl.py", "symbol": "Gadget.__init__"}
+        for row in constructor_matches.values()
+    ):
+        raise AssertionError(constructor_query["test_matches"])
+
+    for symbol, selector in {
+        "py/inheritance.py:Base.step": {
+            "test_closed_over_inherited_step",
+            "test_inherited_step",
+        },
+        "py/inheritance.py:Override.step": "test_overridden_step",
+        "py/inheritance_base.py:ExternalBase.step": "test_imported_inherited_step",
+    }.items():
+        inherited_query = json.loads(
+            extension.map_query(
+                canonical(mapped),
+                canonical(
+                    {
+                        "symbols": [symbol],
+                        "direction": "both",
+                        "depth": 0,
+                        "test_depth": 0,
+                    }
+                ),
+            )
+        )
+        candidate_selectors = {
+            row["selector"]
+            for row in inherited_query["test_matches"]
+            if row["classification"] == "candidate"
+        }
+        expected_selectors = selector if isinstance(selector, set) else {selector}
+        if candidate_selectors != expected_selectors:
+            raise AssertionError((symbol, inherited_query["test_matches"]))
+    ambiguous_base_query = json.loads(
+        extension.map_query(
+            canonical(mapped),
+            canonical(
+                {
+                    "symbols": ["py/inheritance.py:Other.step"],
+                    "direction": "both",
+                    "depth": 0,
+                    "test_depth": 0,
+                }
+            ),
+        )
+    )
+    if any(
+        row["selector"] == "test_ambiguous_step"
+        and row["classification"] != "conservative"
+        for row in ambiguous_base_query["test_matches"]
+    ):
+        raise AssertionError(ambiguous_base_query["test_matches"])
 
     exact_chain_query = json.loads(
         extension.map_query(

@@ -165,6 +165,98 @@ static const AbFact *qualified_member(AbMapState *state,
   return result;
 }
 
+typedef struct AbInheritedMemberMatch {
+  const AbManifestFile *file;
+  const AbFact *fact;
+  size_t count;
+  int incomplete;
+} AbInheritedMemberMatch;
+
+static void inherited_member_add(AbInheritedMemberMatch *match,
+                                 const AbManifestFile *file,
+                                 const AbFact *fact) {
+  if (match->fact && match->file == file &&
+      ab_string_equal(&match->fact->name, &fact->name))
+    return;
+  if (!match->fact) {
+    match->file = file;
+    match->fact = fact;
+  }
+  match->count++;
+}
+
+static int resolve_base_class(AbMapState *state,
+                              const AbManifestFile *owner_file,
+                              const AbFact *base,
+                              const AbManifestFile **out_file,
+                              const AbFact **out_class) {
+  const AbString *binding = string_attribute(base, "binding");
+  const AbString *base_symbol = string_attribute(base, "base_symbol");
+  AbMapReferenceResolution resolution;
+  ArchbirdStatus status;
+  *out_file = NULL;
+  *out_class = NULL;
+  if (!binding || !base_symbol)
+    return 0;
+  if (string_literal(binding, "local")) {
+    *out_class = named_symbol(state, owner_file, base_symbol->data,
+                              base_symbol->length, "class");
+    if (*out_class)
+      *out_file = owner_file;
+    return *out_class != NULL;
+  }
+  if (!string_literal(binding, "imported"))
+    return 0;
+  status =
+      ab_map_resolve_imported_reference(state, owner_file, base, &resolution);
+  if (status != ARCHBIRD_OK || !resolution.exact || !resolution.target ||
+      !resolution.target_fact ||
+      !string_literal(&resolution.target_fact->kind, "class"))
+    return 0;
+  *out_file = resolution.target;
+  *out_class = resolution.target_fact;
+  return 1;
+}
+
+static ArchbirdStatus
+collect_inherited_member(AbMapState *state, const AbManifestFile *owner_file,
+                         const AbFact *owner_class, const AbString *member,
+                         size_t depth, AbInheritedMemberMatch *match) {
+  size_t low;
+  size_t high;
+  size_t index;
+  if (depth >= 64) {
+    match->incomplete = 1;
+    return ARCHBIRD_OK;
+  }
+  ab_project_merged_fact_range(state->project, &owner_file->path, "class-bases",
+                               &low, &high);
+  for (index = low; index < high; index++) {
+    const AbFact *base = ab_project_merged_fact_by_path(state->project, index);
+    const AbManifestFile *base_file;
+    const AbFact *base_class;
+    const AbFact *definition;
+    ArchbirdStatus status;
+    if (!base || !base->has_name ||
+        !ab_string_equal(&base->name, &owner_class->name))
+      continue;
+    if (!resolve_base_class(state, owner_file, base, &base_file, &base_class)) {
+      match->incomplete = 1;
+      continue;
+    }
+    definition = qualified_member(state, base_file, base_class, member, NULL);
+    if (definition) {
+      inherited_member_add(match, base_file, definition);
+      continue;
+    }
+    status = collect_inherited_member(state, base_file, base_class, member,
+                                      depth + 1, match);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  return ARCHBIRD_OK;
+}
+
 static int file_module_binding(AbMapState *state, const AbManifestFile *file,
                                const AbString *name,
                                const AbManifestFile *expected) {
@@ -244,6 +336,51 @@ static const AbFact *exported_symbol(AbMapState *state,
   if (symbol)
     *out_file = file;
   return symbol;
+}
+
+static const AbFact *file_exported_symbol(AbMapState *state,
+                                          const AbManifestFile **file,
+                                          const AbString *name, size_t depth) {
+  const AbFact *direct;
+  const AbFact *origin = NULL;
+  const AbString *module;
+  const AbString *origin_name;
+  const AbManifestFile *target = NULL;
+  size_t low;
+  size_t high;
+  size_t index;
+  ArchbirdStatus status;
+  if (!file || !*file || depth >= 64)
+    return NULL;
+  direct = named_symbol(state, *file, name->data, name->length, NULL);
+  if (direct)
+    return direct;
+  ab_project_merged_fact_range(state->project, &(*file)->path, "export-origins",
+                               &low, &high);
+  for (index = low; index < high; index++) {
+    const AbFact *candidate =
+        ab_project_merged_fact_by_path(state->project, index);
+    if (!candidate || !candidate->has_name ||
+        !ab_string_equal(&candidate->name, name))
+      continue;
+    if (origin && origin != candidate)
+      return NULL;
+    origin = candidate;
+  }
+  if (!origin)
+    return NULL;
+  module = string_attribute(origin, "origin");
+  origin_name = string_attribute(origin, "origin_name");
+  if (!module || !module->length)
+    return NULL;
+  status = ab_map_resolve_import(state->engine, state->manifest, state->config,
+                                 *file, module, &target);
+  if (status != ARCHBIRD_OK || !target)
+    return NULL;
+  *file = target;
+  return file_exported_symbol(
+      state, file, origin_name && origin_name->length ? origin_name : name,
+      depth + 1);
 }
 
 static const AbManifestFile *candidate_module(AbMapState *state,
@@ -332,6 +469,8 @@ ArchbirdStatus ab_map_resolve_imported_reference(
       namespace_symbol =
           named_symbol(state, current, step->data, step->length, "class");
       if (!namespace_symbol && at_root)
+        namespace_symbol = file_exported_symbol(state, &current, step, 0);
+      if (!namespace_symbol && at_root)
         namespace_symbol = exported_symbol(state, package, step, &current);
       if (!namespace_symbol ||
           !string_literal(&namespace_symbol->kind, "class"))
@@ -368,7 +507,18 @@ ArchbirdStatus ab_map_resolve_imported_reference(
                          : named_symbol(state, current, target_name->data,
                                         target_name->length, NULL);
     if (!target && !namespace_symbol && at_root)
+      target = file_exported_symbol(state, &current, target_name, 0);
+    if (!target && !namespace_symbol && at_root)
       target = exported_symbol(state, package, target_name, &current);
+    if (!target && inferred_receiver && namespace_symbol) {
+      AbInheritedMemberMatch inherited = {0};
+      status = collect_inherited_member(state, current, namespace_symbol,
+                                        target_name, 0, &inherited);
+      if (status == ARCHBIRD_OK && inherited.count == 1) {
+        current = inherited.file;
+        target = inherited.fact;
+      }
+    }
     if (target) {
       out->target = current;
       out->target_fact = target;
@@ -438,6 +588,8 @@ ArchbirdStatus ab_map_resolve_imported_name_reference(
   if (target)
     symbol =
         named_symbol(state, target, imported->data, imported->length, NULL);
+  if (!symbol && target)
+    symbol = file_exported_symbol(state, &target, imported, 0);
   if (!symbol) {
     package = matching_package(state, source, module);
     if (package)
@@ -456,6 +608,10 @@ ArchbirdStatus ab_map_resolve_imported_name_reference(
                       ? "imported-name-call"
                       : "imported-name-reference";
   out->exact = 1;
+  if (string_literal(&fact->kind, "imported-name-call") &&
+      string_literal(&symbol->kind, "class"))
+    out->callable_fact = qualified_member(
+        state, target, symbol, &(AbString){(char *)"__init__", 8}, "method");
   return ARCHBIRD_OK;
 }
 

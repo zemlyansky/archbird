@@ -29,6 +29,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, 
 
 _DOMAINS = (
     "calls",
+    "class-bases",
     "decorators",
     "export-origins",
     "exports",
@@ -430,6 +431,7 @@ class _ReceiverOrigin:
     assignment_start: int
     assignment_end: int
     derivation: str
+    import_binding: Tuple[str, str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -545,7 +547,18 @@ class _ReceiverScopeCollector(_ScopeImportCollector):
 
     def result(self) -> _ReceiverScope:
         origins = {
-            name: rows[0]
+            name: _ReceiverOrigin(
+                rows[0].root,
+                rows[0].callee_attributes,
+                rows[0].assignment_start,
+                rows[0].assignment_end,
+                rows[0].derivation,
+                (
+                    self.bindings.get(rows[0].root)
+                    if rows[0].root not in self.ambiguous
+                    else None
+                ),
+            )
             for name, rows in self.writes.items()
             if len(rows) == 1 and rows[0] is not None
         }
@@ -693,6 +706,15 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             return None
         return None
 
+    def _lexical_import_binding(
+        self, name: str
+    ) -> Optional[Tuple[str, str, str]]:
+        for imports in reversed(self.imports):
+            binding = imports.get(name)
+            if binding is not None:
+                return binding
+        return None
+
     def _record_receiver_call(
         self,
         node: ast.Call,
@@ -712,7 +734,11 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             root, attributes, derivation = resolved
             start, end = _absolute_span(receiver, self.starts)
             origin = _ReceiverOrigin(root, attributes, start, end, derivation)
-        binding = self._import_binding(origin.root)
+        binding = (
+            origin.import_binding
+            or self._import_binding(origin.root)
+            or self._lexical_import_binding(origin.root)
+        )
         if binding is None:
             return
         module, imported, local = binding
@@ -922,6 +948,54 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self._record_decorators(node, qualified)
         for decorator in node.decorator_list:
             self.visit(decorator)
+        for base_index, base in enumerate(node.bases):
+            base_span = _absolute_span(base, self.starts)
+            rendered = ast.unparse(base)
+            attributes: Dict[str, object] = {
+                "base_index": base_index,
+                "base_symbol": rendered,
+                "binding": "unknown",
+                "line": getattr(base, "lineno", node.lineno),
+            }
+            root: str | None = None
+            steps: Tuple[str, ...] = ()
+            if isinstance(base, ast.Name):
+                root = base.id
+            elif isinstance(base, ast.Attribute):
+                chain = _attribute_chain(base)
+                if chain is not None:
+                    root, steps = chain
+            if root is not None:
+                binding = self._import_binding(root)
+                if binding is not None:
+                    module, imported, local = binding
+                    module_steps = [
+                        *([imported] if imported and steps else []),
+                        *steps[:-1],
+                    ]
+                    target_symbol = steps[-1] if steps else imported
+                    if target_symbol:
+                        attributes.update(
+                            {
+                                "base_symbol": target_symbol,
+                                "binding": "imported",
+                                "imported": target_symbol,
+                                "local": local,
+                                "module_steps": module_steps,
+                                "root_module": module,
+                            }
+                        )
+                elif self._binding(root) == "project":
+                    attributes["binding"] = "local"
+                    attributes["base_symbol"] = self._qualname(rendered)
+            self.facts.add(
+                "class-bases",
+                "base",
+                base_span,
+                f"{qualified}:{base_index}:{rendered}",
+                qualified,
+                attributes,
+            )
         self.scope.append((node.name, "class"))
         for base in node.bases:
             self.visit(base)
