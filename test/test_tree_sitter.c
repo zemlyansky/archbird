@@ -394,11 +394,21 @@ static void test_typescript_class_scopes(ArchbirdEngine *engine) {
       "  const Bound = class implements Service { boundRun() {} };\n"
       "  const Named = class Internal implements Service { namedRun() {} };\n"
       "  let Rebound; Rebound = class PrivateBound { reboundRun() {} };\n"
+      "  const Wrapped = (class WrappedInternal implements Service { "
+      "wrappedRun() {} });\n"
+      "  const NonNull = (class implements Service { nonNullRun() {} })!;\n"
+      "  const Asserted = <unknown>(class implements Service { "
+      "assertedRun() {} });\n"
+      "  let WrappedAssignment; WrappedAssignment = (class implements Service "
+      "{ reassignedRun() {} });\n"
       "  return class Returned implements Service { returnedRun() {} };\n"
       "}\n"
       "function second() { class Inner { run() {} } }\n"
       "class Top { method() { class Local { nested() {} } return Local; } }\n"
       "let Assigned; Assigned = class Private { assignedRun() {} };\n"
+      "const registry = {}; registry.Widget = (class WidgetInternal { "
+      "widgetRun() {} });\n"
+      "const AsyncWorker = async function PrivateWorker() {};\n"
       "export const enum PluginFormat { Copilot }\n"
       "const COPILOT_FORMAT = { parseHooks() {} };\n";
   ArchbirdProject *project =
@@ -437,10 +447,17 @@ static void test_typescript_class_scopes(ArchbirdEngine *engine) {
       !strstr(facts.bytes, "\"name\":\"outer.Bound.boundRun\"") ||
       !strstr(facts.bytes, "\"name\":\"outer.Named.namedRun\"") ||
       !strstr(facts.bytes, "\"name\":\"outer.Rebound.reboundRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.Wrapped.wrappedRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.NonNull.nonNullRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"outer.Asserted.assertedRun\"") ||
+      !strstr(facts.bytes,
+              "\"name\":\"outer.WrappedAssignment.reassignedRun\"") ||
       !strstr(facts.bytes, "\"name\":\"outer.Returned.returnedRun\"") ||
       !strstr(facts.bytes, "\"name\":\"second.Inner.run\"") ||
       !strstr(facts.bytes, "\"name\":\"Top.method.Local.nested\"") ||
       !strstr(facts.bytes, "\"name\":\"Assigned.assignedRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"registry.Widget.widgetRun\"") ||
+      !strstr(facts.bytes, "\"name\":\"AsyncWorker\"") ||
       !strstr(syntax.bytes, "@anonymous-class:") ||
       !strstr(syntax.bytes, "\"identity_state\":\"partial\"") ||
       !strstr(facts.bytes, "\"name\":\"COPILOT_FORMAT.parseHooks\"") ||
@@ -448,6 +465,9 @@ static void test_typescript_class_scopes(ArchbirdEngine *engine) {
       strstr(facts.bytes, "\"name\":\"enum.parseHooks\"") ||
       strstr(facts.bytes, "\"name\":\"Inner.run\"") ||
       strstr(facts.bytes, "\"name\":\"Internal.namedRun\"") ||
+      strstr(facts.bytes, "\"name\":\"PrivateWorker\"") ||
+      strstr(facts.bytes, "\"name\":\"WrappedInternal\"") ||
+      strstr(facts.bytes, "\"name\":\"WidgetInternal\"") ||
       strstr(facts.bytes, "\"name\":\"outer.anonymousRun\"")) {
     fputs("FAIL TypeScript class scopes diverged across providers\n", stderr);
     failures++;

@@ -54,8 +54,8 @@ const DISCOVERY = {
 function usage(command = "map") {
   const rows = {
     map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|audit] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
-    query: "archbird query [ROOT] [--config PROJECT.json | --map MAP.json] [SELECTORS]",
-    impact: "archbird impact [ROOT] [--config PROJECT.json | --map MAP.json] [SELECTORS]",
+    query: "archbird query [ROOT] [--config PROJECT.json | --map MAP.json] [SELECTORS] [--check]",
+    impact: "archbird impact [ROOT] [--config PROJECT.json | --map MAP.json] [SELECTORS] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
@@ -157,6 +157,17 @@ function write(value, output = "-") {
 
 function hasErrors(document) {
   return (document.diagnostics || []).some((row) => row.severity === "error");
+}
+
+function savedMapProducerError(document) {
+  const digest = document?.tool?.implementation_sha256;
+  if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
+    return "saved Map core implementation digest is missing or invalid";
+  }
+  if (digest !== archbird.IMPLEMENTATION_SHA256) {
+    return `saved Map core ${digest} does not match active core ${archbird.IMPLEMENTATION_SHA256}`;
+  }
+  return null;
 }
 
 class Progress {
@@ -493,6 +504,15 @@ function queryMain(argv, command) {
     progress.emit({ phase: "rendering", artifact: "canonical Map" });
     source = current.mapJson();
   }
+  const sourceDocument = JSON.parse(source);
+  const producerError = options.map
+    ? savedMapProducerError(sourceDocument)
+    : null;
+  if (options.check && producerError) {
+    progress.clear();
+    process.stderr.write(`archbird: check failed: ${producerError}\n`);
+    return 1;
+  }
   const queryOptions = {
     artifacts: options.artifact,
     components: options.component,
@@ -526,7 +546,7 @@ function queryMain(argv, command) {
     progress.finish();
     write(archbird.queryMapMarkdown(source, { ...queryOptions, maxChars: options.maxChars }), options.output);
   } else throw new Error("--format must be json or markdown");
-  return options.check && hasErrors(JSON.parse(source)) ? 1 : 0;
+  return options.check && hasErrors(sourceDocument) ? 1 : 0;
 }
 
 function configMain(argv) {

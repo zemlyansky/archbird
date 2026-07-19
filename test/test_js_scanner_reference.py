@@ -185,6 +185,8 @@ def main() -> int:
             "const short = value => value;\n"
             "const asynchronous = async (value) => value;\n"
             "const expression = function(value) { return value };\n"
+            "const namedAsync = async function PrivateWorker() { return 1 };\n"
+            "const conditional = enabled && class BranchInternal { run() {} };\n"
             "const nested = makeData(1000, () => randomString(10));\n"
         ).encode(),
         capture_output=True,
@@ -195,7 +197,13 @@ def main() -> int:
         for fact in json.loads(initializer_regression.stdout)["facts"]
         if fact["domain"] == "symbols"
     }
-    expected_initializers = {"asynchronous", "direct", "expression", "short"}
+    expected_initializers = {
+        "asynchronous",
+        "direct",
+        "expression",
+        "namedAsync",
+        "short",
+    }
     if initializer_symbols != expected_initializers:
         raise AssertionError(
             "lexical arrow discovery escaped the direct initializer: "

@@ -5,6 +5,34 @@
 
 #include <string.h>
 
+TSNode ab_tree_sitter_unwrap_ecmascript_expression(TSNode node) {
+  for (;;) {
+    const char *type = ts_node_is_null(node) ? "" : ts_node_type(node);
+    TSNode child = (TSNode){0};
+    uint32_t count;
+    uint32_t index;
+    int reverse;
+    if (strcmp(type, "parenthesized_expression") != 0 &&
+        strcmp(type, "as_expression") != 0 &&
+        strcmp(type, "satisfies_expression") != 0 &&
+        strcmp(type, "non_null_expression") != 0 &&
+        strcmp(type, "type_assertion") != 0)
+      return node;
+    child = ab_tree_sitter_child(node, "expression");
+    count = ts_node_named_child_count(node);
+    reverse = strcmp(type, "type_assertion") == 0;
+    for (index = 0; ts_node_is_null(child) && index < count; index++) {
+      uint32_t selected = reverse ? count - index - 1 : index;
+      TSNode candidate = ts_node_named_child(node, selected);
+      if (!ab_tree_sitter_node_type(candidate, "comment"))
+        child = candidate;
+    }
+    if (ts_node_is_null(child))
+      return node;
+    node = child;
+  }
+}
+
 static int identifier_node(const AbTreeSitterScan *scan, TSNode node) {
   return ab_tree_sitter_node_has_text(scan, node) &&
          (ab_tree_sitter_node_type(node, "identifier") ||
@@ -27,12 +55,14 @@ static ArchbirdStatus add_explicit_symbol(AbTreeSitterScan *scan,
                                           const char *kind, AbFact **out_fact);
 
 static int function_value(TSNode node) {
+  node = ab_tree_sitter_unwrap_ecmascript_expression(node);
   return ab_tree_sitter_node_type(node, "arrow_function") ||
          ab_tree_sitter_node_type(node, "function_expression") ||
          ab_tree_sitter_node_type(node, "generator_function");
 }
 
 static int class_value(TSNode node) {
+  node = ab_tree_sitter_unwrap_ecmascript_expression(node);
   return ab_tree_sitter_node_type(node, "class") ||
          ab_tree_sitter_node_type(node, "class_expression");
 }
@@ -573,7 +603,8 @@ static ArchbirdStatus add_variable_function(AbTreeSitterScan *scan,
 static ArchbirdStatus add_variable_class(AbTreeSitterScan *scan,
                                          const AbTreeSitterFrame *frame,
                                          TSNode *out_name, AbFact **out_fact) {
-  TSNode value = ab_tree_sitter_child(frame->node, "value");
+  TSNode value = ab_tree_sitter_unwrap_ecmascript_expression(
+      ab_tree_sitter_child(frame->node, "value"));
   TSNode name = ab_tree_sitter_child(frame->node, "name");
   ArchbirdStatus status;
   if (!class_value(value)) {
@@ -592,7 +623,8 @@ static ArchbirdStatus add_assignment_class(AbTreeSitterScan *scan,
                                            const AbTreeSitterFrame *frame,
                                            TSNode *out_name,
                                            AbFact **out_fact) {
-  TSNode value = ab_tree_sitter_child(frame->node, "right");
+  TSNode value = ab_tree_sitter_unwrap_ecmascript_expression(
+      ab_tree_sitter_child(frame->node, "right"));
   TSNode left = ab_tree_sitter_child(frame->node, "left");
   TSNode anchor = left;
   AbBuffer name;

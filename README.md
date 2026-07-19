@@ -53,7 +53,7 @@ archbird map . --format json --pretty \
   --output .archbird/map.json --check
 
 archbird query --map .archbird/map.json \
-  --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000
+  --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000 --check
 
 archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
@@ -81,6 +81,12 @@ archbird . --view audit --full                    # all human-readable Map detai
 Query profiles (`exact`, `change`, `architecture`, `audit`), per-kind quotas,
 route provenance/confidence, and candidate/conservative policies control which
 focused evidence is shown.
+
+Plain saved-Map queries accept every supported Map schema even when another
+Archbird core produced the artifact. Add `--check` when the result will drive a
+decision: it also requires the saved producer digest to match the active core.
+That producer check does not establish live-source freshness; use `freshness`
+for a new Map-to-repository comparison.
 
 Progress is adaptive: `--progress auto` updates one terminal line only when an
 analysis takes long enough to notice and stays silent for pipes and agents.

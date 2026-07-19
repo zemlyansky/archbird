@@ -31,11 +31,16 @@ export function jsFactory() {
   class Product { run() {} }
   const Bound = class Internal { bound() {} };
   let Rebound; Rebound = class PrivateBound { rebound() {} };
+  const Wrapped = (class WrappedInternal { wrapped() {} });
+  let WrappedAssignment; WrappedAssignment = (class { reassigned() {} });
   return class Returned { returned() {} };
 }
 export function jsOther() { class Product { run() {} } return Product; }
 class Top { method() { class Local { nested() {} } return Local; } }
 let Assigned; Assigned = class Private { assigned() {} };
+const registry = {};
+registry.Widget = (class WidgetInternal { start() {} });
+const AsyncWorker = async function PrivateWorker() {};
 export { jsFactory as makeJs };
 """,
     "js/commonjs.js": b"""
@@ -47,6 +52,9 @@ interface Service {}
 export function tsFactory() {
   class Product implements Service { run() {} }
   const Bound = class Internal implements Service { bound() {} };
+  const Wrapped = ((class WrappedInternal implements Service { wrapped() {} }) as unknown) satisfies unknown;
+  const NonNull = (class implements Service { definite() {} })!;
+  const Asserted = <unknown>(class implements Service { asserted() {} });
   return class Returned implements Service { returned() {} };
 }
 """,
@@ -63,8 +71,11 @@ REQUIRED_BY_PATH = {
     "js/factory.js": [
         "Assigned",
         "Assigned.assigned",
+        "AsyncWorker",
         "Top.method.Local",
         "Top.method.Local.nested",
+        "registry.Widget",
+        "registry.Widget.start",
         "jsFactory.Bound",
         "jsFactory.Bound.bound",
         "jsFactory.Product",
@@ -73,17 +84,27 @@ REQUIRED_BY_PATH = {
         "jsFactory.Rebound.rebound",
         "jsFactory.Returned",
         "jsFactory.Returned.returned",
+        "jsFactory.Wrapped",
+        "jsFactory.Wrapped.wrapped",
+        "jsFactory.WrappedAssignment",
+        "jsFactory.WrappedAssignment.reassigned",
         "jsOther.Product",
         "jsOther.Product.run",
     ],
     "js/commonjs.js": ["cjsFactory.Product", "cjsFactory.Product.run"],
     "ts/factory.ts": [
+        "tsFactory.Asserted",
+        "tsFactory.Asserted.asserted",
         "tsFactory.Bound",
         "tsFactory.Bound.bound",
+        "tsFactory.NonNull",
+        "tsFactory.NonNull.definite",
         "tsFactory.Product",
         "tsFactory.Product.run",
         "tsFactory.Returned",
         "tsFactory.Returned.returned",
+        "tsFactory.Wrapped",
+        "tsFactory.Wrapped.wrapped",
     ],
     "tsx/factory.tsx": ["tsxFactory.Product", "tsxFactory.Product.render"],
 }
@@ -209,6 +230,30 @@ def check_providers(providers: list[dict]) -> None:
         if row["domain"] == "symbols" and row["name"] == "jsFactory.Bound"
     )
     assert bound["attributes"]["internal_name"] == "Internal", bound
+    wrapped = next(
+        row
+        for provider in syntax
+        if provider["producer"]["name"] == "archbird-tree-sitter-javascript"
+        for row in provider["facts"]
+        if row["domain"] == "symbols" and row["name"] == "jsFactory.Wrapped"
+    )
+    assert wrapped["attributes"]["internal_name"] == "WrappedInternal", wrapped
+    member_bound = next(
+        row
+        for provider in syntax
+        if provider["producer"]["name"] == "archbird-tree-sitter-javascript"
+        for row in provider["facts"]
+        if row["domain"] == "symbols" and row["name"] == "registry.Widget"
+    )
+    assert member_bound["attributes"]["internal_name"] == "WidgetInternal", member_bound
+    lexical_names = {
+        row["name"] for row in lexical_facts if row["domain"] == "symbols"
+    }
+    assert not {
+        "PrivateWorker",
+        "WidgetInternal",
+        "WrappedInternal",
+    }.intersection(lexical_names), sorted(lexical_names)
     assert "tsFactory.Product" in syntax_names("typescript", "ts/factory.ts")
     assert "tsxFactory.Product" in syntax_names("tsx", "tsx/factory.tsx")
     exports = {

@@ -68,50 +68,30 @@ static int js_binding_identifier(const AbTokenList *tokens, size_t index) {
                              sizeof(JS_RESERVED_BINDING_WORDS[0]));
 }
 
-/* A named class expression has an internal self-name, not a declaration in
-   the surrounding lexical scope.  Do not turn that self-name into a competing
-   bare symbol; a bound expression is attributed to its outer binding by the
-   binding pass, while syntax evidence retains unbound/internal identity. */
-static int js_class_expression_context(const AbTokenList *tokens,
-                                       size_t keyword_index) {
-  size_t previous;
-  if (!keyword_index)
-    return 0;
-  previous = keyword_index - 1;
-  if (ab_token_equals(tokens, previous, "default") && previous > 0 &&
-      ab_token_equals(tokens, previous - 1, "export"))
-    return 0;
-  return ab_token_equals(tokens, previous, "=") ||
-         ab_token_equals(tokens, previous, "return") ||
-         ab_token_equals(tokens, previous, "new") ||
-         ab_token_equals(tokens, previous, "(") ||
-         ab_token_equals(tokens, previous, "[") ||
-         ab_token_equals(tokens, previous, ",") ||
-         ab_token_equals(tokens, previous, ":") ||
-         ab_token_equals(tokens, previous, "?") ||
-         ab_token_equals(tokens, previous, "=>") ||
-         ab_token_equals(tokens, previous, "yield") ||
-         ab_token_equals(tokens, previous, "extends");
-}
-
-static int js_function_expression_context(const AbTokenList *tokens,
-                                          size_t keyword_index) {
-  size_t previous;
-  if (!keyword_index)
-    return 0;
-  previous = keyword_index - 1;
-  if (ab_token_equals(tokens, previous, "default") && previous > 0 &&
-      ab_token_equals(tokens, previous - 1, "export"))
-    return 0;
-  return ab_token_equals(tokens, previous, "=") ||
-         ab_token_equals(tokens, previous, "return") ||
-         ab_token_equals(tokens, previous, "(") ||
-         ab_token_equals(tokens, previous, "[") ||
-         ab_token_equals(tokens, previous, ",") ||
-         ab_token_equals(tokens, previous, ":") ||
-         ab_token_equals(tokens, previous, "?") ||
-         ab_token_equals(tokens, previous, "=>") ||
-         ab_token_equals(tokens, previous, "yield");
+/* Lexical evidence must not promote an expression's private self-name into an
+   outer declaration.  Recognize declaration positions positively; unusual
+   declaration forms can remain syntax-only without creating a false exact
+   lexical identity. */
+static int js_declaration_context(const AbTokenList *tokens,
+                                  size_t keyword_index) {
+  size_t cursor = keyword_index;
+  while (cursor) {
+    size_t previous = cursor - 1;
+    if (ab_token_equals(tokens, previous, "async") ||
+        ab_token_equals(tokens, previous, "abstract") ||
+        ab_token_equals(tokens, previous, "declare")) {
+      cursor = previous;
+      continue;
+    }
+    if (ab_token_equals(tokens, previous, "default") && previous > 0 &&
+        ab_token_equals(tokens, previous - 1, "export"))
+      return 1;
+    return ab_token_equals(tokens, previous, "export") ||
+           ab_token_equals(tokens, previous, "{") ||
+           ab_token_equals(tokens, previous, "}") ||
+           ab_token_equals(tokens, previous, ";");
+  }
+  return 1;
 }
 
 static ArchbirdStatus pair_forward(ArchbirdEngine *engine,
@@ -706,7 +686,7 @@ static ArchbirdStatus scan_declared_symbols(JsContext *context,
   size_t index;
   for (index = 0; index < context->tokens->count; index++) {
     if (ab_token_equals(context->tokens, index, "function") &&
-        !js_function_expression_context(context->tokens, index)) {
+        js_declaration_context(context->tokens, index)) {
       size_t name_index = index + 1;
       if (name_index < context->tokens->count &&
           ab_token_equals(context->tokens, name_index, "*"))
@@ -738,7 +718,7 @@ static ArchbirdStatus scan_declared_symbols(JsContext *context,
           return status;
       }
     } else if (ab_token_equals(context->tokens, index, "class") &&
-               !js_class_expression_context(context->tokens, index) &&
+               js_declaration_context(context->tokens, index) &&
                index + 1 < context->tokens->count &&
                context->tokens->items[index + 1].kind == AB_TOKEN_IDENTIFIER &&
                !ab_token_equals(context->tokens, index + 1, "extends") &&

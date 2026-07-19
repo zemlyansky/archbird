@@ -1,5 +1,7 @@
 #include "syntax/tree_sitter/ecmascript/module.h"
 
+#include "syntax/tree_sitter/ecmascript/scanner.h"
+
 #include "render_internal.h"
 
 #include <stdint.h>
@@ -102,22 +104,7 @@ static int identifier(AbTreeSitterScan *scan, TSNode node, JsSlice *out) {
 }
 
 static TSNode unwrap(TSNode node) {
-  for (;;) {
-    const char *type = ts_node_is_null(node) ? "" : ts_node_type(node);
-    TSNode child;
-    if (strcmp(type, "parenthesized_expression") != 0 &&
-        strcmp(type, "as_expression") != 0 &&
-        strcmp(type, "satisfies_expression") != 0 &&
-        strcmp(type, "non_null_expression") != 0 &&
-        strcmp(type, "type_assertion") != 0)
-      return node;
-    child = ab_tree_sitter_child(node, "expression");
-    if (ts_node_is_null(child) && ts_node_named_child_count(node) == 1)
-      child = ts_node_named_child(node, 0);
-    if (ts_node_is_null(child))
-      return node;
-    node = child;
-  }
+  return ab_tree_sitter_unwrap_ecmascript_expression(node);
 }
 
 static int static_name(AbTreeSitterScan *scan, TSNode node, JsSlice *out) {

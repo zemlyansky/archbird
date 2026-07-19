@@ -742,6 +742,95 @@ def main() -> int:
             query_document = json.loads(query_output.read_bytes())
             if status or query_document["artifact"] != "query":
                 raise AssertionError(f"native Python {query_command} CLI failed")
+        checked_query = Path(directory) / "checked-query.json"
+        status = cli_main(
+            [
+                "query",
+                "--map",
+                str(saved_map),
+                "--path",
+                "py/pkg",
+                "--format",
+                "json",
+                "--check",
+                "--output",
+                str(checked_query),
+            ]
+        )
+        if status or json.loads(checked_query.read_bytes())["artifact"] != "query":
+            raise AssertionError("current saved Map failed producer coherence")
+        mismatched_map = Path(directory) / "mismatched-map.json"
+        mismatched_document = json.loads(first)
+        mismatched_document["tool"]["implementation_sha256"] = "0" * 64
+        mismatched_map.write_text(
+            json.dumps(mismatched_document, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        blocked_query = Path(directory) / "blocked-query.json"
+        status = cli_main(
+            [
+                "query",
+                "--map",
+                str(mismatched_map),
+                "--path",
+                "py/pkg",
+                "--format",
+                "json",
+                "--check",
+                "--output",
+                str(blocked_query),
+            ]
+        )
+        if status != 1 or blocked_query.exists():
+            raise AssertionError("saved Map producer mismatch was not blocked")
+        missing_producer_map = Path(directory) / "missing-producer-map.json"
+        missing_producer_document = json.loads(first)
+        del missing_producer_document["tool"]["implementation_sha256"]
+        missing_producer_map.write_text(
+            json.dumps(
+                missing_producer_document, sort_keys=True, separators=(",", ":")
+            ),
+            encoding="utf-8",
+        )
+        status = cli_main(
+            [
+                "query",
+                "--map",
+                str(missing_producer_map),
+                "--path",
+                "py/pkg",
+                "--format",
+                "json",
+                "--check",
+                "--output",
+                str(blocked_query),
+            ]
+        )
+        if status != 1 or blocked_query.exists():
+            raise AssertionError("missing saved Map producer identity was not blocked")
+        cross_version_query = Path(directory) / "cross-version-query.json"
+        status = cli_main(
+            [
+                "query",
+                "--map",
+                str(mismatched_map),
+                "--path",
+                "py/pkg",
+                "--format",
+                "json",
+                "--output",
+                str(cross_version_query),
+            ]
+        )
+        cross_version_document = json.loads(cross_version_query.read_bytes())
+        if (
+            status
+            or cross_version_document["source_tool"]["implementation_sha256"]
+            != "0" * 64
+            or cross_version_document["tool"]["implementation_sha256"]
+            != _native.IMPLEMENTATION_SHA256
+        ):
+            raise AssertionError("plain cross-version saved Map query was not preserved")
         qualified_output = Path(directory) / "qualified-query.json"
         status = cli_main(
             [

@@ -290,7 +290,14 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
         help="final Markdown character guard after typed context selection",
     )
     result.add_argument("--pretty", action="store_true")
-    result.add_argument("--check", action="store_true")
+    result.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "block error diagnostics and saved Maps produced by a different "
+            "core implementation"
+        ),
+    )
     result.add_argument("-o", "--output", default="-")
     return result
 
@@ -783,6 +790,21 @@ def _has_error_diagnostics(document: object) -> bool:
     )
 
 
+def _saved_map_producer_error(document: object) -> Optional[str]:
+    tool = document.get("tool") if isinstance(document, dict) else None
+    digest = tool.get("implementation_sha256") if isinstance(tool, dict) else None
+    if not isinstance(digest, str) or len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        return "saved Map core implementation digest is missing or invalid"
+    if digest != _native.IMPLEMENTATION_SHA256:
+        return (
+            f"saved Map core {digest} does not match active core "
+            f"{_native.IMPLEMENTATION_SHA256}"
+        )
+    return None
+
+
 def _config_root(config_json: bytes) -> str:
     try:
         document = json.loads(config_json)
@@ -997,6 +1019,16 @@ def _query_main(
             progress.emit({"phase": "rendering", "artifact": "canonical Map"})
             map_json = current.map_json()
         map_document = json.loads(map_json)
+        producer_error = (
+            _saved_map_producer_error(map_document) if args.map else None
+        )
+        if args.check and producer_error:
+            progress.clear()
+            print(
+                f"archbird: check failed: {producer_error}",
+                file=sys.stderr,
+            )
+            return 1
         if args.check and _has_error_diagnostics(map_document):
             return 1
         query_options = {

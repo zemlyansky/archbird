@@ -3,6 +3,11 @@
 
 #include "syntax/tree_sitter/scanner.h"
 
+/* Strip expression wrappers that preserve the identity of their operand.
+ * JavaScript uses parentheses; TypeScript additionally uses assertion and
+ * satisfaction wrappers. */
+TSNode ab_tree_sitter_unwrap_ecmascript_expression(TSNode node);
+
 ArchbirdStatus ab_scan_tree_sitter_ecmascript_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
     const AbManifestFile *file, const uint8_t *source, size_t source_length,
