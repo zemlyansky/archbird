@@ -35,6 +35,8 @@ typedef struct AbTreeSitterCapabilitySpec {
 typedef ArchbirdStatus (*AbTreeSitterVisitFn)(AbTreeSitterScan *scan,
                                               const AbTreeSitterFrame *frame,
                                               AbTreeSitterFrame *child_frame);
+typedef ArchbirdStatus (*AbTreeSitterPrepareFn)(AbTreeSitterScan *scan);
+typedef void (*AbTreeSitterCleanupFn)(AbTreeSitterScan *scan);
 
 typedef struct AbTreeSitterDescriptor {
   const char *provider_name;
@@ -46,6 +48,8 @@ typedef struct AbTreeSitterDescriptor {
   const AbTreeSitterCapabilitySpec *capabilities;
   size_t capability_count;
   AbTreeSitterVisitFn visit;
+  AbTreeSitterPrepareFn prepare;
+  AbTreeSitterCleanupFn cleanup;
 } AbTreeSitterDescriptor;
 
 struct AbTreeSitterScan {
@@ -55,6 +59,12 @@ struct AbTreeSitterScan {
   const AbManifestFile *file;
   const uint8_t *source;
   size_t source_length;
+  void *language_data;
+  const char *inapplicable_code;
+  const char *inapplicable_message;
+  size_t inapplicable_start;
+  size_t inapplicable_end;
+  int has_inapplicable_span;
   size_t error_count;
   size_t missing_count;
   size_t first_error_start;

@@ -663,6 +663,33 @@ finish_role_excluded_bundle(AbBundleBuilder *builder,
   return status;
 }
 
+static ArchbirdStatus finish_inapplicable_bundle(AbTreeSitterScan *scan,
+                                                 AbProviderBundle *out_bundle) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0;
+       status == ARCHBIRD_OK && index < scan->descriptor->capability_count;
+       index++) {
+    const AbTreeSitterCapabilitySpec *capability =
+        &scan->descriptor->capabilities[index];
+    status = ab_bundle_builder_add_capability(scan->builder, capability->domain,
+                                              "none", "syntax-structure",
+                                              scan->inapplicable_message);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_bundle_builder_add_capability(scan->builder, "syntax-summaries",
+                                              "none", "syntax-structure",
+                                              scan->inapplicable_message);
+  if (status == ARCHBIRD_OK)
+    status = ab_bundle_builder_add_diagnostic(
+        scan->builder, "note", scan->inapplicable_code,
+        scan->inapplicable_message, scan->inapplicable_start,
+        scan->inapplicable_end, scan->has_inapplicable_span);
+  if (status == ARCHBIRD_OK)
+    status = ab_bundle_builder_finish(scan->builder, out_bundle);
+  return status;
+}
+
 ArchbirdStatus ab_tree_sitter_scan_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
     const AbManifestFile *file, const uint8_t *source, size_t source_length,
@@ -715,6 +742,15 @@ ArchbirdStatus ab_tree_sitter_scan_file(
   scan.source = source;
   scan.source_length = source_length;
   parse.scan = &scan;
+  if (descriptor->prepare) {
+    status = descriptor->prepare(&scan);
+    if (status != ARCHBIRD_OK)
+      goto done;
+  }
+  if (scan.inapplicable_code) {
+    status = finish_inapplicable_bundle(&scan, out_bundle);
+    goto done;
+  }
   status = ab_tree_sitter_with_allocator(
       engine, engine->options.max_syntax_bytes, parse_and_extract, &parse,
       &resource_limited);
@@ -745,6 +781,8 @@ ArchbirdStatus ab_tree_sitter_scan_file(
   if (status == ARCHBIRD_OK)
     status = ab_bundle_builder_finish(&builder, out_bundle);
 done:
+  if (descriptor && descriptor->cleanup)
+    descriptor->cleanup(&scan);
   ab_free(engine, scan.recoveries);
   ab_free(engine, scan.fact_regions);
   ab_bundle_builder_abort(&builder);

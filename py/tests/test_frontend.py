@@ -283,6 +283,54 @@ def main() -> int:
             f"{bad_doc['diagnostics']!r}"
         )
 
+    encoded_raw = (
+        b"# coding: iso-8859-1\n"
+        b"label = 'caf\xe9'\n"
+        b"def r\xe9sum\xe9():\n"
+        b"    return label\n"
+    )
+    encoded_doc = json.loads(
+        provider.python_ast_provider_facts(
+            project="python-test",
+            path="pkg/encoded.py",
+            source_bytes=encoded_raw,
+        )
+    )
+    encoded_symbol = next(
+        row
+        for row in encoded_doc["facts"]
+        if row["domain"] == "symbols" and row.get("name") == "r\xe9sum\xe9"
+    )
+    encoded_start = encoded_raw.index(b"r\xe9sum\xe9")
+    if encoded_symbol["span"] != {
+        "end": encoded_start + len(b"r\xe9sum\xe9"),
+        "start": encoded_start,
+    }:
+        raise AssertionError(
+            f"encoded Python span was not mapped to source bytes: {encoded_symbol!r}"
+        )
+    if encoded_doc["inputs"][0]["source_sha256"] != __import__(
+        "hashlib"
+    ).sha256(encoded_raw).hexdigest():
+        raise AssertionError("encoded Python provider did not bind exact source bytes")
+
+    invalid_encoding_raw = b'value = "b\xf6se"\n'
+    invalid_encoding_doc = json.loads(
+        provider.python_ast_provider_facts(
+            project="python-test",
+            path="pkg/invalid_encoding.py",
+            source_bytes=invalid_encoding_raw,
+        )
+    )
+    if invalid_encoding_doc["facts"] or {
+        row["coverage"] for row in invalid_encoding_doc["capabilities"]
+    } != {"none"}:
+        raise AssertionError("undecodable Python source claimed AST coverage")
+    if [row["code"] for row in invalid_encoding_doc["diagnostics"]] != [
+        "python-ast-encoding-inapplicable"
+    ]:
+        raise AssertionError(invalid_encoding_doc["diagnostics"])
+
     invalid_raw = invalid.encode()
     invalid_manifest = {
         "artifact": "archbird-source-manifest",

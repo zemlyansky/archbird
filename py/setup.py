@@ -153,12 +153,19 @@ lexical_common_identity = (
 lexical_common_material = "".join(
     _source_digest(path) for path in lexical_common_identity
 )
+python_syntax_material = "".join(
+    _source_digest(path)
+    for path in paths
+    if path.startswith("src/evidence/python/")
+    and path.endswith((".c", ".h"))
+)
 lexical_digests = {
     language: hashlib.sha256(
         (
             lexical_common_material
             + _source_digest(f"src/evidence/lexical/{directory}/scanner.c")
             + _source_digest(f"src/evidence/lexical/{directory}/scanner.h")
+            + (python_syntax_material if language == "PYTHON" else "")
         ).encode("ascii")
     ).hexdigest()
     for language, directory in (
@@ -225,6 +232,13 @@ for name, directory in TREE_SITTER_PACKS:
             path
             for path in paths
             if path.startswith("src/evidence/syntax/tree_sitter/typescript/")
+        )
+    if name == "PYTHON":
+        pack_paths.update(
+            path
+            for path in paths
+            if path.startswith("src/evidence/python/")
+            and path.endswith((".c", ".h"))
         )
     tree_sitter_material = "".join(
         f"{source_by_path[path]}:{_source_digest(path)}\n"

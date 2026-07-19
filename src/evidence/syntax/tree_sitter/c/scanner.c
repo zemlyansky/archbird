@@ -260,7 +260,9 @@ ArchbirdStatus ab_scan_tree_sitter_c_file(
       tree_sitter_c,
       capabilities,
       sizeof(capabilities) / sizeof(capabilities[0]),
-      visit_c};
+      visit_c,
+      NULL,
+      NULL};
   return ab_tree_sitter_scan_file(engine, manifest, file, source, source_length,
                                   source_manifest_sha256, implementation_sha256,
                                   &descriptor, out_bundle);

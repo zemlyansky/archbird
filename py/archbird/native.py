@@ -100,7 +100,7 @@ def _python_provider_task(task: Tuple[str, str, bytes]) -> bytes:
     return python_ast_provider_facts(
         project=project,
         path=path,
-        text=data.decode("utf-8"),
+        source_bytes=data,
     )
 
 

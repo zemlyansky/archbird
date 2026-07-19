@@ -30,7 +30,9 @@ ArchbirdStatus ab_scan_tree_sitter_javascript_file(
       tree_sitter_javascript,
       capabilities,
       sizeof(capabilities) / sizeof(capabilities[0]),
-      ab_tree_sitter_visit_ecmascript};
+      ab_tree_sitter_visit_ecmascript,
+      NULL,
+      NULL};
   return ab_scan_tree_sitter_ecmascript_file(
       engine, manifest, file, source, source_length, source_manifest_sha256,
       implementation_sha256, &descriptor, out_bundle);

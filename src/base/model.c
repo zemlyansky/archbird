@@ -429,12 +429,49 @@ static int qualified_name_suffix(const AbString *qualified,
          memcmp(qualified->data + offset, leaf->data, leaf->length) == 0;
 }
 
+static const AbString *fact_source_name(const AbFact *fact) {
+  static const char source_name[] = "source_name";
+  size_t index;
+  if (!fact)
+    return NULL;
+  for (index = 0; index < fact->attribute_count; index++) {
+    const AbObjectField *field = &fact->attributes[index];
+    if (field->name.length == sizeof(source_name) - 1 &&
+        memcmp(field->name.data, source_name, sizeof(source_name) - 1) == 0 &&
+        field->value.kind == AB_VALUE_STRING)
+      return &field->value.as.text;
+  }
+  return NULL;
+}
+
+static int source_name_matches(const AbFact *fact, const AbString *alternate) {
+  const AbString *source_name = fact_source_name(fact);
+  size_t prefix_length;
+  if (!source_name || !alternate)
+    return 0;
+  if (ab_string_equal(source_name, alternate))
+    return 1;
+  if (!fact->has_name || fact->name.length <= source_name->length)
+    return 0;
+  prefix_length = fact->name.length;
+  while (prefix_length && fact->name.data[prefix_length - 1] != '.')
+    prefix_length--;
+  return prefix_length &&
+         alternate->length == prefix_length + source_name->length &&
+         memcmp(alternate->data, fact->name.data, prefix_length) == 0 &&
+         memcmp(alternate->data + prefix_length, source_name->data,
+                source_name->length) == 0;
+}
+
 int ab_fact_names_compatible(const AbFact *left, const AbFact *right) {
   static const char symbols[] = "symbols";
   if (!left || !right)
     return 0;
   if (!left->has_name || !right->has_name ||
       ab_string_equal(&left->name, &right->name))
+    return 1;
+  if (source_name_matches(left, &right->name) ||
+      source_name_matches(right, &left->name))
     return 1;
   if (left->domain.length != sizeof(symbols) - 1 ||
       memcmp(left->domain.data, symbols, sizeof(symbols) - 1) != 0 ||
@@ -461,7 +498,7 @@ static ArchbirdStatus merge_fact_compatible_in_place(ArchbirdEngine *engine,
       return status;
     target->has_name = 1;
   } else if (target->has_name && source->has_name &&
-             source->name.length > target->name.length) {
+             qualified_name_suffix(&source->name, &target->name)) {
     AbString more_qualified = {0};
     status = ab_string_copy(engine, &more_qualified, source->name.data,
                             source->name.length);

@@ -354,11 +354,6 @@ ArchbirdStatus ab_tokenize(ArchbirdEngine *engine, const uint8_t *source,
   out->engine = engine;
   out->source = source;
   out->source_length = source_length;
-  if (flags & AB_LEX_PYTHON) {
-    ArchbirdStatus status = ab_utf8_validate(engine, source, source_length);
-    if (status != ARCHBIRD_OK)
-      return status;
-  }
   while (cursor < source_length) {
     size_t start = cursor;
     size_t end = 0;

@@ -1038,6 +1038,53 @@ static int fact_correlation_compare(const AbFact *left, const AbFact *right) {
   return ab_string_compare(&left->key, &right->key);
 }
 
+static int fact_claim_rank(const AbString *claim) {
+  static const char semantic[] = "semantic-";
+  if (claim->length >= sizeof(semantic) - 1 &&
+      memcmp(claim->data, semantic, sizeof(semantic) - 1) == 0)
+    return 3;
+  if (string_equals_literal(claim, "syntax-structure"))
+    return 2;
+  if (string_equals_literal(claim, "lexical-occurrence"))
+    return 1;
+  return 0;
+}
+
+static int fact_witness_compare(const AbFactReference *left,
+                                const AbFactReference *right,
+                                const AbProviderBundle *providers) {
+  const AbProviderBundle *left_provider = &providers[left->provider_index];
+  const AbProviderBundle *right_provider = &providers[right->provider_index];
+  int left_rank = fact_claim_rank(&left->fact->claim);
+  int right_rank = fact_claim_rank(&right->fact->claim);
+  int compared;
+  if (left_rank != right_rank)
+    return left_rank > right_rank ? -1 : 1;
+  compared = ab_string_compare(&left->fact->claim, &right->fact->claim);
+  if (compared != 0)
+    return compared;
+  compared = ab_string_compare(&left_provider->producer.name,
+                               &right_provider->producer.name);
+  if (compared != 0)
+    return compared;
+  compared = ab_string_compare(&left_provider->producer.version,
+                               &right_provider->producer.version);
+  if (compared != 0)
+    return compared;
+  compared = memcmp(left_provider->producer.configuration_sha256,
+                    right_provider->producer.configuration_sha256, 32);
+  if (compared != 0)
+    return compared;
+  compared = memcmp(left_provider->producer.implementation_sha256,
+                    right_provider->producer.implementation_sha256, 32);
+  if (compared != 0)
+    return compared;
+  compared = memcmp(left_provider->sha256, right_provider->sha256, 32);
+  if (compared != 0)
+    return compared;
+  return ab_string_compare(&left->fact->id, &right->fact->id);
+}
+
 static int fact_reference_compare(const AbFactReference *left,
                                   const AbFactReference *right,
                                   AbProviderBundle *providers) {
@@ -1057,11 +1104,7 @@ static int fact_reference_compare(const AbFactReference *left,
   right_mode = providers[right->provider_index].mode;
   if (left_mode != right_mode)
     return (left_mode > right_mode) - (left_mode < right_mode);
-  compared = memcmp(providers[left->provider_index].sha256,
-                    providers[right->provider_index].sha256, 32);
-  if (compared != 0)
-    return compared;
-  return ab_string_compare(&left->fact->id, &right->fact->id);
+  return fact_witness_compare(left, right, providers);
 }
 
 static ArchbirdStatus sort_fact_references(ArchbirdEngine *engine,

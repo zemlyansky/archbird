@@ -38,7 +38,9 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
       tree_sitter_typescript,
       capabilities,
       sizeof(capabilities) / sizeof(capabilities[0]),
-      ab_tree_sitter_visit_ecmascript};
+      ab_tree_sitter_visit_ecmascript,
+      NULL,
+      NULL};
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TSX
   static const AbTreeSitterDescriptor typescript_react = {
@@ -50,7 +52,9 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
       tree_sitter_tsx,
       capabilities,
       sizeof(capabilities) / sizeof(capabilities[0]),
-      ab_tree_sitter_visit_ecmascript};
+      ab_tree_sitter_visit_ecmascript,
+      NULL,
+      NULL};
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TSX
   if (tsx)

@@ -183,12 +183,19 @@ def _implementation_digests(
         "src/base/sha256.h",
     )
     common_material = "".join(source_digest[path] for path in common)
+    python_syntax_material = "".join(
+        source_digest[path]
+        for path in paths
+        if path.startswith("src/evidence/python/")
+        and path.endswith((".c", ".h"))
+    )
     lexical = {
         language: hashlib.sha256(
             (
                 common_material
                 + source_digest[f"src/evidence/lexical/{directory}/scanner.c"]
                 + source_digest[f"src/evidence/lexical/{directory}/scanner.h"]
+                + (python_syntax_material if language == "PYTHON" else "")
             ).encode("ascii")
         ).hexdigest()
         for language, directory in (
@@ -243,6 +250,13 @@ def _implementation_digests(
                 if path.startswith(
                     "src/evidence/syntax/tree_sitter/typescript/"
                 )
+            )
+        if name == "PYTHON":
+            pack_paths.update(
+                path
+                for path in paths
+                if path.startswith("src/evidence/python/")
+                and path.endswith((".c", ".h"))
             )
         material = "".join(
             f"{_source_identity(path)}:{source_digest[path]}\n"

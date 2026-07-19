@@ -10,18 +10,21 @@ from __future__ import annotations
 import ast
 from bisect import bisect_right
 import builtins
+import codecs
 from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 import hashlib
+import io
 import json
 from pathlib import Path, PurePosixPath
 import struct
 import symtable
 import sys
+import tokenize
 import unicodedata
 import warnings
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 _DOMAINS = (
@@ -40,7 +43,7 @@ _DOMAINS = (
     "symbols",
 )
 _CONFIGURATION_BYTES = (
-    b'{"contract":"archbird-python-ast-v2",'
+    b'{"contract":"archbird-python-ast-v3",'
     b'"provider":"archbird-python-ast","schema_version":1}'
 )
 _STDLIB = set(getattr(sys, "stdlib_module_names", ())) | {
@@ -184,9 +187,17 @@ class _SourcePositions:
 
 
 class _Facts:
-    def __init__(self, project: str, path: str) -> None:
+    def __init__(
+        self,
+        project: str,
+        path: str,
+        analysis_source: bytes | None = None,
+        source_span: Callable[[Tuple[int, int]], Tuple[int, int]] | None = None,
+    ) -> None:
         self.project = project
         self.path = path
+        self._analysis_source = analysis_source
+        self._source_span = source_span or (lambda span: span)
         self.rows: List[Dict[str, object]] = []
         self._id_prefix = hashlib.sha256()
         for value in (project, path):
@@ -201,7 +212,27 @@ class _Facts:
         name: Optional[str] = None,
         attributes: Optional[Mapping[str, object]] = None,
     ) -> None:
-        start, end = span
+        analysis_start, analysis_end = span
+        normalized_attributes = dict(attributes) if attributes else {}
+        if (
+            name is not None
+            and self._analysis_source is not None
+            and analysis_start < analysis_end
+        ):
+            try:
+                source_name = self._analysis_source[
+                    analysis_start:analysis_end
+                ].decode("utf-8")
+            except UnicodeDecodeError:
+                source_name = ""
+            semantic_leaf = name.rsplit(".", 1)[-1]
+            normalized_source_name = unicodedata.normalize("NFKC", source_name)
+            if source_name and source_name != normalized_source_name and (
+                normalized_source_name == name
+                or normalized_source_name == semantic_leaf
+            ):
+                normalized_attributes["source_name"] = source_name
+        start, end = self._source_span(span)
         row: Dict[str, object] = {
             "claim": "syntax-structure",
             "domain": domain,
@@ -216,9 +247,12 @@ class _Facts:
             row["correlation"] = "span"
         if name is not None:
             row["name"] = name
-        if attributes:
-            row["attributes"] = dict(attributes)
+        if normalized_attributes:
+            row["attributes"] = normalized_attributes
         self.rows.append(row)
+
+    def source_offset(self, offset: int) -> int:
+        return self._source_span((offset, offset))[0]
 
 
 class _ScopeImportCollector(ast.NodeVisitor):
@@ -602,8 +636,8 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 target_symbol,
                 local,
                 receiver_name,
-                str(origin.assignment_start),
-                str(origin.assignment_end),
+                str(self.facts.source_offset(origin.assignment_start)),
+                str(self.facts.source_offset(origin.assignment_end)),
             )
         )
         self.facts.add(
@@ -1222,11 +1256,51 @@ def _syntax_error_span(
     return min(start, len(raw)), min(start, len(raw))
 
 
+class _SourceOffsets:
+    """Translate decoded UTF-8 parser offsets to exact source-byte offsets."""
+
+    def __init__(self, text: str, source: bytes, encoding: str) -> None:
+        encoder = codecs.getincrementalencoder(encoding)()
+        encoded = bytearray(encoder.encode("", final=False))
+        utf8_offset = 0
+        source_offset = len(encoded)
+        offsets = {0: source_offset}
+        for character in text:
+            chunk = encoder.encode(character, final=False)
+            encoded.extend(chunk)
+            utf8_offset += len(character.encode("utf-8"))
+            source_offset += len(chunk)
+            offsets[utf8_offset] = source_offset
+        encoded.extend(encoder.encode("", final=True))
+        if bytes(encoded) != source:
+            raise UnicodeError(
+                f"Python source encoding {encoding!r} did not round-trip exact bytes"
+            )
+        self._offsets = offsets
+
+    def span(self, span: Tuple[int, int]) -> Tuple[int, int]:
+        try:
+            return self._offsets[span[0]], self._offsets[span[1]]
+        except KeyError as error:
+            raise ValueError(
+                "CPython reported a source position inside an encoded character"
+            ) from error
+
+
+def _decode_python_source(source: bytes) -> Tuple[str, _SourceOffsets | None]:
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+    text = source.decode(encoding)
+    if encoding == "utf-8":
+        return text, None
+    return text, _SourceOffsets(text, source, encoding)
+
+
 def python_ast_provider_facts(
     *,
     project: str,
     path: str,
-    text: str,
+    text: str | None = None,
+    source_bytes: bytes | None = None,
     source_manifest_sha256: str | None = None,
 ) -> bytes:
     """Return compact canonical provider facts bound to one Python source.
@@ -1237,6 +1311,22 @@ def python_ast_provider_facts(
     stale whenever an unrelated repository file changes.
     """
 
+    if (text is None) == (source_bytes is None):
+        raise ValueError("exactly one of text or source_bytes must be supplied")
+    if source_bytes is None:
+        assert text is not None
+        source = text.encode("utf-8")
+    else:
+        source = source_bytes
+    encoding_error: UnicodeError | SyntaxError | None = None
+    source_offsets: _SourceOffsets | None = None
+    if source_bytes is not None:
+        try:
+            text, source_offsets = _decode_python_source(source)
+        except (UnicodeError, SyntaxError) as error:
+            encoding_error = error
+            text = ""
+    assert text is not None
     raw = text.encode("utf-8")
     starts = _line_starts(raw)
     capabilities = [
@@ -1251,76 +1341,111 @@ def python_ast_provider_facts(
         }
         for domain in _DOMAINS
     ]
-    facts = _Facts(project, path)
+    facts = _Facts(
+        project,
+        path,
+        raw,
+        source_offsets.span if source_offsets is not None else None,
+    )
     diagnostics: List[Dict[str, object]] = []
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", SyntaxWarning)
-            tree = ast.parse(text, filename=path)
-            table = symtable.symtable(text, path, "exec")
-        source_tokens = _SourcePositions(text, raw, starts)
-        visitor = _PythonProviderVisitor(facts, starts, source_tokens, table, tree)
-        visitor.visit(tree)
-        selected, origins, origin_names, export_spans, imported = _top_level_exports(
-            tree, path, starts, source_tokens
-        )
-        for name, span in imported:
-            if name and not name.startswith("_"):
-                facts.add(
-                    "reexport-candidates",
-                    "name",
-                    span,
-                    name,
-                    name,
-                )
-        for name in selected:
-            if not name or name.startswith("_"):
-                continue
-            span = export_spans.get(name, (0, 0))
-            facts.add(
-                "exports",
-                "name",
-                span,
-                name,
-                name,
-                {
-                    "origin": origins.get(name, ""),
-                    "origin_name": origin_names.get(name, name),
-                },
-            )
-            facts.add(
-                "export-origins",
-                "origin",
-                span,
-                name,
-                name,
-                {
-                    "origin": origins.get(name, ""),
-                    "origin_name": origin_names.get(name, name),
-                },
-            )
-    except SyntaxError as error:
+    if encoding_error is not None:
         for capability in capabilities:
             capability["coverage"] = "none"
             capability["boundary"] = (
-                "inapplicable: source was not accepted by "
-                f"CPython {sys.version_info.major}.{sys.version_info.minor} syntax; "
-                "portable or semantic providers may still contribute evidence"
+                "inapplicable: source bytes were not accepted by Python source "
+                "encoding detection; portable or semantic providers may still "
+                "contribute evidence"
             )
         diagnostic: Dict[str, object] = {
-            "code": "python-ast-inapplicable",
+            "code": "python-ast-encoding-inapplicable",
             "message": (
-                f"CPython {sys.version_info.major}.{sys.version_info.minor} AST "
-                f"provider did not accept this source: {error}"
+                "CPython AST provider could not decode this source: "
+                f"{encoding_error}"
             ),
             "path": path,
             "project": project,
             "severity": "note",
         }
-        span = _syntax_error_span(error, text, raw, starts)
-        if span is not None:
-            diagnostic["span"] = {"end": span[1], "start": span[0]}
+        if isinstance(encoding_error, UnicodeDecodeError):
+            diagnostic["span"] = {
+                "end": encoding_error.end,
+                "start": encoding_error.start,
+            }
         diagnostics.append(diagnostic)
+    else:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(text, filename=path)
+                table = symtable.symtable(text, path, "exec")
+            source_tokens = _SourcePositions(text, raw, starts)
+            visitor = _PythonProviderVisitor(
+                facts, starts, source_tokens, table, tree
+            )
+            visitor.visit(tree)
+            selected, origins, origin_names, export_spans, imported = (
+                _top_level_exports(tree, path, starts, source_tokens)
+            )
+            for name, span in imported:
+                if name and not name.startswith("_"):
+                    facts.add(
+                        "reexport-candidates",
+                        "name",
+                        span,
+                        name,
+                        name,
+                    )
+            for name in selected:
+                if not name or name.startswith("_"):
+                    continue
+                span = export_spans.get(name, (0, 0))
+                facts.add(
+                    "exports",
+                    "name",
+                    span,
+                    name,
+                    name,
+                    {
+                        "origin": origins.get(name, ""),
+                        "origin_name": origin_names.get(name, name),
+                    },
+                )
+                facts.add(
+                    "export-origins",
+                    "origin",
+                    span,
+                    name,
+                    name,
+                    {
+                        "origin": origins.get(name, ""),
+                        "origin_name": origin_names.get(name, name),
+                    },
+                )
+        except SyntaxError as error:
+            for capability in capabilities:
+                capability["coverage"] = "none"
+                capability["boundary"] = (
+                    "inapplicable: source was not accepted by "
+                    f"CPython {sys.version_info.major}.{sys.version_info.minor} "
+                    "syntax; portable or semantic providers may still "
+                    "contribute evidence"
+                )
+            diagnostic = {
+                "code": "python-ast-inapplicable",
+                "message": (
+                    f"CPython {sys.version_info.major}.{sys.version_info.minor} AST "
+                    f"provider did not accept this source: {error}"
+                ),
+                "path": path,
+                "project": project,
+                "severity": "note",
+            }
+            span = _syntax_error_span(error, text, raw, starts)
+            if span is not None:
+                if source_offsets is not None:
+                    span = source_offsets.span(span)
+                diagnostic["span"] = {"end": span[1], "start": span[0]}
+            diagnostics.append(diagnostic)
     sorted_facts: List[Dict[str, object]] = []
     for row in sorted(facts.rows, key=lambda item: str(item["id"])):
         if sorted_facts and sorted_facts[-1]["id"] == row["id"]:
@@ -1339,7 +1464,7 @@ def python_ast_provider_facts(
             {
                 "path": path,
                 "project": project,
-                "source_sha256": hashlib.sha256(raw).hexdigest(),
+                "source_sha256": hashlib.sha256(source).hexdigest(),
             }
         ],
         "producer": {
@@ -1349,7 +1474,7 @@ def python_ast_provider_facts(
             "implementation_sha256": _implementation_sha256(),
             "name": "archbird-python-ast",
             "runtime": f"cpython-{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "version": "2",
+            "version": "3",
         },
         "provenance": "derived",
         "resolutions": [],

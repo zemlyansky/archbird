@@ -180,9 +180,17 @@ def main() -> int:
         [str(executable), "python", "invalid.py"],
         input=b"name = \xff\n",
         capture_output=True,
+        check=True,
     )
-    if invalid.returncode == 0 or b"valid UTF-8" not in invalid.stderr:
-        raise AssertionError("invalid UTF-8 was not rejected deterministically")
+    invalid_document = json.loads(invalid.stdout)
+    if invalid_document["facts"] or {
+        row["coverage"] for row in invalid_document["capabilities"]
+    } != {"none"}:
+        raise AssertionError("invalid source token claimed lexical coverage")
+    if [row["code"] for row in invalid_document["diagnostics"]] != [
+        "python-lexical-encoding-inapplicable"
+    ]:
+        raise AssertionError(invalid_document["diagnostics"])
     print(f"native Python lexical conformance passed: {len(CASES)} cases")
     return 0
 

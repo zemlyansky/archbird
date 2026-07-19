@@ -478,6 +478,45 @@ static void test_tsx_class_scopes(ArchbirdEngine *engine) {
 }
 #endif
 
+#ifdef ARCHBIRD_TEST_TREE_SITTER_PYTHON
+static void
+test_python_recovery_preserves_lexical_scope(ArchbirdEngine *engine) {
+  static const char source[] = "class Outer:\n"
+                               "    def first(self):\n"
+                               "        def f():\n"
+                               "            (bar.\n"
+                               "        baz)\n"
+                               "            files().setdefault(0)\n"
+                               "\n"
+                               "    def second(self):\n"
+                               "        compile('x')\n";
+  ArchbirdProject *project =
+      create_project(engine, source, "pkg/recovered.py", "python");
+  Output provider = {{0}, 0, 0};
+  if (!project) {
+    fputs("FAIL create Python recovered-scope project\n", stderr);
+    failures++;
+    return;
+  }
+  expect("python-recovered-scope",
+         archbird_project_scan_builtin_provider(
+             engine, project, "syntax:tree-sitter:python",
+             strlen("syntax:tree-sitter:python"), ARCHBIRD_PROVIDER_AUGMENT),
+         ARCHBIRD_OK);
+  expect("python-recovered-scope-render",
+         archbird_project_render_provider_facts(engine, project, 0, 0,
+                                                write_output, &provider),
+         ARCHBIRD_OK);
+  if (!strstr(provider.bytes, "\"enclosing\":\"Outer.first.f\"") ||
+      !strstr(provider.bytes, "\"enclosing\":\"Outer.second\"")) {
+    fprintf(stderr, "FAIL Python recovery corrupted lexical scope: %s\n",
+            provider.bytes);
+    failures++;
+  }
+  archbird_project_destroy(project);
+}
+#endif
+
 static void test_language_pack(ArchbirdEngine *engine, const char *name,
                                const char *provider_id, const char *language,
                                const char *path, const char *source,
@@ -604,6 +643,7 @@ int main(void) {
         "\"name\":\"vector\"");
 #endif
 #ifdef ARCHBIRD_TEST_TREE_SITTER_PYTHON
+    test_python_recovery_preserves_lexical_scope(engine);
     test_language_pack(
         engine, "python-pack", "syntax:tree-sitter:python", "python",
         "pkg/sample.py",

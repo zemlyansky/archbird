@@ -48,6 +48,14 @@ int main(void) {
   };
   static const size_t jsx_lines[] = {1, 1, 1, 1, 1, 1, 1, 1,
                                      1, 1, 1, 1, 1, 1, 1};
+  static const char python_encoded[] =
+      "# coding: iso-8859-1\nvalue = \"caf\xe9\"\ndef target():\n    return "
+      "value\n";
+  static const char *const python_encoded_values[] = {
+      "value", "=", "\"caf\xe9\"", "def",    "target",
+      "(",     ")", ":",           "return", "value",
+  };
+  static const size_t python_encoded_lines[] = {2, 2, 2, 3, 3, 3, 3, 3, 4, 4};
   ArchbirdEngineOptions options;
   ArchbirdEngine *engine = NULL;
   AbTokenList invalid;
@@ -67,6 +75,10 @@ int main(void) {
                 "<div>Here's code</div>; return'valid';", AB_LEX_JAVASCRIPT,
                 jsx_values, jsx_lines,
                 sizeof(jsx_values) / sizeof(jsx_values[0]));
+  expect_tokens(engine, "python-encoded-string", python_encoded, AB_LEX_PYTHON,
+                python_encoded_values, python_encoded_lines,
+                sizeof(python_encoded_values) /
+                    sizeof(python_encoded_values[0]));
   if (ab_tokenize(engine, invalid_source, sizeof(invalid_source), 0,
                   &invalid) != ARCHBIRD_INVALID_SCHEMA) {
     fputs("FAIL invalid UTF-8 accepted\n", stderr);

@@ -778,6 +778,64 @@ done:
   archbird_engine_destroy(engine);
 }
 
+static void test_augment_claim_precedence(void) {
+  static const char low_bundle_configuration[] =
+      "0000000000000000000000000000000000000000000000000000000000000022";
+  static const char high_digest[] =
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+  ArchbirdEngineOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdProject *project = NULL;
+  char provider[4096];
+  char ledger_bytes[16384];
+  OutputBuffer ledger = {ledger_bytes, 0, sizeof(ledger_bytes)};
+  const char *manifest_digest;
+  int provider_length;
+
+  archbird_engine_options_init(&options);
+  expect("claim-precedence-engine", archbird_engine_create(&options, &engine),
+         ARCHBIRD_OK);
+  if (!engine)
+    return;
+  project = make_sample_project(engine);
+  if (!project) {
+    fputs("FAIL create claim-precedence project\n", stderr);
+    failures++;
+    goto done;
+  }
+  manifest_digest = archbird_project_manifest_sha256(project);
+  provider_length = make_named_symbol_provider(
+      provider, sizeof(provider), manifest_digest, "lexical-provider",
+      low_bundle_configuration, "lexical-occurrence", "symbol:lexical",
+      "Box.run", "Box.run");
+  expect("claim-precedence-lexical",
+         archbird_project_add_provider_facts(
+             engine, project, ARCHBIRD_PROVIDER_AUGMENT,
+             (const uint8_t *)provider, (size_t)provider_length),
+         ARCHBIRD_OK);
+  provider_length = make_named_symbol_provider(
+      provider, sizeof(provider), manifest_digest, "syntax-provider",
+      high_digest, "syntax-structure", "symbol:syntax", "Box.run", "Box.run");
+  expect("claim-precedence-syntax",
+         archbird_project_add_provider_facts(
+             engine, project, ARCHBIRD_PROVIDER_AUGMENT,
+             (const uint8_t *)provider, (size_t)provider_length),
+         ARCHBIRD_OK);
+  expect("claim-precedence-finalize",
+         archbird_project_finalize_providers(engine, project), ARCHBIRD_OK);
+  expect("claim-precedence-ledger",
+         archbird_project_render_merge_ledger(engine, project, 0, write_output,
+                                              &ledger),
+         ARCHBIRD_OK);
+  if (!strstr(ledger.data, "\"canonical\":{\"claim\":\"syntax-structure\"")) {
+    fputs("FAIL stronger augment claim was not canonical\n", stderr);
+    failures++;
+  }
+done:
+  archbird_project_destroy(project);
+  archbird_engine_destroy(engine);
+}
+
 static void test_builtin_provider_selection(void) {
   static const char source[] = "def run():\n    return helper()\n";
   static const char manifest[] =
@@ -1219,6 +1277,7 @@ int main(int argc, char **argv) {
   archbird_engine_destroy(engine);
   test_scoped_primary_selection();
   test_anchor_correlation_and_name_enrichment();
+  test_augment_claim_precedence();
   test_builtin_provider_selection();
   test_shared_public_header_names();
   test_primary_inventory_and_augment_fallback();
