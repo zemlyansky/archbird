@@ -457,6 +457,21 @@ def _warn_cache_stats(stats: Mapping[str, int]) -> None:
         )
 
 
+def _warn_map_cache_stats(stats: Mapping[str, int]) -> None:
+    if stats.get("no_space", 0):
+        print(
+            "archbird: warning: canonical Map cache write failed because "
+            "storage is full; analysis remains valid.",
+            file=sys.stderr,
+        )
+    if stats.get("skipped", 0):
+        print(
+            "archbird: warning: canonical Map exceeded the configured cache "
+            "budget and was not stored; analysis remains valid.",
+            file=sys.stderr,
+        )
+
+
 def config_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird config",
@@ -951,6 +966,9 @@ def _project_from_args(
             cache_dir=_cache_dir(args),
             cache_max_bytes=_cache_max_bytes(args),
             progress=progress.emit if progress is not None else None,
+            map_cache=not bool(
+                getattr(args, "test_symbol_observations", ())
+            ),
         )
     except Exception:
         if ledger_path:
@@ -1063,6 +1081,7 @@ def _query_main(
             current = _project_from_args(args, progress)
             progress.emit({"phase": "rendering", "artifact": "canonical Map"})
             map_json = current.map_json()
+            _warn_map_cache_stats(current.map_cache_stats)
         map_document = json.loads(map_json)
         if args.check and _has_error_diagnostics(map_document):
             return 1
@@ -1163,6 +1182,7 @@ def _freshness_main(argv: Sequence[str]) -> int:
         current = _project_from_args(args, progress)
         progress.emit({"phase": "rendering", "artifact": "canonical Map"})
         current_map_json = current.map_json()
+        _warn_map_cache_stats(current.map_cache_stats)
         progress.emit({"phase": "rendering", "artifact": "freshness audit"})
         encoded = audit_map_freshness(
             snapshot_json, current_map_json, pretty=args.pretty
@@ -1586,6 +1606,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             progress.finish()
             return 0
         map_json = project.map_json(pretty=args.pretty and args.format == "json")
+        _warn_map_cache_stats(project.map_cache_stats)
         document = json.loads(map_json)
         encoded = (
             map_json

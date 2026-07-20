@@ -12,6 +12,7 @@ from typing import Mapping
 
 
 _CACHE_CONTRACT = b"archbird-provider-cache-v1"
+_MAP_CACHE_CONTRACT = b"archbird-map-result-cache-v1"
 _DEFAULT_MAX_BYTES = 1024 * 1024 * 1024
 _MAX_SAFE_INTEGER = (1 << 53) - 1
 
@@ -74,6 +75,21 @@ def _cache_key(
     return digest.hexdigest()
 
 
+def _map_cache_key(
+    *, namespace: str, project: str, manifest_sha256: str, config_sha256: str
+) -> str:
+    digest = hashlib.sha256()
+    for value in (
+        _MAP_CACHE_CONTRACT,
+        namespace.encode("ascii"),
+        project.encode("utf-8"),
+        manifest_sha256.encode("ascii"),
+        config_sha256.encode("ascii"),
+    ):
+        _framed(digest, value)
+    return digest.hexdigest()
+
+
 @dataclass
 class ProviderCacheStats:
     bytes: int = 0
@@ -102,6 +118,28 @@ class ProviderCacheStats:
         }
 
 
+@dataclass
+class MapCacheStats:
+    errors: int = 0
+    hits: int = 0
+    invalid: int = 0
+    misses: int = 0
+    no_space: int = 0
+    skipped: int = 0
+    writes: int = 0
+
+    def as_dict(self) -> Mapping[str, int]:
+        return {
+            "errors": self.errors,
+            "hits": self.hits,
+            "invalid": self.invalid,
+            "misses": self.misses,
+            "no_space": self.no_space,
+            "skipped": self.skipped,
+            "writes": self.writes,
+        }
+
+
 class ProviderCache:
     """Store raw canonical bundles; the native core still validates every hit."""
 
@@ -123,38 +161,42 @@ class ProviderCache:
         else:
             self.max_bytes = max_bytes
         self.stats = ProviderCacheStats()
+        self.map_stats = MapCacheStats()
         self._entries: dict[Path, tuple[int, int]] = {}
         self._inventory()
 
     def _inventory(self) -> None:
-        base = self.root / "providers-v1"
-        try:
-            paths = tuple(base.rglob("*"))
-        except OSError:
-            self.stats.errors += 1
-            return
-        for candidate in paths:
+        for base in (self.root / "providers-v1", self.root / "maps-v1"):
             try:
-                if candidate.name.startswith(".") and candidate.name.endswith(
-                    ".tmp"
-                ):
-                    candidate.unlink()
-                    self.stats.temporaries_removed += 1
-                    continue
-                if (
-                    candidate.suffix != ".json"
-                    or candidate.is_symlink()
-                    or not candidate.is_file()
-                ):
-                    continue
-                metadata = candidate.stat()
-            except FileNotFoundError:
-                continue
+                paths = tuple(base.rglob("*"))
             except OSError:
                 self.stats.errors += 1
                 continue
-            self._entries[candidate] = (metadata.st_size, metadata.st_mtime_ns)
-            self.stats.bytes += metadata.st_size
+            for candidate in paths:
+                try:
+                    if candidate.name.startswith(
+                        "."
+                    ) and candidate.name.endswith(".tmp"):
+                        candidate.unlink()
+                        self.stats.temporaries_removed += 1
+                        continue
+                    if (
+                        candidate.suffix != ".json"
+                        or candidate.is_symlink()
+                        or not candidate.is_file()
+                    ):
+                        continue
+                    metadata = candidate.stat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    self.stats.errors += 1
+                    continue
+                self._entries[candidate] = (
+                    metadata.st_size,
+                    metadata.st_mtime_ns,
+                )
+                self.stats.bytes += metadata.st_size
         self._prune(0)
 
     def _prune(self, incoming: int, *, preserve: Path | None = None) -> None:
@@ -198,6 +240,22 @@ class ProviderCache:
         )
         return self.root / "providers-v1" / key[:2] / f"{key}.json"
 
+    def _map_path(
+        self,
+        *,
+        namespace: str,
+        project: str,
+        manifest_sha256: str,
+        config_sha256: str,
+    ) -> Path:
+        key = _map_cache_key(
+            namespace=namespace,
+            project=project,
+            manifest_sha256=manifest_sha256,
+            config_sha256=config_sha256,
+        )
+        return self.root / "maps-v1" / key[:2] / f"{key}.json"
+
     def load(
         self,
         *,
@@ -224,6 +282,32 @@ class ProviderCache:
             self.stats.misses += 1
             return None
         self.stats.hits += 1
+        return data
+
+    def load_map(
+        self,
+        *,
+        namespace: str,
+        project: str,
+        manifest_sha256: str,
+        config_sha256: str,
+    ) -> bytes | None:
+        target = self._map_path(
+            namespace=namespace,
+            project=project,
+            manifest_sha256=manifest_sha256,
+            config_sha256=config_sha256,
+        )
+        try:
+            data = target.read_bytes()
+        except FileNotFoundError:
+            self.map_stats.misses += 1
+            return None
+        except OSError:
+            self.map_stats.errors += 1
+            self.map_stats.misses += 1
+            return None
+        self.map_stats.hits += 1
         return data
 
     def store(
@@ -282,6 +366,60 @@ class ProviderCache:
                 except FileNotFoundError:
                     pass
 
+    def store_map(
+        self,
+        data: bytes,
+        *,
+        namespace: str,
+        project: str,
+        manifest_sha256: str,
+        config_sha256: str,
+    ) -> None:
+        target = self._map_path(
+            namespace=namespace,
+            project=project,
+            manifest_sha256=manifest_sha256,
+            config_sha256=config_sha256,
+        )
+        if len(data) > self.max_bytes:
+            self.map_stats.skipped += 1
+            return
+        previous = self._entries.get(target)
+        previous_size = previous[0] if previous is not None else 0
+        incoming = max(0, len(data) - previous_size)
+        self._prune(incoming, preserve=target)
+        if self.stats.bytes + incoming > self.max_bytes:
+            self.map_stats.skipped += 1
+            return
+        temporary_name = ""
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=target.parent,
+                prefix=f".{target.stem}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary.write(data)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_name = temporary.name
+            os.replace(temporary_name, target)
+            metadata = target.stat()
+            self.stats.bytes += metadata.st_size - previous_size
+            self._entries[target] = (metadata.st_size, metadata.st_mtime_ns)
+            self.map_stats.writes += 1
+        except OSError as error:
+            self.map_stats.errors += 1
+            if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)}:
+                self.map_stats.no_space += 1
+        finally:
+            if temporary_name:
+                try:
+                    Path(temporary_name).unlink()
+                except FileNotFoundError:
+                    pass
+
     def reject(
         self,
         *,
@@ -315,8 +453,40 @@ class ProviderCache:
             if previous is not None:
                 self.stats.bytes -= previous[0]
 
+    def reject_map(
+        self,
+        *,
+        namespace: str,
+        project: str,
+        manifest_sha256: str,
+        config_sha256: str,
+    ) -> None:
+        """Discard a complete Map that failed host-level identity validation."""
+
+        target = self._map_path(
+            namespace=namespace,
+            project=project,
+            manifest_sha256=manifest_sha256,
+            config_sha256=config_sha256,
+        )
+        if self.map_stats.hits:
+            self.map_stats.hits -= 1
+        self.map_stats.invalid += 1
+        self.map_stats.misses += 1
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            self.map_stats.errors += 1
+        else:
+            previous = self._entries.pop(target, None)
+            if previous is not None:
+                self.stats.bytes -= previous[0]
+
 
 __all__ = [
+    "MapCacheStats",
     "ProviderCache",
     "ProviderCacheStats",
     "default_provider_cache_dir",

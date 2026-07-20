@@ -178,10 +178,12 @@ def main() -> int:
     cache_root = repository / "build/test-provider-cache-python"
     shutil.rmtree(cache_root, ignore_errors=True)
     cached_cold = Project.from_config(
-        fixture / "archbird.json", root=fixture, cache_dir=cache_root
+        fixture / "archbird.json", root=fixture, cache_dir=cache_root,
+        map_cache=False,
     )
     cached_warm = Project.from_config(
-        fixture / "archbird.json", root=fixture, cache_dir=cache_root
+        fixture / "archbird.json", root=fixture, cache_dir=cache_root,
+        map_cache=False,
     )
     if cached_cold.map_json() != first or cached_warm.map_json() != first:
         raise AssertionError("Python provider caching changed canonical Map bytes")
@@ -195,6 +197,68 @@ def main() -> int:
             "Python provider cache cold/warm accounting is incomplete: "
             f"{cached_cold.cache_stats!r} -> {cached_warm.cache_stats!r}"
         )
+    map_cache_root = repository / "build/test-map-cache-python"
+    shutil.rmtree(map_cache_root, ignore_errors=True)
+    map_cold = Project.from_config(
+        fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
+    )
+    map_cold_json = map_cold.map_json()
+    map_warm = Project.from_config(
+        fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
+    )
+    if map_warm.map_json() != map_cold_json:
+        raise AssertionError("Python complete Map cache changed canonical bytes")
+    if map_cold.map_cache_stats != {
+        "errors": 0, "hits": 0, "invalid": 0, "misses": 1,
+        "no_space": 0, "skipped": 0, "writes": 1,
+    } or map_warm.map_cache_stats != {
+        "errors": 0, "hits": 1, "invalid": 0, "misses": 0,
+        "no_space": 0, "skipped": 0, "writes": 0,
+    }:
+        raise AssertionError(
+            "Python complete Map cache accounting is incomplete: "
+            f"{map_cold.map_cache_stats!r} -> {map_warm.map_cache_stats!r}"
+        )
+    if map_warm.cache_stats["hits"] != 0:
+        raise AssertionError("Map hit unnecessarily loaded provider cache entries")
+    if map_warm.counts["providers"] == 0:
+        raise AssertionError("Map hit could not lazily materialize provider facts")
+    map_files = tuple((map_cache_root / "maps-v1").rglob("*.json"))
+    if len(map_files) != 1:
+        raise AssertionError("Python complete Map cache path is not singular")
+    map_files[0].write_bytes(b"{broken")
+    map_recovered = Project.from_config(
+        fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
+    )
+    if map_recovered.map_json() != map_cold_json or map_recovered.map_cache_stats[
+        "invalid"
+    ] != 1:
+        raise AssertionError("Python complete Map cache did not reject corruption")
+    changed_fixture = repository / "build/test-map-cache-source-python"
+    shutil.rmtree(changed_fixture, ignore_errors=True)
+    shutil.copytree(fixture, changed_fixture)
+    changed_map = Project.from_config(
+        changed_fixture / "archbird.json",
+        root=changed_fixture,
+        cache_dir=map_cache_root,
+    )
+    changed_map_json = changed_map.map_json()
+    changed_source = changed_fixture / "py/pkg/api.py"
+    changed_source.write_bytes(
+        changed_source.read_bytes() + b"\ndef cache_invalidation_probe():\n    return 2\n"
+    )
+    changed_map_again = Project.from_config(
+        changed_fixture / "archbird.json",
+        root=changed_fixture,
+        cache_dir=map_cache_root,
+    )
+    if (
+        changed_map_again.map_cache_stats["misses"] != 1
+        or changed_map_again.map_json() == changed_map_json
+    ):
+        raise AssertionError("changed Python source reused a stale complete Map")
+    shutil.rmtree(changed_fixture, ignore_errors=True)
+    shutil.rmtree(map_cache_root, ignore_errors=True)
     bounded_root = repository / "build/test-provider-cache-bounded-python"
     shutil.rmtree(bounded_root, ignore_errors=True)
     for invalid_budget in (True, 0, -1, 1.5, (1 << 53)):
@@ -261,12 +325,12 @@ def main() -> int:
         "cache-source",
         [Source("src/a.py", b"def a():\n    return 1\n", language="python")],
     )
-    changed.scan(cache_dir=cache_root)
+    changed.scan(cache_dir=cache_root, map_cache=False)
     changed_repeat = Project(
         "cache-source",
         [Source("src/a.py", b"def a():\n    return 2\n", language="python")],
     )
-    changed_repeat.scan(cache_dir=cache_root)
+    changed_repeat.scan(cache_dir=cache_root, map_cache=False)
     if changed_repeat.cache_stats["hits"] != 0 or changed_repeat.cache_stats["misses"] != 3:
         raise AssertionError(
             "changed Python source reused stale provider facts: "

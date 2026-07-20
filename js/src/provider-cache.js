@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const CACHE_CONTRACT = Buffer.from("archbird-provider-cache-v1");
+const MAP_CACHE_CONTRACT = Buffer.from("archbird-map-result-cache-v1");
 const DEFAULT_MAX_BYTES = 1024 * 1024 * 1024;
 
 function defaultProviderCacheDir() {
@@ -38,6 +39,13 @@ function emptyProviderCacheStats() {
   };
 }
 
+function emptyMapCacheStats() {
+  return {
+    errors: 0, hits: 0, invalid: 0, misses: 0,
+    noSpace: 0, skipped: 0, writes: 0,
+  };
+}
+
 function frame(hash, value) {
   const length = Buffer.alloc(8);
   length.writeBigUInt64BE(BigInt(value.length));
@@ -60,6 +68,20 @@ function cacheKey({ namespace, project, providerId, path: subjectPath, sourceSha
   return hash.digest("hex");
 }
 
+function mapCacheKey({ namespace, project, manifestSha256, configSha256 }) {
+  const hash = crypto.createHash("sha256");
+  for (const value of [
+    MAP_CACHE_CONTRACT,
+    Buffer.from(namespace, "ascii"),
+    Buffer.from(project, "utf8"),
+    Buffer.from(manifestSha256, "ascii"),
+    Buffer.from(configSha256, "ascii"),
+  ]) {
+    frame(hash, value);
+  }
+  return hash.digest("hex");
+}
+
 class ProviderCache {
   constructor(root, { maxBytes = defaultProviderCacheMaxBytes() } = {}) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
@@ -68,13 +90,16 @@ class ProviderCache {
     this.root = path.resolve(root);
     this.maxBytes = maxBytes;
     this.stats = emptyProviderCacheStats();
+    this.mapStats = emptyMapCacheStats();
     this.entries = new Map();
     this.inventory();
   }
 
   inventory() {
-    const base = path.join(this.root, "providers-v1");
-    const pending = [base];
+    const pending = [
+      path.join(this.root, "providers-v1"),
+      path.join(this.root, "maps-v1"),
+    ];
     while (pending.length) {
       const directory = pending.pop();
       let entries;
@@ -144,6 +169,11 @@ class ProviderCache {
     return path.join(this.root, "providers-v1", key.slice(0, 2), `${key}.json`);
   }
 
+  mapTarget(parameters) {
+    const key = mapCacheKey(parameters);
+    return path.join(this.root, "maps-v1", key.slice(0, 2), `${key}.json`);
+  }
+
   load({
     namespace,
     project,
@@ -171,6 +201,19 @@ class ProviderCache {
     }
   }
 
+  loadMap(parameters) {
+    const target = this.mapTarget(parameters);
+    try {
+      const data = fs.readFileSync(target);
+      this.mapStats.hits += 1;
+      return data;
+    } catch (error) {
+      if (error.code !== "ENOENT") this.mapStats.errors += 1;
+      this.mapStats.misses += 1;
+      return null;
+    }
+  }
+
   reject({ namespace, project, providerId, path: subjectPath, sourceSha256 }) {
     const target = this.target({
       namespace,
@@ -187,6 +230,26 @@ class ProviderCache {
     } catch (error) {
       if (error.code !== "ENOENT") {
         this.stats.errors += 1;
+        return;
+      }
+    }
+    const prior = this.entries.get(target);
+    if (prior !== undefined) {
+      this.entries.delete(target);
+      this.stats.bytes -= prior.size;
+    }
+  }
+
+  rejectMap(parameters) {
+    const target = this.mapTarget(parameters);
+    if (this.mapStats.hits) this.mapStats.hits -= 1;
+    this.mapStats.invalid += 1;
+    this.mapStats.misses += 1;
+    try {
+      fs.unlinkSync(target);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        this.mapStats.errors += 1;
         return;
       }
     }
@@ -249,6 +312,50 @@ class ProviderCache {
       }
     }
   }
+
+  storeMap(data, parameters) {
+    const target = this.mapTarget(parameters);
+    if (data.length > this.maxBytes) {
+      this.mapStats.skipped += 1;
+      return;
+    }
+    const prior = this.entries.get(target);
+    const priorSize = prior === undefined ? 0 : prior.size;
+    const incoming = Math.max(0, data.length - priorSize);
+    this.prune(incoming, target);
+    if (this.stats.bytes + incoming > this.maxBytes) {
+      this.mapStats.skipped += 1;
+      return;
+    }
+    const temporary = path.join(
+      path.dirname(target),
+      `.${path.basename(target)}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`,
+    );
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      const descriptor = fs.openSync(temporary, "wx");
+      try {
+        fs.writeFileSync(descriptor, data);
+        fs.fsyncSync(descriptor);
+      } finally {
+        fs.closeSync(descriptor);
+      }
+      fs.renameSync(temporary, target);
+      const metadata = fs.statSync(target);
+      this.stats.bytes += metadata.size - priorSize;
+      this.entries.set(target, { mtime: metadata.mtimeMs, size: metadata.size });
+      this.mapStats.writes += 1;
+    } catch (error) {
+      this.mapStats.errors += 1;
+      if (["ENOSPC", "EDQUOT"].includes(error.code)) this.mapStats.noSpace += 1;
+    } finally {
+      try {
+        fs.unlinkSync(temporary);
+      } catch (_) {
+        // The successful atomic rename consumes the temporary path.
+      }
+    }
+  }
 }
 
 module.exports = {
@@ -257,4 +364,6 @@ module.exports = {
   defaultProviderCacheDir,
   defaultProviderCacheMaxBytes,
   emptyProviderCacheStats,
+  emptyMapCacheStats,
+  mapCacheKey,
 };

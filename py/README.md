@@ -338,8 +338,10 @@ provider inapplicable while portable facts remain. Tree-sitter recovery is
 fact-local. SCIP retains producer, document coverage, source anchoring, and
 freshness. Provider conflicts and unresolved targets remain explicit.
 
-Per-file/provider caches are content-addressed and revalidated by the native
-core. The default 1 GiB budget evicts the oldest content-addressed entries;
+Per-file provider facts and materialized complete unchanged Maps are
+content-addressed and revalidated against the native core, configuration,
+selected source bytes, and provider implementations. The two tiers share a
+1 GiB budget and evict the oldest content-addressed entries;
 `--cache-max-bytes` or `ARCHBIRD_CACHE_MAX_BYTES` changes it, `--cache-dir`
 selects the root, and `--no-cache` disables it. Failed temporaries are removed
 on the next use, and a full cache produces a warning without invalidating the

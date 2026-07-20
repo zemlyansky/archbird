@@ -23,7 +23,7 @@ from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple, Union
 
 from . import _native
 from .errors import ConfigError
-from .provider_cache import ProviderCache, ProviderCacheStats
+from .provider_cache import MapCacheStats, ProviderCache, ProviderCacheStats
 from .providers import (
     python_ast_implementation_sha256,
     python_ast_provider_facts,
@@ -166,6 +166,17 @@ def _python_ast_cache_namespace() -> str:
     return hashlib.sha256(identity.encode("ascii")).hexdigest()
 
 
+def _map_cache_namespace(mode: str) -> str:
+    identity = (
+        f"archbird-python-map-result-cache-v1\0"
+        f"{CORE_IMPLEMENTATION_SHA256}\0"
+        f"{_native_cache_namespace()}\0"
+        f"{_python_ast_cache_namespace()}\0"
+        f"mode={mode}"
+    )
+    return hashlib.sha256(identity.encode("ascii")).hexdigest()
+
+
 def _source_sha256(source: "Source") -> str:
     return hashlib.sha256(source.data).hexdigest()
 
@@ -198,6 +209,12 @@ class Project:
         self.root: Optional[Path] = None
         self.resolution_json: Optional[bytes] = None
         self.cache_stats: Mapping[str, int] = ProviderCacheStats().as_dict()
+        self.map_cache_stats: Mapping[str, int] = MapCacheStats().as_dict()
+        self._config_json: Optional[bytes] = None
+        self._cached_map: Optional[bytes] = None
+        self._map_cache: Optional[ProviderCache] = None
+        self._map_cache_parameters: Optional[dict[str, str]] = None
+        self._deferred_scan: Optional[dict[str, object]] = None
         classifications = [
             {
                 "language": source.language,
@@ -256,6 +273,7 @@ class Project:
         jobs: int = 0,
         cache_dir: Optional[Union[str, Path]] = None,
         cache_max_bytes: Optional[int] = None,
+        map_cache: bool = True,
     ) -> "Project":
         """Discover, read, and optionally analyze one configured repository."""
 
@@ -287,6 +305,7 @@ class Project:
                 jobs=jobs,
                 cache_dir=cache_dir,
                 cache_max_bytes=cache_max_bytes,
+                map_cache=map_cache,
             )
         return project
 
@@ -309,6 +328,7 @@ class Project:
         jobs: int = 0,
         cache_dir: Optional[Union[str, Path]] = None,
         cache_max_bytes: Optional[int] = None,
+        map_cache: bool = True,
     ) -> "Project":
         """Resolve and map one repository with optional reviewed configuration."""
 
@@ -346,6 +366,7 @@ class Project:
                 jobs=jobs,
                 cache_dir=cache_dir,
                 cache_max_bytes=cache_max_bytes,
+                map_cache=map_cache,
             )
         return current
 
@@ -361,6 +382,7 @@ class Project:
 
     @property
     def counts(self) -> Mapping[str, int]:
+        self._materialize()
         return _native.project_counts(self._capsule)
 
     @property
@@ -368,7 +390,10 @@ class Project:
         return _native.project_config_sha256(self._capsule)
 
     def set_config(self, config_json: bytes) -> None:
-        _native.project_set_config(self._capsule, config_json)
+        if self._providers_finalized:
+            raise RuntimeError("providers are already finalized")
+        self._config_json = bytes(config_json)
+        _native.project_set_config(self._capsule, self._config_json)
 
     def add_provider(self, provider_json: bytes, mode: str = "primary") -> None:
         if self._providers_finalized:
@@ -378,6 +403,10 @@ class Project:
     def add_test_symbol_observations(self, observations_json: bytes) -> None:
         """Attach strict project-runner evidence without changing static facts."""
 
+        self._materialize()
+        self._map_cache = None
+        self._map_cache_parameters = None
+        self._cached_map = None
         _native.project_add_test_symbol_observations(
             self._capsule, observations_json
         )
@@ -432,6 +461,62 @@ class Project:
             source_sha256=source_sha256,
         )
 
+    def _map_cache_parameters_for(
+        self, mode: str
+    ) -> Optional[dict[str, str]]:
+        if self._config_json is None:
+            return None
+        return {
+            "namespace": _map_cache_namespace(mode),
+            "project": self.project,
+            "manifest_sha256": self.manifest_sha256,
+            "config_sha256": self.config_sha256,
+        }
+
+    def _cached_map_is_current(self, data: bytes) -> bool:
+        try:
+            document = json.loads(data)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(document, dict):
+            return False
+        tool = document.get("tool")
+        evidence = document.get("evidence")
+        return bool(
+            document.get("artifact") == "map"
+            and document.get("project") == self.project
+            and isinstance(document.get("schema_version"), int)
+            and isinstance(tool, dict)
+            and tool.get("implementation_sha256")
+            == CORE_IMPLEMENTATION_SHA256
+            and isinstance(evidence, dict)
+            and evidence.get("config_sha256") == self.config_sha256
+            and evidence.get("input_sha256") == self.map_input_sha256
+        )
+
+    def _reset_capsule(self) -> None:
+        self._capsule.close()
+        self._capsule = _native.project_create(self.manifest_json)
+        for source in self.sources:
+            _native.project_add_source(self._capsule, source.path, source.data)
+        _native.project_finalize_sources(self._capsule)
+        if self._config_json is not None:
+            _native.project_set_config(self._capsule, self._config_json)
+        self._providers_finalized = False
+
+    def _materialize(self) -> None:
+        """Build provider state lazily when a Map-cache hit is insufficient."""
+
+        if self._cached_map is None:
+            return
+        deferred = dict(self._deferred_scan or {})
+        self._cached_map = None
+        self._map_cache = None
+        self._map_cache_parameters = None
+        self._deferred_scan = None
+        self._reset_capsule()
+        self.scan(map_cache=False, **deferred)
+
     def scan(
         self,
         mode: str = "primary",
@@ -440,6 +525,7 @@ class Project:
         cache_dir: Optional[Union[str, Path]] = None,
         cache_max_bytes: Optional[int] = None,
         progress: Optional[Callable[[Mapping[str, object]], None]] = None,
+        map_cache: bool = True,
     ) -> None:
         """Compose lexical, portable syntax, and CPython AST evidence."""
 
@@ -457,6 +543,31 @@ class Project:
         def report(**event: object) -> None:
             if progress is not None:
                 progress(event)
+
+        map_parameters = (
+            self._map_cache_parameters_for(mode)
+            if cache is not None and map_cache
+            else None
+        )
+        if cache is not None and map_parameters is not None:
+            cached_map = cache.load_map(**map_parameters)
+            if cached_map is not None:
+                if self._cached_map_is_current(cached_map):
+                    self._cached_map = cached_map
+                    self._map_cache = cache
+                    self._map_cache_parameters = map_parameters
+                    self._deferred_scan = {
+                        "mode": mode,
+                        "jobs": jobs,
+                        "cache_dir": cache_dir,
+                        "cache_max_bytes": cache_max_bytes,
+                    }
+                    self._providers_finalized = True
+                    self.cache_stats = cache.stats.as_dict()
+                    self.map_cache_stats = cache.map_stats.as_dict()
+                    report(phase="cache", artifact="map", state="hit")
+                    return
+                cache.reject_map(**map_parameters)
 
         if cache is None:
             for provider_id in (
@@ -646,6 +757,13 @@ class Project:
             if cache is not None
             else ProviderCacheStats().as_dict()
         )
+        self.map_cache_stats = (
+            cache.map_stats.as_dict()
+            if cache is not None
+            else MapCacheStats().as_dict()
+        )
+        self._map_cache = cache if map_parameters is not None else None
+        self._map_cache_parameters = map_parameters
 
     def finalize_providers(self) -> None:
         if not self._providers_finalized:
@@ -667,25 +785,30 @@ class Project:
                 self._providers_finalized = True
 
     def file_facts_json(self, *, pretty: bool = False) -> bytes:
+        self._materialize()
         return _native.project_file_facts(self._capsule, pretty=pretty)
 
     def file_facts(self) -> Mapping[str, object]:
         return json.loads(self.file_facts_json())
 
     def merge_ledger_json(self, *, pretty: bool = False) -> bytes:
+        self._materialize()
         return _native.project_merge_ledger(self._capsule, pretty=pretty)
 
     def merge_conflicts_json(self, *, pretty: bool = False) -> bytes:
         """Render the bounded conflict-only provider ledger."""
 
+        self._materialize()
         return _native.project_merge_conflicts(self._capsule, pretty=pretty)
 
     def merge_summary(self) -> Mapping[str, int]:
+        self._materialize()
         return _native.project_merge_summary(self._capsule)
 
     def provider_facts_json(self, index: int, *, pretty: bool = False) -> bytes:
         """Render one normalized provider bundle by deterministic index."""
 
+        self._materialize()
         return _native.project_provider_facts(
             self._capsule, index, pretty=pretty
         )
@@ -694,13 +817,37 @@ class Project:
         return json.loads(self.provider_facts_json(index))
 
     def map_json(self, *, pretty: bool = False) -> bytes:
-        return _native.project_map(self._capsule, pretty=pretty)
+        if self._cached_map is not None:
+            return (
+                _native.json_canonicalize(self._cached_map, pretty=True)
+                if pretty
+                else self._cached_map
+            )
+        data = _native.project_map(self._capsule, pretty=False)
+        if self._map_cache is not None and self._map_cache_parameters is not None:
+            self._map_cache.store_map(data, **self._map_cache_parameters)
+            self.map_cache_stats = self._map_cache.map_stats.as_dict()
+            self.cache_stats = self._map_cache.stats.as_dict()
+            self._cached_map = data
+        return _native.json_canonicalize(data, pretty=True) if pretty else data
 
     def write_map_json(
         self, sink: Callable[[bytes], object], *, pretty: bool = False
     ) -> None:
         """Write the canonical Map without retaining its complete byte output."""
 
+        if self._cached_map is not None:
+            data = (
+                _native.json_canonicalize(self._cached_map, pretty=True)
+                if pretty
+                else self._cached_map
+            )
+            written = sink(data)
+            if written is not None and written != len(data):
+                raise OSError(
+                    f"output sink wrote {written} of {len(data)} bytes"
+                )
+            return
         _native.project_write_map(self._capsule, sink, pretty=pretty)
 
     def map(self) -> Mapping[str, object]:

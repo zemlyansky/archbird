@@ -341,6 +341,21 @@ function warnCacheStats(stats) {
   }
 }
 
+function warnMapCacheStats(stats) {
+  if (stats.noSpace) {
+    process.stderr.write(
+      "archbird: warning: canonical Map cache write failed because storage " +
+      "is full; analysis remains valid.\n",
+    );
+  }
+  if (stats.skipped) {
+    process.stderr.write(
+      "archbird: warning: canonical Map exceeded the configured cache budget " +
+      "and was not stored; analysis remains valid.\n",
+    );
+  }
+}
+
 function project(options, progress = null) {
   if (progress !== null) progress.emit({ phase: "discovery", state: "start" });
   const { repository, configJson } = repositoryInputs(options);
@@ -372,6 +387,7 @@ function project(options, progress = null) {
       cacheMaxBytes: cacheMaxBytes(options),
       typescript: !options.noTypescript,
       progress: progress === null ? null : (event) => progress.emit(event),
+      mapCache: !(options.testSymbolObservations || []).length,
     });
   } catch (error) {
     if (options.mergeLedger) {
@@ -430,6 +446,7 @@ function mapMain(argv) {
   const current = project(options, progress);
   progress.emit({ phase: "rendering", artifact: "canonical Map" });
   const mapJson = current.mapJson({ pretty: options.pretty && options.format === "json" });
+  warnMapCacheStats(current.mapCacheStats);
   const output = options.format === "json"
     ? mapJson
     : current.mapMarkdown({
@@ -533,6 +550,7 @@ function queryMain(argv, command) {
     const current = project(options, progress);
     progress.emit({ phase: "rendering", artifact: "canonical Map" });
     source = current.mapJson();
+    warnMapCacheStats(current.mapCacheStats);
   }
   const sourceDocument = JSON.parse(source);
   const queryOptions = {
@@ -688,6 +706,7 @@ function freshnessMain(argv) {
   const currentProject = project(options, progress);
   progress.emit({ phase: "rendering", artifact: "canonical Map" });
   const currentMap = currentProject.mapJson();
+  warnMapCacheStats(currentProject.mapCacheStats);
   progress.emit({ phase: "rendering", artifact: "freshness audit" });
   const encoded = archbird.auditMapFreshness(
     read(options.snapshot),

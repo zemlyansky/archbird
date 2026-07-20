@@ -555,11 +555,17 @@ const cacheRoot = path.resolve(
 fs.rmSync(cacheRoot, { force: true, recursive: true });
 const cachedCold = Project.fromConfig(
   path.join(repositoryFixture, "archbird.json"),
-  { root: repositoryFixture, typescript: false, cacheDir: cacheRoot },
+  {
+    root: repositoryFixture, typescript: false, cacheDir: cacheRoot,
+    mapCache: false,
+  },
 );
 const cachedWarm = Project.fromConfig(
   path.join(repositoryFixture, "archbird.json"),
-  { root: repositoryFixture, typescript: false, cacheDir: cacheRoot },
+  {
+    root: repositoryFixture, typescript: false, cacheDir: cacheRoot,
+    mapCache: false,
+  },
 );
 assert.deepEqual(cachedCold.mapJson(), repositoryMapJson);
 assert.deepEqual(cachedWarm.mapJson(), repositoryMapJson);
@@ -567,12 +573,73 @@ assert.ok(cachedCold.cacheStats.misses > 0);
 assert.equal(cachedCold.cacheStats.writes, cachedCold.cacheStats.misses);
 assert.equal(cachedWarm.cacheStats.hits, cachedCold.cacheStats.writes);
 assert.equal(cachedWarm.cacheStats.misses, 0);
+const mapCacheRoot = path.resolve(
+  process.argv[3],
+  "build/test-map-cache-node",
+);
+fs.rmSync(mapCacheRoot, { force: true, recursive: true });
+const mapCachedCold = Project.fromConfig(
+  path.join(repositoryFixture, "archbird.json"),
+  { root: repositoryFixture, typescript: false, cacheDir: mapCacheRoot },
+);
+const mapCachedColdJson = mapCachedCold.mapJson();
+const mapCachedWarm = Project.fromConfig(
+  path.join(repositoryFixture, "archbird.json"),
+  { root: repositoryFixture, typescript: false, cacheDir: mapCacheRoot },
+);
+assert.deepEqual(mapCachedWarm.mapJson(), mapCachedColdJson);
+assert.deepEqual(mapCachedCold.mapCacheStats, {
+  errors: 0, hits: 0, invalid: 0, misses: 1,
+  noSpace: 0, skipped: 0, writes: 1,
+});
+assert.deepEqual(mapCachedWarm.mapCacheStats, {
+  errors: 0, hits: 1, invalid: 0, misses: 0,
+  noSpace: 0, skipped: 0, writes: 0,
+});
+assert.equal(mapCachedWarm.cacheStats.hits, 0);
+assert.ok(mapCachedWarm.counts.providers > 0n);
+const mapPrefixes = fs.readdirSync(path.join(mapCacheRoot, "maps-v1"));
+assert.equal(mapPrefixes.length, 1);
+const mapDirectory = path.join(mapCacheRoot, "maps-v1", mapPrefixes[0]);
+const mapFiles = fs.readdirSync(mapDirectory);
+assert.equal(mapFiles.length, 1);
+fs.writeFileSync(path.join(mapDirectory, mapFiles[0]), "{broken");
+const mapCachedRecovered = Project.fromConfig(
+  path.join(repositoryFixture, "archbird.json"),
+  { root: repositoryFixture, typescript: false, cacheDir: mapCacheRoot },
+);
+assert.deepEqual(mapCachedRecovered.mapJson(), mapCachedColdJson);
+assert.equal(mapCachedRecovered.mapCacheStats.invalid, 1);
+const changedMapFixture = path.resolve(
+  process.argv[3], "build/test-map-cache-source-node",
+);
+fs.rmSync(changedMapFixture, { force: true, recursive: true });
+fs.cpSync(repositoryFixture, changedMapFixture, { recursive: true });
+const changedMap = Project.fromConfig(
+  path.join(changedMapFixture, "archbird.json"),
+  { root: changedMapFixture, typescript: false, cacheDir: mapCacheRoot },
+);
+const changedMapJson = changedMap.mapJson();
+fs.appendFileSync(
+  path.join(changedMapFixture, "js/index.js"),
+  "\nexport function cacheInvalidationProbe() { return 2; }\n",
+);
+const changedMapAgain = Project.fromConfig(
+  path.join(changedMapFixture, "archbird.json"),
+  { root: changedMapFixture, typescript: false, cacheDir: mapCacheRoot },
+);
+assert.equal(changedMapAgain.mapCacheStats.misses, 1);
+assert.notDeepEqual(changedMapAgain.mapJson(), changedMapJson);
+fs.rmSync(changedMapFixture, { force: true, recursive: true });
+fs.rmSync(mapCacheRoot, { force: true, recursive: true });
 const cacheChanged = new Project("cache-source", [
   new Source("src/a.js", Buffer.from("export function a() { return 1; }\n"), {
     language: "javascript",
   }),
 ]);
-cacheChanged.scan("primary", { typescript: false, cacheDir: cacheRoot });
+cacheChanged.scan("primary", {
+  typescript: false, cacheDir: cacheRoot, mapCache: false,
+});
 const cacheChangedAgain = new Project("cache-source", [
   new Source("src/a.js", Buffer.from("export function a() { return 2; }\n"), {
     language: "javascript",
@@ -581,6 +648,7 @@ const cacheChangedAgain = new Project("cache-source", [
 cacheChangedAgain.scan("primary", {
   typescript: false,
   cacheDir: cacheRoot,
+  mapCache: false,
 });
 assert.equal(cacheChangedAgain.cacheStats.hits, 0);
 assert.equal(cacheChangedAgain.cacheStats.misses, 2);

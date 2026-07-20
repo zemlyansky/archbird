@@ -9,6 +9,7 @@ const {
   ProviderCache,
   defaultProviderCacheDir,
   defaultProviderCacheMaxBytes,
+  emptyMapCacheStats,
   emptyProviderCacheStats,
 } = require("./provider-cache");
 const { typescriptProviderBundles } = require("./providers/typescript");
@@ -84,6 +85,33 @@ function nativeCacheNamespace() {
       "ascii",
     ),
   );
+}
+
+function typescriptProviderIdentity() {
+  const version = require("typescript").version;
+  return {
+    implementation: sha256(
+      Buffer.concat([
+        fs.readFileSync(require.resolve("./providers/typescript")),
+        Buffer.from(`\0typescript:${version}`),
+      ]),
+    ),
+    runtime: `node-${process.versions.node};typescript-${version}`,
+  };
+}
+
+function mapCacheNamespace(typescript, mode) {
+  const host = typescript
+    ? typescriptProviderIdentity()
+    : { implementation: "disabled", runtime: "disabled" };
+  return sha256(Buffer.from([
+    "archbird-node-map-result-cache-v1",
+    native.IMPLEMENTATION_SHA256,
+    nativeCacheNamespace(),
+    host.implementation,
+    host.runtime,
+    `mode=${mode}`,
+  ].join("\0"), "ascii"));
 }
 
 function utf8Compare(left, right) {
@@ -172,13 +200,19 @@ class Project {
     native.projectFinalizeSources(this._handle);
     this._providersFinalized = false;
     this.cacheStats = emptyProviderCacheStats();
+    this.mapCacheStats = emptyMapCacheStats();
+    this._configJson = null;
+    this._cachedMap = null;
+    this._mapCache = null;
+    this._mapCacheParameters = null;
+    this._deferredScan = null;
   }
 
   static fromConfig(
     configPath,
     {
       root = null, scan = true, typescript = true, cacheDir = null,
-      cacheMaxBytes = null,
+      cacheMaxBytes = null, mapCache = true,
     } = {},
   ) {
     const resolvedConfig = path.resolve(configPath);
@@ -201,7 +235,9 @@ class Project {
     });
     project.root = repository;
     project.setConfig(configJson);
-    if (scan) project.scan("primary", { typescript, cacheDir, cacheMaxBytes });
+    if (scan) project.scan("primary", {
+      typescript, cacheDir, cacheMaxBytes, mapCache,
+    });
     return project;
   }
 
@@ -222,6 +258,7 @@ class Project {
       typescript = true,
       cacheDir = null,
       cacheMaxBytes = null,
+      mapCache = true,
     } = {},
   ) {
     const repository = path.resolve(root);
@@ -256,7 +293,9 @@ class Project {
     current.root = repository;
     current.resolutionJson = resolutionJson;
     current.setConfig(effectiveConfig);
-    if (scan) current.scan("primary", { typescript, cacheDir, cacheMaxBytes });
+    if (scan) current.scan("primary", {
+      typescript, cacheDir, cacheMaxBytes, mapCache,
+    });
     return current;
   }
 
@@ -269,6 +308,7 @@ class Project {
   }
 
   get counts() {
+    this.materialize();
     return native.projectCounts(this._handle);
   }
 
@@ -277,7 +317,9 @@ class Project {
   }
 
   setConfig(configJson) {
-    native.projectSetConfig(this._handle, Buffer.from(configJson));
+    if (this._providersFinalized) throw new Error("providers are already finalized");
+    this._configJson = Buffer.from(configJson);
+    native.projectSetConfig(this._handle, this._configJson);
   }
 
   addProvider(providerJson, mode = "primary") {
@@ -286,6 +328,10 @@ class Project {
   }
 
   addTestSymbolObservations(observationsJson) {
+    this.materialize();
+    this._mapCache = null;
+    this._mapCacheParameters = null;
+    this._cachedMap = null;
     native.projectAddTestSymbolObservations(
       this._handle,
       Buffer.from(observationsJson),
@@ -323,10 +369,62 @@ class Project {
     cache.store(this.providerFactsJson(providerIndex), parameters);
   }
 
+  mapCacheParameters(typescript, mode) {
+    if (this._configJson === null) return null;
+    return {
+      namespace: mapCacheNamespace(typescript, mode),
+      project: this.project,
+      manifestSha256: this.manifestSha256,
+      configSha256: this.configSha256,
+    };
+  }
+
+  cachedMapIsCurrent(data) {
+    let document;
+    try {
+      document = JSON.parse(data.toString("utf8"));
+    } catch (_) {
+      return false;
+    }
+    return document && document.artifact === "map" &&
+      document.project === this.project &&
+      Number.isInteger(document.schema_version) &&
+      document.tool &&
+      document.tool.implementation_sha256 === native.IMPLEMENTATION_SHA256 &&
+      document.evidence &&
+      document.evidence.config_sha256 === this.configSha256 &&
+      document.evidence.input_sha256 === this.mapInputSha256;
+  }
+
+  resetHandle() {
+    native.projectDestroy(this._handle);
+    this._handle = native.projectCreate(this.manifestJson);
+    for (const source of this.sources) {
+      native.projectAddSource(this._handle, source.path, source.data);
+    }
+    native.projectFinalizeSources(this._handle);
+    if (this._configJson !== null) {
+      native.projectSetConfig(this._handle, this._configJson);
+    }
+    this._providersFinalized = false;
+  }
+
+  materialize() {
+    if (this._cachedMap === null) return;
+    const deferred = { ...(this._deferredScan || {}) };
+    this._cachedMap = null;
+    this._mapCache = null;
+    this._mapCacheParameters = null;
+    this._deferredScan = null;
+    this.resetHandle();
+    this.scan(deferred.mode || "primary", { ...deferred, mapCache: false });
+  }
+
   scan(
     mode = "primary",
     {
       typescript = true, cacheDir = null, cacheMaxBytes = null, progress = null,
+      mapCache = true,
     } = {},
   ) {
     if (this._providersFinalized) throw new Error("providers are already finalized");
@@ -341,6 +439,28 @@ class Project {
       cacheDir,
       { maxBytes: cacheMaxBytes === null ? defaultProviderCacheMaxBytes() : cacheMaxBytes },
     );
+    const mapParameters = cache !== null && mapCache
+      ? this.mapCacheParameters(typescript, mode)
+      : null;
+    if (cache !== null && mapParameters !== null) {
+      const cachedMap = cache.loadMap(mapParameters);
+      if (cachedMap !== null) {
+        if (this.cachedMapIsCurrent(cachedMap)) {
+          this._cachedMap = cachedMap;
+          this._mapCache = cache;
+          this._mapCacheParameters = mapParameters;
+          this._deferredScan = {
+            mode, typescript, cacheDir, cacheMaxBytes,
+          };
+          this._providersFinalized = true;
+          this.cacheStats = { ...cache.stats };
+          this.mapCacheStats = { ...cache.mapStats };
+          report({ phase: "cache", artifact: "map", state: "hit" });
+          return;
+        }
+        cache.rejectMap(mapParameters);
+      }
+    }
     if (cache === null) {
       for (const providerId of NATIVE_LEXICAL_PROVIDERS) {
         report({ phase: "providers", provider: providerId, state: "start" });
@@ -419,18 +539,14 @@ class Project {
         total: hostSources.length,
       });
       let completed = 0;
+      const typescriptIdentity = typescriptProviderIdentity();
       for (const bundle of typescriptProviderBundles({
         project: this.project,
         sourceManifestSha256: this.manifestSha256,
         sources: this.sources,
         hashBytes: sha256,
-        implementationSha256: sha256(
-          Buffer.concat([
-            fs.readFileSync(require.resolve("./providers/typescript")),
-            Buffer.from(`\0typescript:${require("typescript").version}`),
-          ]),
-        ),
-        runtime: `node-${process.versions.node};typescript-${require("typescript").version}`,
+        implementationSha256: typescriptIdentity.implementation,
+        runtime: typescriptIdentity.runtime,
       })) {
         this.addProvider(bundle, mode);
         completed += 1;
@@ -466,6 +582,11 @@ class Project {
     this.cacheStats = cache === null
       ? emptyProviderCacheStats()
       : { ...cache.stats };
+    this.mapCacheStats = cache === null
+      ? emptyMapCacheStats()
+      : { ...cache.mapStats };
+    this._mapCache = mapParameters === null ? null : cache;
+    this._mapCacheParameters = mapParameters;
   }
 
   finalizeProviders() {
@@ -489,6 +610,7 @@ class Project {
   }
 
   fileFactsJson({ pretty = false } = {}) {
+    this.materialize();
     return native.projectFileFacts(this._handle, pretty);
   }
 
@@ -497,19 +619,34 @@ class Project {
   }
 
   mergeLedgerJson({ pretty = false } = {}) {
+    this.materialize();
     return native.projectMergeLedger(this._handle, pretty);
   }
 
   mergeConflictsJson({ pretty = false } = {}) {
+    this.materialize();
     return native.projectMergeConflicts(this._handle, pretty);
   }
 
   mergeSummary() {
+    this.materialize();
     return native.projectMergeSummary(this._handle);
   }
 
   mapJson({ pretty = false } = {}) {
-    return native.projectMap(this._handle, pretty);
+    if (this._cachedMap !== null) {
+      return pretty
+        ? native.jsonCanonicalize(this._cachedMap, true, false)
+        : this._cachedMap;
+    }
+    const data = native.projectMap(this._handle, false);
+    if (this._mapCache !== null && this._mapCacheParameters !== null) {
+      this._mapCache.storeMap(data, this._mapCacheParameters);
+      this.mapCacheStats = { ...this._mapCache.mapStats };
+      this.cacheStats = { ...this._mapCache.stats };
+      this._cachedMap = data;
+    }
+    return pretty ? native.jsonCanonicalize(data, true, false) : data;
   }
 
   map() {
@@ -548,6 +685,7 @@ class Project {
   }
 
   providerFactsJson(index, { pretty = false } = {}) {
+    this.materialize();
     return native.projectProviderFacts(this._handle, index, pretty);
   }
 
