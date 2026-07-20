@@ -19,6 +19,7 @@ typedef struct AbSymbolReferenceRow {
   struct AbSymbolReferenceCandidate *candidates;
   size_t candidate_count;
   size_t candidate_capacity;
+  const char *relation;
   const char *resolution;
 } AbSymbolReferenceRow;
 
@@ -100,6 +101,9 @@ static int row_compare(const void *left_raw, const void *right_raw) {
   compared = ab_string_compare(left->context, right->context);
   if (compared)
     return compared;
+  compared = strcmp(left->relation, right->relation);
+  if (compared)
+    return compared < 0 ? -1 : 1;
   compared = optional_string_compare(left->container, right->container);
   if (compared)
     return compared;
@@ -130,6 +134,7 @@ static int same_group(const AbSymbolReferenceRow *left,
   if (!ab_string_equal(&left->occurrence->path, &right->occurrence->path) ||
       !source_equal(left, right) ||
       !ab_string_equal(left->context, right->context) ||
+      strcmp(left->relation, right->relation) ||
       optional_string_compare(left->container, right->container) ||
       !ab_string_equal(&left->occurrence->name, &right->occurrence->name) ||
       strcmp(left->resolution, right->resolution) ||
@@ -336,6 +341,7 @@ static ArchbirdStatus render_evidence(AbBuffer *buffer, const AbFact *fact,
 
 ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
                                                const AbMapState *state) {
+  static const AbString declaration_context = {(char *)"declaration", 11};
   size_t total = ab_project_merged_fact_count(state->project);
   AbMapSymbolReference *symbols = NULL;
   AbSymbolReferenceRow *rows = NULL;
@@ -387,6 +393,23 @@ ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
         rows[row_count].context = context;
         rows[row_count].container =
             ab_map_fact_string_attribute(fact, "container");
+        rows[row_count].relation = "value";
+        row_count++;
+      }
+    } else if (fact->has_name && string_literal(&fact->domain, "symbols") &&
+               string_literal(&fact->kind, "declaration") &&
+               (file = manifest_file(state->manifest, &fact->path)) != NULL &&
+               file->has_layer) {
+      size_t family_length = 0;
+      const char *family = ab_map_symbol_language_family(file, &family_length);
+      if (family_length == 1 && family[0] == 'c') {
+        rows[row_count].occurrence = fact;
+        rows[row_count].provider =
+            ab_project_merged_fact_provider(state->project, index);
+        rows[row_count].source = fact;
+        rows[row_count].source_file = file;
+        rows[row_count].context = &declaration_context;
+        rows[row_count].relation = "declaration-definition";
         row_count++;
       }
     }
@@ -400,7 +423,9 @@ ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
     size_t candidate_end = 0;
     size_t candidate;
     row->semantic =
-        ab_map_unique_semantic_target(state->project, row->occurrence);
+        string_literal(&row->occurrence->kind, "declaration")
+            ? NULL
+            : ab_map_unique_semantic_target(state->project, row->occurrence);
     row->semantic_path =
         row->semantic
             ? ab_map_fact_string_attribute(row->semantic, "target_path")
@@ -450,7 +475,11 @@ ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
     row->resolution =
         row->candidate_count == 0
             ? "unresolved"
-            : (row->candidate_count == 1 ? "candidate" : "ambiguous");
+            : (row->candidate_count == 1
+                   ? (string_literal(&row->occurrence->kind, "declaration")
+                          ? "unique"
+                          : "candidate")
+                   : "ambiguous");
   }
   if (row_count) {
     size_t head = 0;
@@ -525,7 +554,11 @@ ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
         row->resolution =
             row->candidate_count == 0
                 ? "unresolved"
-                : (row->candidate_count == 1 ? "candidate" : "ambiguous");
+                : (row->candidate_count == 1
+                       ? (string_literal(&row->occurrence->kind, "declaration")
+                              ? "unique"
+                              : "candidate")
+                       : "ambiguous");
     }
   }
   if (row_count > 1)
@@ -589,8 +622,11 @@ ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
     if (status == ARCHBIRD_OK)
       status = render_string(buffer, &row->occurrence->name);
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer,
-                                 ",\"relation\":\"value\",\"resolution\":\"");
+      status = ab_buffer_literal(buffer, ",\"relation\":\"");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, row->relation);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "\",\"resolution\":\"");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, row->resolution);
     if (status == ARCHBIRD_OK)

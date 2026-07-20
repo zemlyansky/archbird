@@ -1067,6 +1067,61 @@ def main() -> int:
         "csrc/cross_file_target.c"
     ]:
         raise AssertionError(cross_file)
+    declaration_binding = next(
+        row
+        for row in mapped["symbol_references"]
+        if row["source"]
+        == {"path": "csrc/cross_file_target.h", "symbol": "cross_file_only"}
+        and row["relation"] == "declaration-definition"
+    )
+    if declaration_binding["resolution"] != "unique" or declaration_binding[
+        "candidates"
+    ] != [
+        {
+            "line": 1,
+            "path": "csrc/cross_file_target.c",
+            "symbol": "cross_file_only",
+        }
+    ]:
+        raise AssertionError(declaration_binding)
+    declaration_query = json.loads(
+        extension.map_query(
+            canonical(mapped),
+            canonical(
+                {
+                    "symbols": ["csrc/cross_file_target.h:cross_file_only"],
+                    "direction": "both",
+                    "depth": 1,
+                    "test_depth": 0,
+                }
+            ),
+        )
+    )
+    if [row["path"] for row in declaration_query["files"]] != [
+        "csrc/cross_file_target.h",
+        "csrc/cross_file_target.c",
+    ] or not any(
+        row["relation"] == "declaration-definition"
+        for row in declaration_query["symbol_references"]
+    ):
+        raise AssertionError(declaration_query)
+    ambiguous_binding = next(
+        row
+        for row in mapped["symbol_references"]
+        if row["source"]
+        == {
+            "path": "csrc/duplicate_definition.h",
+            "symbol": "duplicate_definition",
+        }
+        and row["relation"] == "declaration-definition"
+    )
+    if ambiguous_binding["resolution"] != "ambiguous" or [
+        row["path"] for row in ambiguous_binding["candidates"]
+    ] != [
+        "csrc/duplicate_definition_a.c",
+        "csrc/duplicate_definition_b.c",
+    ]:
+        raise AssertionError(ambiguous_binding)
     cross_file_impact = json.loads(
         extension.map_query(
             canonical(mapped),
