@@ -47,13 +47,23 @@
     "analysis": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["track", "selector_policy", "depth", "test_depth", "configuration"],
+      "required": [
+        "track",
+        "selector_policy",
+        "depth",
+        "test_depth",
+        "configuration",
+        "issue_query_source",
+        "issue_search_limit"
+      ],
       "properties": {
         "track": {"const": "seeded_routing"},
         "selector_policy": {"const": "task_explicit_identity"},
         "depth": {"type": "integer", "minimum": 0, "maximum": 16},
         "test_depth": {"type": "integer", "minimum": 0, "maximum": 16},
-        "configuration": {"const": "zero_config"}
+        "configuration": {"const": "zero_config"},
+        "issue_query_source": {"const": "task_title"},
+        "issue_search_limit": {"type": "integer", "minimum": 1, "maximum": 100}
       }
     },
     "metrics": {

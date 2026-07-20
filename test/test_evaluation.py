@@ -144,6 +144,8 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         "analysis": {
             "configuration": "zero_config",
             "depth": 1,
+            "issue_query_source": "task_title",
+            "issue_search_limit": 20,
             "selector_policy": "task_explicit_identity",
             "test_depth": 1,
             "track": "seeded_routing",
@@ -295,6 +297,10 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert second["cases"][0]["metrics"]["matched_symbol_recall_all"] == 1.0
     assert second["cases"][0]["metrics"]["matched_symbol_truth"] == 1
     assert second["cases"][0]["metrics"]["relevant_symbol_recall_all"] == 0.5
+    assert second["cases"][0]["metrics"]["issue_file_recall_all"] == 0.5
+    assert second["cases"][0]["metrics"]["issue_context_file_recall_all"] == 1.0
+    assert second["cases"][0]["metrics"]["issue_test_recall_all"] == 1.0
+    assert second["cases"][0]["artifacts"]["issue_query"]["bytes"] > 0
     assert second["cases"][0]["metrics"]["seed_file_recall_all"] == 1.0
     assert second["cases"][0]["metrics"]["seed_file_truth"] == 1
 
@@ -311,7 +317,6 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     write_json(case_path, case)
     run("freeze", environment=environment)
     state = json.loads((root / "state.json").read_text())
-    second_corpus = state["current_corpus_sha256"]
     corpus_comparison = json.loads((root / state["current_corpus_comparison"]).read_text())
     assert corpus_comparison["changed"] == ["fixture-target-change"]
     assert corpus_comparison["added"] == []

@@ -170,7 +170,7 @@ def validate_case(value: Mapping[str, Any], source: Path | None = None) -> Mappi
         raise EvaluationError(f"{where} has unsupported identity")
     if value["provenance"] != "asserted":
         raise EvaluationError(f"{where}.provenance must be asserted")
-    case_id = safe_id(value["id"], f"{where}.id")
+    safe_id(value["id"], f"{where}.id")
     if value["split"] not in {"development", "validation", "held_out"}:
         raise EvaluationError(f"{where}.split is invalid")
 
@@ -350,7 +350,15 @@ def validate_protocol(
         raise EvaluationError(f"{where}.analysis must be an object")
     exact_keys(
         analysis,
-        {"track", "selector_policy", "depth", "test_depth", "configuration"},
+        {
+            "track",
+            "selector_policy",
+            "depth",
+            "test_depth",
+            "configuration",
+            "issue_query_source",
+            "issue_search_limit",
+        },
         set(),
         f"{where}.analysis",
     )
@@ -360,6 +368,18 @@ def validate_protocol(
         raise EvaluationError(f"{where}.analysis.selector_policy is unsupported")
     if analysis["configuration"] != "zero_config":
         raise EvaluationError(f"{where}.analysis.configuration is unsupported")
+    if analysis["issue_query_source"] != "task_title":
+        raise EvaluationError(
+            f"{where}.analysis.issue_query_source is unsupported"
+        )
+    if (
+        not isinstance(analysis["issue_search_limit"], int)
+        or isinstance(analysis["issue_search_limit"], bool)
+        or not 1 <= analysis["issue_search_limit"] <= 100
+    ):
+        raise EvaluationError(
+            f"{where}.analysis.issue_search_limit must be from 1 to 100"
+        )
     for key in ("depth", "test_depth"):
         if (
             not isinstance(analysis[key], int)
@@ -1119,6 +1139,28 @@ def extract_rankings(
     )
 
 
+def extract_retrieval_rankings(
+    query: Mapping[str, Any],
+) -> tuple[list[str], list[str]]:
+    query_metadata = query.get("query", {})
+    retrieval = (
+        query_metadata.get("retrieval", {})
+        if isinstance(query_metadata, dict)
+        else {}
+    )
+    hits = retrieval.get("hits", []) if isinstance(retrieval, dict) else []
+    files: list[str] = []
+    symbols: list[str] = []
+    for hit in hits:
+        if not isinstance(hit, dict) or not isinstance(hit.get("path"), str):
+            continue
+        path = str(hit["path"])
+        files.append(path)
+        if hit.get("kind") == "symbol" and isinstance(hit.get("name"), str):
+            symbols.append(f"{path}:{hit['name']}")
+    return deduplicate(files), deduplicate(symbols)
+
+
 def checkout(repository: Path, destination: Path, revision: str) -> None:
     git(repository, "worktree", "prune", capture=False)
     if destination.exists():
@@ -1150,6 +1192,10 @@ def run_case(
     if sha256_file(case_path) != entry["case_sha256"]:
         raise EvaluationError(f"frozen case is corrupt: {case_id}")
     case = validate_case(read_json(case_path, "frozen evaluation case"), case_path)
+    protocol_path = corpus_directory / "protocol.json"
+    protocol = validate_protocol(
+        read_json(protocol_path, "frozen evaluation protocol"), protocol_path
+    )
     repository_info = case["repository"]
     repository = repository_path(root, str(repository_info["id"]))
     worktree = root / "work/checkouts" / case_id
@@ -1230,6 +1276,58 @@ def run_case(
         seed_truth, matched_symbol_truth = selector_truth(
             case["analysis"]["selectors"], worktree
         )
+        issue_query_path = case_output / "issue-query.json"
+        issue_query_command = [
+            str(archbird),
+            "query",
+            "--map",
+            str(map_path),
+            "--search",
+            str(case["task"]["title"]),
+            "--search-limit",
+            str(protocol["analysis"]["issue_search_limit"]),
+            "--depth",
+            str(protocol["analysis"]["depth"]),
+            "--test-depth",
+            str(protocol["analysis"]["test_depth"]),
+            "--format",
+            "json",
+            "--output",
+            str(issue_query_path),
+        ]
+        issue_query_observation = run_process(
+            issue_query_command,
+            worktree,
+            case_output / "issue-query.stdout",
+            case_output / "issue-query.stderr",
+        )
+        if (
+            issue_query_observation["returncode"] != 0
+            or not issue_query_path.is_file()
+        ):
+            return {
+                "case_sha256": entry["case_sha256"],
+                "error": "issue query command failed",
+                "id": case_id,
+                "issue_query": issue_query_observation,
+                "map": map_observation,
+                "query": query_observation,
+                "review_status": entry["review_status"],
+                "split": entry["split"],
+                "status": "error",
+            }
+        issue_query_document = read_json(issue_query_path, "case issue Query")
+        (
+            issue_files,
+            issue_context_files,
+            _issue_seed_files,
+            issue_symbols,
+            _issue_matched_symbols,
+            issue_tests,
+        ) = extract_rankings(issue_query_document)
+        issue_retrieval_files, issue_retrieval_symbols = (
+            extract_retrieval_rankings(issue_query_document)
+        )
         truth = case["ground_truth"]
         metrics: dict[str, Any] = {}
         metrics.update(rank_metrics("relevant_file", ranked_files, truth["relevant_files"]))
@@ -1257,7 +1355,35 @@ def run_case(
         )
         metrics.update(rank_metrics("relevant_test", ranked_tests, truth["relevant_tests"]))
         metrics.update(
+            rank_metrics(
+                "issue_retrieval_file",
+                issue_retrieval_files,
+                truth["relevant_files"],
+            )
+        )
+        metrics.update(
+            rank_metrics(
+                "issue_retrieval_symbol",
+                issue_retrieval_symbols,
+                truth["relevant_symbols"],
+            )
+        )
+        metrics.update(rank_metrics("issue_file", issue_files, truth["relevant_files"]))
+        metrics.update(
+            rank_metrics(
+                "issue_context_file",
+                issue_context_files,
+                truth["relevant_files"],
+            )
+        )
+        metrics.update(
+            rank_metrics("issue_symbol", issue_symbols, truth["relevant_symbols"])
+        )
+        metrics.update(rank_metrics("issue_test", issue_tests, truth["relevant_tests"]))
+        metrics.update(
             {
+                "issue_query_duration_ms": issue_query_observation["duration_ms"],
+                "issue_query_max_rss_kib": issue_query_observation["max_rss_kib"],
                 "map_duration_ms": map_observation["duration_ms"],
                 "map_max_rss_kib": map_observation["max_rss_kib"],
                 "query_duration_ms": query_observation["duration_ms"],
@@ -1266,11 +1392,16 @@ def run_case(
         )
         return {
             "artifacts": {
+                "issue_query": {
+                    "bytes": issue_query_path.stat().st_size,
+                    "sha256": sha256_file(issue_query_path),
+                },
                 "map": {"bytes": map_path.stat().st_size, "sha256": sha256_file(map_path)},
                 "query": {"bytes": query_path.stat().st_size, "sha256": sha256_file(query_path)},
             },
             "case_sha256": entry["case_sha256"],
             "id": case_id,
+            "issue_query": issue_query_observation,
             "map": map_observation,
             "map_tool": map_document.get("source_tool", map_document.get("tool")),
             "metrics": metrics,
@@ -1313,6 +1444,12 @@ def aggregate_cases(
     for prefix in (
         "diff_context_file",
         "diff_file",
+        "issue_context_file",
+        "issue_file",
+        "issue_retrieval_file",
+        "issue_retrieval_symbol",
+        "issue_symbol",
+        "issue_test",
         "matched_symbol",
         "relevant_context_file",
         "relevant_file",
@@ -1523,7 +1660,8 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
     old = {str(case["id"]): case for case in before["cases"]}
     new = {str(case["id"]): case for case in after["cases"]}
     rows = []
-    counters = lambda: {"changed": 0, "improved": 0, "regressed": 0, "unchanged": 0}
+    def counters() -> dict[str, int]:
+        return {"changed": 0, "improved": 0, "regressed": 0, "unchanged": 0}
     summary: dict[str, Any] = {
         "candidate_context": counters(),
         "candidate_quality": counters(),
