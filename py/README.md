@@ -299,10 +299,23 @@ current map. Save this beside `archbird.json`:
 <!-- archbird-minimal-verify-config:end -->
 
 ```bash
+archbird verify --init archbird.json \
+  --output architecture.candidate.verify.json
+
 archbird verify --config architecture.verify.json --check
 archbird verify --config architecture.verify.json \
   --format sarif --output .archbird/architecture.sarif --check
+
+archbird verify --config architecture.verify.json \
+  --freeze .archbird/architecture.baseline.json \
+  --freeze-owner architecture \
+  --freeze-rationale "Reviewed starting point"
 ```
+
+`verify --init` drafts the current component-edge matrix and marks it
+`candidate=true`; review it before Archbird will run it. `--freeze` records the
+current violations and covered facts so later runs distinguish new, known,
+reintroduced, and resolved findings while coverage only grows.
 
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
@@ -317,6 +330,12 @@ never becomes pass. Multi-project suites support source locks, explicit name
 mappings, intentional supersets, reviewed divergences, and project-root
 overrides that do not enter canonical evidence.
 
+Use `required_subset`/`required_values` for missing members,
+`mapped_values_equal` for provider renames, `forbidden_edges` for forbidden
+dependencies, and `set_equal` or `required_subset` for public surfaces. The
+local application edits check metadata only as an unreviewed candidate and can
+create expiring waiver candidates without changing derived findings.
+
 ## Act: review and judge a change
 
 Archbird does not make the edit. It turns one failed architecture rule into a
@@ -326,6 +345,10 @@ before and after repository state to see whether the required changes happened.
 ```bash
 archbird verify --config architecture.verify.json --format json \
   --output .archbird/before.verify.json
+
+archbird plan --verification .archbird/before.verify.json \
+  --finding FINGERPRINT --format markdown \
+  --output .archbird/change.task.md
 
 archbird plan --verification .archbird/before.verify.json \
   --finding FINGERPRINT --output .archbird/change.proposal.json
@@ -349,7 +372,8 @@ archbird verify-plan \
 Results distinguish satisfied, missing, unexpected, unknown, stale, and
 superseded. Candidate paths are evidence-backed advice, not write authorization.
 Relevant evidence changes invalidate a proposal; unrelated changes are context
-drift.
+drift. Task Markdown shows 20 evidence rows by default; use `--full` for all
+rows.
 
 ## Interchange and visualization
 

@@ -65,7 +65,7 @@ function usage(command = "map") {
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
-    verify: "archbird verify --config SUITE.verify.json [--project-root NAME=PATH] [--check]",
+    verify: "archbird verify (--config SUITE.verify.json | --init PROJECT.json) [--baseline FILE | --freeze FILE] [--check]",
     plan: "archbird plan --verification RESULT.json --finding FINGERPRINT",
     contract: "archbird contract --proposal PROPOSAL.json --objective TEXT --owner NAME --rationale TEXT",
     "verify-plan": "archbird verify-plan --proposal P.json --contract C.json --before-verification B.json --after-verification A.json [--check]",
@@ -890,16 +890,68 @@ function projectRoots(values) {
 function verifyMain(argv) {
   const options = parse(argv, {
     ...COMMON,
+    init: { type: "string" },
+    initRoot: { flag: "init-root", type: "string" },
     format: { default: "json", type: "string" },
     projectRoot: { flag: "project-root", type: "multiple" },
     baseline: { type: "string" },
+    freeze: { type: "string" },
+    freezeOwner: { flag: "freeze-owner", type: "string" },
+    freezeRationale: { flag: "freeze-rationale", type: "string" },
     full: { type: "boolean" },
     maxFindings: { flag: "max-findings", default: 200, type: "number" },
   });
   if (options.help) { process.stdout.write(usage("verify")); return 0; }
-  required(options, "config");
+  if (Boolean(options.config) === Boolean(options.init)) {
+    throw new Error("exactly one of --config or --init is required");
+  }
+  if (options.init) {
+    if (options.output === "-") {
+      throw new Error("verify --init requires --output so relative paths stay portable");
+    }
+    if (options.projectRoot.length || options.baseline || options.freeze ||
+        options.freezeOwner || options.freezeRationale || options.check ||
+        options.full || options.format !== "json" || options.maxFindings !== 200) {
+      throw new Error(
+        "verify --init accepts only --init-root, cache options, --pretty, and --output",
+      );
+    }
+    const configPath = path.resolve(options.init);
+    const outputPath = path.resolve(options.output);
+    const relativeConfig = path.relative(path.dirname(outputPath), configPath)
+      .split(path.sep).join("/");
+    if (!relativeConfig || path.isAbsolute(relativeConfig)) {
+      throw new Error("verify --init refuses an absolute project config path");
+    }
+    const candidate = archbird.Project.fromConfig(configPath, {
+      root: options.initRoot ? path.resolve(options.initRoot) : null,
+      cacheDir: options.noCache
+        ? null
+        : (options.cacheDir || archbird.defaultProviderCacheDir()),
+      cacheMaxBytes: cacheMaxBytes(options),
+      typescript: !options.noTypescript,
+    });
+    try {
+      write(archbird.draftVerificationSuite(candidate.mapJson(), {
+        projectConfig: relativeConfig,
+        pretty: true,
+      }), options.output);
+    } finally {
+      candidate.dispose();
+    }
+    return 0;
+  }
+  if (options.initRoot) throw new Error("--init-root requires --init");
+  if (options.freeze && (!options.freezeOwner || !options.freezeRationale)) {
+    throw new Error("--freeze requires --freeze-owner and --freeze-rationale");
+  }
+  if (!options.freeze && (options.freezeOwner || options.freezeRationale)) {
+    throw new Error("--freeze-owner/--freeze-rationale require --freeze");
+  }
+  const baseline = options.baseline ||
+    (options.freeze && fs.existsSync(path.resolve(options.freeze)) ? options.freeze : null);
   const verification = archbird.Verification.fromConfig(options.config, {
-    baseline: options.baseline,
+    baseline,
     cacheDir: options.noCache
       ? null
       : (options.cacheDir || archbird.defaultProviderCacheDir()),
@@ -914,6 +966,13 @@ function verifyMain(argv) {
     pretty: options.pretty || options.format === "sarif",
   });
   write(encoded, options.output);
+  if (options.freeze) {
+    write(verification.freeze({
+      owner: options.freezeOwner,
+      rationale: options.freezeRationale,
+      pretty: true,
+    }), options.freeze);
+  }
   return options.check && verification.hasErrors() ? 1 : 0;
 }
 
@@ -921,7 +980,7 @@ function planMain(argv) {
   const options = parse(argv, {
     verification: { type: "string" }, finding: { type: "string" },
     format: { default: "json", type: "string" }, full: { type: "boolean" },
-    maxCandidates: { flag: "max-candidates", default: 100, type: "number" },
+    maxCandidates: { flag: "max-candidates", default: 20, type: "number" },
     pretty: COMMON.pretty, output: COMMON.output, help: COMMON.help,
   });
   if (options.help) { process.stdout.write(usage("plan")); return 0; }

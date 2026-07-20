@@ -1011,6 +1011,87 @@ def verification_plan(suite: bytes, pretty=False) -> bytes:
     )
 
 
+def verification_draft(map: bytes, project_config: str, pretty=False) -> bytes:
+    document = _bytes(map)
+    config = _text(project_config, "project config")
+    function = _declare(
+        "archbird_verification_draft",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _one_shot(
+        lambda engine, write: function(
+            engine,
+            document,
+            len(document),
+            config,
+            len(config),
+            _json_flags(pretty, True),
+            write,
+            None,
+        ),
+        input_budget=len(document),
+        saved_artifact=True,
+    )
+
+
+def verification_freeze(
+    suite: bytes,
+    input: bytes,
+    *,
+    owner: str,
+    rationale: str,
+    pretty=False,
+) -> bytes:
+    suite_document = _bytes(suite)
+    input_document = _bytes(input)
+    owner_data = _text(owner, "baseline owner")
+    rationale_data = _text(rationale, "baseline rationale")
+    function = _declare(
+        "archbird_verification_freeze",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _one_shot(
+        lambda engine, write: function(
+            engine,
+            suite_document,
+            len(suite_document),
+            input_document,
+            len(input_document),
+            owner_data,
+            len(owner_data),
+            rationale_data,
+            len(rationale_data),
+            _json_flags(pretty, True),
+            write,
+            None,
+        ),
+        input_budget=max(len(suite_document), len(input_document)),
+        saved_artifact=True,
+    )
+
+
 def verification_analyze(suite: bytes, input: bytes, pretty=False) -> bytes:
     return _simple_render(
         "archbird_verification_analyze",

@@ -321,12 +321,28 @@ current map. Save this beside `archbird.json`:
 <!-- archbird-minimal-verify-config:end -->
 
 ```bash
+# Draft the current component edges as an unreviewed starting point.
+archbird verify --init archbird.json \
+  --output architecture.candidate.verify.json
+
+# After review, remove candidate=true and run the suite.
 archbird verify --config architecture.verify.json --check
 archbird verify --config architecture.verify.json \
   --format sarif --output .archbird/architecture.sarif --check
 archbird verify --config architecture.verify.json \
   --format junit --output .archbird/architecture.junit.xml --check
+
+# Freeze an existing codebase's reviewed starting point.
+archbird verify --config architecture.verify.json \
+  --freeze .archbird/architecture.baseline.json \
+  --freeze-owner architecture \
+  --freeze-rationale "Reviewed starting point"
 ```
+
+`verify --init` writes only a candidate component-edge suite; Archbird refuses
+to run it until a reviewer removes `candidate=true`. `--freeze` records current
+blocking findings and the facts each check covered. Later runs classify new,
+known, reintroduced, and resolved findings, while coverage can only grow.
 
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
@@ -354,6 +370,21 @@ attestations for behavior; similar names alone are not semantic equivalence.
 See [`examples/tinygrad-polygrad.verify.json`](examples/tinygrad-polygrad.verify.json)
 for a porting contract.
 
+Common change intents use the same Verify checks rather than a separate rule
+language:
+
+| Intent | Check shape |
+| --- | --- |
+| require a missing member | `required_subset` or `required_values` |
+| keep renamed providers aligned | `mapped_values_equal` |
+| remove a forbidden dependency | `forbidden_edges` |
+| preserve a public surface | `set_equal` or `required_subset` |
+
+The local application can edit check IDs, owners, requirement IDs, and
+rationale, but every downloaded suite remains an unreviewed candidate. Derived
+findings cannot be edited; the application can instead create an explicit,
+expiring waiver candidate.
+
 ## Act: review and judge a change
 
 Archbird does not make the edit. It turns one failed architecture rule into a
@@ -369,6 +400,10 @@ new derived/observed evidence → derived transition result
 ```bash
 archbird verify --config architecture.verify.json --format json \
   --output .archbird/before.verify.json
+
+archbird plan --verification .archbird/before.verify.json \
+  --finding FINGERPRINT --format markdown \
+  --output .archbird/change.task.md
 
 archbird plan --verification .archbird/before.verify.json \
   --finding FINGERPRINT --output .archbird/change.proposal.json
@@ -392,7 +427,9 @@ archbird verify-plan \
 Proposals separate required postconditions, evidence-backed candidates,
 preserved checks, coverage, and unknowns. Contracts are immutable asserted
 review. Results distinguish satisfied, missing, unexpected, unknown, stale,
-and superseded. Candidate paths are advice, not write authorization.
+and superseded. Candidate paths are advice, not write authorization. Markdown
+task packets show the first 20 evidence rows by default; add `--full` when the
+complete evidence list is needed.
 
 ## Evidence providers
 

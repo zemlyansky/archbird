@@ -534,6 +534,58 @@ static ArchbirdStatus exercise_verify(TestAllocator *allocator) {
   return status;
 }
 
+static ArchbirdStatus exercise_verify_authoring(TestAllocator *allocator) {
+  static const char map[] =
+      "{\"artifact\":\"map\",\"components\":[{\"name\":\"api\","
+      "\"outgoing\":{\"core\":[\"src/api.c\"]}},{\"name\":\"core\","
+      "\"outgoing\":{}}],\"project\":\"allocator-test\","
+      "\"schema_version\":7}";
+  static const char suite[] =
+      "{\"schema_version\":1,\"suite\":\"allocator-test\",\"projects\":{"
+      "\"subject\":{\"map\":\"subject.json\"}},\"extractors\":{\"expected\":{"
+      "\"kind\":\"literal_set\",\"values\":[\"A\"]},\"actual\":{\"kind\":"
+      "\"literal_set\",\"values\":[\"B\"]}},\"checks\":[{\"id\":"
+      "\"ALLOC-AUTHOR\",\"assert\":\"set_equal\",\"expected\":\"expected\","
+      "\"actual\":\"actual\",\"owner\":\"test\",\"rationale\":"
+      "\"Exercise allocator ownership through authoring.\"}]}";
+  static const char input[] =
+      "{\"schema_version\":1,\"artifact\":\"verification-input\","
+      "\"suite_path\":\"allocator.verify.json\",\"projects\":[{\"name\":"
+      "\"subject\",\"map\":{\"artifact\":\"map\",\"schema_version\":6,"
+      "\"project\":\"allocator-test\",\"evidence\":{\"config_sha256\":"
+      "\"1111111111111111111111111111111111111111111111111111111111111111\","
+      "\"input_sha256\":"
+      "\"2222222222222222222222222222222222222222222222222222222222222222\"},"
+      "\"tool\":{\"name\":\"archbird\",\"version\":\"fixture\","
+      "\"implementation_sha256\":"
+      "\"3333333333333333333333333333333333333333333333333333333333333333\"},"
+      "\"diagnostics\":[]},\"sources\":[]}],\"provided_facts\":[],"
+      "\"attestations\":[],\"baseline\":null}";
+  ArchbirdStatus status;
+  ArchbirdEngine *engine = create_engine(allocator, &status);
+  FixedOutput output = {{0}, 0};
+  if (!engine)
+    return status;
+  status = archbird_verification_draft(
+      engine, (const uint8_t *)map, sizeof(map) - 1, "archbird.json",
+      sizeof("archbird.json") - 1, 0, fixed_write, &output);
+  if (status == ARCHBIRD_OK) {
+    output.length = 0;
+    status = archbird_verification_freeze(
+        engine, (const uint8_t *)suite, sizeof(suite) - 1,
+        (const uint8_t *)input, sizeof(input) - 1, "test", sizeof("test") - 1,
+        "Reviewed allocator baseline.",
+        sizeof("Reviewed allocator baseline.") - 1, 0, fixed_write, &output);
+  }
+  if (status == ARCHBIRD_OK && !output.length)
+    status = ARCHBIRD_CONFLICT;
+  if (status != ARCHBIRD_OK)
+    (void)snprintf(allocator->error, sizeof(allocator->error), "%s",
+                   archbird_engine_error(engine));
+  archbird_engine_destroy(engine);
+  return status;
+}
+
 static int first_fingerprint(const FixedOutput *verification,
                              const char **out) {
   static const char prefix[] = "\"fingerprint\":\"";
@@ -746,6 +798,7 @@ int main(void) {
   run_failure_sweep("query-report-budget-every-n",
                     exercise_budgeted_query_report);
   run_failure_sweep("verify-every-n", exercise_verify);
+  run_failure_sweep("verify-authoring-every-n", exercise_verify_authoring);
   run_failure_sweep("act-every-n", exercise_act);
   free(report_map);
   free(report_verification);
@@ -756,6 +809,6 @@ int main(void) {
   if (failures)
     return 1;
   puts("native allocator tests passed: JSON, PCRE2, config resolution, "
-       "SCIP, Map/reports, Verify, and Act every-N sweeps");
+       "SCIP, Map/reports, Verify/authoring, and Act every-N sweeps");
   return 0;
 }

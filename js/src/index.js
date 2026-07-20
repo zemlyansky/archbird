@@ -962,6 +962,14 @@ class Verification {
   hasErrors() {
     return Boolean(this.result().summary.blocking);
   }
+
+  freeze({ owner, rationale, pretty = true } = {}) {
+    return verificationFreeze(this.suiteJson, this.inputJson, {
+      owner,
+      rationale,
+      pretty,
+    });
+  }
 }
 
 function inventoryState(
@@ -1451,6 +1459,40 @@ function verificationAnalyze(suiteJson, inputJson, { pretty = false } = {}) {
   );
 }
 
+function draftVerificationSuite(
+  mapJson,
+  { projectConfig, pretty = true } = {},
+) {
+  if (typeof projectConfig !== "string" || !projectConfig.length) {
+    throw new TypeError("projectConfig must be a non-empty portable path");
+  }
+  return native.verificationDraft(
+    Buffer.from(mapJson),
+    projectConfig,
+    pretty,
+  );
+}
+
+function verificationFreeze(
+  suiteJson,
+  inputJson,
+  { owner, rationale, pretty = true } = {},
+) {
+  if (typeof owner !== "string" || !owner.trim()) {
+    throw new TypeError("baseline owner must be non-empty");
+  }
+  if (typeof rationale !== "string" || !rationale.trim()) {
+    throw new TypeError("baseline rationale must be non-empty");
+  }
+  return native.verificationFreeze(
+    Buffer.from(suiteJson),
+    Buffer.from(inputJson),
+    owner,
+    rationale,
+    pretty,
+  );
+}
+
 function verificationReport(
   suiteJson,
   inputJson,
@@ -1692,11 +1734,13 @@ module.exports = {
   discoveryPlan,
   resolveDiscovery,
   diffMaps,
+  draftVerificationSuite,
   exportGraph,
   queryMap,
   queryMapMarkdown,
   renderMapMarkdown,
   verificationAnalyze,
+  verificationFreeze,
   verificationPlan,
   verificationReport,
   verifyChangeContract,

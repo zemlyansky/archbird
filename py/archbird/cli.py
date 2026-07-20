@@ -32,6 +32,7 @@ from .native import (
     change_proposal,
     change_verify,
     compile_test_observations,
+    draft_verification_suite,
     diff_maps_json,
     export_graph,
     export_okf_bundle,
@@ -592,7 +593,17 @@ def verification_parser() -> argparse.ArgumentParser:
         prog="archbird verify",
         description="Evaluate a reviewed architecture suite.",
     )
-    result.add_argument("-c", "--config", required=True, help="verification suite JSON")
+    source = result.add_mutually_exclusive_group(required=True)
+    source.add_argument("-c", "--config", help="verification suite JSON")
+    source.add_argument(
+        "--init",
+        metavar="PROJECT_CONFIG",
+        help="draft a candidate component-edge suite for human review",
+    )
+    result.add_argument(
+        "--init-root",
+        help="local project root override used only while drafting --init",
+    )
     result.add_argument(
         "--project-root",
         action="append",
@@ -610,6 +621,14 @@ def verification_parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--baseline",
         help="classify findings against an explicit frozen baseline",
+    )
+    result.add_argument(
+        "--freeze",
+        help="write/update a reviewed violation and coverage-ratchet baseline",
+    )
+    result.add_argument("--freeze-owner", help="owner recorded by --freeze")
+    result.add_argument(
+        "--freeze-rationale", help="review rationale recorded by --freeze"
     )
     result.add_argument("-o", "--output", default="-", help="JSON output or -")
     result.add_argument(
@@ -648,7 +667,7 @@ def plan_parser() -> argparse.ArgumentParser:
     result.add_argument("--finding", required=True)
     result.add_argument("--format", choices=("json", "markdown"), default="json")
     result.add_argument("--full", action="store_true")
-    result.add_argument("--max-candidates", type=int, default=100)
+    result.add_argument("--max-candidates", type=int, default=20)
     result.add_argument("--pretty", action="store_true")
     result.add_argument("-o", "--output", default="-")
     return result
@@ -1478,10 +1497,71 @@ def _workspace_main(argv: Sequence[str]) -> int:
 def _verify_main(argv: Sequence[str]) -> int:
     args = verification_parser().parse_args(argv)
     try:
+        if args.init is not None:
+            if args.output == "-":
+                raise ValueError(
+                    "verify --init requires --output so relative paths stay portable"
+                )
+            if (
+                args.project_root
+                or args.baseline is not None
+                or args.freeze is not None
+                or args.freeze_owner is not None
+                or args.freeze_rationale is not None
+                or args.check
+                or args.full
+                or args.format != "json"
+                or args.max_findings != 200
+            ):
+                raise ValueError(
+                    "verify --init accepts only --init-root, --jobs, cache options, "
+                    "--pretty, and --output"
+                )
+            config_path = Path(args.init).resolve()
+            output_path = Path(args.output).resolve()
+            try:
+                relative_config = os.path.relpath(config_path, output_path.parent)
+            except ValueError as error:
+                raise ValueError(
+                    "verify --init config and output must share a filesystem"
+                ) from error
+            if Path(relative_config).is_absolute():
+                raise ValueError(
+                    "verify --init refuses an absolute project config path"
+                )
+            project = Project.from_config(
+                config_path,
+                root=args.init_root,
+                jobs=args.jobs,
+                cache_dir=_cache_dir(args),
+                cache_max_bytes=_cache_max_bytes(args),
+            )
+            encoded = draft_verification_suite(
+                project,
+                project_config=Path(relative_config).as_posix(),
+                pretty=True,
+            )
+            _write(encoded, args.output)
+            return 0
+        if args.init_root is not None:
+            raise ValueError("--init-root requires --init")
+        if args.freeze is not None and (
+            not args.freeze_owner or not args.freeze_rationale
+        ):
+            raise ValueError(
+                "--freeze requires --freeze-owner and --freeze-rationale"
+            )
+        if args.freeze is None and (
+            args.freeze_owner is not None or args.freeze_rationale is not None
+        ):
+            raise ValueError("--freeze-owner/--freeze-rationale require --freeze")
+        baseline = args.baseline
+        if baseline is None and args.freeze is not None and Path(args.freeze).is_file():
+            baseline = args.freeze
         verification = Verification.from_config(
             args.config,
             project_roots=_project_roots(args.project_root),
-            baseline=args.baseline,
+            baseline=baseline,
             jobs=args.jobs,
             cache_dir=_cache_dir(args),
             cache_max_bytes=_cache_max_bytes(args),
@@ -1493,6 +1573,15 @@ def _verify_main(argv: Sequence[str]) -> int:
             pretty=args.pretty or args.format == "sarif",
         )
         _write(encoded, args.output)
+        if args.freeze is not None:
+            _write(
+                verification.freeze(
+                    owner=args.freeze_owner,
+                    rationale=args.freeze_rationale,
+                    pretty=True,
+                ),
+                args.freeze,
+            )
         return int(args.check and verification.has_errors())
     except (ConfigError, OSError, RuntimeError, ValueError) as error:
         print(f"archbird: error: {error}", file=sys.stderr)

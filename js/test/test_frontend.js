@@ -16,6 +16,7 @@ const {
   auditMapFreshness,
   analyzeOkfSource,
   exportGraph,
+  draftVerificationSuite,
   IMPLEMENTATION_SHA256,
   Project,
   publishOkfBundle,
@@ -523,6 +524,12 @@ assert.deepEqual(
 assert.equal(repositoryProject.map().project, "map-base");
 assert.deepEqual(repositoryProject.mapJson(), repositoryProject.mapJson());
 const repositoryMapJson = repositoryProject.mapJson();
+const candidateSuite = JSON.parse(draftVerificationSuite(repositoryMapJson, {
+  projectConfig: "archbird.json",
+}));
+assert.equal(candidateSuite.candidate, true);
+assert.equal(candidateSuite.suite, "map-base-architecture");
+assert.deepEqual(candidateSuite.projects, { subject: { config: "archbird.json" } });
 const currentProducerQuery = JSON.parse(queryMap(repositoryMapJson, {
   paths: ["py/pkg"],
   depth: 0,
@@ -1137,6 +1144,17 @@ const providerDocument = JSON.parse(providerJson.toString("utf8"));
 const providerFinding = providerDocument.checks
   .find((row) => row.id === "PROVIDER-RENAME")
   .findings.find((row) => row.key === "core_sum");
+const frozenBaseline = JSON.parse(providerVerification.freeze({
+  owner: "architecture",
+  rationale: "Review current provider fixture debt.",
+}));
+assert.equal(frozenBaseline.artifact, "verification-baseline");
+assert.equal(frozenBaseline.active.length, 1);
+assert.deepEqual(frozenBaseline.coverage["PROVIDER-TEST-ROUTES"], [
+  "route:js/runtime.js",
+  "route:py/api.py",
+  "route:src/core.c",
+]);
 const changeProposal = ChangeProposal.compile(
   providerJson,
   providerFinding.fingerprint,

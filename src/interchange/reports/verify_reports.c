@@ -1015,9 +1015,32 @@ ArchbirdStatus ab_verify_render_markdown(AbVerificationContext *context,
   }
 
   if (context->baseline.enabled) {
+    size_t known = 0;
+    size_t added = 0;
+    size_t reintroduced = 0;
+    for (check_index = 0; check_index < context->check_count; check_index++) {
+      const AbVerifyCheckResult *check = &context->checks[check_index];
+      size_t finding_index;
+      for (finding_index = 0; finding_index < check->finding_count;
+           finding_index++) {
+        const AbVerifyFinding *finding = &check->findings[finding_index];
+        if (string_literal(&finding->baseline_state, "known"))
+          known++;
+        else if (string_literal(&finding->baseline_state, "new"))
+          added++;
+        else if (string_literal(&finding->baseline_state, "reintroduced"))
+          reintroduced++;
+      }
+    }
     MD_TRY(ab_buffer_literal(buffer, "## Baseline ratchet\n\nBaseline `"));
     MD_TRY(ab_buffer_append(buffer, context->baseline.sha256, 16));
-    MD_TRY(ab_buffer_literal(buffer, "`; known active="));
+    MD_TRY(ab_buffer_literal(buffer, "`; current known="));
+    MD_TRY(ab_buffer_u64(buffer, known));
+    MD_TRY(ab_buffer_literal(buffer, "; new="));
+    MD_TRY(ab_buffer_u64(buffer, added));
+    MD_TRY(ab_buffer_literal(buffer, "; reintroduced="));
+    MD_TRY(ab_buffer_u64(buffer, reintroduced));
+    MD_TRY(ab_buffer_literal(buffer, "; frozen active="));
     MD_TRY(ab_buffer_u64(buffer, context->baseline.active_count));
     MD_TRY(ab_buffer_literal(buffer, "; resolved history="));
     MD_TRY(ab_buffer_u64(buffer, context->baseline.resolved_count));

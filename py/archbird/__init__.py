@@ -49,6 +49,7 @@ _NATIVE_EXPORTS = (
     "change_verify",
     "compile_test_observations",
     "diff_maps_json",
+    "draft_verification_suite",
     "export_graph",
     "export_okf_bundle",
     "publish_okf_bundle",

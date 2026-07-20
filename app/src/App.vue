@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import ArtifactDrop from "./components/ArtifactDrop.vue";
 import GraphCanvas from "./components/GraphCanvas.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
+import VerificationEditor from "./components/VerificationEditor.vue";
 import { BrowserHost, type BrowserSource } from "./adapters/browser-host";
 import type { HostEvent, SnapshotSummary } from "./adapters/protocol";
 import { ServerHost } from "./adapters/server-host";
@@ -392,6 +393,10 @@ onMounted(async () => {
           @source="openSource"
         />
       </template>
+      <VerificationEditor
+        v-else-if="artifact && !error && ['verification', 'verification-suite'].includes(artifact.artifact)"
+        :artifact="artifact"
+      />
       <div v-else-if="artifact && !error" class="document-card">
         <p class="eyebrow">Loaded {{ artifact.artifact }}</p>
         <h1>Structured document view</h1>

@@ -1482,6 +1482,81 @@ static napi_value verification_analyze(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value verification_draft(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  const uint8_t *map;
+  size_t map_length;
+  char *project_config = NULL;
+  size_t project_config_length = 0;
+  int pretty;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 2 || !get_buffer(env, argv[0], &map, &map_length))
+    return NULL;
+  project_config = get_string(env, argv[1], &project_config_length);
+  if (!project_config || !get_optional_bool(env, argc, argv, 2, 0, &pretty)) {
+    free(project_config);
+    return NULL;
+  }
+  status = saved_artifact_engine(map_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_draft(
+        engine, map, map_length, project_config, project_config_length,
+        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
+        output_write, &output);
+  free(project_config);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static napi_value verification_freeze(napi_env env, napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5];
+  const uint8_t *suite;
+  const uint8_t *input;
+  size_t suite_length;
+  size_t input_length;
+  char *owner = NULL;
+  char *rationale = NULL;
+  size_t owner_length = 0;
+  size_t rationale_length = 0;
+  int pretty;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 4 || !get_buffer(env, argv[0], &suite, &suite_length) ||
+      !get_buffer(env, argv[1], &input, &input_length))
+    return NULL;
+  owner = get_string(env, argv[2], &owner_length);
+  rationale = get_string(env, argv[3], &rationale_length);
+  if (!owner || !rationale ||
+      !get_optional_bool(env, argc, argv, 4, 0, &pretty)) {
+    free(owner);
+    free(rationale);
+    return NULL;
+  }
+  status =
+      saved_artifact_engine(larger_input(suite_length, input_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_freeze(
+        engine, suite, suite_length, input, input_length, owner, owner_length,
+        rationale, rationale_length,
+        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
+        output_write, &output);
+  free(owner);
+  free(rationale);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value verification_report(napi_env env, napi_callback_info info) {
   size_t argc = 5;
   napi_value argv[5];
@@ -1743,6 +1818,10 @@ static napi_value init(napi_env env, napi_value exports) {
       {"verificationReport", NULL, verification_report, NULL, NULL, NULL,
        napi_default, NULL},
       {"verificationAnalyze", NULL, verification_analyze, NULL, NULL, NULL,
+       napi_default, NULL},
+      {"verificationFreeze", NULL, verification_freeze, NULL, NULL, NULL,
+       napi_default, NULL},
+      {"verificationDraft", NULL, verification_draft, NULL, NULL, NULL,
        napi_default, NULL},
       {"verificationPlan", NULL, verification_plan, NULL, NULL, NULL,
        napi_default, NULL},

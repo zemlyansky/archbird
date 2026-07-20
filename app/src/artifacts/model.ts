@@ -73,7 +73,15 @@ export function parseArtifact(bytes: Uint8Array, name: string): ParsedArtifact {
     throw new Error(`${name} is not valid UTF-8 JSON: ${(error as Error).message}`);
   }
   const document = object(value, name);
-  const artifact = string(document.artifact, `${name}.artifact`);
+  const artifact = typeof document.artifact === "string" && document.artifact.length
+    ? document.artifact
+    : document.schema_version === 1
+      && typeof document.suite === "string"
+      && Array.isArray(document.checks)
+      && document.projects !== null
+      && typeof document.projects === "object"
+      ? "verification-suite"
+      : string(document.artifact, `${name}.artifact`);
   return { artifact, bytes, document, name };
 }
 

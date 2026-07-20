@@ -11,7 +11,7 @@
 
 * { box-sizing: border-box; }
 html, body, #app, main { width: 100%; min-height: 100%; margin: 0; }
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 
 body {
@@ -143,12 +143,25 @@ details { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px
 summary { cursor: pointer; font-size: 0.8rem; }
 pre { font: 0.7rem/1.5 "IBM Plex Mono", ui-monospace, monospace; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #cbd5e1; }
 
-.error-card, .document-card { grid-column: 2 / -1; align-self: start; margin: 40px; border: 1px solid var(--line); border-radius: 14px; padding: 28px; background: var(--panel); }
+.error-card, .document-card, .contract-editor { grid-column: 2 / -1; align-self: start; margin: 40px; border: 1px solid var(--line); border-radius: 14px; padding: 28px; background: var(--panel); }
 .error-card { border-color: rgba(248, 113, 113, 0.4); }
 .error-banner { position: fixed; z-index: 9; left: 255px; right: 340px; top: 84px; padding: 9px 12px; border: 1px solid rgba(248, 113, 113, 0.45); border-radius: 8px; background: rgba(69, 10, 10, 0.94); font-size: 0.75rem; }
 .error-banner strong, .error-banner span { display: block; }
 .error-banner span { color: #fecaca; margin-top: 2px; }
 .document-card pre { max-height: 55vh; }
+.contract-editor { display: grid; gap: 14px; max-width: 980px; }
+.contract-editor h1 { margin: 0; }
+.contract-editor > p { color: var(--muted); line-height: 1.55; }
+.contract-editor label { display: grid; gap: 5px; color: var(--muted); font-size: 0.76rem; }
+.contract-editor input, .contract-editor select, .contract-editor textarea {
+  width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 8px;
+  color: #f8fafc; background: rgba(15, 23, 42, 0.8);
+}
+.contract-editor textarea { min-height: 76px; resize: vertical; }
+.contract-editor > button { justify-self: start; border: 1px solid var(--accent); border-radius: 7px; padding: 8px 12px; background: rgba(14, 165, 233, 0.12); cursor: pointer; }
+.check-editor { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border: 1px solid var(--line); border-radius: 9px; padding: 12px; }
+.check-editor label:last-of-type { grid-column: 1 / -1; }
+.finding-message, .editor-message { padding: 10px; border-left: 2px solid var(--accent); background: rgba(14, 165, 233, 0.06); }
 
 @media (max-width: 940px) {
   .topbar { grid-template-columns: 1fr 1fr; height: auto; }

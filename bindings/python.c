@@ -1354,6 +1354,72 @@ static PyObject *py_verification_analyze(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_verification_draft(PyObject *self, PyObject *args,
+                                       PyObject *kwargs) {
+  static char *keywords[] = {"map", "project_config", "pretty", NULL};
+  const char *map;
+  const char *project_config;
+  Py_ssize_t map_length;
+  Py_ssize_t project_config_length;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#s#|p:verification_draft",
+                                   keywords, &map, &map_length, &project_config,
+                                   &project_config_length, &pretty))
+    return NULL;
+  status = saved_artifact_engine((size_t)map_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_draft(
+        engine, (const uint8_t *)map, (size_t)map_length, project_config,
+        (size_t)project_config_length,
+        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
+        output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_verification_freeze(PyObject *self, PyObject *args,
+                                        PyObject *kwargs) {
+  static char *keywords[] = {"suite",     "input",  "owner",
+                             "rationale", "pretty", NULL};
+  const char *suite;
+  const char *input;
+  const char *owner;
+  const char *rationale;
+  Py_ssize_t suite_length;
+  Py_ssize_t input_length;
+  Py_ssize_t owner_length;
+  Py_ssize_t rationale_length;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#s#s#|p:verification_freeze", keywords, &suite,
+          &suite_length, &input, &input_length, &owner, &owner_length,
+          &rationale, &rationale_length, &pretty))
+    return NULL;
+  status = saved_artifact_engine(
+      larger_input((size_t)suite_length, (size_t)input_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_freeze(
+        engine, (const uint8_t *)suite, (size_t)suite_length,
+        (const uint8_t *)input, (size_t)input_length, owner,
+        (size_t)owner_length, rationale, (size_t)rationale_length,
+        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
+        output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_verification_report(PyObject *self, PyObject *args,
                                         PyObject *kwargs) {
   static char *keywords[] = {"suite",        "input",  "format",
@@ -1571,6 +1637,12 @@ static PyMethodDef archbird_methods[] = {
     {"verification_report", (PyCFunction)py_verification_report,
      METH_VARARGS | METH_KEYWORDS,
      "Render Markdown, SARIF, or JUnit from native verification evidence."},
+    {"verification_freeze", (PyCFunction)py_verification_freeze,
+     METH_VARARGS | METH_KEYWORDS,
+     "Render an explicit violation and coverage baseline."},
+    {"verification_draft", (PyCFunction)py_verification_draft,
+     METH_VARARGS | METH_KEYWORDS,
+     "Draft a candidate-only component dependency suite."},
     {"verification_analyze", (PyCFunction)py_verification_analyze,
      METH_VARARGS | METH_KEYWORDS,
      "Evaluate a verification suite over host-supplied evidence."},

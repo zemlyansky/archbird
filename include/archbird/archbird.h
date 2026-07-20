@@ -509,6 +509,29 @@ ARCHBIRD_API ArchbirdStatus archbird_verification_analyze_report(
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*
+ * Draft a candidate-only component dependency suite from one canonical Map.
+ * project_config is the portable path that the resulting suite will use; the
+ * core performs no path resolution and never promotes the draft to reviewed
+ * architecture intent.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_verification_draft(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const char *project_config, size_t project_config_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Render a reviewed violation/coverage baseline from the same suite and input
+ * used by Verify.  Existing baseline state in verification_input_json is
+ * carried forward so resolved findings and coverage form a monotonic ratchet.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_verification_freeze(
+    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
+    const uint8_t *verification_input_json, size_t verification_input_length,
+    const char *owner, size_t owner_length, const char *rationale,
+    size_t rationale_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data);
+
+/*
  * Compile one immutable derived architecture-change proposal from one exact
  * finding in a canonical verification artifact.  The core performs no
  * repository I/O and does not authorize or apply edits.

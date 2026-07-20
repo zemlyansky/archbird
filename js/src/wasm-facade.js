@@ -478,6 +478,25 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
       oneInput(suite, "_ab_wasm_verification_plan", boolFlags(pretty)),
     verificationAnalyze: (suite, input, pretty = false) =>
       twoInputs(suite, input, "_ab_wasm_verification_analyze", boolFlags(pretty)),
+    verificationDraft: (map, projectConfig, pretty = false) =>
+      twoInputs(map, projectConfig, "_ab_wasm_verification_draft", boolFlags(pretty, true)),
+    verificationFreeze(suite, input, owner, rationale, pretty = false) {
+      return withInputs(
+        [suite, input, owner, rationale],
+        ([suiteInput, inputInput, ownerInput, rationaleInput]) =>
+          result(module._ab_wasm_verification_freeze(
+            suiteInput.pointer,
+            suiteInput.length,
+            inputInput.pointer,
+            inputInput.length,
+            ownerInput.pointer,
+            ownerInput.length,
+            rationaleInput.pointer,
+            rationaleInput.length,
+            boolFlags(pretty, true),
+          )),
+      );
+    },
     verificationReport(suite, input, format, maxFindings = 200, pretty = false) {
       const formatNumber = formatValue(
         format,

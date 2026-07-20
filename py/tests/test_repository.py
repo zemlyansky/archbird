@@ -46,6 +46,7 @@ def main() -> int:
         Workspace,
         analyze_okf_source,
         diff_maps_json,
+        draft_verification_suite,
         export_graph,
         publish_okf_bundle,
         resolve_discovery,
@@ -155,6 +156,15 @@ def main() -> int:
     second = project.map_json()
     if first != second:
         raise AssertionError("repository Map output is not repeatable")
+    draft = json.loads(
+        draft_verification_suite(
+            project, project_config="archbird.json", pretty=False
+        )
+    )
+    if not draft["candidate"] or draft["suite"] != "map-base-architecture":
+        raise AssertionError("Python host did not produce a candidate suite")
+    if draft["projects"] != {"subject": {"config": "archbird.json"}}:
+        raise AssertionError("Python candidate suite lost its portable config")
     streamed = io.BytesIO()
     project.write_map_json(streamed.write)
     if streamed.getvalue() != first:
@@ -895,6 +905,51 @@ def main() -> int:
         for finding in check["findings"]
         if finding["key"] == "core_sum"
     )
+    frozen = json.loads(
+        provider_verification.freeze(
+            owner="architecture",
+            rationale="Review current provider fixture debt.",
+            pretty=False,
+        )
+    )
+    if frozen["artifact"] != "verification-baseline" or len(frozen["active"]) != 1:
+        raise AssertionError("Python host did not freeze current findings")
+    if frozen["coverage"]["PROVIDER-TEST-ROUTES"] != [
+        "route:js/runtime.js",
+        "route:py/api.py",
+        "route:src/core.c",
+    ]:
+        raise AssertionError("Python baseline lost its coverage ratchet")
+    previous = json.loads(json.dumps(frozen))
+    retired_fingerprint = "f" * 64
+    previous["active"].append(
+        {
+            "check": "RETIRED-CHECK",
+            "comparison": "extra",
+            "fingerprint": retired_fingerprint,
+            "key": "retired-edge",
+        }
+    )
+    previous["coverage"]["RETIRED-CHECK"] = ["route:retired"]
+    repeated_input = json.loads(provider_verification.input_json)
+    repeated_input["baseline"] = previous
+    repeated = json.loads(
+        _native.verification_freeze(
+            provider_verification.suite_json,
+            json.dumps(
+                repeated_input,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+            owner="architecture",
+            rationale="Carry the reviewed baseline forward.",
+        )
+    )
+    if retired_fingerprint not in repeated["resolved"]:
+        raise AssertionError("Python baseline lost resolved finding history")
+    if repeated["coverage"]["RETIRED-CHECK"] != ["route:retired"]:
+        raise AssertionError("Python baseline lost retired-check coverage")
     proposal = ChangeProposal.compile(
         provider_json, str(provider_finding["fingerprint"])
     )
@@ -1412,6 +1467,42 @@ def main() -> int:
         if status:
             raise AssertionError("native Python OKF replacement CLI failed")
         output = Path(directory) / "verification.json"
+        candidate_output = Path(directory) / "candidate.verify.json"
+        status = cli_main(
+            [
+                "verify",
+                "--init",
+                str(fixture / "archbird.json"),
+                "--init-root",
+                str(fixture),
+                "--no-cache",
+                "--output",
+                str(candidate_output),
+            ]
+        )
+        candidate_document = json.loads(candidate_output.read_bytes())
+        if status or not candidate_document["candidate"]:
+            raise AssertionError("native Python verify --init failed")
+        baseline_output = Path(directory) / "provider.baseline.json"
+        provider_report = Path(directory) / "provider.freeze-result.json"
+        status = cli_main(
+            [
+                "verify",
+                "--config",
+                str(repository / "test/fixtures/act/provider/provider.verify.json"),
+                "--freeze",
+                str(baseline_output),
+                "--freeze-owner",
+                "architecture",
+                "--freeze-rationale",
+                "Review current provider fixture debt.",
+                "--no-cache",
+                "--output",
+                str(provider_report),
+            ]
+        )
+        if status or json.loads(baseline_output.read_bytes())["artifact"] != "verification-baseline":
+            raise AssertionError("native Python verify --freeze failed")
         status = cli_main(
             [
                 "verify",

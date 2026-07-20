@@ -1377,6 +1377,30 @@ class Verification:
     def has_errors(self) -> bool:
         return bool(self.result()["summary"]["blocking"])
 
+    def freeze(self, *, owner: str, rationale: str, pretty: bool = True) -> bytes:
+        """Render an explicit violation and coverage-ratchet baseline."""
+
+        return _native.verification_freeze(
+            self.suite_json,
+            self.input_json,
+            owner=owner,
+            rationale=rationale,
+            pretty=pretty,
+        )
+
+
+def draft_verification_suite(
+    project: Project,
+    *,
+    project_config: str,
+    pretty: bool = True,
+) -> bytes:
+    """Draft a candidate component-edge suite from one current Map."""
+
+    return _native.verification_draft(
+        project.map_json(), project_config, pretty=pretty
+    )
+
 
 def _query_request(
     *,

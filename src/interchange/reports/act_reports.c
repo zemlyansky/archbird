@@ -248,7 +248,7 @@ ab_act_proposal_render_markdown(AbBuffer *buffer,
   REPORT_TRY(ab_buffer_literal(buffer, "\n## Evidence\n\n"));
   {
     size_t evidence_count = proposal->evidence->as.array.count;
-    size_t shown = full || evidence_count < 100 ? evidence_count : 100;
+    size_t shown = full || evidence_count < 20 ? evidence_count : 20;
     for (index = 0; index < shown; index++) {
       REPORT_TRY(ab_buffer_literal(buffer, "- "));
       REPORT_TRY(render_evidence_value_label(
