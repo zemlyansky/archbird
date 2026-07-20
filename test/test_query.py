@@ -270,6 +270,108 @@ def main() -> int:
         raise AssertionError("budgeted query did not compact its focus header")
     if "canonical Query IR remains complete" not in wide_first:
         raise AssertionError("budgeted query blurred the IR/view boundary")
+
+    retrieval_map = json.loads(
+        (fixture.parent / "report_map.json").read_text(encoding="utf-8")
+    )
+    retrieval_request = {
+        "search": ["@sample dep"],
+        "search_limit": 5,
+        "direction": "both",
+        "depth": 0,
+        "test_depth": 0,
+    }
+    retrieval_first = extension.map_query(
+        canonical(retrieval_map), canonical(retrieval_request)
+    )
+    retrieval_second = extension.map_query(
+        canonical(retrieval_map), canonical(retrieval_request)
+    )
+    if retrieval_first != retrieval_second:
+        raise AssertionError("deterministic retrieval bytes are not repeatable")
+    retrieval = json.loads(retrieval_first)["query"]["retrieval"]
+    if (
+        retrieval["hits"][0]["kind"] != "package"
+        or retrieval["hits"][0]["name"] != "sample"
+        or not any(
+            reason["field"] == "package.dependency"
+            and reason["value"] == "@sample/dep"
+            for reason in retrieval["hits"][0]["reasons"]
+        )
+    ):
+        raise AssertionError(
+            f"package metadata retrieval lost its witness: {retrieval!r}"
+        )
+    supported_legacy_map = copy.deepcopy(retrieval_map)
+    for package in supported_legacy_map["packages"]:
+        package.pop("aliases", None)
+        package.pop("dependencies", None)
+        package.pop("exports", None)
+    legacy_retrieval = json.loads(
+        extension.map_query(
+            canonical(supported_legacy_map),
+            canonical(
+                {
+                    "search": ["sample"],
+                    "search_limit": 1,
+                    "direction": "both",
+                    "depth": 0,
+                    "test_depth": 0,
+                }
+            ),
+        )
+    )["query"]["retrieval"]
+    if legacy_retrieval["hits"][0]["kind"] != "package":
+        raise AssertionError("retrieval rejected optional legacy package fields")
+    malformed_package_map = copy.deepcopy(retrieval_map)
+    malformed_package_map["packages"][0]["aliases"] = {}
+    try:
+        extension.map_query(
+            canonical(malformed_package_map), canonical(retrieval_request)
+        )
+    except Exception:
+        pass
+    else:
+        raise AssertionError("retrieval accepted malformed package metadata")
+    invalid_retrieval_requests = (
+        {
+            "search": ["---"],
+            "direction": "both",
+            "depth": 0,
+            "test_depth": 0,
+        },
+        {
+            "search": [" ".join(f"term{index}" for index in range(17))],
+            "direction": "both",
+            "depth": 0,
+            "test_depth": 0,
+        },
+        {
+            "search": ["sample"],
+            "search_limit": 0,
+            "direction": "both",
+            "depth": 0,
+            "test_depth": 0,
+        },
+        {
+            "search": ["sample"],
+            "search_limit": 101,
+            "direction": "both",
+            "depth": 0,
+            "test_depth": 0,
+        },
+    )
+    for invalid_request in invalid_retrieval_requests:
+        try:
+            extension.map_query(
+                canonical(retrieval_map), canonical(invalid_request)
+            )
+        except Exception:
+            pass
+        else:
+            raise AssertionError(
+                f"invalid retrieval request was accepted: {invalid_request!r}"
+            )
     if data.project == "map-base":
         cases = (
             {

@@ -537,6 +537,20 @@ const currentProducerQuery = JSON.parse(queryMap(repositoryMapJson, {
 }));
 assert.equal(currentProducerQuery.query.producer_policy, "current");
 assert.equal(currentProducerQuery.query.producer_compatibility, "current");
+const retrievalQuery = JSON.parse(queryMap(repositoryMapJson, {
+  search: ["twce javascript"], searchLimit: 4, depth: 0, testDepth: 0,
+}));
+assert.equal(retrievalQuery.query.retrieval.contract, "archbird-lexical-ranking-v1");
+assert.equal(retrievalQuery.query.retrieval.confidence, "candidate");
+assert.equal(retrievalQuery.query.retrieval.hits.length, 4);
+assert.equal(retrievalQuery.query.retrieval.hits[0].path, "js/index.js");
+assert.equal(retrievalQuery.query.retrieval.hits[0].name, "twice");
+assert.ok(retrievalQuery.query.retrieval.hits[0].reasons.some(
+  (reason) => reason.match === "edit-1",
+));
+assert.ok(queryMapMarkdown(repositoryMapJson, {
+  search: ["twce javascript"], searchLimit: 4, depth: 0, testDepth: 0,
+}).includes("## Candidate seeds"));
 const differentProducerMap = JSON.parse(repositoryMapJson);
 differentProducerMap.tool.implementation_sha256 = "0".repeat(64);
 const compatibleProducerQuery = JSON.parse(queryMap(

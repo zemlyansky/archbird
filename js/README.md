@@ -81,6 +81,12 @@ adds only checks with exact subject-side source-path overlap and reports input
 and producer freshness. The browser `Project.queryMarkdown()` accepts the same
 option.
 
+Pass `{ search: ["provider registration"], searchLimit: 8 }` when the path or
+symbol is not yet known. Archbird returns advisory candidate seeds with the
+exact matched Map fields and scores, then expands them through normal typed
+Query routes. This deterministic lexical ranking does not claim semantic
+equivalence.
+
 ### Import observed test routes
 
 Run each case in isolation with V8 or Istanbul coverage, then convert the
@@ -133,6 +139,9 @@ npx archbird map . --format json --pretty \
 
 npx archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000
+
+npx archbird query --map .archbird/map.json \
+  --search 'where is provider registration handled' --search-limit 8
 
 npx archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2

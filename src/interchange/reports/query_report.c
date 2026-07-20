@@ -92,6 +92,76 @@ static ArchbirdStatus query_schema_error(ArchbirdEngine *engine,
                             "%s", message);
 }
 
+static ArchbirdStatus render_retrieval_summary(ArchbirdEngine *engine,
+                                               const AbValue *retrieval,
+                                               int compact, AbBuffer *out) {
+  const AbString *contract = ab_report_string(retrieval, "contract");
+  const AbString *confidence = ab_report_string(retrieval, "confidence");
+  const AbValue *hits = ab_report_array(retrieval, "hits");
+  size_t matched = ab_report_size(retrieval, "matched_count", SIZE_MAX);
+  size_t candidates = ab_report_size(retrieval, "candidate_count", SIZE_MAX);
+  size_t limit = ab_report_size(retrieval, "limit", SIZE_MAX);
+  size_t shown;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!contract || !confidence || !hits || matched == SIZE_MAX ||
+      candidates == SIZE_MAX || limit == SIZE_MAX ||
+      !ab_report_string_equal(confidence, "candidate"))
+    return query_schema_error(engine, "query retrieval evidence is malformed");
+  QUERY_TRY(ab_report_literal_line(out, "## Candidate seeds"));
+  QUERY_TRY(ab_report_blank(out));
+  QUERY_TRY(ab_report_linef(
+      out,
+      "Deterministic `%.*s` ranking; selected=%zu (limit=%zu), matched=%zu, "
+      "indexed=%zu. "
+      "These seeds are advisory; graph routes retain their own evidence class.",
+      (int)contract->length, contract->data, hits->as.array.count, limit,
+      matched, candidates));
+  QUERY_TRY(ab_report_blank(out));
+  QUERY_TRY(ab_report_literal_line(out, "```text"));
+  shown = compact && hits->as.array.count > 5 ? 5 : hits->as.array.count;
+  for (index = 0; index < shown; index++) {
+    const AbValue *hit = &hits->as.array.items[index];
+    const AbString *kind = ab_report_string(hit, "kind");
+    const AbString *path = ab_report_string(hit, "path");
+    const AbString *name = ab_report_string(hit, "name");
+    const AbValue *reasons = ab_report_array(hit, "reasons");
+    size_t score = ab_report_size(hit, "score", SIZE_MAX);
+    const AbString *field;
+    const AbString *match;
+    const AbString *term;
+    if (!kind || (!path && !name) || !reasons || !reasons->as.array.count ||
+        score == SIZE_MAX)
+      return query_schema_error(engine, "query retrieval hit is malformed");
+    field = ab_report_string(&reasons->as.array.items[0], "field");
+    match = ab_report_string(&reasons->as.array.items[0], "match");
+    term = ab_report_string(&reasons->as.array.items[0], "term");
+    if (!field || !match || !term)
+      return query_schema_error(engine, "query retrieval reason is malformed");
+    QUERY_TRY(ab_report_appendf(out, "%zu. %.*s ", index + 1, (int)kind->length,
+                                kind->data));
+    if (path)
+      QUERY_TRY(ab_buffer_append(out, path->data, path->length));
+    if (name && (!path || !ab_string_equal(path, name))) {
+      if (path)
+        QUERY_TRY(ab_buffer_literal(out, ":"));
+      QUERY_TRY(ab_buffer_append(out, name->data, name->length));
+    }
+    QUERY_TRY(ab_report_appendf(out, " score=%zu [%.*s:%.*s term=%.*s]", score,
+                                (int)field->length, field->data,
+                                (int)match->length, match->data,
+                                (int)term->length, term->data));
+    QUERY_TRY(ab_buffer_literal(out, "\n"));
+  }
+  if (hits->as.array.count > shown)
+    QUERY_TRY(ab_report_linef(out, "… %zu candidate seeds omitted by detail",
+                              hits->as.array.count - shown));
+  QUERY_TRY(ab_report_literal_line(out, "```"));
+  QUERY_TRY(ab_report_blank(out));
+cleanup:
+  return status;
+}
+
 static const AbValue *optional_array(const AbValue *object, const char *name) {
   static const AbValue empty = {.kind = AB_VALUE_ARRAY};
   const AbValue *value = ab_value_member(object, name);
@@ -1496,6 +1566,7 @@ static ArchbirdStatus render_query_view(
   const AbValue *seeds;
   const AbValue *seed_identities;
   const AbValue *change_set;
+  const AbValue *retrieval;
   const AbString *scope;
   const AbString *producer_policy;
   const AbString *producer_compatibility;
@@ -1530,6 +1601,9 @@ static ArchbirdStatus render_query_view(
   seeds = optional_array(metadata, "seeds");
   seed_identities = optional_array(metadata, "seed_identities");
   change_set = ab_value_member(metadata, "change_set");
+  retrieval = ab_value_member(metadata, "retrieval");
+  if (retrieval && retrieval->kind != AB_VALUE_OBJECT)
+    return query_schema_error(engine, "query retrieval must be an object");
   scope = string_or_empty(metadata, "scope");
   producer_policy = string_or_empty(metadata, "producer_policy");
   producer_compatibility = string_or_empty(metadata, "producer_compatibility");
@@ -1724,6 +1798,8 @@ static ArchbirdStatus render_query_view(
         policy_data));
     QUERY_TRY(ab_report_blank(out));
   }
+  if (retrieval)
+    QUERY_TRY(render_retrieval_summary(engine, retrieval, compact_detail, out));
   if (change_view && change_set) {
     const AbValue *source = ab_report_object(change_set, "source");
     const AbValue *entries = ab_report_array(change_set, "entries");

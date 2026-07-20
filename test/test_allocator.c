@@ -389,6 +389,7 @@ typedef enum ReportExerciseKind {
   REPORT_EXERCISE_MAP_OVERVIEW,
   REPORT_EXERCISE_MAP_ARCHITECTURE,
   REPORT_EXERCISE_QUERY,
+  REPORT_EXERCISE_QUERY_RETRIEVAL,
   REPORT_EXERCISE_QUERY_CHANGES,
   REPORT_EXERCISE_QUERY_VERIFICATION,
   REPORT_EXERCISE_QUERY_BUDGET
@@ -399,6 +400,9 @@ static ArchbirdStatus exercise_report(TestAllocator *allocator,
   static const char query[] =
       "{\"artifacts\":[\"browser-bundle\"],\"direction\":\"both\","
       "\"depth\":1,\"test_depth\":1}";
+  static const char retrieval_query[] =
+      "{\"search\":[\"browser bundle\"],\"search_limit\":4,"
+      "\"direction\":\"both\",\"depth\":1,\"test_depth\":1}";
   ArchbirdStatus status;
   ArchbirdEngine *engine = create_engine(allocator, &status);
   CountingOutput output = {0};
@@ -431,6 +435,11 @@ static ArchbirdStatus exercise_report(TestAllocator *allocator,
     status = archbird_map_query_markdown(
         engine, report_map, report_map_length, (const uint8_t *)query,
         sizeof(query) - 1, 0, count_write, &output);
+    break;
+  case REPORT_EXERCISE_QUERY_RETRIEVAL:
+    status = archbird_map_query_markdown(
+        engine, report_map, report_map_length, (const uint8_t *)retrieval_query,
+        sizeof(retrieval_query) - 1, 0, count_write, &output);
     break;
   case REPORT_EXERCISE_QUERY_CHANGES:
     status = archbird_map_query_markdown_view(
@@ -483,6 +492,11 @@ exercise_architecture_map_report(TestAllocator *allocator) {
 
 static ArchbirdStatus exercise_query_report(TestAllocator *allocator) {
   return exercise_report(allocator, REPORT_EXERCISE_QUERY);
+}
+
+static ArchbirdStatus
+exercise_retrieval_query_report(TestAllocator *allocator) {
+  return exercise_report(allocator, REPORT_EXERCISE_QUERY_RETRIEVAL);
 }
 
 static ArchbirdStatus exercise_budgeted_query_report(TestAllocator *allocator) {
@@ -791,6 +805,8 @@ int main(void) {
   run_failure_sweep("map-report-architecture-every-n",
                     exercise_architecture_map_report);
   run_failure_sweep("query-report-every-n", exercise_query_report);
+  run_failure_sweep("query-retrieval-report-every-n",
+                    exercise_retrieval_query_report);
   run_failure_sweep("query-change-report-every-n",
                     exercise_change_query_report);
   run_failure_sweep("query-verification-report-every-n",

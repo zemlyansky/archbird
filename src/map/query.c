@@ -4,6 +4,7 @@
 #include "json_value.h"
 #include "map_internal.h"
 #include "render_internal.h"
+#include "retrieval.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -15,12 +16,14 @@ typedef struct QueryRequest {
   const AbValue *components;
   const AbValue *packages;
   const AbValue *artifacts;
+  const AbValue *search;
   const AbValue *change_set;
   const AbValue *context;
   const AbString *direction;
   const AbString *producer_policy;
   size_t depth;
   size_t test_depth;
+  size_t search_limit;
 } QueryRequest;
 
 typedef struct QueryFile {
@@ -131,6 +134,7 @@ typedef struct QueryContext {
   const AbValue *symbol_references;
   const char *producer_compatibility;
   int exact_symbol_scope;
+  AbRetrievalResult retrieval;
 } QueryContext;
 
 static int string_literal(const AbString *value, const char *literal) {
@@ -482,13 +486,15 @@ static ArchbirdStatus decode_request(QueryContext *context,
   context->request.components = optional_array(request, "components");
   context->request.packages = optional_array(request, "packages");
   context->request.artifacts = optional_array(request, "artifacts");
+  context->request.search = optional_array(request, "search");
   context->request.change_set = ab_value_member(request, "change_set");
   if (!string_array_valid(context->request.focus) ||
       !string_array_valid(context->request.paths) ||
       !string_array_valid(context->request.symbols) ||
       !string_array_valid(context->request.components) ||
       !string_array_valid(context->request.packages) ||
-      !string_array_valid(context->request.artifacts))
+      !string_array_valid(context->request.artifacts) ||
+      !string_array_valid(context->request.search))
     return query_error(context, "query selectors must be arrays of strings");
   if (validate_change_set(context, context->request.change_set) != ARCHBIRD_OK)
     return ARCHBIRD_INVALID_SCHEMA;
@@ -529,13 +535,21 @@ static ArchbirdStatus decode_request(QueryContext *context,
       return query_error(context, "query.test_depth must be an integer >= 0");
     context->request.test_depth = (size_t)number;
   }
+  context->request.search_limit = 8;
+  depth = ab_value_member(request, "search_limit");
+  if (depth) {
+    if (!ab_value_u64(depth, &number) || !number || number > 100)
+      return query_error(context,
+                         "query.search_limit must be an integer from 1 to 100");
+    context->request.search_limit = (size_t)number;
+  }
   if (!context->request.focus->as.array.count &&
       !context->request.paths->as.array.count &&
       !context->request.symbols->as.array.count &&
       !context->request.components->as.array.count &&
       !context->request.packages->as.array.count &&
       !context->request.artifacts->as.array.count &&
-      !context->request.change_set)
+      !context->request.search->as.array.count && !context->request.change_set)
     return query_error(context, "query requires at least one focus selector");
   return ARCHBIRD_OK;
 }
@@ -683,6 +697,7 @@ static void query_context_free(QueryContext *context) {
   ab_free(context->engine, context->package_selected);
   ab_free(context->engine, context->artifact_selected);
   ab_free(context->engine, context->component_selected);
+  ab_map_retrieval_free(context->engine, &context->retrieval);
   memset(context, 0, sizeof(*context));
 }
 
@@ -1108,6 +1123,107 @@ static ArchbirdStatus select_change_set(QueryContext *context) {
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus seed_retrieved_component(QueryContext *context,
+                                               const AbRetrievalHit *hit) {
+  const AbValue *files =
+      required_array(context, hit->row, "files", "map.components[]");
+  if (!files || !string_array_valid(files) ||
+      hit->source_index >= context->component_count)
+    return ARCHBIRD_INVALID_SCHEMA;
+  context->component_selected[hit->source_index] = 1;
+  seed_string_array(context, files);
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus seed_retrieved_package(QueryContext *context,
+                                             const AbRetrievalHit *hit) {
+  const AbValue *entrypoints = ab_value_member(hit->row, "entrypoints");
+  size_t field;
+  if (!entrypoints || entrypoints->kind != AB_VALUE_OBJECT ||
+      hit->source_index >= context->package_count)
+    return query_error(context, "retrieved Map package is invalid");
+  context->package_selected[hit->source_index] = 1;
+  for (field = 0; field < entrypoints->as.object.count; field++) {
+    const AbValue *target = &entrypoints->as.object.fields[field].value;
+    if (target->kind != AB_VALUE_STRING)
+      return query_error(context, "map package entrypoint must be a string");
+    mark_seed(context, &target->as.text);
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus seed_retrieved_artifact(QueryContext *context,
+                                              const AbRetrievalHit *hit) {
+  const AbValue *inputs =
+      required_array(context, hit->row, "inputs", "map.artifacts[]");
+  const AbValue *loaders =
+      required_array(context, hit->row, "loaded_by", "map.artifacts[]");
+  size_t index;
+  if (!inputs || !loaders || hit->source_index >= context->artifact_count)
+    return ARCHBIRD_INVALID_SCHEMA;
+  context->artifact_selected[hit->source_index] = 1;
+  for (index = 0; index < inputs->as.array.count; index++) {
+    const AbString *path =
+        required_string(context, &inputs->as.array.items[index], "path",
+                        "map.artifacts[].inputs[]");
+    if (!path)
+      return ARCHBIRD_INVALID_SCHEMA;
+    mark_seed(context, path);
+  }
+  for (index = 0; index < loaders->as.array.count; index++) {
+    const AbString *path =
+        required_string(context, &loaders->as.array.items[index], "path",
+                        "map.artifacts[].loaded_by[]");
+    if (!path)
+      return ARCHBIRD_INVALID_SCHEMA;
+    mark_seed(context, path);
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus select_retrieval(QueryContext *context) {
+  size_t index;
+  ArchbirdStatus status;
+  if (!context->request.search->as.array.count)
+    return ARCHBIRD_OK;
+  status =
+      ab_map_retrieve(context->engine, context->map, context->request.search,
+                      context->request.search_limit, &context->retrieval);
+  if (status != ARCHBIRD_OK)
+    return status;
+  for (index = 0; index < context->retrieval.hit_count; index++) {
+    const AbRetrievalHit *hit = &context->retrieval.hits[index];
+    if (hit->kind == AB_RETRIEVAL_FILE) {
+      mark_seed(context, hit->path);
+    } else if (hit->kind == AB_RETRIEVAL_SYMBOL) {
+      const AbString *scope =
+          required_string(context, hit->row, "scope", "map.files[].symbols[]");
+      size_t file_index = find_file(context, hit->path);
+      if (!scope || file_index == SIZE_MAX)
+        return ARCHBIRD_INVALID_SCHEMA;
+      context->files[file_index].symbol_seed = 1;
+      context->files[file_index].matched_symbol_seed = 1;
+      status = append_symbol(context, file_index, hit->row, hit->name,
+                             hit->symbol_kind, scope, hit->line);
+      if (status != ARCHBIRD_OK)
+        return status;
+    } else if (hit->kind == AB_RETRIEVAL_COMPONENT) {
+      status = seed_retrieved_component(context, hit);
+      if (status != ARCHBIRD_OK)
+        return status;
+    } else if (hit->kind == AB_RETRIEVAL_PACKAGE) {
+      status = seed_retrieved_package(context, hit);
+      if (status != ARCHBIRD_OK)
+        return status;
+    } else if (hit->kind == AB_RETRIEVAL_ARTIFACT) {
+      status = seed_retrieved_artifact(context, hit);
+      if (status != ARCHBIRD_OK)
+        return status;
+    }
+  }
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus select_initial(QueryContext *context) {
   size_t index;
   ArchbirdStatus status;
@@ -1134,6 +1250,8 @@ static ArchbirdStatus select_initial(QueryContext *context) {
     status = select_artifacts(context, context->request.focus);
   if (status == ARCHBIRD_OK)
     status = select_artifacts(context, context->request.artifacts);
+  if (status == ARCHBIRD_OK)
+    status = select_retrieval(context);
   if (status != ARCHBIRD_OK)
     return status;
   for (index = 0; index < context->file_count; index++)
@@ -3598,9 +3716,10 @@ static ArchbirdStatus render_focus_labels(AbBuffer *buffer,
       context->request.focus,    context->request.paths,
       context->request.symbols,  context->request.components,
       context->request.packages, context->request.artifacts,
+      context->request.search,
   };
   const char *prefixes[] = {
-      "", "path:", "symbol:", "component:", "package:", "artifact:"};
+      "", "path:", "symbol:", "component:", "package:", "artifact:", "search:"};
   size_t group;
   int first = 1;
   ArchbirdStatus status = ab_buffer_literal(buffer, "[");
@@ -3656,6 +3775,107 @@ static ArchbirdStatus render_focus_labels(AbBuffer *buffer,
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "]");
+  return status;
+}
+
+static ArchbirdStatus render_retrieval(AbBuffer *buffer,
+                                       const QueryContext *context) {
+  size_t index;
+  ArchbirdStatus status = ab_buffer_literal(buffer, "{\"candidate_count\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, context->retrieval.candidate_count);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_literal(buffer, ",\"confidence\":\"candidate\",\"contract\":"
+                                  "\"archbird-lexical-ranking-v1\",\"hits\":[");
+  for (index = 0; status == ARCHBIRD_OK && index < context->retrieval.hit_count;
+       index++) {
+    const AbRetrievalHit *hit = &context->retrieval.hits[index];
+    size_t reason_index;
+    if (index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "{\"kind\":");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_buffer_json_string(buffer, ab_map_retrieval_kind_name(hit->kind),
+                                strlen(ab_map_retrieval_kind_name(hit->kind)));
+    if (status == ARCHBIRD_OK && hit->line) {
+      status = ab_buffer_literal(buffer, ",\"line\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_u64(buffer, hit->line);
+    }
+    if (status == ARCHBIRD_OK && hit->name) {
+      status = ab_buffer_literal(buffer, ",\"name\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer, hit->name);
+    }
+    if (status == ARCHBIRD_OK && hit->path) {
+      status = ab_buffer_literal(buffer, ",\"path\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer, hit->path);
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"reasons\":[");
+    for (reason_index = 0;
+         status == ARCHBIRD_OK && reason_index < hit->reason_count;
+         reason_index++) {
+      const AbRetrievalReason *reason = &hit->reasons[reason_index];
+      if (reason_index)
+        status = ab_buffer_literal(buffer, ",");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, "{\"field\":");
+      if (status == ARCHBIRD_OK)
+        status =
+            ab_buffer_json_string(buffer, reason->field, strlen(reason->field));
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, ",\"match\":");
+      if (status == ARCHBIRD_OK)
+        status =
+            ab_buffer_json_string(buffer, reason->match, strlen(reason->match));
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, ",\"term\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer,
+                               &context->retrieval.terms[reason->term_index]);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, ",\"value\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer, reason->value);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, "}");
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "],\"score\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, hit->score);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "],\"limit\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, context->retrieval.limit);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"matched_count\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, context->retrieval.matched_count);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"queries\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(buffer, context->request.search);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"terms\":[");
+  for (index = 0;
+       status == ARCHBIRD_OK && index < context->retrieval.term_count;
+       index++) {
+    if (index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = render_string(buffer, &context->retrieval.terms[index]);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "]}");
   return status;
 }
 
@@ -3737,6 +3957,11 @@ static ArchbirdStatus render_query_metadata(AbBuffer *buffer,
     status = ab_buffer_literal(buffer, ",\"producer_policy\":");
   if (status == ARCHBIRD_OK)
     status = render_string(buffer, context->request.producer_policy);
+  if (status == ARCHBIRD_OK && context->request.search->as.array.count) {
+    status = ab_buffer_literal(buffer, ",\"retrieval\":");
+    if (status == ARCHBIRD_OK)
+      status = render_retrieval(buffer, context);
+  }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"seeds\":[");
   for (index = 0; status == ARCHBIRD_OK && index < context->file_count;

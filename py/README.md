@@ -72,6 +72,12 @@ live-source comparison performed by `audit_map_freshness()`.
 adds only checks with exact subject-side source-path overlap and reports input
 and producer freshness.
 
+Pass `search=["provider registration"]` and `search_limit=8` when the path or
+symbol is not yet known. Archbird returns advisory candidate seeds with the
+exact matched Map fields and scores, then expands them through normal typed
+Query routes. This deterministic lexical ranking does not claim semantic
+equivalence.
+
 Workspace, Verification, ChangeProposal, ChangeContract, change-result,
 graph-view, freshness, diff, OKF, and report functions use the same canonical
 schemas as the CLI and C core.
@@ -107,6 +113,9 @@ archbird map . --format json --pretty \
 
 archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000
+
+archbird query --map .archbird/map.json \
+  --search 'where is provider registration handled' --search-limit 8
 
 archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2

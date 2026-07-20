@@ -233,6 +233,22 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
     result.add_argument("--package", action="append", default=[])
     result.add_argument("--artifact", action="append", default=[])
     result.add_argument(
+        "--search",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help=(
+            "rank deterministic candidate seeds from names, paths, signatures, "
+            "component descriptions, and package/artifact metadata; repeatable"
+        ),
+    )
+    result.add_argument(
+        "--search-limit",
+        type=int,
+        default=8,
+        help="maximum candidate seeds selected by --search (default: 8)",
+    )
+    result.add_argument(
         "--git-diff",
         metavar="REVISION",
         help=(
@@ -1222,6 +1238,8 @@ def _query_main(
             raise ValueError("--max-chars must be nonnegative")
         if args.max_seed_distance is not None and args.max_seed_distance < 0:
             raise ValueError("--max-seed-distance must be nonnegative")
+        if args.search_limit < 1 or args.search_limit > 100:
+            raise ValueError("--search-limit must be from 1 to 100")
         if args.format == "json" and args.max_chars:
             raise ValueError("--max-chars applies only to Markdown")
         if args.format == "markdown" and args.pretty:
@@ -1251,6 +1269,8 @@ def _query_main(
             "components": args.component,
             "packages": args.package,
             "artifacts": args.artifact,
+            "search": args.search,
+            "search_limit": args.search_limit,
             "change_set": change_set,
             "direction": args.direction,
             "producer_policy": (

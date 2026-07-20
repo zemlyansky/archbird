@@ -28,6 +28,8 @@ function queryRequest(options = {}) {
     focus: options.focus || [],
     packages: options.packages || [],
     paths: options.paths || [],
+    search: options.search || [],
+    search_limit: options.searchLimit ?? 8,
     symbols: options.symbols || [],
     test_depth: options.testDepth ?? 8,
   };

@@ -1,0 +1,643 @@
+#include "retrieval.h"
+
+#include "archbird_internal.h"
+
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct RetrievalField {
+  const char *name;
+  const AbString *value;
+  unsigned weight;
+} RetrievalField;
+
+typedef struct RetrievalCandidate {
+  AbRetrievalHit hit;
+  unsigned strengths[AB_RETRIEVAL_MAX_TERMS];
+  unsigned weights[AB_RETRIEVAL_MAX_TERMS];
+} RetrievalCandidate;
+
+static int ascii_alnum(unsigned char value) {
+  return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+         (value >= '0' && value <= '9');
+}
+
+static unsigned char ascii_fold(unsigned char value) {
+  return value >= 'A' && value <= 'Z' ? (unsigned char)(value + ('a' - 'A'))
+                                      : value;
+}
+
+static int slice_equal(const char *left, size_t left_length, const char *right,
+                       size_t right_length) {
+  size_t index;
+  if (left_length != right_length)
+    return 0;
+  for (index = 0; index < left_length; index++)
+    if (ascii_fold((unsigned char)left[index]) !=
+        ascii_fold((unsigned char)right[index]))
+      return 0;
+  return 1;
+}
+
+static int slice_prefix(const char *text, size_t text_length,
+                        const char *prefix, size_t prefix_length) {
+  return text_length >= prefix_length &&
+         slice_equal(text, prefix_length, prefix, prefix_length);
+}
+
+static int slice_contains(const char *text, size_t text_length,
+                          const char *needle, size_t needle_length) {
+  size_t index;
+  if (!needle_length || needle_length > text_length)
+    return 0;
+  for (index = 0; index + needle_length <= text_length; index++)
+    if (slice_equal(text + index, needle_length, needle, needle_length))
+      return 1;
+  return 0;
+}
+
+static size_t bounded_edit_distance(const char *left, size_t left_length,
+                                    const char *right, size_t right_length,
+                                    size_t bound) {
+  size_t previous[65];
+  size_t current[65];
+  size_t row;
+  size_t column;
+  if (left_length > 64 || right_length > 64 ||
+      left_length > right_length + bound || right_length > left_length + bound)
+    return bound + 1;
+  for (column = 0; column <= right_length; column++)
+    previous[column] = column;
+  for (row = 1; row <= left_length; row++) {
+    size_t minimum = SIZE_MAX;
+    current[0] = row;
+    for (column = 1; column <= right_length; column++) {
+      size_t deletion = previous[column] + 1;
+      size_t insertion = current[column - 1] + 1;
+      size_t substitution =
+          previous[column - 1] +
+          (ascii_fold((unsigned char)left[row - 1]) ==
+                   ascii_fold((unsigned char)right[column - 1])
+               ? 0
+               : 1);
+      size_t value = deletion < insertion ? deletion : insertion;
+      if (substitution < value)
+        value = substitution;
+      current[column] = value;
+      if (value < minimum)
+        minimum = value;
+    }
+    if (minimum > bound)
+      return bound + 1;
+    memcpy(previous, current, (right_length + 1) * sizeof(*previous));
+  }
+  return previous[right_length];
+}
+
+static int term_exists(const AbRetrievalResult *result, const char *data,
+                       size_t length) {
+  size_t index;
+  for (index = 0; index < result->term_count; index++)
+    if (slice_equal(result->terms[index].data, result->terms[index].length,
+                    data, length))
+      return 1;
+  return 0;
+}
+
+static ArchbirdStatus add_terms(ArchbirdEngine *engine,
+                                AbRetrievalResult *result,
+                                const AbString *query) {
+  size_t start = 0;
+  size_t index;
+  for (index = 0; index <= query->length; index++) {
+    int boundary = index == query->length ||
+                   !ascii_alnum((unsigned char)query->data[index]);
+    if (!boundary)
+      continue;
+    if (index > start &&
+        !term_exists(result, query->data + start, index - start)) {
+      if (result->term_count == AB_RETRIEVAL_MAX_TERMS)
+        return archbird_error_set(
+            engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+            "retrieval query contains more than %d unique terms",
+            AB_RETRIEVAL_MAX_TERMS);
+      if (ab_string_copy(engine, &result->terms[result->term_count],
+                         query->data + start, index - start) != ARCHBIRD_OK)
+        return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "out of memory tokenizing retrieval query");
+      result->term_count++;
+    }
+    start = index + 1;
+  }
+  return ARCHBIRD_OK;
+}
+
+static unsigned field_match(const AbString *field, const AbString *term,
+                            const char **match) {
+  size_t start = 0;
+  size_t index;
+  unsigned best = 0;
+  const char *best_match = NULL;
+  if (!field || !field->length)
+    return 0;
+  if (slice_equal(field->data, field->length, term->data, term->length)) {
+    *match = "exact-field";
+    return 120;
+  }
+  for (index = 0; index <= field->length; index++) {
+    int camel = index > start && index < field->length &&
+                field->data[index] >= 'A' && field->data[index] <= 'Z' &&
+                field->data[index - 1] >= 'a' && field->data[index - 1] <= 'z';
+    int boundary = index == field->length || camel ||
+                   !ascii_alnum((unsigned char)field->data[index]);
+    size_t length;
+    size_t distance;
+    if (!boundary)
+      continue;
+    length = index - start;
+    if (length) {
+      if (slice_equal(field->data + start, length, term->data, term->length)) {
+        if (best < 100) {
+          best = 100;
+          best_match = "exact-token";
+        }
+      } else if (slice_prefix(field->data + start, length, term->data,
+                              term->length)) {
+        if (best < 72) {
+          best = 72;
+          best_match = "prefix";
+        }
+      } else if (term->length >= 3 &&
+                 slice_contains(field->data + start, length, term->data,
+                                term->length)) {
+        if (best < 48) {
+          best = 48;
+          best_match = "substring";
+        }
+      } else if (term->length >= 4 && length >= 3) {
+        size_t bound = term->length >= 8 ? 2 : 1;
+        distance = bounded_edit_distance(field->data + start, length,
+                                         term->data, term->length, bound);
+        if (distance == 1 && best < 32) {
+          best = 32;
+          best_match = "edit-1";
+        } else if (bound >= 2 && distance == 2 && best < 16) {
+          best = 16;
+          best_match = "edit-2";
+        }
+      }
+    }
+    start = camel ? index : index + 1;
+  }
+  if (best < 44 && term->length >= 3 &&
+      slice_contains(field->data, field->length, term->data, term->length)) {
+    best = 44;
+    best_match = "substring";
+  }
+  *match = best_match;
+  return best;
+}
+
+static ArchbirdStatus grow_candidates(ArchbirdEngine *engine,
+                                      RetrievalCandidate **items, size_t *count,
+                                      size_t *capacity) {
+  RetrievalCandidate *resized;
+  size_t next = *capacity ? *capacity * 2 : 128;
+  if (next < *capacity || next > SIZE_MAX / sizeof(**items))
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "too many retrieval candidates");
+  resized =
+      (RetrievalCandidate *)ab_realloc(engine, *items, next * sizeof(**items));
+  if (!resized)
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory collecting retrieval candidates");
+  *items = resized;
+  *capacity = next;
+  (void)count;
+  return ARCHBIRD_OK;
+}
+
+static void consider_candidate_field(RetrievalCandidate *candidate,
+                                     const AbRetrievalResult *result,
+                                     const RetrievalField *field) {
+  size_t term_index;
+  for (term_index = 0; term_index < result->term_count; term_index++) {
+    const char *match = NULL;
+    unsigned strength =
+        field_match(field->value, &result->terms[term_index], &match);
+    unsigned weighted = strength * field->weight;
+    unsigned previous =
+        candidate->strengths[term_index] * candidate->weights[term_index];
+    if (!weighted || weighted <= previous)
+      continue;
+    candidate->strengths[term_index] = strength;
+    candidate->weights[term_index] = field->weight;
+    {
+      size_t reason_index = 0;
+      while (reason_index < candidate->hit.reason_count &&
+             candidate->hit.reasons[reason_index].term_index != term_index)
+        reason_index++;
+      if (reason_index == candidate->hit.reason_count)
+        candidate->hit.reason_count++;
+      candidate->hit.reasons[reason_index] =
+          (AbRetrievalReason){field->name, field->value, match,
+                              term_index,  strength,     field->weight};
+    }
+  }
+}
+
+static ArchbirdStatus
+add_candidate(ArchbirdEngine *engine, const AbRetrievalResult *result,
+              RetrievalCandidate **items, size_t *count, size_t *capacity,
+              AbRetrievalKind kind, const AbValue *row, const AbString *path,
+              const AbString *name, const AbString *symbol_kind, size_t line,
+              size_t source_index, const RetrievalField *fields,
+              size_t field_count) {
+  RetrievalCandidate *candidate;
+  size_t field_index;
+  if (*count == *capacity) {
+    ArchbirdStatus status = grow_candidates(engine, items, count, capacity);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  candidate = &(*items)[(*count)++];
+  memset(candidate, 0, sizeof(*candidate));
+  candidate->hit.kind = kind;
+  candidate->hit.row = row;
+  candidate->hit.path = path;
+  candidate->hit.name = name;
+  candidate->hit.symbol_kind = symbol_kind;
+  candidate->hit.line = line;
+  candidate->hit.source_index = source_index;
+  for (field_index = 0; field_index < field_count; field_index++)
+    consider_candidate_field(candidate, result, &fields[field_index]);
+  return ARCHBIRD_OK;
+}
+
+static const AbString *text_member(const AbValue *object, const char *name) {
+  const AbValue *value = ab_value_member(object, name);
+  return value && value->kind == AB_VALUE_STRING ? &value->as.text : NULL;
+}
+
+static const AbValue *optional_array_member(const AbValue *object,
+                                            const char *name) {
+  static const AbValue empty = {.kind = AB_VALUE_ARRAY};
+  const AbValue *value = ab_value_member(object, name);
+  return value ? value : &empty;
+}
+
+static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
+                                         const AbValue *map,
+                                         const AbRetrievalResult *result,
+                                         RetrievalCandidate **out,
+                                         size_t *out_count) {
+  RetrievalCandidate *items = NULL;
+  size_t count = 0;
+  size_t capacity = 0;
+  const AbValue *files = ab_value_member(map, "files");
+  const AbValue *components = ab_value_member(map, "components");
+  const AbValue *packages = ab_value_member(map, "packages");
+  const AbValue *artifacts = ab_value_member(map, "artifacts");
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  *out = NULL;
+  *out_count = 0;
+  if (!files || files->kind != AB_VALUE_ARRAY || !components ||
+      components->kind != AB_VALUE_ARRAY || !packages ||
+      packages->kind != AB_VALUE_ARRAY || !artifacts ||
+      artifacts->kind != AB_VALUE_ARRAY)
+    return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                              ARCHBIRD_NO_OFFSET,
+                              "retrieval input Map collections are invalid");
+  for (index = 0; status == ARCHBIRD_OK && index < files->as.array.count;
+       index++) {
+    const AbValue *file = &files->as.array.items[index];
+    const AbString *path = text_member(file, "path");
+    const AbString *layer = text_member(file, "layer");
+    const AbString *language = text_member(file, "language");
+    const AbValue *symbols = ab_value_member(file, "symbols");
+    RetrievalField file_fields[3];
+    size_t symbol_index;
+    if (!path || !layer || !language || !symbols ||
+        symbols->kind != AB_VALUE_ARRAY) {
+      status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "retrieval input Map file is invalid");
+      break;
+    }
+    file_fields[0] = (RetrievalField){"file.path", path, 10};
+    file_fields[1] = (RetrievalField){"file.layer", layer, 3};
+    file_fields[2] = (RetrievalField){"file.language", language, 2};
+    status = add_candidate(engine, result, &items, &count, &capacity,
+                           AB_RETRIEVAL_FILE, file, path, path, NULL, 0, index,
+                           file_fields, 3);
+    for (symbol_index = 0;
+         status == ARCHBIRD_OK && symbol_index < symbols->as.array.count;
+         symbol_index++) {
+      const AbValue *symbol = &symbols->as.array.items[symbol_index];
+      const AbString *name = text_member(symbol, "name");
+      const AbString *kind = text_member(symbol, "kind");
+      const AbString *scope = text_member(symbol, "scope");
+      const AbString *signature = text_member(symbol, "signature");
+      const AbValue *line_value = ab_value_member(symbol, "line");
+      uint64_t line;
+      RetrievalField fields[7];
+      size_t field_count = 0;
+      if (!name || !kind || !scope || !line_value ||
+          !ab_value_u64(line_value, &line) || line > SIZE_MAX) {
+        status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "retrieval input Map symbol is invalid");
+        break;
+      }
+      fields[field_count++] = (RetrievalField){"symbol.name", name, 14};
+      fields[field_count++] = (RetrievalField){"symbol.kind", kind, 2};
+      fields[field_count++] = (RetrievalField){"symbol.scope", scope, 1};
+      fields[field_count++] = (RetrievalField){"file.path", path, 6};
+      fields[field_count++] = (RetrievalField){"file.layer", layer, 3};
+      fields[field_count++] = (RetrievalField){"file.language", language, 3};
+      if (signature)
+        fields[field_count++] =
+            (RetrievalField){"symbol.signature", signature, 4};
+      status = add_candidate(engine, result, &items, &count, &capacity,
+                             AB_RETRIEVAL_SYMBOL, symbol, path, name, kind,
+                             (size_t)line, index, fields, field_count);
+    }
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < components->as.array.count;
+       index++) {
+    const AbValue *row = &components->as.array.items[index];
+    const AbString *name = text_member(row, "name");
+    const AbString *description = text_member(row, "description");
+    RetrievalField fields[2];
+    size_t field_count = 0;
+    if (!name) {
+      status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "retrieval input Map component is invalid");
+      break;
+    }
+    fields[field_count++] = (RetrievalField){"component.name", name, 12};
+    if (description)
+      fields[field_count++] =
+          (RetrievalField){"component.description", description, 5};
+    status = add_candidate(engine, result, &items, &count, &capacity,
+                           AB_RETRIEVAL_COMPONENT, row, NULL, name, NULL, 0,
+                           index, fields, field_count);
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < packages->as.array.count;
+       index++) {
+    const AbValue *row = &packages->as.array.items[index];
+    const AbString *name = text_member(row, "name");
+    const AbString *identity = text_member(row, "identity");
+    const AbString *manifest = text_member(row, "manifest");
+    RetrievalField fields[3];
+    size_t field_count = 0;
+    const AbValue *aliases;
+    const AbValue *dependencies;
+    const AbValue *exports;
+    size_t item_index;
+    if (!name || !identity || !manifest) {
+      status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "retrieval input Map package is invalid");
+      break;
+    }
+    fields[field_count++] = (RetrievalField){"package.name", name, 12};
+    fields[field_count++] = (RetrievalField){"package.identity", identity, 12};
+    fields[field_count++] = (RetrievalField){"package.manifest", manifest, 5};
+    status = add_candidate(engine, result, &items, &count, &capacity,
+                           AB_RETRIEVAL_PACKAGE, row, manifest, identity, NULL,
+                           0, index, fields, field_count);
+    if (status != ARCHBIRD_OK)
+      break;
+    aliases = optional_array_member(row, "aliases");
+    dependencies = optional_array_member(row, "dependencies");
+    exports = optional_array_member(row, "exports");
+    if (aliases->kind != AB_VALUE_ARRAY ||
+        dependencies->kind != AB_VALUE_ARRAY ||
+        exports->kind != AB_VALUE_ARRAY) {
+      status = archbird_error_set(
+          engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+          "retrieval input Map package metadata is invalid");
+      break;
+    }
+    for (item_index = 0; item_index < aliases->as.array.count; item_index++) {
+      const AbValue *value = &aliases->as.array.items[item_index];
+      RetrievalField field;
+      if (value->kind != AB_VALUE_STRING) {
+        status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "retrieval package alias is invalid");
+        break;
+      }
+      field = (RetrievalField){"package.alias", &value->as.text, 10};
+      consider_candidate_field(&items[count - 1], result, &field);
+    }
+    for (item_index = 0;
+         status == ARCHBIRD_OK && item_index < dependencies->as.array.count;
+         item_index++) {
+      const AbString *dependency =
+          text_member(&dependencies->as.array.items[item_index], "name");
+      RetrievalField field;
+      if (!dependency) {
+        status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "retrieval package dependency is invalid");
+        break;
+      }
+      field = (RetrievalField){"package.dependency", dependency, 4};
+      consider_candidate_field(&items[count - 1], result, &field);
+    }
+    for (item_index = 0;
+         status == ARCHBIRD_OK && item_index < exports->as.array.count;
+         item_index++) {
+      const AbValue *value = &exports->as.array.items[item_index];
+      RetrievalField field;
+      if (value->kind != AB_VALUE_STRING) {
+        status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "retrieval package export is invalid");
+        break;
+      }
+      field = (RetrievalField){"package.export", &value->as.text, 7};
+      consider_candidate_field(&items[count - 1], result, &field);
+    }
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < artifacts->as.array.count;
+       index++) {
+    const AbValue *row = &artifacts->as.array.items[index];
+    const AbString *name = text_member(row, "name");
+    const AbString *output = text_member(row, "output");
+    RetrievalField fields[2];
+    if (!name || !output) {
+      status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "retrieval input Map artifact is invalid");
+      break;
+    }
+    fields[0] = (RetrievalField){"artifact.name", name, 12};
+    fields[1] = (RetrievalField){"artifact.output", output, 8};
+    status = add_candidate(engine, result, &items, &count, &capacity,
+                           AB_RETRIEVAL_ARTIFACT, row, output, name, NULL, 0,
+                           index, fields, 2);
+  }
+  if (status != ARCHBIRD_OK) {
+    ab_free(engine, items);
+    return status;
+  }
+  *out = items;
+  *out_count = count;
+  return ARCHBIRD_OK;
+}
+
+static int hit_compare(const void *left_raw, const void *right_raw) {
+  const AbRetrievalHit *left = (const AbRetrievalHit *)left_raw;
+  const AbRetrievalHit *right = (const AbRetrievalHit *)right_raw;
+  int compared;
+  if (left->score != right->score)
+    return left->score < right->score ? 1 : -1;
+  if (left->kind != right->kind)
+    return left->kind < right->kind ? -1 : 1;
+  if (left->path || right->path) {
+    static const AbString empty = {NULL, 0};
+    compared = ab_string_compare(left->path ? left->path : &empty,
+                                 right->path ? right->path : &empty);
+    if (compared)
+      return compared;
+  }
+  if (left->name || right->name) {
+    static const AbString empty = {NULL, 0};
+    compared = ab_string_compare(left->name ? left->name : &empty,
+                                 right->name ? right->name : &empty);
+    if (compared)
+      return compared;
+  }
+  return (left->line > right->line) - (left->line < right->line);
+}
+
+ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
+                               const AbValue *queries, size_t limit,
+                               AbRetrievalResult *out) {
+  RetrievalCandidate *candidates = NULL;
+  size_t candidate_count = 0;
+  size_t document_frequency[AB_RETRIEVAL_MAX_TERMS] = {0};
+  size_t index;
+  size_t term_index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  memset(out, 0, sizeof(*out));
+  out->limit = limit;
+  if (!queries || queries->kind != AB_VALUE_ARRAY || !queries->as.array.count ||
+      !limit)
+    return archbird_error_set(
+        engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+        "retrieval requires search strings and limit > 0");
+  for (index = 0; index < queries->as.array.count; index++) {
+    const AbValue *query = &queries->as.array.items[index];
+    if (query->kind != AB_VALUE_STRING || !query->as.text.length ||
+        query->as.text.length > 1024) {
+      status = archbird_error_set(
+          engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+          "retrieval queries must be 1..1024 byte strings");
+      goto cleanup;
+    }
+    status = add_terms(engine, out, &query->as.text);
+    if (status != ARCHBIRD_OK)
+      goto cleanup;
+  }
+  if (!out->term_count) {
+    status =
+        archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+                           "retrieval query contains no searchable terms");
+    goto cleanup;
+  }
+  status = collect_candidates(engine, map, out, &candidates, &candidate_count);
+  if (status != ARCHBIRD_OK)
+    goto cleanup;
+  out->candidate_count = candidate_count;
+  for (index = 0; index < candidate_count; index++)
+    for (term_index = 0; term_index < out->term_count; term_index++)
+      if (candidates[index].strengths[term_index])
+        document_frequency[term_index]++;
+  for (index = 0; index < candidate_count; index++) {
+    RetrievalCandidate *candidate = &candidates[index];
+    size_t matched_terms = 0;
+    for (term_index = 0; term_index < out->term_count; term_index++) {
+      uint64_t rarity;
+      uint64_t contribution;
+      if (!candidate->strengths[term_index])
+        continue;
+      matched_terms++;
+      rarity = 64 + (((uint64_t)candidate_count + 1) * 256) /
+                        (document_frequency[term_index] + 1);
+      if (rarity > 2048)
+        rarity = 2048;
+      contribution = (uint64_t)candidate->strengths[term_index] *
+                     candidate->weights[term_index] * rarity;
+      if (out->term_count > 1 && candidate->strengths[term_index] < 44)
+        contribution /= 4;
+      candidate->hit.score += contribution;
+    }
+    if (out->term_count > 1 && !matched_terms) {
+      candidate->hit.score = 0;
+      continue;
+    }
+    candidate->hit.score += (uint64_t)matched_terms * 10000000;
+    if (matched_terms == out->term_count)
+      candidate->hit.score += 50000000;
+  }
+  for (index = 0; index < candidate_count; index++)
+    if (candidates[index].hit.score)
+      out->matched_count++;
+  if (!out->matched_count)
+    goto cleanup;
+  out->hit_count = out->matched_count < limit ? out->matched_count : limit;
+  out->hits = (AbRetrievalHit *)ab_malloc(engine, out->matched_count *
+                                                      sizeof(*out->hits));
+  if (!out->hits) {
+    status =
+        archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+                           "out of memory ranking retrieval candidates");
+    goto cleanup;
+  }
+  {
+    size_t write = 0;
+    for (index = 0; index < candidate_count; index++)
+      if (candidates[index].hit.score)
+        out->hits[write++] = candidates[index].hit;
+  }
+  qsort(out->hits, out->matched_count, sizeof(*out->hits), hit_compare);
+cleanup:
+  ab_free(engine, candidates);
+  if (status != ARCHBIRD_OK)
+    ab_map_retrieval_free(engine, out);
+  return status;
+}
+
+void ab_map_retrieval_free(ArchbirdEngine *engine, AbRetrievalResult *result) {
+  size_t index;
+  for (index = 0; index < result->term_count; index++)
+    ab_string_free(engine, &result->terms[index]);
+  ab_free(engine, result->hits);
+  memset(result, 0, sizeof(*result));
+}
+
+const char *ab_map_retrieval_kind_name(AbRetrievalKind kind) {
+  switch (kind) {
+  case AB_RETRIEVAL_FILE:
+    return "file";
+  case AB_RETRIEVAL_SYMBOL:
+    return "symbol";
+  case AB_RETRIEVAL_COMPONENT:
+    return "component";
+  case AB_RETRIEVAL_PACKAGE:
+    return "package";
+  case AB_RETRIEVAL_ARTIFACT:
+    return "artifact";
+  }
+  return "unknown";
+}

@@ -75,6 +75,7 @@ function usage(command = "map") {
   };
   const selectorHelp = ["query", "impact"].includes(command)
     ? "\n--symbol accepts PATTERN or repository-relative PATH:PATTERN; repeated selectors form a union.\n" +
+      "--search TEXT ranks advisory lexical seeds, then expands them through the typed graph.\n" +
       "--git-diff REVISION seeds tracked current paths and retains deletions as change evidence.\n" +
       "Context profiles exact|change|architecture|audit control Markdown; " +
       "--max-chars is only the final guard.\n"
@@ -476,6 +477,8 @@ function selectorDefinitions() {
     component: { type: "multiple" },
     package: { type: "multiple" },
     artifact: { type: "multiple" },
+    search: { type: "multiple" },
+    searchLimit: { flag: "search-limit", default: 8, type: "number" },
     gitDiff: { flag: "git-diff", type: "string" },
     verificationResult: { flag: "verification-result", type: "string" },
     direction: { type: "string" },
@@ -642,6 +645,10 @@ function queryMain(argv, command) {
   if (options.maxSeedDistance !== undefined && options.maxSeedDistance < 0) {
     throw new Error("--max-seed-distance must be nonnegative");
   }
+  if (!Number.isSafeInteger(options.searchLimit) ||
+      options.searchLimit < 1 || options.searchLimit > 100) {
+    throw new Error("--search-limit must be from 1 to 100");
+  }
   if (options.compact && options.full) {
     throw new Error("--compact and --full conflict");
   }
@@ -672,6 +679,8 @@ function queryMain(argv, command) {
     packages: options.package,
     paths: options.path,
     producerPolicy: options.check && options.map ? "current" : "compatible",
+    search: options.search,
+    searchLimit: options.searchLimit,
     symbols: options.symbol,
     testDepth: options.testDepth,
   };

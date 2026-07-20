@@ -1319,6 +1319,8 @@ function queryRequest(
     components = [],
     packages = [],
     artifacts = [],
+    search = [],
+    searchLimit = 8,
     changeSet = null,
     context = null,
     direction = "both",
@@ -1336,6 +1338,8 @@ function queryRequest(
     packages,
     paths,
     producer_policy: producerPolicy,
+    search,
+    search_limit: searchLimit,
     symbols,
     test_depth: testDepth,
   };

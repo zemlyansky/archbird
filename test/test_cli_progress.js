@@ -79,6 +79,22 @@ try {
   assert.equal(brief.status, 0, brief.stderr);
   assert.match(brief.stdout, /^# Change brief:/);
   assert.match(brief.stdout, /## Evidence limits/);
+  const retrieval = spawnSync(process.execPath, [
+    cli, "query", "--map", currentMapPath, "--search", "twce javascript",
+    "--search-limit", "4", "--depth", "0", "--format", "json",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ARCHBIRD_ENGINE: "native",
+      ARCHBIRD_NATIVE_ADDON: addon,
+    },
+  });
+  assert.equal(retrieval.status, 0, retrieval.stderr);
+  assert.equal(
+    JSON.parse(retrieval.stdout).query.retrieval.hits[0].name,
+    "twice",
+  );
   const blocked = runQuery(mismatchedMapPath, true);
   assert.equal(blocked.status, 1, blocked.stderr);
   assert.equal(blocked.stdout, "");

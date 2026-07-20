@@ -49,6 +49,7 @@ def main() -> int:
         draft_verification_suite,
         export_graph,
         publish_okf_bundle,
+        query_map_json,
         resolve_discovery,
         write_okf_bundle,
     )
@@ -737,6 +738,106 @@ def main() -> int:
     query = project.query(paths=["py/pkg"], depth=0)
     if query["artifact"] != "query" or len(query["files"]) != 2:
         raise AssertionError("repository query did not select the package directory")
+    retrieval_query = project.query(
+        search=["twce python"], search_limit=4, depth=0, test_depth=0
+    )
+    retrieval = retrieval_query["query"]["retrieval"]
+    if (
+        retrieval["contract"] != "archbird-lexical-ranking-v1"
+        or retrieval["confidence"] != "candidate"
+        or len(retrieval["hits"]) != 4
+        or retrieval["hits"][0]["path"] != "py/pkg/api.py"
+        or retrieval["hits"][0]["name"] != "twice"
+        or not any(
+            reason["match"] == "edit-1"
+            for reason in retrieval["hits"][0]["reasons"]
+        )
+    ):
+        raise AssertionError(f"unexpected deterministic retrieval: {retrieval!r}")
+    retrieval_markdown = project.query_markdown(
+        search=["twce python"], search_limit=4, depth=0, test_depth=0
+    )
+    if (
+        b"## Candidate seeds" not in retrieval_markdown
+        or b"twice" not in retrieval_markdown
+    ):
+        raise AssertionError("retrieval Markdown omitted ranked candidate evidence")
+    if retrieval_query != project.query(
+        search=["twce python"], search_limit=4, depth=0, test_depth=0
+    ):
+        raise AssertionError("deterministic retrieval is not repeatable")
+    report_map_json = (repository / "test/fixtures/report_map.json").read_bytes()
+    package_retrieval = json.loads(
+        query_map_json(
+            report_map_json,
+            search=["@sample dep"],
+            search_limit=5,
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    if (
+        package_retrieval["hits"][0]["kind"] != "package"
+        or package_retrieval["hits"][0]["name"] != "sample"
+        or not any(
+            reason["field"] == "package.dependency"
+            and reason["value"] == "@sample/dep"
+            for reason in package_retrieval["hits"][0]["reasons"]
+        )
+    ):
+        raise AssertionError(
+            f"package metadata retrieval lost its witness: {package_retrieval!r}"
+        )
+    supported_legacy_map = json.loads(report_map_json)
+    for package in supported_legacy_map["packages"]:
+        package.pop("aliases", None)
+        package.pop("dependencies", None)
+        package.pop("exports", None)
+    legacy_retrieval = json.loads(
+        query_map_json(
+            json.dumps(
+                supported_legacy_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            search=["sample"],
+            search_limit=1,
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    if legacy_retrieval["hits"][0]["kind"] != "package":
+        raise AssertionError("retrieval rejected optional legacy package fields")
+    malformed_package_map = json.loads(report_map_json)
+    malformed_package_map["packages"][0]["aliases"] = {}
+    try:
+        query_map_json(
+            json.dumps(
+                malformed_package_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            search=["sample"],
+            depth=0,
+            test_depth=0,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("retrieval accepted malformed package metadata")
+    for invalid in (
+        {"search": ["---"]},
+        {"search": [" ".join(f"term{index}" for index in range(17))]},
+        {"search": ["sample"], "search_limit": 0},
+        {"search": ["sample"], "search_limit": 101},
+    ):
+        try:
+            query_map_json(
+                report_map_json,
+                depth=0,
+                test_depth=0,
+                **invalid,
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"invalid retrieval was accepted: {invalid!r}")
     if not project.query_markdown(paths=["py/pkg"], depth=0).startswith(
         b"# Focused architecture map: map-base\n"
     ):
@@ -1028,6 +1129,31 @@ def main() -> int:
             raise AssertionError("native Python changes view CLI failed")
         if "## Evidence limits" not in brief_text:
             raise AssertionError("native Python changes view lost omission accounting")
+        retrieval_output = Path(directory) / "retrieval.json"
+        status = cli_main(
+            [
+                "query",
+                "--map",
+                str(saved_map),
+                "--search",
+                "twce python",
+                "--search-limit",
+                "4",
+                "--depth",
+                "0",
+                "--format",
+                "json",
+                "--output",
+                str(retrieval_output),
+            ]
+        )
+        retrieval_document = json.loads(retrieval_output.read_bytes())
+        if (
+            status
+            or retrieval_document["query"]["retrieval"]["hits"][0]["name"]
+            != "twice"
+        ):
+            raise AssertionError("native Python retrieval CLI failed")
         checked_query = Path(directory) / "checked-query.json"
         status = cli_main(
             [
