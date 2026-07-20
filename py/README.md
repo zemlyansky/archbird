@@ -76,6 +76,26 @@ Workspace, Verification, ChangeProposal, ChangeContract, change-result,
 graph-view, freshness, diff, OKF, and report functions use the same canonical
 schemas as the CLI and C core.
 
+### Import observed test routes
+
+Generate coverage.py JSON with pytest dynamic contexts, then convert it without
+rerunning the project:
+
+```bash
+pytest --cov=your_package --cov-context=test
+coverage json --show-contexts -o .archbird/coverage.json
+archbird observe . --map .archbird/map.json \
+  --request .archbird/coverage-request.json \
+  --output .archbird/test-symbols.json
+```
+
+The request explicitly maps test selectors and contexts to report files and
+names mapped runner configuration. `compile_test_observations()` provides the
+same operation through Python. The Python host also accepts isolated Istanbul,
+LLVM, and gcov JSON; use the Node host for V8’s UTF-16 offsets. Aggregate
+reports without an exact per-test context are rejected rather than presented
+as test attribution.
+
 ## Command line
 
 Save complete evidence once and query it without re-analyzing:

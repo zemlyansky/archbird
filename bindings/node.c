@@ -708,6 +708,32 @@ static napi_value json_canonicalize(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value test_symbol_observations_validate(napi_env env,
+                                                    napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  const uint8_t *input;
+  size_t input_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 1 || !get_buffer(env, argv[0], &input, &input_length))
+    return NULL;
+  status = saved_artifact_engine(input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_test_symbol_observations_validate(engine, input, input_length);
+  if (status != ARCHBIRD_OK) {
+    result = throw_status(env, engine, status);
+    archbird_engine_destroy(engine);
+    return result;
+  }
+  archbird_engine_destroy(engine);
+  NAPI_TRY(napi_get_undefined(env, &result));
+  return result;
+}
+
 static napi_value discovery_plan(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -1790,6 +1816,8 @@ static napi_value init(napi_env env, napi_value exports) {
        napi_default, NULL},
       {"jsonCanonicalize", NULL, json_canonicalize, NULL, NULL, NULL,
        napi_default, NULL},
+      {"testSymbolObservationsValidate", NULL,
+       test_symbol_observations_validate, NULL, NULL, NULL, napi_default, NULL},
   };
   napi_value abi;
   napi_value implementation_sha256;

@@ -609,6 +609,29 @@ static PyObject *py_json_canonicalize(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_test_symbol_observations_validate(PyObject *self,
+                                                      PyObject *args) {
+  const char *input;
+  Py_ssize_t input_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTuple(args, "y#:test_symbol_observations_validate", &input,
+                        &input_length))
+    return NULL;
+  status = saved_artifact_engine((size_t)input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_test_symbol_observations_validate(
+        engine, (const uint8_t *)input, (size_t)input_length);
+  if (status != ARCHBIRD_OK) {
+    PyObject *result = raise_status(engine, status);
+    archbird_engine_destroy(engine);
+    return result;
+  }
+  archbird_engine_destroy(engine);
+  Py_RETURN_NONE;
+}
+
 static PyObject *py_discovery_plan(PyObject *self, PyObject *args,
                                    PyObject *kwargs) {
   static char *keywords[] = {"config", "paths", "pretty", NULL};
@@ -1638,6 +1661,9 @@ static PyMethodDef archbird_methods[] = {
      METH_VARARGS | METH_KEYWORDS, "Render one accepted provider artifact."},
     {"json_canonicalize", (PyCFunction)py_json_canonicalize,
      METH_VARARGS | METH_KEYWORDS, "Canonicalize strict Archbird JSON."},
+    {"test_symbol_observations_validate", py_test_symbol_observations_validate,
+     METH_VARARGS,
+     "Validate strict project-owned test-to-symbol observations."},
     {NULL, NULL, 0, NULL},
 };
 

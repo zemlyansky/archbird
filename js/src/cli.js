@@ -15,6 +15,7 @@ const COMMANDS = new Set([
   "freshness",
   "impact",
   "map",
+  "observe",
   "plan",
   "query",
   "serve",
@@ -57,6 +58,7 @@ const DISCOVERY = {
 function usage(command = "map") {
   const rows = {
     map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|audit] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
+    observe: "archbird observe [ROOT] --map MAP.json --request COVERAGE.json [--output OBSERVATIONS.json]",
     query: "archbird query [ROOT] [--config PROJECT.json | --map MAP.json] [SELECTORS] [--check]",
     impact: "archbird impact [ROOT] [--config PROJECT.json | --map MAP.json] [SELECTORS] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
@@ -803,6 +805,31 @@ function diffMain(argv) {
   return options.check && diffRisk(JSON.parse(encoded), options.check) ? 1 : 0;
 }
 
+function observeMain(argv) {
+  const options = parse(argv, {
+    map: { type: "string" },
+    request: { type: "string" },
+    output: { aliases: ["o"], default: "-", type: "string" },
+    help: { aliases: ["h"], type: "boolean" },
+  }, { positionals: 1 });
+  if (options.help) {
+    process.stdout.write(`${usage("observe")}\nArchbird reads coverage reports; it never runs the tests.\n`);
+    return 0;
+  }
+  required(options, "map", "request");
+  const requestPath = path.resolve(options.request);
+  const encoded = archbird.compileTestObservations(
+    read(options.map),
+    fs.readFileSync(requestPath),
+    {
+      repository: path.resolve(options._[0] || "."),
+      requestDirectory: path.dirname(requestPath),
+    },
+  );
+  write(encoded, options.output);
+  return 0;
+}
+
 function freshnessMain(argv) {
   const options = parse(argv, {
     ...DISCOVERY,
@@ -1078,6 +1105,7 @@ function main(argv = process.argv.slice(2)) {
     return queryMain(rest, command);
   }
   if (command === "diff") return diffMain(rest);
+  if (command === "observe") return observeMain(rest);
   if (command === "freshness") return freshnessMain(rest);
   if (command === "workspace") return workspaceMain(rest);
   if (command === "verify") return verifyMain(rest);

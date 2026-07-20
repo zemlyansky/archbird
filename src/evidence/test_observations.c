@@ -206,8 +206,11 @@ static ArchbirdStatus validate_document(ArchbirdEngine *engine,
       "artifact",   "cases",          "producer", "project",
       "provenance", "schema_version", "source"};
   static const char *const producer_fields[] = {"configuration_sha256",
-                                                "implementation_sha256", "name",
-                                                "runtime", "version"};
+                                                "implementation_sha256",
+                                                "input_sha256",
+                                                "name",
+                                                "runtime",
+                                                "version"};
   static const char *const case_fields[] = {"group", "path", "selector",
                                             "symbols"};
   static const char *const symbol_fields[] = {"hits", "path", "symbol"};
@@ -237,6 +240,8 @@ static ArchbirdStatus validate_document(ArchbirdEngine *engine,
       !nonempty_string(ab_value_member(producer, "version")) ||
       !digest_string(ab_value_member(producer, "implementation_sha256")) ||
       !digest_string(ab_value_member(producer, "configuration_sha256")) ||
+      (ab_value_member(producer, "input_sha256") &&
+       !digest_string(ab_value_member(producer, "input_sha256"))) ||
       (ab_value_member(producer, "runtime") &&
        !nonempty_string(ab_value_member(producer, "runtime"))) ||
       !cases || cases->kind != AB_VALUE_ARRAY || !cases->as.array.count)

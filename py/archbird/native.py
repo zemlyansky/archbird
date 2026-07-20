@@ -38,6 +38,34 @@ PATTERN_ENGINE = _native.PATTERN_ENGINE
 PATTERN_UNICODE = _native.PATTERN_UNICODE
 PATTERN_OPTIONS = _native.PATTERN_OPTIONS
 
+
+def validate_test_symbol_observations(observations_json: bytes) -> None:
+    """Validate one canonical project-owned test-to-symbol artifact."""
+
+    _native.test_symbol_observations_validate(observations_json)
+
+
+def compile_test_observations(
+    map_json: bytes,
+    request_json: bytes,
+    *,
+    request_directory: Union[str, Path],
+    repository: Union[str, Path],
+) -> bytes:
+    """Convert project-owned coverage reports to strict observed test routes."""
+
+    from .adapters.coverage import compile_test_observations as compile_adapter
+
+    encoded = compile_adapter(
+        map_json,
+        request_json,
+        request_directory=Path(request_directory),
+        repository=Path(repository),
+    )
+    validate_test_symbol_observations(encoded)
+    return encoded
+
+
 _NATIVE_CACHE_PROVIDERS = (
     (
         "lexical:c",

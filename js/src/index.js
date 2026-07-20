@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const native = require("./native");
 const { okfNormalization } = require("./adapters/okf/normalization");
+const { compileTestObservations: compileCoverageObservations } = require("./adapters/coverage");
 const {
   ProviderCache,
   defaultProviderCacheDir,
@@ -78,6 +79,21 @@ const PROVIDER_SUPPORT = Object.freeze({
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+function compileTestObservations(mapJson, requestJson, options) {
+  const result = compileCoverageObservations(mapJson, requestJson, {
+    ...options,
+    implementationSha256: sha256(Buffer.from([
+      "archbird-node-coverage-adapter-v1",
+      native.IMPLEMENTATION_SHA256,
+      native.VERSION,
+      sha256(fs.readFileSync(require.resolve("./adapters/coverage"))),
+    ].join("\0"))),
+    version: native.VERSION,
+  });
+  native.testSymbolObservationsValidate(result);
+  return result;
 }
 
 function nativeCacheNamespace() {
@@ -1669,6 +1685,7 @@ module.exports = {
   publishOkfBundle,
   analyzeWorkspace,
   compileChangeProposal,
+  compileTestObservations,
   createChangeContract,
   defaultProviderCacheDir,
   defaultProviderCacheMaxBytes,

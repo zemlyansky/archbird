@@ -651,6 +651,19 @@ def json_canonicalize(
     )
 
 
+def test_symbol_observations_validate(input: bytes) -> None:
+    data = _bytes(input)
+    function = _declare(
+        "archbird_test_symbol_observations_validate",
+        [_POINTER, ctypes.c_char_p, ctypes.c_size_t],
+    )
+    _one_shot(
+        lambda engine, _write: function(engine, data, len(data)),
+        input_budget=len(data),
+        saved_artifact=True,
+    )
+
+
 def discovery_plan(config: bytes, paths: Sequence[str], pretty=False) -> bytes:
     data = _bytes(config, "config")
     create = _declare(

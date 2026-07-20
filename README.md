@@ -95,6 +95,46 @@ the verification input and producer still match the current Map. It does not
 rerun verification, match reference-only evidence, or treat a path-free check
 as relevant.
 
+### Import tests that actually reached a symbol
+
+Static test routes are candidates. `observe` converts project-owned per-test
+coverage reports into exact runtime test-to-symbol evidence that subsequent
+Map and Query runs can attach:
+
+```bash
+archbird observe . --map .archbird/map.json \
+  --request .archbird/coverage-request.json \
+  --output .archbird/test-symbols.json
+
+archbird query . --symbol runtime_start \
+  --test-symbol-observations .archbird/test-symbols.json
+```
+
+The request names mapped runner/test files and report files. Python supports
+coverage.py JSON produced with dynamic test contexts; Node supports V8 JSON.
+Both hosts support isolated Istanbul, `llvm-cov export`, and gcov JSON. For
+formats without per-test contexts, use one isolated report per case—Archbird
+rejects aggregate coverage because it cannot prove which test produced a hit.
+Archbird reads these reports and checks their source hashes; it does not run
+the tests or coverage tools.
+
+```json
+{
+  "schema_version": 1,
+  "artifact": "archbird-coverage-observation-request",
+  "format": "coverage.py",
+  "group": "python",
+  "runner_paths": ["pyproject.toml"],
+  "reports": [{"id": "pytest", "path": "coverage.json"}],
+  "cases": [{
+    "path": "tests/test_runtime.py",
+    "selector": "tests/test_runtime.py::test_start",
+    "report": "pytest",
+    "context": "tests/test_runtime.py::test_start|run"
+  }]
+}
+```
+
 The default is an architecture-first overview for a person or coding agent;
 canonical JSON still contains every selected file and mapped fact. Choose the
 human projection and its amount of detail independently:

@@ -14,7 +14,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from . import __version__, implementation_digest
 from . import _native
@@ -31,6 +31,7 @@ from .native import (
     change_contract,
     change_proposal,
     change_verify,
+    compile_test_observations,
     diff_maps_json,
     export_graph,
     export_okf_bundle,
@@ -551,6 +552,23 @@ def diff_parser() -> argparse.ArgumentParser:
         help="fail on a comma-separated set of structural risk categories",
     )
     result.add_argument("-o", "--output", default="-")
+    return result
+
+
+def observe_parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog="archbird observe",
+        description=(
+            "Convert project-owned per-test coverage reports into exact "
+            "test-to-symbol observations without running the project."
+        ),
+    )
+    result.add_argument("root_path", nargs="?", help="repository root (default: .)")
+    result.add_argument("--map", required=True, help="canonical Map JSON")
+    result.add_argument(
+        "--request", required=True, help="coverage observation request JSON"
+    )
+    result.add_argument("-o", "--output", default="-", help="output artifact or -")
     return result
 
 
@@ -1411,6 +1429,24 @@ def _diff_main(argv: Sequence[str]) -> int:
         return 2
 
 
+def _observe_main(argv: Sequence[str]) -> int:
+    args = observe_parser().parse_args(argv)
+    try:
+        repository = Path(args.root_path or ".").resolve()
+        request_path = Path(args.request).resolve()
+        encoded = compile_test_observations(
+            Path(args.map).read_bytes(),
+            request_path.read_bytes(),
+            request_directory=request_path.parent,
+            repository=repository,
+        )
+        _write(encoded, args.output)
+        return 0
+    except (ConfigError, OSError, RuntimeError, ValueError) as error:
+        print(f"archbird: error: {error}", file=sys.stderr)
+        return 2
+
+
 def _workspace_main(argv: Sequence[str]) -> int:
     args = workspace_parser().parse_args(argv)
     try:
@@ -1686,6 +1722,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
     if arguments and arguments[0] == "diff":
         return _diff_main(arguments[1:])
+    if arguments and arguments[0] == "observe":
+        return _observe_main(arguments[1:])
     if arguments and arguments[0] == "freshness":
         return _freshness_main(arguments[1:])
     if arguments and arguments[0] == "workspace":

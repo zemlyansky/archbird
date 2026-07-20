@@ -47,6 +47,7 @@ _NATIVE_EXPORTS = (
     "change_contract",
     "change_proposal",
     "change_verify",
+    "compile_test_observations",
     "diff_maps_json",
     "export_graph",
     "export_okf_bundle",
@@ -58,6 +59,7 @@ _NATIVE_EXPORTS = (
     "verification_analyze_json",
     "verification_plan_json",
     "verification_report",
+    "validate_test_symbol_observations",
     "write_okf_bundle",
 )
 

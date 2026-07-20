@@ -81,6 +81,24 @@ adds only checks with exact subject-side source-path overlap and reports input
 and producer freshness. The browser `Project.queryMarkdown()` accepts the same
 option.
 
+### Import observed test routes
+
+Run each case in isolation with V8 or Istanbul coverage, then convert the
+project-owned reports without rerunning the project:
+
+```bash
+npx archbird observe . --map .archbird/map.json \
+  --request .archbird/coverage-request.json \
+  --output .archbird/test-symbols.json
+```
+
+`compileTestObservations(map, request, { repository, requestDirectory })`
+provides the same Node API. The Node host supports V8, Istanbul, LLVM, and gcov
+JSON. One isolated report is required per case because aggregate reports cannot
+establish which test produced a hit; use the PyPI host for coverage.py dynamic
+contexts. Archbird reads and source-hash-checks the reports but never launches
+the test runner.
+
 ### Browser API
 
 ```js

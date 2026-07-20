@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/coverage-observation-request.schema.json",
+  "title": "Archbird project-owned coverage observation request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "format",
+    "group",
+    "runner_paths",
+    "reports",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-coverage-observation-request"},
+    "format": {
+      "enum": ["coverage.py", "gcov", "istanbul", "llvm", "v8"]
+    },
+    "group": {"type": "string", "minLength": 1},
+    "runner_paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/path"}
+    },
+    "reports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "path": {"$ref": "#/$defs/path"}
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "selector", "report"],
+        "properties": {
+          "path": {"$ref": "#/$defs/path"},
+          "selector": {"type": "string", "minLength": 1},
+          "report": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "context": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*//)(?!.*\\\\).+$"
+    }
+  }
+}

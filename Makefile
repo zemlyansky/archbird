@@ -120,6 +120,7 @@ editable-install: build-py
 		"import archbird._native as n; assert n.__file__.endswith('_native.py'), n.__file__; print(n.__file__)"
 
 test-py: build-py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_coverage_observations.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_frontend_input_budget.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_map_report_scaling.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_python_provider_applicability.py
@@ -152,6 +153,8 @@ build-js:
 		--addon $(NODE_NATIVE)
 
 test-js: build-js build-py
+	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
+		$(NODE) test/test_coverage_observations.js js/src $(CURDIR) $(NODE_NATIVE)
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) --expose-gc js/test/test_frontend.js $(NODE_NATIVE) $(CURDIR)
 	$(NODE) test/test_cli_progress.js js/src/cli.js $(CURDIR) $(NODE_NATIVE)
