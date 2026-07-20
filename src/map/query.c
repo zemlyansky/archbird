@@ -3787,7 +3787,7 @@ static ArchbirdStatus render_retrieval(AbBuffer *buffer,
   if (status == ARCHBIRD_OK)
     status =
         ab_buffer_literal(buffer, ",\"confidence\":\"candidate\",\"contract\":"
-                                  "\"archbird-lexical-ranking-v1\",\"hits\":[");
+                                  "\"archbird-lexical-ranking-v2\",\"hits\":[");
   for (index = 0; status == ARCHBIRD_OK && index < context->retrieval.hit_count;
        index++) {
     const AbRetrievalHit *hit = &context->retrieval.hits[index];

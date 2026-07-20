@@ -105,6 +105,86 @@ static int term_exists(const AbRetrievalResult *result, const char *data,
   return 0;
 }
 
+static int common_natural_language_term(const AbString *term) {
+  static const char *const words[] = {"a",  "all",  "an",  "and", "are",  "as",
+                                      "at", "be",   "by",  "for", "from", "i",
+                                      "in", "into", "is",  "it",  "of",   "on",
+                                      "or", "that", "the", "to",  "with"};
+  size_t index;
+  for (index = 0; index < sizeof(words) / sizeof(words[0]); index++)
+    if (slice_equal(term->data, term->length, words[index],
+                    strlen(words[index])))
+      return 1;
+  return 0;
+}
+
+static void compact_common_terms(ArchbirdEngine *engine,
+                                 AbRetrievalResult *result) {
+  size_t index;
+  size_t retained = 0;
+  size_t write = 0;
+  if (result->term_count <= 1)
+    return;
+  for (index = 0; index < result->term_count; index++)
+    retained += !common_natural_language_term(&result->terms[index]);
+  if (!retained)
+    return;
+  for (index = 0; index < result->term_count; index++) {
+    if (common_natural_language_term(&result->terms[index])) {
+      ab_string_free(engine, &result->terms[index]);
+      continue;
+    }
+    if (write != index) {
+      result->terms[write] = result->terms[index];
+      memset(&result->terms[index], 0, sizeof(result->terms[index]));
+    }
+    write++;
+  }
+  result->term_count = write;
+}
+
+static int camel_acronym_equal(const char *word, size_t word_length,
+                               const char *abbreviation,
+                               size_t abbreviation_length) {
+  size_t word_index;
+  size_t abbreviation_index = 0;
+  if (abbreviation_length < 2 || word_length <= abbreviation_length)
+    return 0;
+  for (word_index = 0; word_index < word_length; word_index++) {
+    int initial = word_index == 0;
+    int camel = word_index > 0 && word[word_index] >= 'A' &&
+                word[word_index] <= 'Z' && word[word_index - 1] >= 'a' &&
+                word[word_index - 1] <= 'z';
+    if (!initial && !camel)
+      continue;
+    if (abbreviation_index >= abbreviation_length ||
+        ascii_fold((unsigned char)word[word_index]) !=
+            ascii_fold((unsigned char)abbreviation[abbreviation_index]))
+      return 0;
+    abbreviation_index++;
+  }
+  return abbreviation_index == abbreviation_length;
+}
+
+static int ordered_abbreviation(const char *word, size_t word_length,
+                                const char *abbreviation,
+                                size_t abbreviation_length) {
+  size_t word_index = 0;
+  size_t abbreviation_index = 0;
+  if (abbreviation_length < 4 || word_length <= abbreviation_length ||
+      word_length > abbreviation_length * 3 ||
+      ascii_fold((unsigned char)word[0]) !=
+          ascii_fold((unsigned char)abbreviation[0]))
+    return 0;
+  while (word_index < word_length && abbreviation_index < abbreviation_length) {
+    if (ascii_fold((unsigned char)word[word_index]) ==
+        ascii_fold((unsigned char)abbreviation[abbreviation_index]))
+      abbreviation_index++;
+    word_index++;
+  }
+  return abbreviation_index == abbreviation_length;
+}
+
 static ArchbirdStatus add_terms(ArchbirdEngine *engine,
                                 AbRetrievalResult *result,
                                 const AbString *query) {
@@ -187,6 +267,15 @@ static unsigned field_match(const AbString *field, const AbString *term,
           best = 16;
           best_match = "edit-2";
         }
+      }
+      if (best < 40 && camel_acronym_equal(term->data, term->length,
+                                           field->data + start, length)) {
+        best = 40;
+        best_match = "acronym";
+      } else if (best < 28 && ordered_abbreviation(field->data + start, length,
+                                                   term->data, term->length)) {
+        best = 28;
+        best_match = "abbreviation";
       }
     }
     start = camel ? index : index + 1;
@@ -302,6 +391,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
   const AbValue *components = ab_value_member(map, "components");
   const AbValue *packages = ab_value_member(map, "packages");
   const AbValue *artifacts = ab_value_member(map, "artifacts");
+  const AbValue *calls = ab_value_member(map, "call_resolutions");
+  size_t call_index = 0;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   *out = NULL;
@@ -309,10 +400,23 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
   if (!files || files->kind != AB_VALUE_ARRAY || !components ||
       components->kind != AB_VALUE_ARRAY || !packages ||
       packages->kind != AB_VALUE_ARRAY || !artifacts ||
-      artifacts->kind != AB_VALUE_ARRAY)
+      artifacts->kind != AB_VALUE_ARRAY || !calls ||
+      calls->kind != AB_VALUE_ARRAY)
     return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                               ARCHBIRD_NO_OFFSET,
                               "retrieval input Map collections are invalid");
+  for (index = 0; index < calls->as.array.count; index++) {
+    const AbString *source =
+        text_member(&calls->as.array.items[index], "source");
+    const AbString *name = text_member(&calls->as.array.items[index], "name");
+    const AbString *previous =
+        index ? text_member(&calls->as.array.items[index - 1], "source") : NULL;
+    if (!source || !name ||
+        (previous && ab_string_compare(previous, source) > 0))
+      return archbird_error_set(
+          engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+          "retrieval input Map calls must be valid and source-sorted");
+  }
   for (index = 0; status == ARCHBIRD_OK && index < files->as.array.count;
        index++) {
     const AbValue *file = &files->as.array.items[index];
@@ -335,6 +439,29 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     status = add_candidate(engine, result, &items, &count, &capacity,
                            AB_RETRIEVAL_FILE, file, path, path, NULL, 0, index,
                            file_fields, 3);
+    while (status == ARCHBIRD_OK && call_index < calls->as.array.count) {
+      const AbValue *call = &calls->as.array.items[call_index];
+      const AbString *source = text_member(call, "source");
+      const AbString *name = text_member(call, "name");
+      int compared;
+      RetrievalField field;
+      if (!source || !name) {
+        status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "retrieval input Map call is invalid");
+        break;
+      }
+      compared = ab_string_compare(source, path);
+      if (compared < 0) {
+        call_index++;
+        continue;
+      }
+      if (compared > 0)
+        break;
+      field = (RetrievalField){"file.call", name, 5};
+      consider_candidate_field(&items[count - 1], result, &field);
+      call_index++;
+    }
     for (symbol_index = 0;
          status == ARCHBIRD_OK && symbol_index < symbols->as.array.count;
          symbol_index++) {
@@ -520,6 +647,68 @@ static int hit_compare(const void *left_raw, const void *right_raw) {
   return (left->line > right->line) - (left->line < right->line);
 }
 
+static int nullable_string_equal(const AbString *left, const AbString *right) {
+  return (!left && !right) || (left && right && ab_string_equal(left, right));
+}
+
+static int hit_identity_equal(const AbRetrievalHit *left,
+                              const AbRetrievalHit *right) {
+  return left->kind == right->kind && left->line == right->line &&
+         nullable_string_equal(left->path, right->path) &&
+         nullable_string_equal(left->name, right->name);
+}
+
+static int hit_location_equal(const AbRetrievalHit *left,
+                              const AbRetrievalHit *right) {
+  if (left->path || right->path)
+    return nullable_string_equal(left->path, right->path);
+  return left->kind == right->kind &&
+         nullable_string_equal(left->name, right->name);
+}
+
+static int selected_contains(const AbRetrievalHit *selected, size_t count,
+                             const AbRetrievalHit *candidate,
+                             int location_only) {
+  size_t index;
+  for (index = 0; index < count; index++)
+    if (location_only ? hit_location_equal(&selected[index], candidate)
+                      : hit_identity_equal(&selected[index], candidate))
+      return 1;
+  return 0;
+}
+
+static ArchbirdStatus diversify_hits(ArchbirdEngine *engine,
+                                     AbRetrievalResult *result) {
+  AbRetrievalHit *selected;
+  size_t target = result->hit_count;
+  size_t diverse_target = target >= 3 ? (target * 2 + 2) / 3 : target;
+  size_t count = 0;
+  size_t index;
+  if (target <= 1)
+    return ARCHBIRD_OK;
+  selected = (AbRetrievalHit *)ab_malloc(engine, target * sizeof(*selected));
+  if (!selected)
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory diversifying retrieval results");
+  for (index = 0; index < result->matched_count && count < diverse_target;
+       index++) {
+    if (selected_contains(selected, count, &result->hits[index], 1))
+      continue;
+    selected[count++] = result->hits[index];
+  }
+  for (index = 0; index < result->matched_count && count < target; index++) {
+    if (selected_contains(selected, count, &result->hits[index], 0))
+      continue;
+    selected[count++] = result->hits[index];
+  }
+  qsort(selected, count, sizeof(*selected), hit_compare);
+  memcpy(result->hits, selected, count * sizeof(*selected));
+  result->hit_count = count;
+  ab_free(engine, selected);
+  return ARCHBIRD_OK;
+}
+
 ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
                                const AbValue *queries, size_t limit,
                                AbRetrievalResult *out) {
@@ -549,6 +738,7 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
     if (status != ARCHBIRD_OK)
       goto cleanup;
   }
+  compact_common_terms(engine, out);
   if (!out->term_count) {
     status =
         archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
@@ -582,13 +772,7 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
         contribution /= 4;
       candidate->hit.score += contribution;
     }
-    if (out->term_count > 1 && !matched_terms) {
-      candidate->hit.score = 0;
-      continue;
-    }
-    candidate->hit.score += (uint64_t)matched_terms * 10000000;
-    if (matched_terms == out->term_count)
-      candidate->hit.score += 50000000;
+    candidate->hit.score *= (uint64_t)matched_terms * matched_terms;
   }
   for (index = 0; index < candidate_count; index++)
     if (candidates[index].hit.score)
@@ -611,6 +795,7 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
         out->hits[write++] = candidates[index].hit;
   }
   qsort(out->hits, out->matched_count, sizeof(*out->hits), hit_compare);
+  status = diversify_hits(engine, out);
 cleanup:
   ab_free(engine, candidates);
   if (status != ARCHBIRD_OK)

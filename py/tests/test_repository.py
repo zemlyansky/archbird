@@ -743,7 +743,7 @@ def main() -> int:
     )
     retrieval = retrieval_query["query"]["retrieval"]
     if (
-        retrieval["contract"] != "archbird-lexical-ranking-v1"
+        retrieval["contract"] != "archbird-lexical-ranking-v2"
         or retrieval["confidence"] != "candidate"
         or len(retrieval["hits"]) != 4
         or retrieval["hits"][0]["path"] != "py/pkg/api.py"
@@ -788,6 +788,78 @@ def main() -> int:
         raise AssertionError(
             f"package metadata retrieval lost its witness: {package_retrieval!r}"
         )
+    call_retrieval = json.loads(
+        query_map_json(
+            report_map_json,
+            search=["Find Worker in the code"],
+            search_limit=5,
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    if {term.lower() for term in call_retrieval["terms"]} & {"in", "the"}:
+        raise AssertionError("multi-term retrieval retained common prose terms")
+    if not any(
+        hit.get("path") == "js/main.js"
+        and any(
+            reason["field"] == "file.call" and reason["value"] == "Worker"
+            for reason in hit["reasons"]
+        )
+        for hit in call_retrieval["hits"]
+    ):
+        raise AssertionError(
+            f"call-name retrieval lost its file witness: {call_retrieval!r}"
+        )
+    shorthand_map = json.loads(report_map_json)
+    websocket_file = dict(shorthand_map["files"][0])
+    websocket_file.update(
+        {
+            "call_counts": {},
+            "calls": [],
+            "exports": [],
+            "imports": [],
+            "language": "c",
+            "layer": "core",
+            "path": "ws.c",
+            "symbols": [],
+        }
+    )
+    decoder_file = dict(websocket_file)
+    decoder_file["path"] = "codec.c"
+    decoder_file["symbols"] = [
+        {
+            "kind": "class",
+            "line": 1,
+            "name": "ZStandardDecoder",
+            "scope": "public",
+            "signature": "class ZStandardDecoder",
+        }
+    ]
+    shorthand_map["files"].extend((websocket_file, decoder_file))
+    shorthand_map["files"].sort(key=lambda row: row["path"])
+    for query, expected_path, expected_match in (
+        ("WebSocket", "ws.c", "acronym"),
+        ("zstd", "codec.c", "abbreviation"),
+    ):
+        shorthand = json.loads(
+            query_map_json(
+                json.dumps(
+                    shorthand_map, sort_keys=True, separators=(",", ":")
+                ).encode(),
+                search=[query],
+                search_limit=5,
+                depth=0,
+                test_depth=0,
+            )
+        )["query"]["retrieval"]
+        if not any(
+            hit.get("path") == expected_path
+            and any(reason["match"] == expected_match for reason in hit["reasons"])
+            for hit in shorthand["hits"]
+        ):
+            raise AssertionError(
+                f"retrieval lost {expected_match} witness for {query}: {shorthand!r}"
+            )
     supported_legacy_map = json.loads(report_map_json)
     for package in supported_legacy_map["packages"]:
         package.pop("aliases", None)
@@ -821,6 +893,21 @@ def main() -> int:
         pass
     else:
         raise AssertionError("retrieval accepted malformed package metadata")
+    malformed_call_map = json.loads(report_map_json)
+    malformed_call_map["call_resolutions"].reverse()
+    try:
+        query_map_json(
+            json.dumps(
+                malformed_call_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            search=["Worker"],
+            depth=0,
+            test_depth=0,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("retrieval accepted unsorted call evidence")
     for invalid in (
         {"search": ["---"]},
         {"search": [" ".join(f"term{index}" for index in range(17))]},

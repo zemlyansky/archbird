@@ -540,7 +540,7 @@ assert.equal(currentProducerQuery.query.producer_compatibility, "current");
 const retrievalQuery = JSON.parse(queryMap(repositoryMapJson, {
   search: ["twce javascript"], searchLimit: 4, depth: 0, testDepth: 0,
 }));
-assert.equal(retrievalQuery.query.retrieval.contract, "archbird-lexical-ranking-v1");
+assert.equal(retrievalQuery.query.retrieval.contract, "archbird-lexical-ranking-v2");
 assert.equal(retrievalQuery.query.retrieval.confidence, "candidate");
 assert.equal(retrievalQuery.query.retrieval.hits.length, 4);
 assert.equal(retrievalQuery.query.retrieval.hits[0].path, "js/index.js");
