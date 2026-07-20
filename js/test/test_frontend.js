@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { scipFixture } = require("../../test/scip_fixture");
+const { ProviderCache } = require("../src/provider-cache");
 
 if (process.argv.length !== 4) {
   throw new Error("usage: test_node_frontend.js ADDON REPOSITORY_ROOT");
@@ -584,6 +585,76 @@ cacheChangedAgain.scan("primary", {
 assert.equal(cacheChangedAgain.cacheStats.hits, 0);
 assert.equal(cacheChangedAgain.cacheStats.misses, 2);
 fs.rmSync(cacheRoot, { force: true, recursive: true });
+const boundedCacheRoot = path.resolve(
+  process.argv[3],
+  "build/test-provider-cache-bounded-node",
+);
+fs.rmSync(boundedCacheRoot, { force: true, recursive: true });
+for (const invalidBudget of [true, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+  assert.throws(
+    () => new ProviderCache(boundedCacheRoot, { maxBytes: invalidBudget }),
+    /positive safe integer/,
+  );
+}
+const priorCacheBudget = process.env.ARCHBIRD_CACHE_MAX_BYTES;
+for (const invalidEnvironment of ["", "+1", " 1", "1.5", "9007199254740992"]) {
+  process.env.ARCHBIRD_CACHE_MAX_BYTES = invalidEnvironment;
+  assert.throws(
+    () => new ProviderCache(boundedCacheRoot),
+    /positive (safe )?integer/,
+  );
+}
+if (priorCacheBudget === undefined) {
+  delete process.env.ARCHBIRD_CACHE_MAX_BYTES;
+} else {
+  process.env.ARCHBIRD_CACHE_MAX_BYTES = priorCacheBudget;
+}
+const boundedCache = new ProviderCache(boundedCacheRoot, { maxBytes: 100 });
+const boundedParameters = {
+  namespace: "fixture",
+  project: "cache-budget",
+  providerId: "fixture",
+  path: "a.js",
+  sourceSha256: "1".repeat(64),
+};
+boundedCache.store(Buffer.alloc(60, "a"), boundedParameters);
+const boundedSecond = {
+  ...boundedParameters,
+  path: "b.js",
+  sourceSha256: "2".repeat(64),
+};
+boundedCache.store(Buffer.alloc(60, "b"), boundedSecond);
+assert.ok(boundedCache.stats.bytes <= 100);
+assert.equal(boundedCache.stats.evictions, 1);
+assert.equal(boundedCache.load(boundedParameters), null);
+assert.deepEqual(boundedCache.load(boundedSecond), Buffer.alloc(60, "b"));
+boundedCache.store(Buffer.alloc(101, "c"), boundedParameters);
+assert.equal(boundedCache.stats.skipped, 1);
+const staleCacheTemporary = path.join(
+  boundedCacheRoot,
+  "providers-v1",
+  "aa",
+  ".stale.tmp",
+);
+fs.mkdirSync(path.dirname(staleCacheTemporary), { recursive: true });
+fs.writeFileSync(staleCacheTemporary, "partial");
+const recoveredCache = new ProviderCache(boundedCacheRoot, { maxBytes: 100 });
+assert.equal(fs.existsSync(staleCacheTemporary), false);
+assert.equal(recoveredCache.stats.temporariesRemoved, 1);
+const originalOpenSync = fs.openSync;
+fs.openSync = () => {
+  const error = new Error("no space left on device");
+  error.code = "ENOSPC";
+  throw error;
+};
+try {
+  recoveredCache.store(Buffer.from("d"), boundedParameters);
+} finally {
+  fs.openSync = originalOpenSync;
+}
+assert.equal(recoveredCache.stats.noSpace, 1);
+assert.equal(recoveredCache.stats.errors, 1);
+fs.rmSync(boundedCacheRoot, { force: true, recursive: true });
 const zeroFixture = path.resolve(process.argv[3], "test/fixtures/zero_config");
 const zeroResolutionJson = resolveDiscovery(zeroFixture);
 assert.deepEqual(zeroResolutionJson, resolveDiscovery(zeroFixture));

@@ -323,9 +323,13 @@ fact-local. SCIP retains producer, document coverage, source anchoring, and
 freshness. Provider conflicts and unresolved targets remain explicit.
 
 Per-file/provider caches are content-addressed and revalidated by the native
-core. `--no-cache` disables them; `--cache-dir` selects the root. `--jobs 0` is
-automatic. Python analysis uses a bounded ordered process pool only for large
-Python source sets; worker count cannot change canonical output.
+core. The default 1 GiB budget evicts the oldest content-addressed entries;
+`--cache-max-bytes` or `ARCHBIRD_CACHE_MAX_BYTES` changes it, `--cache-dir`
+selects the root, and `--no-cache` disables it. Failed temporaries are removed
+on the next use, and a full cache produces a warning without invalidating the
+analysis. `--jobs 0` is automatic. Python analysis uses a bounded ordered
+process pool only for large Python source sets; worker count cannot change
+canonical output.
 
 ## Commands, installation, and limits
 

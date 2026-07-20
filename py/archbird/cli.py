@@ -18,7 +18,10 @@ from typing import Optional, Sequence
 from . import __version__, implementation_digest
 from . import _native
 from .errors import ConfigError
-from .provider_cache import default_provider_cache_dir
+from .provider_cache import (
+    default_provider_cache_dir,
+    default_provider_cache_max_bytes,
+)
 from .native import (
     Project,
     Verification,
@@ -379,6 +382,14 @@ def _add_cache_options(result: argparse.ArgumentParser) -> None:
         ),
     )
     result.add_argument(
+        "--cache-max-bytes",
+        type=int,
+        help=(
+            "maximum persistent provider-cache bytes "
+            "(default: ARCHBIRD_CACHE_MAX_BYTES or 1073741824)"
+        ),
+    )
+    result.add_argument(
         "--no-cache",
         action="store_true",
         help="disable persistent per-file provider reuse",
@@ -402,6 +413,34 @@ def _cache_dir(args: argparse.Namespace) -> Optional[Path]:
         if args.cache_dir
         else default_provider_cache_dir()
     )
+
+
+def _cache_max_bytes(args: argparse.Namespace) -> int:
+    value = (
+        args.cache_max_bytes
+        if args.cache_max_bytes is not None
+        else default_provider_cache_max_bytes()
+    )
+    if value <= 0 or value > (1 << 53) - 1:
+        raise ValueError("--cache-max-bytes must be a positive safe integer")
+    return value
+
+
+def _warn_cache_stats(stats: Mapping[str, int]) -> None:
+    if stats.get("no_space", 0):
+        print(
+            "archbird: warning: provider-cache write failed because storage "
+            "is full; analysis remains valid. Use --cache-dir, increase "
+            "--cache-max-bytes, or use --no-cache.",
+            file=sys.stderr,
+        )
+    if stats.get("skipped", 0):
+        print(
+            "archbird: warning: provider-cache entries exceeded the configured "
+            "budget and were not stored; analysis remains valid. Increase "
+            "--cache-max-bytes or use --no-cache.",
+            file=sys.stderr,
+        )
 
 
 def config_parser() -> argparse.ArgumentParser:
@@ -861,6 +900,7 @@ def _has_discovery_overrides(args: argparse.Namespace) -> bool:
         or args.max_index_bytes is not None
         or args.no_config
         or args.cache_dir
+        or args.cache_max_bytes is not None
         or args.no_cache
     )
 
@@ -895,12 +935,14 @@ def _project_from_args(
         current.scan(
             jobs=args.jobs,
             cache_dir=_cache_dir(args),
+            cache_max_bytes=_cache_max_bytes(args),
             progress=progress.emit if progress is not None else None,
         )
     except Exception:
         if ledger_path:
             _write(current.merge_conflicts_json(pretty=True), ledger_path)
         raise
+    _warn_cache_stats(current.cache_stats)
     if ledger_path:
         _write(current.merge_conflicts_json(pretty=True), ledger_path)
     for observation_path in getattr(args, "test_symbol_observations", ()):
@@ -1201,7 +1243,10 @@ def _workspace_main(argv: Sequence[str]) -> int:
     args = workspace_parser().parse_args(argv)
     try:
         encoded = Workspace.from_config(
-            args.config, jobs=args.jobs, cache_dir=_cache_dir(args)
+            args.config,
+            jobs=args.jobs,
+            cache_dir=_cache_dir(args),
+            cache_max_bytes=_cache_max_bytes(args),
         ).json(pretty=args.pretty)
         document = json.loads(encoded)
         _write(encoded, args.output)
@@ -1231,6 +1276,7 @@ def _verify_main(argv: Sequence[str]) -> int:
             baseline=args.baseline,
             jobs=args.jobs,
             cache_dir=_cache_dir(args),
+            cache_max_bytes=_cache_max_bytes(args),
         )
         encoded = verification.report(
             args.format,
@@ -1425,6 +1471,7 @@ def _serve_main(argv: Sequence[str]) -> int:
                 "cache_dir": (
                     str(_cache_dir(args)) if _cache_dir(args) is not None else None
                 ),
+                "cache_max_bytes": _cache_max_bytes(args),
                 "max_file_bytes": args.max_file_bytes,
                 "max_index_bytes": args.max_index_bytes,
                 "only": tuple(args.only),

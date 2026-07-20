@@ -418,6 +418,11 @@ The complete commands are `map`, `config show|init`, `query`, `impact`,
 `archbird COMMAND --help` for flags. Exit status is 0 for success, 1 when
 requested `--check` blocks, and 2 for invalid input/configuration.
 
+Persistent per-file provider caches are content-addressed and core-validated.
+They have a 1 GiB default budget; use `--cache-max-bytes`,
+`ARCHBIRD_CACHE_MAX_BYTES`, `--cache-dir`, or `--no-cache` to control storage.
+Cache eviction or write failure never changes canonical analysis output.
+
 ## CI and agent workflow
 
 ```bash

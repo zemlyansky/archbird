@@ -33,6 +33,7 @@ const COMMON = {
   version: { type: "boolean" },
   noTypescript: { flag: "no-typescript", type: "boolean" },
   cacheDir: { flag: "cache-dir", type: "string" },
+  cacheMaxBytes: { flag: "cache-max-bytes", type: "number" },
   noCache: { flag: "no-cache", type: "boolean" },
 };
 
@@ -308,8 +309,36 @@ function hasDiscoveryOverrides(options) {
     options.noConfig || options.project || options.source.length || options.only.length ||
     options.exclude.length || options.ignoreFile.length || options.noIgnore ||
     options.noDefaultExcludes || options.maxFileBytes !== undefined ||
-    options.maxIndexBytes !== undefined || options.cacheDir || options.noCache
+    options.maxIndexBytes !== undefined || options.cacheDir ||
+    options.cacheMaxBytes !== undefined || options.noCache
   );
+}
+
+function cacheMaxBytes(options) {
+  const value = options.cacheMaxBytes === undefined
+    ? archbird.defaultProviderCacheMaxBytes()
+    : options.cacheMaxBytes;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("--cache-max-bytes must be a positive safe integer");
+  }
+  return value;
+}
+
+function warnCacheStats(stats) {
+  if (stats.noSpace) {
+    process.stderr.write(
+      "archbird: warning: provider-cache write failed because storage is full; " +
+      "analysis remains valid. Use --cache-dir, increase --cache-max-bytes, " +
+      "or use --no-cache.\n",
+    );
+  }
+  if (stats.skipped) {
+    process.stderr.write(
+      "archbird: warning: provider-cache entries exceeded the configured " +
+      "budget and were not stored; analysis remains valid. Increase " +
+      "--cache-max-bytes or use --no-cache.\n",
+    );
+  }
 }
 
 function project(options, progress = null) {
@@ -340,6 +369,7 @@ function project(options, progress = null) {
       cacheDir: options.noCache
         ? null
         : (options.cacheDir || archbird.defaultProviderCacheDir()),
+      cacheMaxBytes: cacheMaxBytes(options),
       typescript: !options.noTypescript,
       progress: progress === null ? null : (event) => progress.emit(event),
     });
@@ -349,6 +379,7 @@ function project(options, progress = null) {
     }
     throw error;
   }
+  warnCacheStats(current.cacheStats);
   if (options.mergeLedger) {
     write(current.mergeConflictsJson({ pretty: true }), options.mergeLedger);
   }
@@ -661,6 +692,7 @@ function workspaceMain(argv) {
     cacheDir: options.noCache
       ? null
       : (options.cacheDir || archbird.defaultProviderCacheDir()),
+    cacheMaxBytes: cacheMaxBytes(options),
     typescript: !options.noTypescript,
   });
   const encoded = workspace.json({ pretty: options.pretty });
@@ -697,6 +729,7 @@ function verifyMain(argv) {
     cacheDir: options.noCache
       ? null
       : (options.cacheDir || archbird.defaultProviderCacheDir()),
+    cacheMaxBytes: cacheMaxBytes(options),
     projectRoots: projectRoots(options.projectRoot),
     typescript: !options.noTypescript,
   });
@@ -836,6 +869,7 @@ async function serveMain(argv) {
     maxIndexBytes: { flag: "max-index-bytes", type: "number" },
     noTypescript: { flag: "no-typescript", type: "boolean" },
     cacheDir: { flag: "cache-dir", type: "string" },
+    cacheMaxBytes: { flag: "cache-max-bytes", type: "number" },
     noCache: { flag: "no-cache", type: "boolean" },
     host: { default: "127.0.0.1", type: "string" },
     port: { default: 4177, type: "number" },
@@ -872,6 +906,7 @@ async function serveMain(argv) {
       cacheDir: options.noCache
         ? null
         : (options.cacheDir || archbird.defaultProviderCacheDir()),
+      cacheMaxBytes: cacheMaxBytes(options),
     },
     root: repository,
     typescript: !options.noTypescript,

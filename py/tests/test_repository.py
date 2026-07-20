@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import importlib.util
+import errno
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 
@@ -48,6 +51,11 @@ def main() -> int:
         resolve_discovery,
         write_okf_bundle,
     )
+    from archbird.provider_cache import (
+        ProviderCache,
+        default_provider_cache_max_bytes,
+    )
+    import archbird.provider_cache as provider_cache_module
     if (
         len(_native.IMPLEMENTATION_SHA256) != 64
         or any(character not in "0123456789abcdef"
@@ -187,6 +195,68 @@ def main() -> int:
             "Python provider cache cold/warm accounting is incomplete: "
             f"{cached_cold.cache_stats!r} -> {cached_warm.cache_stats!r}"
         )
+    bounded_root = repository / "build/test-provider-cache-bounded-python"
+    shutil.rmtree(bounded_root, ignore_errors=True)
+    for invalid_budget in (True, 0, -1, 1.5, (1 << 53)):
+        try:
+            ProviderCache(bounded_root, max_bytes=invalid_budget)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"Python cache accepted invalid budget {invalid_budget!r}"
+            )
+    for invalid_environment in ("", "+1", " 1", "1.5", str(1 << 53)):
+        with mock.patch.dict(
+            os.environ,
+            {"ARCHBIRD_CACHE_MAX_BYTES": invalid_environment},
+        ):
+            try:
+                default_provider_cache_max_bytes()
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    "Python cache accepted invalid environment budget "
+                    f"{invalid_environment!r}"
+                )
+    bounded = ProviderCache(bounded_root, max_bytes=100)
+    cache_parameters = {
+        "namespace": "fixture",
+        "project": "cache-budget",
+        "provider_id": "fixture",
+        "path": "a.py",
+        "source_sha256": "1" * 64,
+    }
+    bounded.store(b"a" * 60, **cache_parameters)
+    second_parameters = dict(
+        cache_parameters, path="b.py", source_sha256="2" * 64
+    )
+    bounded.store(b"b" * 60, **second_parameters)
+    if bounded.stats.bytes > 100 or bounded.stats.evictions != 1:
+        raise AssertionError(f"Python cache budget was not enforced: {bounded.stats}")
+    if bounded.load(**cache_parameters) is not None:
+        raise AssertionError("Python cache retained an evicted entry")
+    if bounded.load(**second_parameters) != b"b" * 60:
+        raise AssertionError("Python cache evicted the wrong entry")
+    bounded.store(b"c" * 101, **cache_parameters)
+    if bounded.stats.skipped != 1:
+        raise AssertionError("Python cache did not reject an oversized entry")
+    stale = bounded_root / "providers-v1" / "aa" / ".stale.tmp"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"partial")
+    recovered = ProviderCache(bounded_root, max_bytes=100)
+    if stale.exists() or recovered.stats.temporaries_removed != 1:
+        raise AssertionError("Python cache did not remove a failed temporary")
+    with mock.patch.object(
+        provider_cache_module.tempfile,
+        "NamedTemporaryFile",
+        side_effect=OSError(errno.ENOSPC, "no space left on device"),
+    ):
+        recovered.store(b"d", **cache_parameters)
+    if recovered.stats.no_space != 1 or recovered.stats.errors != 1:
+        raise AssertionError("Python cache did not classify ENOSPC")
+    shutil.rmtree(bounded_root, ignore_errors=True)
     changed = Project(
         "cache-source",
         [Source("src/a.py", b"def a():\n    return 1\n", language="python")],

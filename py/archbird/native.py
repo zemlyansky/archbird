@@ -23,7 +23,7 @@ from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple, Union
 
 from . import _native
 from .errors import ConfigError
-from .provider_cache import ProviderCache
+from .provider_cache import ProviderCache, ProviderCacheStats
 from .providers import (
     python_ast_implementation_sha256,
     python_ast_provider_facts,
@@ -197,13 +197,7 @@ class Project:
         self.sources = ordered
         self.root: Optional[Path] = None
         self.resolution_json: Optional[bytes] = None
-        self.cache_stats: Mapping[str, int] = {
-            "errors": 0,
-            "hits": 0,
-            "invalid": 0,
-            "misses": 0,
-            "writes": 0,
-        }
+        self.cache_stats: Mapping[str, int] = ProviderCacheStats().as_dict()
         classifications = [
             {
                 "language": source.language,
@@ -261,6 +255,7 @@ class Project:
         scan: bool = True,
         jobs: int = 0,
         cache_dir: Optional[Union[str, Path]] = None,
+        cache_max_bytes: Optional[int] = None,
     ) -> "Project":
         """Discover, read, and optionally analyze one configured repository."""
 
@@ -288,7 +283,11 @@ class Project:
         project.root = repository
         project.set_config(config_json)
         if scan:
-            project.scan(jobs=jobs, cache_dir=cache_dir)
+            project.scan(
+                jobs=jobs,
+                cache_dir=cache_dir,
+                cache_max_bytes=cache_max_bytes,
+            )
         return project
 
     @classmethod
@@ -309,6 +308,7 @@ class Project:
         scan: bool = True,
         jobs: int = 0,
         cache_dir: Optional[Union[str, Path]] = None,
+        cache_max_bytes: Optional[int] = None,
     ) -> "Project":
         """Resolve and map one repository with optional reviewed configuration."""
 
@@ -342,7 +342,11 @@ class Project:
         current.resolution_json = resolution_json
         current.set_config(effective_config)
         if scan:
-            current.scan(jobs=jobs, cache_dir=cache_dir)
+            current.scan(
+                jobs=jobs,
+                cache_dir=cache_dir,
+                cache_max_bytes=cache_max_bytes,
+            )
         return current
 
     @property
@@ -434,6 +438,7 @@ class Project:
         *,
         jobs: int = 0,
         cache_dir: Optional[Union[str, Path]] = None,
+        cache_max_bytes: Optional[int] = None,
         progress: Optional[Callable[[Mapping[str, object]], None]] = None,
     ) -> None:
         """Compose lexical, portable syntax, and CPython AST evidence."""
@@ -443,7 +448,11 @@ class Project:
         if jobs < 0:
             raise ValueError("jobs must be zero or positive")
         support_mode = "augment" if mode == "primary" else mode
-        cache = ProviderCache(cache_dir) if cache_dir is not None else None
+        cache = (
+            ProviderCache(cache_dir, max_bytes=cache_max_bytes)
+            if cache_dir is not None
+            else None
+        )
 
         def report(**event: object) -> None:
             if progress is not None:
@@ -632,13 +641,11 @@ class Project:
                     pass
             raise
         report(phase="joining", state="complete")
-        self.cache_stats = cache.stats.as_dict() if cache is not None else {
-            "errors": 0,
-            "hits": 0,
-            "invalid": 0,
-            "misses": 0,
-            "writes": 0,
-        }
+        self.cache_stats = (
+            cache.stats.as_dict()
+            if cache is not None
+            else ProviderCacheStats().as_dict()
+        )
 
     def finalize_providers(self) -> None:
         if not self._providers_finalized:
@@ -832,6 +839,7 @@ class Workspace:
         *,
         jobs: int = 0,
         cache_dir: Optional[Union[str, Path]] = None,
+        cache_max_bytes: Optional[int] = None,
     ) -> "Workspace":
         path = Path(config_path).resolve()
         try:
@@ -862,6 +870,7 @@ class Workspace:
                     root=project_root,
                     jobs=jobs,
                     cache_dir=cache_dir,
+                    cache_max_bytes=cache_max_bytes,
                 )
             )
         return cls(config_json, projects, path=path)
@@ -895,6 +904,7 @@ class Verification:
         baseline: Optional[Union[str, Path]] = None,
         jobs: int = 0,
         cache_dir: Optional[Union[str, Path]] = None,
+        cache_max_bytes: Optional[int] = None,
     ) -> "Verification":
         """Load only the paths declared by a validated verification plan."""
 
@@ -937,7 +947,11 @@ class Verification:
             if row["config"] is not None:
                 config_path = (base / str(row["config"])).resolve()
                 project = Project.from_config(
-                    config_path, root=root, jobs=jobs, cache_dir=cache_dir
+                    config_path,
+                    root=root,
+                    jobs=jobs,
+                    cache_dir=cache_dir,
+                    cache_max_bytes=cache_max_bytes,
                 )
                 map_document = _strict_document(
                     project.map_json(), f"project {name} map"

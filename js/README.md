@@ -328,6 +328,12 @@ For CPython-AST evidence, use the PyPI host. Tree-sitter recovery is fact-local;
 SCIP retains producer, document coverage, source anchoring, and freshness.
 Provider conflicts, ambiguity, and unresolved targets remain explicit.
 
+Node's per-file provider cache is content-addressed and revalidated by the
+native/Wasm core. Its default 1 GiB budget evicts the oldest entries;
+`--cache-max-bytes` or `ARCHBIRD_CACHE_MAX_BYTES` changes it, `--cache-dir`
+selects the root, and `--no-cache` disables it. Failed temporaries are removed
+on the next use, and a full cache warns without changing canonical output.
+
 ## Visualization, interchange, and commands
 
 ```bash

@@ -8,6 +8,8 @@ const { okfNormalization } = require("./adapters/okf/normalization");
 const {
   ProviderCache,
   defaultProviderCacheDir,
+  defaultProviderCacheMaxBytes,
+  emptyProviderCacheStats,
 } = require("./provider-cache");
 const { typescriptProviderBundles } = require("./providers/typescript");
 
@@ -169,18 +171,15 @@ class Project {
     }
     native.projectFinalizeSources(this._handle);
     this._providersFinalized = false;
-    this.cacheStats = {
-      errors: 0,
-      hits: 0,
-      invalid: 0,
-      misses: 0,
-      writes: 0,
-    };
+    this.cacheStats = emptyProviderCacheStats();
   }
 
   static fromConfig(
     configPath,
-    { root = null, scan = true, typescript = true, cacheDir = null } = {},
+    {
+      root = null, scan = true, typescript = true, cacheDir = null,
+      cacheMaxBytes = null,
+    } = {},
   ) {
     const resolvedConfig = path.resolve(configPath);
     const configJson = fs.readFileSync(resolvedConfig);
@@ -202,7 +201,7 @@ class Project {
     });
     project.root = repository;
     project.setConfig(configJson);
-    if (scan) project.scan("primary", { typescript, cacheDir });
+    if (scan) project.scan("primary", { typescript, cacheDir, cacheMaxBytes });
     return project;
   }
 
@@ -222,6 +221,7 @@ class Project {
       scan = true,
       typescript = true,
       cacheDir = null,
+      cacheMaxBytes = null,
     } = {},
   ) {
     const repository = path.resolve(root);
@@ -256,7 +256,7 @@ class Project {
     current.root = repository;
     current.resolutionJson = resolutionJson;
     current.setConfig(effectiveConfig);
-    if (scan) current.scan("primary", { typescript, cacheDir });
+    if (scan) current.scan("primary", { typescript, cacheDir, cacheMaxBytes });
     return current;
   }
 
@@ -325,7 +325,9 @@ class Project {
 
   scan(
     mode = "primary",
-    { typescript = true, cacheDir = null, progress = null } = {},
+    {
+      typescript = true, cacheDir = null, cacheMaxBytes = null, progress = null,
+    } = {},
   ) {
     if (this._providersFinalized) throw new Error("providers are already finalized");
     if (progress !== null && typeof progress !== "function") {
@@ -335,7 +337,10 @@ class Project {
       if (progress !== null) progress(event);
     };
     const supportMode = mode === "primary" ? "augment" : mode;
-    const cache = cacheDir === null ? null : new ProviderCache(cacheDir);
+    const cache = cacheDir === null ? null : new ProviderCache(
+      cacheDir,
+      { maxBytes: cacheMaxBytes === null ? defaultProviderCacheMaxBytes() : cacheMaxBytes },
+    );
     if (cache === null) {
       for (const providerId of NATIVE_LEXICAL_PROVIDERS) {
         report({ phase: "providers", provider: providerId, state: "start" });
@@ -459,7 +464,7 @@ class Project {
     }
     report({ phase: "joining", state: "complete" });
     this.cacheStats = cache === null
-      ? { errors: 0, hits: 0, invalid: 0, misses: 0, writes: 0 }
+      ? emptyProviderCacheStats()
       : { ...cache.stats };
   }
 
@@ -561,7 +566,10 @@ class Workspace {
     this.configPath = configPath;
   }
 
-  static fromConfig(configPath, { cacheDir = null, typescript = true } = {}) {
+  static fromConfig(
+    configPath,
+    { cacheDir = null, cacheMaxBytes = null, typescript = true } = {},
+  ) {
     const resolved = path.resolve(configPath);
     const configJson = fs.readFileSync(resolved);
     const plan = JSON.parse(
@@ -579,7 +587,9 @@ class Workspace {
       const root = row.root === null
         ? null
         : path.resolve(path.dirname(resolved), row.root);
-      return Project.fromConfig(projectConfig, { root, cacheDir, typescript });
+      return Project.fromConfig(projectConfig, {
+        root, cacheDir, cacheMaxBytes, typescript,
+      });
     });
     return new Workspace(configJson, projects, { configPath: resolved });
   }
@@ -616,6 +626,7 @@ class Verification {
       providedFacts = [],
       typescript = true,
       cacheDir = null,
+      cacheMaxBytes = null,
     } = {},
   ) {
     const resolved = path.resolve(configPath);
@@ -655,6 +666,7 @@ class Verification {
           root,
           typescript,
           cacheDir,
+          cacheMaxBytes,
         });
         mapDocument = strictDocument(project.mapJson(), `project ${row.name} map`);
         repositoryRoot = project.root;
@@ -1497,6 +1509,7 @@ module.exports = {
   compileChangeProposal,
   createChangeContract,
   defaultProviderCacheDir,
+  defaultProviderCacheMaxBytes,
   discoveryPlan,
   resolveDiscovery,
   diffMaps,
