@@ -65,6 +65,20 @@ try {
   const checkedCurrent = runQuery(currentMapPath, true);
   assert.equal(checkedCurrent.status, 0, checkedCurrent.stderr);
   assert.equal(JSON.parse(checkedCurrent.stdout).artifact, "query");
+  const brief = spawnSync(process.execPath, [
+    cli, "query", "--map", currentMapPath, "--path", "js", "--depth", "0",
+    "--view", "changes", "--detail", "compact",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ARCHBIRD_ENGINE: "native",
+      ARCHBIRD_NATIVE_ADDON: addon,
+    },
+  });
+  assert.equal(brief.status, 0, brief.stderr);
+  assert.match(brief.stdout, /^# Change brief:/);
+  assert.match(brief.stdout, /## Evidence limits/);
   const blocked = runQuery(mismatchedMapPath, true);
   assert.equal(blocked.status, 1, blocked.stderr);
   assert.equal(blocked.stdout, "");

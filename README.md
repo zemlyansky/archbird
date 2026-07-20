@@ -57,6 +57,10 @@ archbird query --map .archbird/map.json \
 
 archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
+
+archbird query --map .archbird/map.json \
+  --symbol 'src/runtime.c:runtime_start' \
+  --view changes --detail compact --check
 ```
 
 Query selectors accept exact or partial symbols, paths, mapped directories,
@@ -64,6 +68,12 @@ globs, layers, components, tests, packages, artifacts, builds, provider
 surfaces, parity surfaces, and named entries. `query` is bidirectional by
 default; `impact` starts upstream. Occurrence-backed symbol relations are used
 before conservative file expansion.
+
+`query --view changes` uses the same complete Query artifact and ranking policy,
+but presents it as a coding packet: change seeds, affected code, strongest
+routes, ranked tests, packages/builds/artifacts, explicit uncertainty, and a
+ledger of collapsed evidence. It does not infer an edit or change the canonical
+Query.
 
 The default is an architecture-first overview for a person or coding agent;
 canonical JSON still contains every selected file and mapped fact. Choose the
@@ -339,6 +349,9 @@ project = Project.from_repository(".")
 map_json = project.map_json(pretty=True)
 print(project.map_markdown(max_chars=12_000).decode())
 print(project.query_markdown(symbols=["runtime_start"], depth=1).decode())
+print(project.query_markdown(
+    symbols=["runtime_start"], depth=1, view="changes", detail="compact"
+).decode())
 ```
 
 ### JavaScript / Node
@@ -349,6 +362,9 @@ const { Project } = require("archbird");
 const project = Project.fromRepository(".");
 try {
   console.log(project.mapMarkdown({ maxChars: 12000 }).toString("utf8"));
+  console.log(project.queryMarkdown({
+    symbols: ["runtime_start"], depth: 1, view: "changes", detail: "compact",
+  }).toString("utf8"));
 } finally {
   project.dispose();
 }

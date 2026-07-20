@@ -623,6 +623,38 @@ def main() -> int:
         b"# Focused architecture map: map-base\n"
     ):
         raise AssertionError("native Python query Markdown is invalid")
+    change_brief = project.query_markdown(
+        paths=["py/pkg"], depth=0, view="changes"
+    )
+    if not change_brief.startswith(b"# Change brief: map-base\n"):
+        raise AssertionError("native Python change brief is invalid")
+    for expected in (
+        b"## Affected code",
+        b"## Routes, tests, and delivery",
+        b"## Evidence limits",
+    ):
+        if expected not in change_brief:
+            raise AssertionError(f"Python change brief omitted {expected!r}")
+    if change_brief != project.query_markdown(
+        paths=["py/pkg"], depth=0, view="changes"
+    ):
+        raise AssertionError("Python change brief is not repeatable")
+    for invalid_options in (
+        {"view": "other"},
+        {"detail": "other"},
+        {"compact": True, "full": True},
+        {"compact": True, "detail": "full"},
+    ):
+        try:
+            project.query_markdown(
+                paths=["py/pkg"], depth=0, **invalid_options
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"Python accepted invalid query projection: {invalid_options!r}"
+            )
     context_policy = {"profile": "exact", "quotas": {"files": 1}}
     context_query = project.query(
         paths=["py/pkg"], depth=0, context=context_policy
@@ -812,6 +844,27 @@ def main() -> int:
             query_document = json.loads(query_output.read_bytes())
             if status or query_document["artifact"] != "query":
                 raise AssertionError(f"native Python {query_command} CLI failed")
+        brief_output = Path(directory) / "changes.md"
+        status = cli_main(
+            [
+                "query",
+                "--map",
+                str(saved_map),
+                "--path",
+                "py/pkg",
+                "--view",
+                "changes",
+                "--detail",
+                "compact",
+                "--output",
+                str(brief_output),
+            ]
+        )
+        brief_text = brief_output.read_text(encoding="utf-8")
+        if status or not brief_text.startswith("# Change brief: map-base\n"):
+            raise AssertionError("native Python changes view CLI failed")
+        if "## Evidence limits" not in brief_text:
+            raise AssertionError("native Python changes view lost omission accounting")
         checked_query = Path(directory) / "checked-query.json"
         status = cli_main(
             [

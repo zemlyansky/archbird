@@ -84,6 +84,17 @@ archbird_map_query_markdown(ArchbirdEngine *engine, const uint8_t *map_json,
                             size_t map_length, const uint8_t *query_json,
                             size_t query_length, size_t max_chars,
                             ArchbirdWriteFn write_fn, void *user_data) {
+  return archbird_map_query_markdown_view(
+      engine, map_json, map_length, query_json, query_length,
+      ARCHBIRD_QUERY_VIEW_FOCUSED, ARCHBIRD_REPORT_DETAIL_STANDARD, max_chars,
+      write_fn, user_data);
+}
+
+ArchbirdStatus archbird_map_query_markdown_view(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *query_json, size_t query_length, ArchbirdQueryView view,
+    ArchbirdReportDetail detail, size_t max_chars, ArchbirdWriteFn write_fn,
+    void *user_data) {
   AbValue map = {0};
   AbValue query = {0};
   AbBuffer query_json_buffer;
@@ -91,7 +102,10 @@ archbird_map_query_markdown(ArchbirdEngine *engine, const uint8_t *map_json,
   AbMapReportCapture capture;
   ArchbirdStatus status;
   if (!engine || (!map_json && map_length) || (!query_json && query_length) ||
-      !write_fn)
+      !write_fn || view < ARCHBIRD_QUERY_VIEW_FOCUSED ||
+      view > ARCHBIRD_QUERY_VIEW_CHANGES ||
+      detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
+      detail > ARCHBIRD_REPORT_DETAIL_FULL)
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_build_identity_validate(engine);
   if (status != ARCHBIRD_OK)
@@ -110,7 +124,8 @@ archbird_map_query_markdown(ArchbirdEngine *engine, const uint8_t *map_json,
     status = ab_json_value_decode(engine, query_json_buffer.data,
                                   query_json_buffer.length, &query);
   if (status == ARCHBIRD_OK)
-    status = ab_query_report_markdown(engine, &map, &query, max_chars, &report);
+    status = ab_query_report_markdown_view(engine, &map, &query, view, detail,
+                                           max_chars, &report);
   if (status == ARCHBIRD_OK)
     status = map_report_write(engine, &report, write_fn, user_data);
   ab_value_free(engine, &query);

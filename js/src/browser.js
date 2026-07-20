@@ -37,6 +37,29 @@ function queryRequest(options = {}) {
   return canonical(request);
 }
 
+function queryProjection(options = {}) {
+  const views = { focused: 0, changes: 1 };
+  const details = { compact: 0, standard: 1, full: 2 };
+  const view = options.view ?? "focused";
+  const detail = options.detail ?? "standard";
+  const compact = options.compact ?? false;
+  const full = options.full ?? false;
+  if (!Object.hasOwn(views, view)) {
+    throw new RangeError("view must be focused or changes");
+  }
+  if (!Object.hasOwn(details, detail)) {
+    throw new RangeError("detail must be compact, standard, or full");
+  }
+  if (compact && full) throw new RangeError("compact and full conflict");
+  if ((compact || full) && detail !== "standard") {
+    throw new RangeError("detail conflicts with compact/full alias");
+  }
+  return {
+    detail: details[compact ? "compact" : (full ? "full" : detail)],
+    view: views[view],
+  };
+}
+
 function sourceRows(values) {
   return values.map((value) => {
     const split = value.indexOf("=");
@@ -347,9 +370,12 @@ async function createBrowserArchbird(moduleOptions = {}) {
     }
 
     queryMarkdown(options = {}) {
-      return core.mapQueryMarkdown(
+      const projection = queryProjection(options);
+      return core.mapQueryMarkdownView(
         this.mapJson(),
         Buffer.from(JSON.stringify(queryRequest(options))),
+        projection.view,
+        projection.detail,
         options.maxChars ?? 0,
       );
     }

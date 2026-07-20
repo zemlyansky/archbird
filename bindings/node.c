@@ -1063,6 +1063,39 @@ static napi_value map_query_markdown(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value map_query_markdown_view(napi_env env,
+                                          napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5];
+  const uint8_t *map;
+  const uint8_t *query;
+  size_t map_length;
+  size_t query_length;
+  size_t view;
+  size_t detail;
+  size_t max_chars;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 4 || !get_buffer(env, argv[0], &map, &map_length) ||
+      !get_buffer(env, argv[1], &query, &query_length) ||
+      !get_optional_size(env, argc, argv, 2, 0, "view", &view) ||
+      !get_optional_size(env, argc, argv, 3, 1, "detail", &detail) ||
+      !get_optional_size(env, argc, argv, 4, 0, "maxChars", &max_chars))
+    return NULL;
+  status =
+      saved_artifact_engine(larger_input(map_length, query_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_query_markdown_view(
+        engine, map, map_length, query, query_length, (ArchbirdQueryView)view,
+        (ArchbirdReportDetail)detail, max_chars, output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value map_diff(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -1697,6 +1730,8 @@ static napi_value init(napi_env env, napi_value exports) {
       {"okfPublish", NULL, okf_publish, NULL, NULL, NULL, napi_default, NULL},
       {"mapQuery", NULL, map_query, NULL, NULL, NULL, napi_default, NULL},
       {"mapQueryMarkdown", NULL, map_query_markdown, NULL, NULL, NULL,
+       napi_default, NULL},
+      {"mapQueryMarkdownView", NULL, map_query_markdown_view, NULL, NULL, NULL,
        napi_default, NULL},
       {"discoveryDescend", NULL, discovery_descend, NULL, NULL, NULL,
        napi_default, NULL},

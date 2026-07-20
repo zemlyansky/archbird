@@ -770,9 +770,13 @@ class Project:
         direction: str = "both",
         depth: int = 1,
         test_depth: int = 8,
+        view: str = "focused",
+        detail: str = "standard",
+        compact: bool = False,
+        full: bool = False,
         max_chars: int = 0,
     ) -> bytes:
-        """Render a ranked, whole-file query neighborhood as Markdown."""
+        """Render focused context or a change brief from the same Query IR."""
 
         return query_map_markdown(
             self.map_json(),
@@ -786,6 +790,10 @@ class Project:
             direction=direction,
             depth=depth,
             test_depth=test_depth,
+            view=view,
+            detail=detail,
+            compact=compact,
+            full=full,
             max_chars=max_chars,
         )
 
@@ -1297,12 +1305,27 @@ def query_map_markdown(
     producer_policy: str = "compatible",
     depth: int = 1,
     test_depth: int = 8,
+    view: str = "focused",
+    detail: str = "standard",
+    compact: bool = False,
+    full: bool = False,
     max_chars: int = 0,
 ) -> bytes:
-    """Query a canonical saved Map and render bounded Markdown context."""
+    """Project a canonical Query as focused context or a change brief."""
 
     if max_chars < 0:
         raise ValueError("max_chars must be nonnegative")
+    views = {"focused": 0, "changes": 1}
+    details = {"compact": 0, "standard": 1, "full": 2}
+    if view not in views:
+        raise ValueError("view must be focused or changes")
+    if detail not in details:
+        raise ValueError("detail must be compact, standard, or full")
+    if compact and full:
+        raise ValueError("compact and full conflict")
+    if (compact or full) and detail != "standard":
+        raise ValueError("detail conflicts with compact/full alias")
+    selected_detail = "compact" if compact else "full" if full else detail
     request = _query_request(
         focus=focus,
         paths=paths,
@@ -1316,8 +1339,12 @@ def query_map_markdown(
         depth=depth,
         test_depth=test_depth,
     )
-    return _native.map_query_markdown(
-        map_json, request, max_chars=max_chars
+    return _native.map_query_markdown_view(
+        map_json,
+        request,
+        views[view],
+        details[selected_detail],
+        max_chars=max_chars,
     )
 
 

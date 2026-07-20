@@ -287,6 +287,20 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
         "--format", choices=("markdown", "json"), default="markdown"
     )
     result.add_argument(
+        "--view",
+        choices=("focused", "changes"),
+        default="focused",
+        help="human Markdown projection",
+    )
+    result.add_argument(
+        "--detail",
+        choices=("compact", "standard", "full"),
+        default="standard",
+        help="amount of evidence in the selected view",
+    )
+    result.add_argument("--compact", action="store_true", help="alias for --detail compact")
+    result.add_argument("--full", action="store_true", help="alias for --detail full")
+    result.add_argument(
         "--max-chars",
         type=int,
         default=0,
@@ -1039,6 +1053,10 @@ def _query_main(
             raise ValueError("--max-chars applies only to Markdown")
         if args.format == "markdown" and args.pretty:
             raise ValueError("--pretty applies only to JSON")
+        if args.compact and args.full:
+            raise ValueError("--compact and --full conflict")
+        if (args.compact or args.full) and args.detail != "standard":
+            raise ValueError("--detail conflicts with --compact/--full")
         if args.map:
             map_json = Path(args.map).read_bytes()
         else:
@@ -1112,7 +1130,13 @@ def _query_main(
             query_map_json(map_json, pretty=args.pretty, **query_options)
             if args.format == "json"
             else query_map_markdown(
-                map_json, max_chars=args.max_chars, **query_options
+                map_json,
+                view=args.view,
+                detail=args.detail,
+                compact=args.compact,
+                full=args.full,
+                max_chars=args.max_chars,
+                **query_options,
             )
         )
         progress.finish()

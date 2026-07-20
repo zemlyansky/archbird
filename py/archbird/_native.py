@@ -822,6 +822,21 @@ def map_query_markdown(map: bytes, query: bytes, max_chars=0) -> bytes:
     )
 
 
+def map_query_markdown_view(
+    map: bytes, query: bytes, view: int, detail: int, max_chars=0
+) -> bytes:
+    if max_chars < 0:
+        raise ValueError("query max_chars must be a nonnegative integer")
+    return _simple_render(
+        "archbird_map_query_markdown_view",
+        [_bytes(map), _bytes(query)],
+        suffix_types=(ctypes.c_int, ctypes.c_int, ctypes.c_size_t),
+        suffix_values=(view, detail, max_chars),
+        include_flags=False,
+        saved_artifact=True,
+    )
+
+
 def map_diff(before: bytes, after: bytes, pretty=False) -> bytes:
     return _simple_render(
         "archbird_map_diff",

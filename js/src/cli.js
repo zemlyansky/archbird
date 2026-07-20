@@ -465,6 +465,10 @@ function selectorDefinitions() {
     conservative: { type: "string" },
     contextQuota: { flag: "context-quota", type: "multiple" },
     contextOffset: { flag: "context-offset", type: "multiple" },
+    view: { type: "string" },
+    detail: { default: "standard", type: "string" },
+    compact: { type: "boolean" },
+    full: { type: "boolean" },
     maxChars: { flag: "max-chars", default: 0, type: "number" },
     testSymbolObservations: { flag: "test-symbol-observations", type: "multiple" },
     format: { default: "markdown", type: "string" },
@@ -516,6 +520,12 @@ function queryMain(argv, command) {
   if (options.maxSeedDistance !== undefined && options.maxSeedDistance < 0) {
     throw new Error("--max-seed-distance must be nonnegative");
   }
+  if (options.compact && options.full) {
+    throw new Error("--compact and --full conflict");
+  }
+  if ((options.compact || options.full) && options.detail !== "standard") {
+    throw new Error("--detail conflicts with --compact/--full");
+  }
   const progress = new Progress(options.progress);
   let source;
   if (options.map) source = read(options.map);
@@ -558,7 +568,14 @@ function queryMain(argv, command) {
       write(archbird.queryMap(source, { ...queryOptions, pretty: options.pretty }), options.output);
     } else if (options.format === "markdown") {
       progress.finish();
-      write(archbird.queryMapMarkdown(source, { ...queryOptions, maxChars: options.maxChars }), options.output);
+      write(archbird.queryMapMarkdown(source, {
+        ...queryOptions,
+        compact: options.compact,
+        detail: options.detail,
+        full: options.full,
+        maxChars: options.maxChars,
+        view: options.view || "focused",
+      }), options.output);
     } else throw new Error("--format must be json or markdown");
   } catch (error) {
     if (options.check && error?.code === "ARCHBIRD_STATUS_10") {
@@ -927,7 +944,9 @@ function main(argv = process.argv.slice(2)) {
   const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : "map";
   const rest = command === "map" && argv[0] !== "map" ? argv : argv.slice(1);
   if (command === "config") return configMain(rest);
-  if (command === "query" || command === "impact") return queryMain(rest, command);
+  if (command === "query" || command === "impact") {
+    return queryMain(rest, command);
+  }
   if (command === "diff") return diffMain(rest);
   if (command === "freshness") return freshnessMain(rest);
   if (command === "workspace") return workspaceMain(rest);

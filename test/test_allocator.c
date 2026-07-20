@@ -387,6 +387,7 @@ typedef enum ReportExerciseKind {
   REPORT_EXERCISE_MAP_OVERVIEW,
   REPORT_EXERCISE_MAP_ARCHITECTURE,
   REPORT_EXERCISE_QUERY,
+  REPORT_EXERCISE_QUERY_CHANGES,
   REPORT_EXERCISE_QUERY_BUDGET
 } ReportExerciseKind;
 
@@ -427,6 +428,12 @@ static ArchbirdStatus exercise_report(TestAllocator *allocator,
     status = archbird_map_query_markdown(
         engine, report_map, report_map_length, (const uint8_t *)query,
         sizeof(query) - 1, 0, count_write, &output);
+    break;
+  case REPORT_EXERCISE_QUERY_CHANGES:
+    status = archbird_map_query_markdown_view(
+        engine, report_map, report_map_length, (const uint8_t *)query,
+        sizeof(query) - 1, ARCHBIRD_QUERY_VIEW_CHANGES,
+        ARCHBIRD_REPORT_DETAIL_STANDARD, 0, count_write, &output);
     break;
   case REPORT_EXERCISE_QUERY_BUDGET:
     status = archbird_map_query_markdown(
@@ -470,6 +477,10 @@ static ArchbirdStatus exercise_query_report(TestAllocator *allocator) {
 
 static ArchbirdStatus exercise_budgeted_query_report(TestAllocator *allocator) {
   return exercise_report(allocator, REPORT_EXERCISE_QUERY_BUDGET);
+}
+
+static ArchbirdStatus exercise_change_query_report(TestAllocator *allocator) {
+  return exercise_report(allocator, REPORT_EXERCISE_QUERY_CHANGES);
 }
 
 static ArchbirdStatus exercise_verify(TestAllocator *allocator) {
@@ -709,6 +720,8 @@ int main(void) {
   run_failure_sweep("map-report-architecture-every-n",
                     exercise_architecture_map_report);
   run_failure_sweep("query-report-every-n", exercise_query_report);
+  run_failure_sweep("query-change-report-every-n",
+                    exercise_change_query_report);
   run_failure_sweep("query-report-budget-every-n",
                     exercise_budgeted_query_report);
   run_failure_sweep("verify-every-n", exercise_verify);

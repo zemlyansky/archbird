@@ -343,6 +343,11 @@ typedef enum ArchbirdReportDetail {
   ARCHBIRD_REPORT_DETAIL_FULL = 2
 } ArchbirdReportDetail;
 
+typedef enum ArchbirdQueryView {
+  ARCHBIRD_QUERY_VIEW_FOCUSED = 0,
+  ARCHBIRD_QUERY_VIEW_CHANGES = 1
+} ArchbirdQueryView;
+
 /*
  * Render a human projection of the complete Map IR. Views choose the question
  * being answered; detail controls how much evidence that projection exposes.
@@ -373,6 +378,18 @@ ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
     const uint8_t *query_json, size_t query_length, size_t max_chars,
     ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Render the same canonical Query IR for a particular human task. FOCUSED is
+ * the compatibility report; CHANGES presents seeds, affected code, strongest
+ * routes, tests, delivery surfaces, uncertainty, and omitted evidence as a
+ * deterministic change brief. Detail changes presentation only.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown_view(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *query_json, size_t query_length, ArchbirdQueryView view,
+    ArchbirdReportDetail detail, size_t max_chars, ArchbirdWriteFn write_fn,
+    void *user_data);
 
 ARCHBIRD_API ArchbirdStatus archbird_map_diff(
     ArchbirdEngine *engine, const uint8_t *before_json, size_t before_length,

@@ -51,6 +51,15 @@ const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js
     }).toString("utf8"),
     /Context: profile=exact;.*files=1\/2\./,
   );
+  const changeBrief = project.queryMarkdown({
+    paths: ["py/pkg"],
+    depth: 0,
+    view: "changes",
+  }).toString("utf8");
+  assert.match(changeBrief, /^# Change brief: map-base\n/);
+  assert.match(changeBrief, /## Affected code/);
+  assert.match(changeBrief, /## Routes, tests, and delivery/);
+  assert.match(changeBrief, /## Evidence limits/);
   assert.match(project.mapMarkdown().toString("utf8"), /^# map-base/);
   const componentGraphJson = project.graphViewJson();
   const symbolGraphJson = project.graphViewJson({

@@ -1224,9 +1224,28 @@ function renderMapMarkdown(
 
 function queryMapMarkdown(mapJson, options = {}) {
   const request = queryRequest(options);
-  return native.mapQueryMarkdown(
+  const views = { focused: 0, changes: 1 };
+  const details = { compact: 0, standard: 1, full: 2 };
+  const view = options.view ?? "focused";
+  const detail = options.detail ?? "standard";
+  const compact = options.compact ?? false;
+  const full = options.full ?? false;
+  if (!Object.hasOwn(views, view)) {
+    throw new RangeError("view must be focused or changes");
+  }
+  if (!Object.hasOwn(details, detail)) {
+    throw new RangeError("detail must be compact, standard, or full");
+  }
+  if (compact && full) throw new RangeError("compact and full conflict");
+  if ((compact || full) && detail !== "standard") {
+    throw new RangeError("detail conflicts with compact/full alias");
+  }
+  const selectedDetail = compact ? "compact" : (full ? "full" : detail);
+  return native.mapQueryMarkdownView(
     Buffer.from(mapJson),
     Buffer.from(JSON.stringify(request)),
+    views[view],
+    details[selectedDetail],
     options.maxChars ?? 0,
   );
 }

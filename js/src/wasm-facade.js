@@ -402,6 +402,15 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
         "_ab_wasm_map_query_markdown",
         sizeValue(maxChars, "maxChars"),
       ),
+    mapQueryMarkdownView: (map, query, view = 0, detail = 1, maxChars = 0) =>
+      twoInputs(
+        map,
+        query,
+        "_ab_wasm_map_query_markdown_view",
+        sizeValue(view, "view"),
+        sizeValue(detail, "detail"),
+        sizeValue(maxChars, "maxChars"),
+      ),
     mapDiff: (before, after, pretty = false) =>
       twoInputs(before, after, "_ab_wasm_map_diff", boolFlags(pretty)),
     mapFreshness: (snapshot, current, pretty = false) =>

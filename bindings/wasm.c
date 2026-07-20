@@ -725,6 +725,20 @@ AB_WASM_EXPORT int ab_wasm_map_query_markdown(const uint8_t *map,
   return stateless_end(engine, status);
 }
 
+AB_WASM_EXPORT int
+ab_wasm_map_query_markdown_view(const uint8_t *map, size_t map_length,
+                                const uint8_t *query, size_t query_length,
+                                int view, int detail, size_t max_chars) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(map_length, query_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_query_markdown_view(
+        engine, map, map_length, query, query_length, (ArchbirdQueryView)view,
+        (ArchbirdReportDetail)detail, max_chars, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
 AB_WASM_EXPORT int ab_wasm_map_diff(const uint8_t *before, size_t before_length,
                                     const uint8_t *after, size_t after_length,
                                     uint32_t flags) {

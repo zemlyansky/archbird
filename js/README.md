@@ -52,8 +52,15 @@ try {
     context: { profile: "change" },
     maxChars: 8000,
   });
+  const brief = project.queryMarkdown({
+    symbols: ["src/runtime.c:runtime_start"],
+    depth: 1,
+    view: "changes",
+    detail: "compact",
+  });
   console.log(overview.toString("utf8"));
   console.log(context.toString("utf8"));
+  console.log(brief.toString("utf8"));
 } finally {
   project.dispose();
 }
@@ -107,7 +114,16 @@ npx archbird query --map .archbird/map.json \
 
 npx archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
+
+npx archbird query --map .archbird/map.json \
+  --symbol 'src/runtime.c:runtime_start' \
+  --view changes --detail compact --check
 ```
+
+`query --view changes` presents the same complete Query artifact as a coding
+packet. It groups change seeds, affected code, strongest routes, ranked tests,
+packages/builds/artifacts, uncertainty, and collapsed evidence without
+inventing an edit or changing canonical JSON.
 
 Unchecked saved-Map queries accept supported older producers. Add `--check`
 when the result will drive a decision; the shared core then requires the saved

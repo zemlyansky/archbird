@@ -886,12 +886,12 @@ cleanup:
   return status;
 }
 
-static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
-                                        const AbValue *map,
-                                        const AbValue *query, size_t node_limit,
-                                        int include_neighborhood,
-                                        int include_routed, int compact_header,
-                                        AbBuffer *out) {
+static ArchbirdStatus
+render_query_view(ArchbirdEngine *engine, const AbValue *map,
+                  const AbValue *query, size_t node_limit,
+                  int include_neighborhood, int include_routed,
+                  int compact_header, ArchbirdQueryView view,
+                  ArchbirdReportDetail detail, AbBuffer *out) {
   const AbValue *map_files = optional_array(map, "files");
   const AbValue *files = optional_array(query, "files");
   const AbValue *edges = optional_array(query, "edges");
@@ -908,6 +908,11 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
   const AbValue *seeds;
   const AbValue *seed_identities;
   const AbString *scope;
+  const AbString *producer_policy;
+  const AbString *producer_compatibility;
+  int change_view = view == ARCHBIRD_QUERY_VIEW_CHANGES;
+  int full_detail = detail == ARCHBIRD_REPORT_DETAIL_FULL;
+  int compact_detail = detail == ARCHBIRD_REPORT_DETAIL_COMPACT;
   QueryReportFile *report_files = NULL;
   QueryContextPolicy policy;
   size_t compact_symbols =
@@ -936,12 +941,23 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
   seeds = optional_array(metadata, "seeds");
   seed_identities = optional_array(metadata, "seed_identities");
   scope = string_or_empty(metadata, "scope");
+  producer_policy = string_or_empty(metadata, "producer_policy");
+  producer_compatibility = string_or_empty(metadata, "producer_compatibility");
   if (!direction || !config || !inputs || config->length < 16 ||
       inputs->length < 16 || node_limit > files->as.array.count)
     return query_schema_error(engine, "query report evidence is malformed");
   status = query_context_policy(engine, metadata, &policy);
   if (status != ARCHBIRD_OK)
     return status;
+  if (compact_detail) {
+    if (compact_symbols > 5)
+      compact_symbols = 5;
+    if (compact_edges > 5)
+      compact_edges = 5;
+  } else if (full_detail) {
+    compact_symbols = SIZE_MAX;
+    compact_edges = SIZE_MAX;
+  }
   if (files->as.array.count) {
     report_files = (QueryReportFile *)ab_calloc(engine, files->as.array.count,
                                                 sizeof(*report_files));
@@ -1013,10 +1029,13 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
       test_emitted_count = policy.test_match_quota;
   }
 
-  QUERY_TRY(ab_report_linef(out, "# Focused architecture map: %.*s",
+  QUERY_TRY(ab_report_linef(out,
+                            change_view ? "# Change brief: %.*s"
+                                        : "# Focused architecture map: %.*s",
                             (int)project->length, project->data));
   QUERY_TRY(ab_report_blank(out));
-  QUERY_TRY(ab_buffer_literal(out, "Focus: `"));
+  QUERY_TRY(
+      ab_buffer_literal(out, change_view ? "Change seeds: `" : "Focus: `"));
   {
     size_t focus_limit =
         compact_header && focus->as.array.count > 3 ? 3 : focus->as.array.count;
@@ -1066,9 +1085,11 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
   QUERY_TRY(
       ab_report_appendf(out, "selected-files=%zu.\n", files->as.array.count));
   QUERY_TRY(ab_report_blank(out));
-  QUERY_TRY(ab_report_appendf(out, "Context: profile=%.*s; max-seed-distance=",
-                              (int)policy.profile->length,
-                              policy.profile->data));
+  QUERY_TRY(ab_report_appendf(
+      out,
+      change_view ? "Selection: profile=%.*s; max-seed-distance="
+                  : "Context: profile=%.*s; max-seed-distance=",
+      (int)policy.profile->length, policy.profile->data));
   if (policy.max_seed_distance == SIZE_MAX)
     QUERY_TRY(ab_buffer_literal(out, "all"));
   else
@@ -1082,7 +1103,8 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
     QUERY_TRY(ab_report_appendf(out, "; file-offset=%zu", visible_start));
   QUERY_TRY(ab_buffer_literal(out, ".\n"));
   QUERY_TRY(ab_report_blank(out));
-  QUERY_TRY(ab_buffer_literal(out, "Evidence: map tool "));
+  QUERY_TRY(ab_buffer_literal(out, change_view ? "Source snapshot: map tool "
+                                               : "Evidence: map tool "));
   QUERY_TRY(render_tool_label(out, source_tool));
   QUERY_TRY(ab_buffer_literal(out, "; query tool "));
   QUERY_TRY(render_tool_label(out, tool));
@@ -1092,7 +1114,27 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
       "unresolved calls are reported, not guessed.",
       16, config->data, 16, inputs->data));
   QUERY_TRY(ab_report_blank(out));
-  if (discovery->as.object.count) {
+  if (change_view) {
+    const char *compatibility_data = producer_compatibility->length
+                                         ? producer_compatibility->data
+                                         : "unknown";
+    size_t compatibility_length = producer_compatibility->length
+                                      ? producer_compatibility->length
+                                      : sizeof("unknown") - 1;
+    const char *policy_data =
+        producer_policy->length ? producer_policy->data : "compatible";
+    size_t policy_length = producer_policy->length ? producer_policy->length
+                                                   : sizeof("compatible") - 1;
+    QUERY_TRY(ab_report_linef(
+        out,
+        "Producer compatibility: %.*s under `%.*s` policy. Source freshness "
+        "is not inferred from a saved Query; run `archbird freshness` against "
+        "the live repository when consuming a snapshot.",
+        (int)compatibility_length, compatibility_data, (int)policy_length,
+        policy_data));
+    QUERY_TRY(ab_report_blank(out));
+  }
+  if (discovery->as.object.count && (!change_view || full_detail)) {
     const AbValue *coverage = ab_report_object(discovery, "coverage");
     size_t inventory = ab_report_size(coverage, "inventory_files", SIZE_MAX);
     size_t selected = ab_report_size(coverage, "selected", SIZE_MAX);
@@ -1132,7 +1174,8 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
             ? compact_edges
             : packages->as.array.count;
     if (components->as.array.count) {
-      QUERY_TRY(ab_buffer_literal(out, "Components: "));
+      QUERY_TRY(ab_buffer_literal(out, change_view ? "Affected components: "
+                                                   : "Components: "));
       for (index = 0; index < component_limit; index++) {
         const AbValue *item = &components->as.array.items[index];
         if (item->kind != AB_VALUE_STRING) {
@@ -1150,7 +1193,8 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
       QUERY_TRY(ab_buffer_literal(out, "\n"));
     }
     if (packages->as.array.count) {
-      QUERY_TRY(ab_buffer_literal(out, "Packages: "));
+      QUERY_TRY(ab_buffer_literal(out, change_view ? "Affected packages: "
+                                                   : "Packages: "));
       for (index = 0; index < package_limit; index++) {
         const AbValue *package = &packages->as.array.items[index];
         const AbString *identity = ab_report_string(package, "identity");
@@ -1176,7 +1220,8 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
   }
 
   if (include_neighborhood) {
-    QUERY_TRY(ab_report_literal_line(out, "## Ranked neighborhood"));
+    QUERY_TRY(ab_report_literal_line(
+        out, change_view ? "## Affected code" : "## Ranked neighborhood"));
     QUERY_TRY(ab_report_blank(out));
     QUERY_TRY(ab_report_literal_line(out, "```text"));
     if (!visible_count)
@@ -1265,7 +1310,9 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
   }
   if (include_routed) {
     QUERY_TRY(ab_report_blank(out));
-    QUERY_TRY(ab_report_literal_line(out, "## Routed evidence"));
+    QUERY_TRY(ab_report_literal_line(out, change_view
+                                              ? "## Routes, tests, and delivery"
+                                              : "## Routed evidence"));
     QUERY_TRY(ab_report_blank(out));
     QUERY_TRY(ab_report_literal_line(out, "```text"));
     if (ab_report_string_equal(scope, "symbol")) {
@@ -1319,6 +1366,12 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
                                     query_resolution_kinds[resolution_index],
                                     counts[resolution_index]));
       QUERY_TRY(ab_buffer_literal(out, "\n"));
+      if (change_view && (counts[2] || counts[3]))
+        QUERY_TRY(ab_report_linef(
+            out,
+            "uncertainty: ambiguous=%zu unresolved=%zu; these calls are "
+            "retained as unknown rather than assigned a target",
+            counts[2], counts[3]));
     }
     {
       const AbValue *matches = optional_array(query, "test_matches");
@@ -1749,18 +1802,23 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
       test_emitted_count = 0;
     }
     QUERY_TRY(ab_report_blank(out));
-    QUERY_TRY(ab_report_literal_line(out, "## Selection manifest"));
+    QUERY_TRY(ab_report_literal_line(
+        out, change_view ? "## Evidence limits" : "## Selection manifest"));
     QUERY_TRY(ab_report_blank(out));
-    QUERY_TRY(ab_buffer_literal(out, "Requested policy: `"));
-    if (requested)
-      QUERY_TRY(ab_value_render(out, requested));
-    else
-      QUERY_TRY(ab_buffer_literal(out, "{}"));
-    QUERY_TRY(ab_buffer_literal(out, "`.\n"));
+    if (!change_view || full_detail) {
+      QUERY_TRY(ab_buffer_literal(out, "Requested policy: `"));
+      if (requested)
+        QUERY_TRY(ab_value_render(out, requested));
+      else
+        QUERY_TRY(ab_buffer_literal(out, "{}"));
+      QUERY_TRY(ab_buffer_literal(out, "`.\n"));
+    }
     QUERY_TRY(ab_report_appendf(
         out,
-        "Effective policy: profile=%.*s; candidate=%.*s; conservative=%.*s; "
-        "max-seed-distance=",
+        change_view ? "Policy: profile=%.*s; candidate=%.*s; "
+                      "conservative=%.*s; max-seed-distance="
+                    : "Effective policy: profile=%.*s; candidate=%.*s; "
+                      "conservative=%.*s; max-seed-distance=",
         (int)policy.profile->length, policy.profile->data,
         (int)policy.candidate->length, policy.candidate->data,
         (int)policy.conservative->length, policy.conservative->data));
@@ -1770,19 +1828,30 @@ static ArchbirdStatus render_query_view(ArchbirdEngine *engine,
       QUERY_TRY(ab_report_appendf(out, "%zu.\n", policy.max_seed_distance));
     QUERY_TRY(ab_report_linef(
         out,
-        "Emitted: files=%zu/%zu canonical=%zu; symbol-calls=%zu/%zu; "
-        "symbol-references=%zu/%zu; test-matches=%zu/%zu.",
+        change_view
+            ? "Shown: files=%zu/%zu eligible (%zu canonical); "
+              "symbol-calls=%zu/%zu; symbol-references=%zu/%zu; tests=%zu/%zu."
+            : "Emitted: files=%zu/%zu canonical=%zu; symbol-calls=%zu/%zu; "
+              "symbol-references=%zu/%zu; test-matches=%zu/%zu.",
         file_emitted, eligible_files, files->as.array.count, call_emitted,
         symbol_calls->as.array.count, reference_emitted,
         symbol_references->as.array.count, test_emitted_count,
         test_eligible_count));
     QUERY_TRY(ab_report_linef(
         out,
-        "Not emitted: tests-candidate-collapsed=%zu; "
-        "tests-conservative-collapsed=%zu; tests-excluded=%zu; "
-        "files-before-offset=%zu; tests-before-offset=%zu.",
+        change_view ? "Collapsed or excluded: candidate-tests=%zu; "
+                      "conservative-tests=%zu; excluded-tests=%zu; "
+                      "files-before-offset=%zu; tests-before-offset=%zu."
+                    : "Not emitted: tests-candidate-collapsed=%zu; "
+                      "tests-conservative-collapsed=%zu; tests-excluded=%zu; "
+                      "files-before-offset=%zu; tests-before-offset=%zu.",
         test_candidate_collapsed_count, test_conservative_collapsed_count,
         test_excluded_count, visible_start, test_start));
+    if (change_view)
+      QUERY_TRY(ab_report_literal_line(
+          out,
+          "The canonical Query JSON retains every selected fact; this brief "
+          "only changes their human presentation."));
     if ((include_neighborhood &&
          visible_start + visible_count < eligible_files) ||
         (include_routed &&
@@ -1830,8 +1899,11 @@ cleanup:
 static ArchbirdStatus render_query_once(ArchbirdEngine *engine,
                                         const AbValue *map,
                                         const AbValue *query, size_t node_limit,
+                                        ArchbirdQueryView view,
+                                        ArchbirdReportDetail detail,
                                         AbBuffer *out) {
-  return render_query_view(engine, map, query, node_limit, 1, 1, 0, out);
+  return render_query_view(engine, map, query, node_limit, 1, 1, 0, view,
+                           detail, out);
 }
 
 static ArchbirdStatus
@@ -1876,10 +1948,11 @@ static ArchbirdStatus
 render_query_budget_candidate(ArchbirdEngine *engine, const AbValue *map,
                               const AbValue *query, size_t budget,
                               size_t node_limit, int include_neighborhood,
-                              int include_routed, AbBuffer *out) {
+                              int include_routed, ArchbirdQueryView view,
+                              ArchbirdReportDetail detail, AbBuffer *out) {
   ArchbirdStatus status =
       render_query_view(engine, map, query, node_limit, include_neighborhood,
-                        include_routed, 1, out);
+                        include_routed, 1, view, detail, out);
   if (status == ARCHBIRD_OK)
     status =
         render_query_budget_summary(engine, query, budget, node_limit,
@@ -1891,13 +1964,14 @@ static ArchbirdStatus
 render_query_budget_length(ArchbirdEngine *engine, const AbValue *map,
                            const AbValue *query, size_t budget,
                            size_t node_limit, int include_neighborhood,
-                           int include_routed, size_t *out_length) {
+                           int include_routed, ArchbirdQueryView view,
+                           ArchbirdReportDetail detail, size_t *out_length) {
   AbBuffer candidate;
   ArchbirdStatus status;
   ab_buffer_init(&candidate, engine);
   status = render_query_budget_candidate(engine, map, query, budget, node_limit,
                                          include_neighborhood, include_routed,
-                                         &candidate);
+                                         view, detail, &candidate);
   if (status == ARCHBIRD_OK)
     *out_length = ab_report_codepoints(candidate.data, candidate.length);
   ab_buffer_free(&candidate);
@@ -1907,14 +1981,16 @@ render_query_budget_length(ArchbirdEngine *engine, const AbValue *map,
 static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
                                             const AbValue *map,
                                             const AbValue *query, size_t budget,
+                                            ArchbirdQueryView view,
+                                            ArchbirdReportDetail detail,
                                             AbBuffer *out) {
   const AbValue *files = optional_array(query, "files");
   size_t minimum_length = 0;
   size_t visible_count = 0;
   int include_neighborhood = 0;
   int include_routed = 0;
-  ArchbirdStatus status = render_query_budget_length(engine, map, query, budget,
-                                                     0, 0, 0, &minimum_length);
+  ArchbirdStatus status = render_query_budget_length(
+      engine, map, query, budget, 0, 0, 0, view, detail, &minimum_length);
   if (status != ARCHBIRD_OK)
     return status;
   if (minimum_length > budget)
@@ -1928,7 +2004,7 @@ static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
     include_neighborhood = 1;
     status = render_query_budget_length(engine, map, query, budget, 0,
                                         include_neighborhood, include_routed,
-                                        &length);
+                                        view, detail, &length);
     if (status != ARCHBIRD_OK)
       return status;
     if (length > budget)
@@ -1939,7 +2015,7 @@ static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
     include_routed = 1;
     status = render_query_budget_length(engine, map, query, budget, 0,
                                         include_neighborhood, include_routed,
-                                        &length);
+                                        view, detail, &length);
     if (status != ARCHBIRD_OK)
       return status;
     if (length > budget)
@@ -1953,7 +2029,7 @@ static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
       size_t length = 0;
       status = render_query_budget_length(engine, map, query, budget, middle,
                                           include_neighborhood, include_routed,
-                                          &length);
+                                          view, detail, &length);
       if (status != ARCHBIRD_OK)
         return status;
       if (length <= budget) {
@@ -1966,13 +2042,15 @@ static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
   }
   return render_query_budget_candidate(engine, map, query, budget,
                                        visible_count, include_neighborhood,
-                                       include_routed, out);
+                                       include_routed, view, detail, out);
 }
 
-ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,
-                                        const AbValue *map,
-                                        const AbValue *query, size_t max_chars,
-                                        AbBuffer *out) {
+ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,
+                                             const AbValue *map,
+                                             const AbValue *query,
+                                             ArchbirdQueryView view,
+                                             ArchbirdReportDetail detail,
+                                             size_t max_chars, AbBuffer *out) {
   const AbValue *files;
   size_t low;
   size_t high;
@@ -1980,7 +2058,10 @@ ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,
   size_t best_length = 0;
   ArchbirdStatus status;
   uint64_t schema;
-  if (!engine || !map || !query || !out)
+  if (!engine || !map || !query || !out || view < ARCHBIRD_QUERY_VIEW_FOCUSED ||
+      view > ARCHBIRD_QUERY_VIEW_CHANGES ||
+      detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
+      detail > ARCHBIRD_REPORT_DETAIL_FULL)
     return ARCHBIRD_INVALID_ARGUMENT;
   if (map->kind != AB_VALUE_OBJECT ||
       !ab_value_string_is(ab_value_member(map, "artifact"), "map") ||
@@ -1997,7 +2078,8 @@ ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,
   if (!files)
     return query_schema_error(engine, "query.files must be an array");
   if (!max_chars)
-    return render_query_once(engine, map, query, files->as.array.count, out);
+    return render_query_once(engine, map, query, files->as.array.count, view,
+                             detail, out);
   low = 0;
   high = files->as.array.count;
   while (low <= high) {
@@ -2005,7 +2087,8 @@ ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,
     AbBuffer candidate;
     size_t length;
     ab_buffer_init(&candidate, engine);
-    status = render_query_once(engine, map, query, middle, &candidate);
+    status =
+        render_query_once(engine, map, query, middle, view, detail, &candidate);
     if (status != ARCHBIRD_OK) {
       ab_buffer_free(&candidate);
       return status;
@@ -2025,12 +2108,22 @@ ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,
   if (best_count == SIZE_MAX) {
     AbBuffer minimum;
     ab_buffer_init(&minimum, engine);
-    status = render_query_once(engine, map, query, 0, &minimum);
+    status = render_query_once(engine, map, query, 0, view, detail, &minimum);
     ab_buffer_free(&minimum);
     if (status != ARCHBIRD_OK)
       return status;
-    return render_query_budgeted(engine, map, query, max_chars, out);
+    return render_query_budgeted(engine, map, query, max_chars, view, detail,
+                                 out);
   }
   (void)best_length;
-  return render_query_once(engine, map, query, best_count, out);
+  return render_query_once(engine, map, query, best_count, view, detail, out);
+}
+
+ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,
+                                        const AbValue *map,
+                                        const AbValue *query, size_t max_chars,
+                                        AbBuffer *out) {
+  return ab_query_report_markdown_view(
+      engine, map, query, ARCHBIRD_QUERY_VIEW_FOCUSED,
+      ARCHBIRD_REPORT_DETAIL_STANDARD, max_chars, out);
 }

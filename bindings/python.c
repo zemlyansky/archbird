@@ -951,6 +951,43 @@ static PyObject *py_map_query_markdown(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_map_query_markdown_view(PyObject *self, PyObject *args,
+                                            PyObject *kwargs) {
+  static char *keywords[] = {"map",    "query",     "view",
+                             "detail", "max_chars", NULL};
+  const char *map;
+  const char *query;
+  Py_ssize_t map_length;
+  Py_ssize_t query_length;
+  Py_ssize_t max_chars = 0;
+  int view;
+  int detail;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#ii|n:map_query_markdown_view", keywords, &map,
+          &map_length, &query, &query_length, &view, &detail, &max_chars))
+    return NULL;
+  if (max_chars < 0) {
+    PyErr_SetString(PyExc_ValueError,
+                    "query max_chars must be a nonnegative integer");
+    return NULL;
+  }
+  status = saved_artifact_engine(
+      larger_input((size_t)map_length, (size_t)query_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_query_markdown_view(
+        engine, (const uint8_t *)map, (size_t)map_length,
+        (const uint8_t *)query, (size_t)query_length, (ArchbirdQueryView)view,
+        (ArchbirdReportDetail)detail, (size_t)max_chars, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_map_diff(PyObject *self, PyObject *args, PyObject *kwargs) {
   static char *keywords[] = {"before", "after", "pretty", NULL};
   const char *before;
@@ -1538,6 +1575,9 @@ static PyMethodDef archbird_methods[] = {
     {"map_query_markdown", (PyCFunction)py_map_query_markdown,
      METH_VARARGS | METH_KEYWORDS,
      "Query a canonical saved map and render ranked Markdown context."},
+    {"map_query_markdown_view", (PyCFunction)py_map_query_markdown_view,
+     METH_VARARGS | METH_KEYWORDS,
+     "Project a canonical saved-map query by view and detail level."},
     {"discovery_descend", py_discovery_descend, METH_VARARGS,
      "Return C-owned safe traversal decisions for repository directories."},
     {"discovery_plan", (PyCFunction)py_discovery_plan,

@@ -902,6 +902,33 @@ assert.deepEqual(
   queryReport,
   queryMapMarkdown(repositoryMapJson, { paths: ["py/pkg"], depth: 0 }),
 );
+const changeBrief = repositoryProject.queryMarkdown({
+  paths: ["py/pkg"],
+  depth: 0,
+  view: "changes",
+});
+assert.match(changeBrief.toString("utf8"), /^# Change brief: map-base\n/);
+assert.match(changeBrief.toString("utf8"), /## Affected code/);
+assert.match(changeBrief.toString("utf8"), /## Routes, tests, and delivery/);
+assert.match(changeBrief.toString("utf8"), /## Evidence limits/);
+assert.deepEqual(
+  changeBrief,
+  queryMapMarkdown(repositoryMapJson, {
+    paths: ["py/pkg"],
+    depth: 0,
+    view: "changes",
+  }),
+);
+assert.throws(
+  () => repositoryProject.queryMarkdown({ paths: ["py/pkg"], view: "other" }),
+  /view must be focused or changes/,
+);
+assert.throws(
+  () => repositoryProject.queryMarkdown({
+    paths: ["py/pkg"], compact: true, full: true,
+  }),
+  /compact and full conflict/,
+);
 const contextPolicy = { profile: "exact", quotas: { files: 1 } };
 const contextQuery = repositoryProject.query({
   paths: ["py/pkg"],

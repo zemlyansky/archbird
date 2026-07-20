@@ -353,6 +353,31 @@ def main() -> int:
         native_report = extension.map_query_markdown(
             map_json, canonical(request)
         ).decode()
+        focused_view = extension.map_query_markdown_view(
+            map_json, canonical(request), 0, 1
+        ).decode()
+        if focused_view != native_report:
+            raise AssertionError("focused Query view changed compatibility Markdown")
+        change_report = extension.map_query_markdown_view(
+            map_json, canonical(request), 1, 1
+        ).decode()
+        if change_report != extension.map_query_markdown_view(
+            map_json, canonical(request), 1, 1
+        ).decode():
+            raise AssertionError("change brief is not byte-repeatable")
+        for expected_text in (
+            f"# Change brief: {native_document['project']}",
+            "Change seeds:",
+            "## Affected code",
+            "## Routes, tests, and delivery",
+            "## Evidence limits",
+            "Producer compatibility:",
+            "The canonical Query JSON retains every selected fact",
+        ):
+            if expected_text not in change_report:
+                raise AssertionError(
+                    f"change brief omitted required section: {expected_text}"
+                )
         expected_report = render_query_markdown(query_data)
         if normalized_query_report(
             native_report, native_document["tool"]
@@ -390,6 +415,17 @@ def main() -> int:
             pass
         else:
             raise AssertionError("native query Markdown accepted undersized budget")
+        for view, detail in ((-1, 1), (2, 1), (1, -1), (1, 3)):
+            try:
+                extension.map_query_markdown_view(
+                    map_json, canonical(request), view, detail
+                )
+            except Exception:
+                pass
+            else:
+                raise AssertionError(
+                    f"invalid query projection was accepted: {view=}, {detail=}"
+                )
     for bad in ({}, {"paths": ["missing"]}, {"paths": ["../bad"]}):
         try:
             extension.map_query(map_json, canonical(bad))
