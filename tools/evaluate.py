@@ -1122,13 +1122,18 @@ def extract_rankings(
         for value in query.get("matched_symbols", [])
         if (identity := symbol_identity(value)) is not None
     ]
+    matched_symbol_files = [
+        str(value["path"])
+        for value in query.get("matched_symbols", [])
+        if isinstance(value, dict) and isinstance(value.get("path"), str)
+    ]
     tests = []
     test_files = []
     for test in query.get("test_matches", []):
         if isinstance(test, dict) and isinstance(test.get("path"), str) and isinstance(test.get("selector"), str):
             test_files.append(str(test["path"]))
             tests.append(f"{test['path']}::{test['selector']}")
-    context_files = deduplicate([*files, *test_files])
+    context_files = deduplicate([*files, *matched_symbol_files, *test_files])
     return (
         deduplicate(files),
         context_files,
