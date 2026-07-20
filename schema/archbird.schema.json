@@ -135,8 +135,9 @@
       "required": ["name", "kind", "path"],
       "properties": {
         "name": {"type": "string", "minLength": 1},
-        "kind": {"enum": ["autoconf", "make", "npm"]},
-        "path": {"type": "string", "minLength": 1}
+        "kind": {"enum": ["autoconf", "compile_commands", "make", "npm"]},
+        "path": {"type": "string", "minLength": 1},
+        "variant": {"type": "string"}
       }
     },
     "index": {
@@ -151,6 +152,7 @@
         "position_encoding_fallback": {
           "enum": ["utf8", "utf16", "utf32"]
         },
+        "variant": {"type": "string"},
         "required": {"type": "boolean", "default": true}
       }
     },

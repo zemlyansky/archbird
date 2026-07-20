@@ -1662,9 +1662,15 @@ static ArchbirdStatus append_key_part(AbBuffer *key, const uint8_t *bytes,
 
 static ArchbirdStatus add_index_attributes(ScipAnalysis *analysis,
                                            AbFact *fact) {
-  return ab_fact_add_string_attribute(
+  ArchbirdStatus status = ab_fact_add_string_attribute(
       analysis->engine, fact, "index",
       (const uint8_t *)analysis->spec->name.data, analysis->spec->name.length);
+  if (status == ARCHBIRD_OK && analysis->spec->variant.length)
+    status = ab_fact_add_string_attribute(
+        analysis->engine, fact, "variant",
+        (const uint8_t *)analysis->spec->variant.data,
+        analysis->spec->variant.length);
+  return status;
 }
 
 static int document_evidence_current(const ScipDocument *document) {
@@ -2374,6 +2380,8 @@ static ArchbirdStatus add_summary_fact(ScipAnalysis *analysis,
             analysis->configured_position_documents);
   ADD_STRING("path_prefix", analysis->spec->path_prefix.data,
              analysis->spec->path_prefix.length);
+  ADD_STRING("variant", analysis->spec->variant.data,
+             analysis->spec->variant.length);
   ADD_COUNT("references", analysis->references);
   ADD_COUNT("reference_facts", analysis->reference_facts);
   ADD_COUNT("relationship_edges", analysis->relationship_edges);
@@ -2563,6 +2571,8 @@ static void configuration_digest(const AbConfigIndex *spec, uint8_t out[32]) {
   hash_slice(&context, (const uint8_t *)spec->path.data, spec->path.length);
   hash_slice(&context, (const uint8_t *)spec->path_prefix.data,
              spec->path_prefix.length);
+  hash_slice(&context, (const uint8_t *)spec->variant.data,
+             spec->variant.length);
   policy[0] = (uint8_t)spec->position_encoding_fallback;
   policy[1] = (uint8_t)(spec->required != 0);
   hash_slice(&context, policy, sizeof(policy));

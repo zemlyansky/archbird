@@ -193,6 +193,7 @@ static void build_free(ArchbirdEngine *engine, AbMapBuildRoute *build) {
   string_array_free(engine, &build->paths);
   ab_string_free(engine, &build->command);
   string_array_free(engine, &build->conditions);
+  ab_string_free(engine, &build->variant);
   memset(build, 0, sizeof(*build));
 }
 
@@ -347,6 +348,7 @@ static void index_free(ArchbirdEngine *engine, AbMapIndex *index) {
   ab_string_free(engine, &index->format);
   ab_string_free(engine, &index->path);
   ab_string_free(engine, &index->path_prefix);
+  ab_string_free(engine, &index->variant);
   ab_string_free(engine, &index->evidence_state);
   ab_string_free(engine, &index->sha256);
   ab_string_free(engine, &index->tool_name);

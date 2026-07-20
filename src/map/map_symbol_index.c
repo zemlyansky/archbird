@@ -254,8 +254,17 @@ const AbFact *ab_map_unique_semantic_target(const ArchbirdProject *project,
     target_symbol = ab_map_fact_string_attribute(candidate, "target_symbol");
     if (!target_path || !target_symbol)
       continue;
-    if (matched)
-      return NULL;
+    if (matched) {
+      const AbString *matched_path =
+          ab_map_fact_string_attribute(matched, "target_path");
+      const AbString *matched_symbol =
+          ab_map_fact_string_attribute(matched, "target_symbol");
+      if (!matched_path || !matched_symbol ||
+          !ab_string_equal(matched_path, target_path) ||
+          !ab_string_equal(matched_symbol, target_symbol))
+        return NULL;
+      continue;
+    }
     matched = candidate;
   }
   return matched;

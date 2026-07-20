@@ -538,6 +538,7 @@ static void build_free(ArchbirdEngine *engine, AbConfigBuild *build) {
   ab_string_free(engine, &build->name);
   ab_string_free(engine, &build->kind);
   ab_string_free(engine, &build->path);
+  ab_string_free(engine, &build->variant);
   memset(build, 0, sizeof(*build));
 }
 
@@ -546,6 +547,7 @@ static void index_free(ArchbirdEngine *engine, AbConfigIndex *index) {
   ab_string_free(engine, &index->format);
   ab_string_free(engine, &index->path);
   ab_string_free(engine, &index->path_prefix);
+  ab_string_free(engine, &index->variant);
   memset(index, 0, sizeof(*index));
 }
 
@@ -945,35 +947,40 @@ static ArchbirdStatus parse_package(ArchbirdEngine *engine, yyjson_val *value,
 
 static ArchbirdStatus parse_build(ArchbirdEngine *engine, yyjson_val *value,
                                   void *out_raw) {
-  static const char *const fields[] = {"kind", "name", "path"};
-  static const char *const kinds[] = {"autoconf", "make", "npm"};
+  static const char *const fields[] = {"kind", "name", "path", "variant"};
+  static const char *const required[] = {"kind", "name", "path"};
+  static const char *const kinds[] = {"autoconf", "compile_commands", "make",
+                                      "npm"};
   AbConfigBuild *out = (AbConfigBuild *)out_raw;
   ArchbirdStatus status =
-      object_shape(engine, value, "builds[]", fields, 3, fields, 3);
+      object_shape(engine, value, "builds[]", fields, 4, required, 3);
   if (status == ARCHBIRD_OK)
     status = copy_string(engine, member(value, "name"), "builds[].name", 0,
                          &out->name);
   if (status == ARCHBIRD_OK)
     status = copy_string(engine, member(value, "kind"), "builds[].kind", 0,
                          &out->kind);
-  if (status == ARCHBIRD_OK && !string_one_of(&out->kind, kinds, 3))
+  if (status == ARCHBIRD_OK && !string_one_of(&out->kind, kinds, 4))
     status = config_error(engine, "builds[].kind is unsupported");
   if (status == ARCHBIRD_OK)
     status = copy_string(engine, member(value, "path"), "builds[].path", 0,
                          &out->path);
+  if (status == ARCHBIRD_OK)
+    status = copy_default_string(engine, member(value, "variant"), "",
+                                 "builds[].variant", 1, &out->variant);
   return status;
 }
 
 static ArchbirdStatus parse_index(ArchbirdEngine *engine, yyjson_val *value,
                                   void *out_raw) {
   static const char *const fields[] = {
-      "format",  "name", "path", "path_prefix", "position_encoding_fallback",
-      "required"};
+      "format",   "name",   "path", "path_prefix", "position_encoding_fallback",
+      "required", "variant"};
   static const char *const required[] = {"format", "name", "path"};
   AbConfigIndex *out = (AbConfigIndex *)out_raw;
   yyjson_val *fallback;
   ArchbirdStatus status =
-      object_shape(engine, value, "indexes[]", fields, 6, required, 3);
+      object_shape(engine, value, "indexes[]", fields, 7, required, 3);
   if (status == ARCHBIRD_OK)
     status = copy_string(engine, member(value, "name"), "indexes[].name", 0,
                          &out->name);
@@ -995,6 +1002,9 @@ static ArchbirdStatus parse_index(ArchbirdEngine *engine, yyjson_val *value,
   if (status == ARCHBIRD_OK && out->path_prefix.length)
     status = require_canonical_directory(engine, &out->path_prefix,
                                          "indexes[].path_prefix");
+  if (status == ARCHBIRD_OK)
+    status = copy_default_string(engine, member(value, "variant"), "",
+                                 "indexes[].variant", 1, &out->variant);
   fallback = member(value, "position_encoding_fallback");
   if (status == ARCHBIRD_OK && fallback) {
     const char *text;

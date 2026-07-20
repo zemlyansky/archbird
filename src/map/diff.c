@@ -1089,7 +1089,9 @@ static ArchbirdStatus artifact_index(DiffContext *context, const AbValue *map,
 
 static ArchbirdStatus build_index(DiffContext *context, const AbValue *map,
                                   DiffIndex *out) {
-  static const char *const fields[] = {"conditions", "deps", "paths"};
+  static const char *const fields[] = {"command", "conditions", "deps",
+                                       "paths"};
+  static const AbString empty = {NULL, 0};
   const AbValue *rows = required_member(context, map, "builds", AB_VALUE_ARRAY);
   size_t index;
   ArchbirdStatus status = rows ? ARCHBIRD_OK : ARCHBIRD_INVALID_SCHEMA;
@@ -1100,16 +1102,18 @@ static ArchbirdStatus build_index(DiffContext *context, const AbValue *map,
         required_member(context, row, "source", AB_VALUE_STRING);
     const AbValue *name =
         required_member(context, row, "name", AB_VALUE_STRING);
-    const AbString *parts[2];
+    const AbValue *variant = ab_value_member(row, "variant");
+    const AbString *parts[3];
     AbBuffer key;
     AbBuffer value;
-    if (!source || !name)
+    if (!source || !name || (variant && variant->kind != AB_VALUE_STRING))
       return ARCHBIRD_INVALID_SCHEMA;
     parts[0] = &source->as.text;
     parts[1] = &name->as.text;
+    parts[2] = variant ? &variant->as.text : &empty;
     ab_buffer_init(&key, context->engine);
     ab_buffer_init(&value, context->engine);
-    status = key_parts(&key, parts, 2);
+    status = key_parts(&key, parts, 3);
     if (status == ARCHBIRD_OK)
       status = projection_value(context, row, fields,
                                 sizeof(fields) / sizeof(fields[0]), &value);

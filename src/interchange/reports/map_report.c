@@ -1180,6 +1180,7 @@ static ArchbirdStatus map_render_build_full(const MapReportContext *context,
   const AbString *source = ab_report_string(route, "source");
   const AbString *name = ab_report_string(route, "name");
   const AbString *command = map_string_or_empty(route, "command");
+  const AbString *variant = map_string_or_empty(route, "variant");
   const AbValue *deps = map_optional_array(route, "deps");
   const AbValue *paths = map_optional_array(route, "paths");
   const AbValue *conditions = map_optional_array(route, "conditions");
@@ -1187,7 +1188,7 @@ static ArchbirdStatus map_render_build_full(const MapReportContext *context,
   AbBuffer text;
   ArchbirdStatus status = ARCHBIRD_OK;
   size_t index;
-  if (!source || !name || !command)
+  if (!source || !name || !command || !variant)
     return map_schema_error(context->engine, "map.builds[] is malformed");
   ab_report_list_init(&details, context->engine);
   ab_buffer_init(&text, context->engine);
@@ -1239,6 +1240,9 @@ static ArchbirdStatus map_render_build_full(const MapReportContext *context,
   if (status == ARCHBIRD_OK && command->length)
     status = ab_report_list_addf(&details, "command=%.*s", (int)command->length,
                                  command->data);
+  if (status == ARCHBIRD_OK && variant->length)
+    status = ab_report_list_addf(&details, "variant=%.*s", (int)variant->length,
+                                 variant->data);
   if (status == ARCHBIRD_OK && conditions->as.array.count) {
     status = ab_buffer_literal(&text, "conditions=");
     for (index = 0; status == ARCHBIRD_OK && index < conditions->as.array.count;
@@ -1324,18 +1328,30 @@ static ArchbirdStatus map_render_entrypoints(const MapReportContext *context,
         const AbValue *route = &context->builds->as.array.items[route_index];
         const AbString *source = ab_report_string(route, "source");
         const AbString *name = ab_report_string(route, "name");
-        if (!source || !name) {
+        const AbString *variant = map_string_or_empty(route, "variant");
+        if (!source || !name || !variant) {
           status =
               map_schema_error(context->engine, "map.builds[] is malformed");
           break;
         }
         if (ab_string_equal(source, &sources.items[index]))
-          status = ab_report_list_addf(
-              &routes, "%.*s[deps=%zu,paths=%zu,conditions=%zu]",
-              (int)name->length, name->data,
-              map_optional_array(route, "deps")->as.array.count,
-              map_optional_array(route, "paths")->as.array.count,
-              map_optional_array(route, "conditions")->as.array.count);
+          status =
+              variant->length
+                  ? ab_report_list_addf(
+                        &routes,
+                        "%.*s[variant=%.*s,deps=%zu,paths=%zu,conditions=%zu]",
+                        (int)name->length, name->data, (int)variant->length,
+                        variant->data,
+                        map_optional_array(route, "deps")->as.array.count,
+                        map_optional_array(route, "paths")->as.array.count,
+                        map_optional_array(route, "conditions")->as.array.count)
+                  : ab_report_list_addf(
+                        &routes, "%.*s[deps=%zu,paths=%zu,conditions=%zu]",
+                        (int)name->length, name->data,
+                        map_optional_array(route, "deps")->as.array.count,
+                        map_optional_array(route, "paths")->as.array.count,
+                        map_optional_array(route, "conditions")
+                            ->as.array.count);
       }
       if (status == ARCHBIRD_OK)
         status = ab_report_appendf(&prefix,
@@ -1368,13 +1384,32 @@ static ArchbirdStatus map_render_indexes(const MapReportContext *context,
     const AbString *name = ab_report_string(row, "name");
     const AbString *format = ab_report_string(row, "format");
     const AbString *prefix = map_string_or_empty(row, "path_prefix");
+    const AbString *variant = map_string_or_empty(row, "variant");
     const AbValue *tool = ab_report_object(row, "tool");
     const AbValue *coverage = ab_report_object(row, "coverage");
     const AbString *tool_name = map_string_or_empty(tool, "name");
     const AbString *tool_version = map_string_or_empty(tool, "version");
-    if (!name || !format || !prefix || !tool_name || !tool_version || !coverage)
+    if (!name || !format || !prefix || !variant || !tool_name ||
+        !tool_version || !coverage)
       return map_schema_error(context->engine, "map.indexes[] is malformed");
-    if (prefix->length)
+    if (variant->length)
+      MAP_REPORT_TRY(ab_report_linef(
+          out,
+          "%.*s: format=%.*s variant=%.*s tool=%.*s@%.*s%s%.*s "
+          "documents=%zu/%zu references=%zu unique=%zu ambiguous=%zu "
+          "unresolved=%zu edges=%zu",
+          (int)name->length, name->data, (int)format->length, format->data,
+          (int)variant->length, variant->data, (int)tool_name->length,
+          tool_name->data, (int)tool_version->length, tool_version->data,
+          prefix->length ? " path_prefix=" : "", (int)prefix->length,
+          prefix->data, ab_report_size(coverage, "documents_mapped", 0),
+          ab_report_size(coverage, "documents_total", 0),
+          ab_report_size(coverage, "references", 0),
+          ab_report_size(coverage, "resolved_unique", 0),
+          ab_report_size(coverage, "resolved_ambiguous", 0),
+          ab_report_size(coverage, "unresolved", 0),
+          ab_report_size(coverage, "edges", 0)));
+    else if (prefix->length)
       MAP_REPORT_TRY(ab_report_linef(
           out,
           "%.*s: format=%.*s tool=%.*s@%.*s path_prefix=%.*s "

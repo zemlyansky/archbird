@@ -238,11 +238,11 @@ The complete configuration vocabulary is:
 | Section | Purpose |
 | --- | --- |
 | `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
-| `packages`, `builds`, `artifacts` | manifests, public entrypoints, Autoconf/Make/npm routes, logical outputs and loaders |
+| `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
 | `tests` | static cases, reviewed `case_routes`, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
-| `indexes` | one or more SCIP indexes with prefixes and position encoding |
+| `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `checks`, `limits` | basic Map-presence requirements and bounded resource policy |
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
@@ -250,6 +250,27 @@ Selectors are segment-aware: `src/*.c` matches immediate children and
 new source. `route_to` records broad asserted intent; `case_routes` is
 case-specific. Patterns use the pinned `archbird-pcre2-v1` contract rather than
 Python `re` or JavaScript `RegExp`.
+
+Zero-config discovery consumes conventional root `compile_commands.json` and
+`index.scip` files when present. Declare multiple compiler outputs explicitly
+and give each one a stable variant when a repository has CPU, CUDA, Wasm, or
+other builds:
+
+```json
+{
+  "builds": [
+    {"name": "wasm-db", "kind": "compile_commands", "path": "build/wasm/compile_commands.json", "variant": "wasm"}
+  ],
+  "indexes": [
+    {"name": "wasm-scip", "format": "scip", "path": "build/wasm/index.scip", "variant": "wasm"}
+  ]
+}
+```
+
+Archbird reads these artifacts; it never invokes the compiler or indexer.
+Compilation routes retain repository source paths, the compiler basename, and
+a command digest without publishing absolute build-machine paths. SCIP facts
+retain their variant, producer, source anchoring, coverage, and freshness.
 
 The block above is mirrored by
 [`examples/minimal.archbird.json`](examples/minimal.archbird.json). A complete

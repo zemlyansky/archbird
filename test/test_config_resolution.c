@@ -140,6 +140,12 @@ int main(void) {
       "{\"bytes\":20,\"path\":\"src/api.c\"},"
       "{\"bytes\":20,\"path\":\"src/api.cc\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
+  static const char compiler_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
+      "\"files\":[{\"bytes\":2,\"path\":\"compile_commands.json\"},"
+      "{\"bytes\":1,\"path\":\"index.scip\"},"
+      "{\"bytes\":20,\"path\":\"src/main.c\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
   static const char configured[] =
       "{\"layers\":[{\"globs\":[\"**/*.py\"],\"language\":\"python\","
       "\"name\":\"configured\"}],\"project\":\"base\",\"schema_version\":1}";
@@ -181,6 +187,8 @@ int main(void) {
   Output r = {{0}, 0};
   Output cpp = {{0}, 0};
   Output mixed_c_cpp = {{0}, 0};
+  Output compiler = {{0}, 0};
+  Output compiler_scoped = {{0}, 0};
   Output index = {{0}, 0};
   Output vendor = {{0}, 0};
   ArchbirdDiscovery *discovery = NULL;
@@ -309,6 +317,29 @@ int main(void) {
       !contains(&mixed_c_cpp, "\"language\":\"c\",\"layer\":\"auto-c\","
                               "\"path\":\"include/api.h\"")) {
     fprintf(stderr, "mixed C/C++ header inference is not conservative\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, compiler_inventory, &compiler) ||
+      !contains(&compiler,
+                "\"kind\":\"compile_commands\",\"name\":"
+                "\"compile_commands\",\"path\":\"compile_commands.json\","
+                "\"variant\":\"default\"") ||
+      !contains(&compiler, "\"format\":\"scip\",\"name\":\"scip\",\"path\":"
+                           "\"index.scip\",\"required\":true") ||
+      !contains(&compiler,
+                "\"path\":\"compile_commands.json\",\"roles\":[\"build\","
+                "\"index\"]") ||
+      !contains(&compiler, "\"path\":\"index.scip\",\"roles\":[\"index\"]")) {
+    fprintf(stderr, "zero-config compiler evidence is incorrect\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", override_request, compiler_inventory,
+               &compiler_scoped) ||
+      !contains(&compiler_scoped, "\"builds\":[]") ||
+      !contains(&compiler_scoped, "\"indexes\":[]") ||
+      contains(&compiler_scoped, "compile_commands.json") ||
+      contains(&compiler_scoped, "index.scip")) {
+    fprintf(stderr, "selected discovery scope retained compiler evidence\n");
     failed = 1;
   }
   if (!resolve(engine, index_config, request, index_inventory, &index) ||

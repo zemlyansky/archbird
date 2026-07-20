@@ -1,8 +1,10 @@
 #include "map_internal.h"
 
 #include "archbird_internal.h"
+#include "json_value.h"
 #include "manifests/autoconf_manifest.h"
 #include "package_json.h"
+#include "sha256.h"
 #include "utf8.h"
 
 #include <ctype.h>
@@ -34,6 +36,18 @@ static int string_compare(const void *left_raw, const void *right_raw) {
                            (const AbString *)right_raw);
 }
 
+static int string_array_compare(const AbStringArray *left,
+                                const AbStringArray *right) {
+  size_t index;
+  size_t shared = left->count < right->count ? left->count : right->count;
+  for (index = 0; index < shared; index++) {
+    int compared = ab_string_compare(&left->items[index], &right->items[index]);
+    if (compared)
+      return compared;
+  }
+  return (left->count > right->count) - (left->count < right->count);
+}
+
 static int build_compare(const void *left_raw, const void *right_raw) {
   const AbMapBuildRoute *left = (const AbMapBuildRoute *)left_raw;
   const AbMapBuildRoute *right = (const AbMapBuildRoute *)right_raw;
@@ -43,7 +57,18 @@ static int build_compare(const void *left_raw, const void *right_raw) {
   compared = ab_string_compare(&left->name, &right->name);
   if (compared)
     return compared;
-  return ab_string_compare(&left->command, &right->command);
+  compared = ab_string_compare(&left->variant, &right->variant);
+  if (compared)
+    return compared;
+  compared = ab_string_compare(&left->command, &right->command);
+  if (compared)
+    return compared;
+  compared = string_array_compare(&left->conditions, &right->conditions);
+  if (compared)
+    return compared;
+  compared = string_array_compare(&left->deps, &right->deps);
+  return compared ? compared
+                  : string_array_compare(&left->paths, &right->paths);
 }
 
 static ArchbirdStatus append_unique(ArchbirdEngine *engine,
@@ -816,7 +841,9 @@ recipe_paths(ArchbirdEngine *engine, const AbStringArray *recipes,
   return status;
 }
 
-static ArchbirdStatus reserve_build(AbMapState *state, AbMapBuildRoute **out) {
+static ArchbirdStatus reserve_build(AbMapState *state,
+                                    const AbConfigBuild *config,
+                                    AbMapBuildRoute **out) {
   AbMapBuildRoute *resized;
   if (state->build_count == SIZE_MAX / sizeof(*state->builds))
     return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
@@ -831,6 +858,9 @@ static ArchbirdStatus reserve_build(AbMapState *state, AbMapBuildRoute **out) {
   state->builds = resized;
   *out = &state->builds[state->build_count];
   memset(*out, 0, sizeof(**out));
+  if (config->variant.length)
+    return ab_string_copy(state->engine, &(*out)->variant, config->variant.data,
+                          config->variant.length);
   return ARCHBIRD_OK;
 }
 
@@ -857,7 +887,7 @@ static ArchbirdStatus add_make_routes(AbMapState *state,
         contains_byte(work->name.data, work->name.length, '%') ||
         contains_byte(work->name.data, work->name.length, '$'))
       continue;
-    status = reserve_build(state, &route);
+    status = reserve_build(state, config, &route);
     if (status == ARCHBIRD_OK)
       state->build_count++;
     if (status == ARCHBIRD_OK)
@@ -927,7 +957,7 @@ static ArchbirdStatus add_npm_routes(AbMapState *state,
   for (index = 0; status == ARCHBIRD_OK && index < package->script_count;
        index++) {
     AbMapBuildRoute *route = NULL;
-    status = reserve_build(state, &route);
+    status = reserve_build(state, config, &route);
     if (status == ARCHBIRD_OK)
       state->build_count++;
     if (status == ARCHBIRD_OK)
@@ -982,7 +1012,7 @@ static ArchbirdStatus add_autoconf_routes(AbMapState *state,
   ArchbirdStatus status =
       ab_autoconf_metadata(state->engine, text, length, &metadata);
   if (status == ARCHBIRD_OK)
-    status = reserve_build(state, &autoreconf);
+    status = reserve_build(state, config, &autoreconf);
   if (status == ARCHBIRD_OK)
     state->build_count++;
   if (status == ARCHBIRD_OK)
@@ -991,7 +1021,7 @@ static ArchbirdStatus add_autoconf_routes(AbMapState *state,
   if (status == ARCHBIRD_OK)
     status = append_unique(state->engine, &autoreconf->paths, "configure", 9);
   if (status == ARCHBIRD_OK)
-    status = reserve_build(state, &configure);
+    status = reserve_build(state, config, &configure);
   if (status == ARCHBIRD_OK)
     state->build_count++;
   if (status == ARCHBIRD_OK)
@@ -1029,6 +1059,228 @@ static ArchbirdStatus add_autoconf_routes(AbMapState *state,
     qsort(configure->paths.items, configure->paths.count,
           sizeof(*configure->paths.items), string_compare);
   ab_autoconf_metadata_free(state->engine, &metadata);
+  return status;
+}
+
+static const AbString *compile_string(const AbValue *row, const char *name) {
+  const AbValue *value = ab_value_member(row, name);
+  return value && value->kind == AB_VALUE_STRING ? &value->as.text : NULL;
+}
+
+static const AbManifestFile *compile_source_file(const AbMapState *state,
+                                                 const AbString *directory,
+                                                 const AbString *file,
+                                                 const char **out_evidence) {
+  const AbManifestFile *best = NULL;
+  const char *best_evidence = NULL;
+  size_t index;
+  for (index = 0; index < state->manifest->file_count; index++) {
+    const AbManifestFile *candidate = &state->manifest->files[index];
+    const AbString *path = &candidate->path;
+    int matched = 0;
+    const char *evidence = NULL;
+    size_t part;
+    if (!candidate->has_layer)
+      continue;
+    if (path->length == file->length &&
+        !memcmp(path->data, file->data, path->length))
+      matched = 1;
+    if (matched)
+      evidence = "compile-source:exact";
+    else if (path->length < file->length &&
+             (file->data[file->length - path->length - 1] == '/' ||
+              file->data[file->length - path->length - 1] == '\\') &&
+             !memcmp(path->data, file->data + file->length - path->length,
+                     path->length))
+      matched = 1;
+    if (matched && !evidence)
+      evidence = "compile-source:suffix";
+    if (!matched && directory) {
+      size_t joined_length = directory->length + 1 + file->length;
+      if (path->length <= joined_length) {
+        size_t offset = joined_length - path->length;
+        if (offset == 0)
+          matched = 1;
+        else {
+          char boundary = offset - 1 < directory->length
+                              ? directory->data[offset - 1]
+                              : file->data[offset - directory->length - 1];
+          matched = boundary == '/' || boundary == '\\';
+        }
+        for (part = 0; matched && part < path->length; part++) {
+          size_t source = offset + part;
+          char byte = source < directory->length ? directory->data[source]
+                      : source == directory->length
+                          ? '/'
+                          : file->data[source - directory->length - 1];
+          if (byte == '\\')
+            byte = '/';
+          if (byte != path->data[part])
+            matched = 0;
+        }
+      }
+      if (matched)
+        evidence = "compile-source:directory-suffix";
+    }
+    if (matched && (!best || path->length > best->path.length)) {
+      best = candidate;
+      best_evidence = evidence;
+    }
+  }
+  *out_evidence = best_evidence;
+  return best;
+}
+
+static const AbString *compile_executable(const AbValue *row,
+                                          AbString *temporary) {
+  const AbValue *arguments = ab_value_member(row, "arguments");
+  const AbString *command = compile_string(row, "command");
+  const char *data;
+  size_t length;
+  size_t start = 0;
+  size_t end;
+  size_t leaf;
+  if (arguments && arguments->kind == AB_VALUE_ARRAY &&
+      arguments->as.array.count &&
+      arguments->as.array.items[0].kind == AB_VALUE_STRING)
+    command = &arguments->as.array.items[0].as.text;
+  if (!command || !command->length)
+    return NULL;
+  data = command->data;
+  length = command->length;
+  while (start < length && isspace((unsigned char)data[start]))
+    start++;
+  if (start == length)
+    return NULL;
+  if (data[start] == '\'' || data[start] == '"') {
+    char quote = data[start++];
+    end = start;
+    while (end < length && data[end] != quote)
+      end++;
+  } else {
+    end = start;
+    while (end < length && !isspace((unsigned char)data[end]))
+      end++;
+  }
+  leaf = start;
+  for (; start < end; start++)
+    if (data[start] == '/' || data[start] == '\\')
+      leaf = start + 1;
+  temporary->data = (char *)data + leaf;
+  temporary->length = end - leaf;
+  return temporary->length ? temporary : NULL;
+}
+
+static ArchbirdStatus compile_entry_condition(AbMapState *state,
+                                              const AbValue *row,
+                                              AbStringArray *conditions) {
+  AbBuffer encoded;
+  ArchbirdSha256Context context;
+  uint8_t digest[32];
+  char hex[65];
+  char condition[32];
+  ArchbirdStatus status;
+  ab_buffer_init(&encoded, state->engine);
+  status = ab_value_render(&encoded, row);
+  if (status == ARCHBIRD_OK) {
+    archbird_sha256_init(&context);
+    status = archbird_sha256_update(&context, encoded.data, encoded.length);
+  }
+  if (status == ARCHBIRD_OK) {
+    archbird_sha256_final(&context, digest);
+    archbird_sha256_hex(digest, hex);
+    memcpy(condition, "command-sha256:", 15);
+    memcpy(condition + 15, hex, 16);
+    condition[31] = '\0';
+    status = append_unique(state->engine, conditions, condition, 31);
+  }
+  ab_buffer_free(&encoded);
+  return status;
+}
+
+static ArchbirdStatus add_compile_commands_routes(AbMapState *state,
+                                                  const AbConfigBuild *config,
+                                                  const uint8_t *text,
+                                                  size_t length) {
+  AbValue document = {0};
+  size_t index;
+  size_t invalid = 0;
+  size_t unmapped = 0;
+  ArchbirdStatus status =
+      ab_json_value_decode(state->engine, text, length, &document);
+  if (status != ARCHBIRD_OK || document.kind != AB_VALUE_ARRAY) {
+    const char *message = archbird_engine_error(state->engine);
+    char copied[256];
+    snprintf(copied, sizeof(copied), "%s",
+             message && message[0]
+                 ? message
+                 : "compile_commands.json must be a JSON array");
+    ab_value_free(state->engine, &document);
+    archbird_error_clear(state->engine);
+    return ab_map_add_diagnostic(state, "error", "invalid-compile-commands",
+                                 copied, &config->path);
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < document.as.array.count;
+       index++) {
+    const AbValue *row = &document.as.array.items[index];
+    const AbString *directory;
+    const AbString *file;
+    const AbManifestFile *source;
+    const char *source_evidence = NULL;
+    AbString executable = {0};
+    AbMapBuildRoute *route = NULL;
+    if (row->kind != AB_VALUE_OBJECT ||
+        !(directory = compile_string(row, "directory")) ||
+        !(file = compile_string(row, "file")) ||
+        !compile_executable(row, &executable)) {
+      invalid++;
+      continue;
+    }
+    source = compile_source_file(state, directory, file, &source_evidence);
+    if (!source) {
+      unmapped++;
+      continue;
+    }
+    status = reserve_build(state, config, &route);
+    if (status == ARCHBIRD_OK)
+      state->build_count++;
+    if (status == ARCHBIRD_OK && !route->variant.length)
+      status = ab_string_copy(state->engine, &route->variant, config->name.data,
+                              config->name.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_string_copy(state->engine, &route->source, config->path.data,
+                              config->path.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_string_copy(state->engine, &route->name, source->path.data,
+                              source->path.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_string_copy(state->engine, &route->command, executable.data,
+                              executable.length);
+    if (status == ARCHBIRD_OK)
+      status = append_unique(state->engine, &route->paths, source->path.data,
+                             source->path.length);
+    if (status == ARCHBIRD_OK)
+      status = append_unique(state->engine, &route->conditions, source_evidence,
+                             strlen(source_evidence));
+    if (status == ARCHBIRD_OK)
+      status = compile_entry_condition(state, row, &route->conditions);
+  }
+  if (status == ARCHBIRD_OK && invalid) {
+    char message[128];
+    snprintf(message, sizeof(message),
+             "%zu compile command(s) lack directory, file, or compiler",
+             invalid);
+    status = ab_map_add_diagnostic(state, "warning", "compile-command-invalid",
+                                   message, &config->path);
+  }
+  if (status == ARCHBIRD_OK && unmapped) {
+    char message[128];
+    snprintf(message, sizeof(message),
+             "%zu compile command source path(s) are not mapped", unmapped);
+    status = ab_map_add_diagnostic(state, "warning", "compile-command-unmapped",
+                                   message, &config->path);
+  }
+  ab_value_free(state->engine, &document);
   return status;
 }
 
@@ -1073,6 +1325,9 @@ ArchbirdStatus ab_map_analyze_builds(AbMapState *state) {
     }
     if (string_literal(&config->kind, "autoconf"))
       status = add_autoconf_routes(state, config, text, file->byte_length);
+    else if (string_literal(&config->kind, "compile_commands"))
+      status =
+          add_compile_commands_routes(state, config, text, file->byte_length);
     else if (string_literal(&config->kind, "make"))
       status = add_make_routes(state, config, text, file->byte_length);
     else
@@ -1135,6 +1390,11 @@ ArchbirdStatus ab_map_render_builds(AbBuffer *buffer, const AbMapState *state) {
       status = ab_buffer_literal(buffer, ",\"source\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, &route->source);
+    if (status == ARCHBIRD_OK && route->variant.length) {
+      status = ab_buffer_literal(buffer, ",\"variant\":");
+      if (status == ARCHBIRD_OK)
+        status = json_string(buffer, &route->variant);
+    }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "}");
   }

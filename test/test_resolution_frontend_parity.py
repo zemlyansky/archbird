@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -58,7 +59,9 @@ def main() -> int:
         check=True,
         stdout=subprocess.PIPE,
     )
-    node_outputs = [bytes.fromhex(row) for row in completed.stdout.decode().splitlines()]
+    node_outputs = [
+        bytes.fromhex(row) for row in completed.stdout.decode().splitlines()
+    ]
     if node_outputs != python_outputs:
         raise AssertionError("Python and Node config-resolution artifacts differ")
     r_fixture = repository / "test/fixtures/zero_config_r"
@@ -77,6 +80,43 @@ def main() -> int:
     )
     if bytes.fromhex(r_completed.stdout.decode().strip()) != r_resolution:
         raise AssertionError("Python and Node CRAN resolution artifacts differ")
+    compiler_fixture = repository / "build/tmp/config-resolution-compiler"
+    shutil.rmtree(compiler_fixture, ignore_errors=True)
+    (compiler_fixture / "src").mkdir(parents=True)
+    (compiler_fixture / "src/main.c").write_text("int main(void) { return 0; }\n")
+    (compiler_fixture / "compile_commands.json").write_text("[]\n")
+    (compiler_fixture / "index.scip").write_bytes(b"fixture")
+    compiler_resolution = resolve_discovery(compiler_fixture)
+    compiler_completed = subprocess.run(
+        [
+            str(node),
+            str(repository / "test/test_resolution_node.js"),
+            str(addon.resolve()),
+            str(repository),
+            str(compiler_fixture),
+            "default",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    if bytes.fromhex(compiler_completed.stdout.decode().strip()) != compiler_resolution:
+        raise AssertionError("Python and Node compiler resolution artifacts differ")
+    compiler_document = json.loads(compiler_resolution)
+    if compiler_document["effective_config"]["builds"] != [
+        {
+            "kind": "compile_commands",
+            "name": "compile_commands",
+            "path": "compile_commands.json",
+            "variant": "default",
+        }
+    ] or compiler_document["effective_config"]["indexes"] != [
+        {"format": "scip", "name": "scip", "path": "index.scip", "required": True}
+    ]:
+        raise AssertionError(
+            "zero-config compiler evidence is incorrect: "
+            f"{compiler_document['effective_config']!r}"
+        )
+    shutil.rmtree(compiler_fixture)
     r_project = Project.from_repository(r_fixture, jobs=1)
     r_map = json.loads(r_project.map_json())
     if r_map["project"] != "zeroR":
@@ -105,17 +145,12 @@ def main() -> int:
         check=True,
         stdout=subprocess.PIPE,
     )
-    if (
-        bytes.fromhex(autoconf_completed.stdout.decode().strip())
-        != autoconf_resolution
-    ):
+    if bytes.fromhex(autoconf_completed.stdout.decode().strip()) != autoconf_resolution:
         raise AssertionError("Python and Node Autoconf resolution artifacts differ")
     autoconf_project = Project.from_repository(autoconf_fixture, jobs=1)
     autoconf_map = json.loads(autoconf_project.map_json())
     if autoconf_map["project"] != "native-demo":
-        raise AssertionError(
-            f"AC_INIT identity was lost: {autoconf_map['project']!r}"
-        )
+        raise AssertionError(f"AC_INIT identity was lost: {autoconf_map['project']!r}")
     if len(autoconf_map["packages"]) != 1:
         raise AssertionError(
             f"Autoconf package was not inferred: {autoconf_map['packages']!r}"
@@ -131,13 +166,13 @@ def main() -> int:
             f"Autoconf package evidence is incorrect: {autoconf_package!r}"
         )
     routes = {route["name"]: route for route in autoconf_map["builds"]}
-    if routes["autoreconf"]["command"] != "autoreconf -i" or routes[
-        "configure"
-    ]["paths"] != ["Makefile", "config.h", "config.status", "src/Makefile"]:
+    if routes["autoreconf"]["command"] != "autoreconf -i" or routes["configure"][
+        "paths"
+    ] != ["Makefile", "config.h", "config.status", "src/Makefile"]:
         raise AssertionError(f"Autoconf build routes are incorrect: {routes!r}")
     print(
         "Python/Node config-resolution parity passed for npm, Python, CRAN, "
-        "and Autoconf"
+        "Autoconf, SCIP, and compile_commands"
     )
     return 0
 

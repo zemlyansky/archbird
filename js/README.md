@@ -242,11 +242,11 @@ Configuration can additionally declare:
 
 | Section | Purpose |
 | --- | --- |
-| `packages`, `builds`, `artifacts` | manifests, public entrypoints, Autoconf/Make/npm routes, logical outputs and loaders |
+| `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
 | `tests` | static cases, reviewed `case_routes`, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
-| `indexes` | one or more SCIP indexes with prefixes and position encoding |
+| `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `checks`, `limits` | basic Map-presence requirements and bounded resource policy |
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
@@ -254,6 +254,25 @@ Selectors are segment-aware: `src/*.c` matches immediate children and
 new files. `route_to` is broad asserted intent; `case_routes` is case-specific.
 Patterns use the pinned `archbird-pcre2-v1` contract rather than JavaScript
 `RegExp`.
+
+Root `compile_commands.json` and `index.scip` files are consumed automatically
+in zero-config mode. Multiple compiler outputs can be named and kept separate:
+
+```json
+{
+  "builds": [
+    {"name": "wasm-db", "kind": "compile_commands", "path": "build/wasm/compile_commands.json", "variant": "wasm"}
+  ],
+  "indexes": [
+    {"name": "wasm-scip", "format": "scip", "path": "build/wasm/index.scip", "variant": "wasm"}
+  ]
+}
+```
+
+Archbird consumes compiler outputs but never invokes a compiler or indexer.
+Build routes expose repository source paths, compiler basenames, and command
+digests without leaking absolute build-machine paths. SCIP facts retain their
+variant, producer, source anchoring, coverage, and freshness.
 
 The embedded config is mirrored by `examples/minimal.archbird.json`; the
 complete multi-language form is `examples/quickstart.archbird.json` in the

@@ -73,8 +73,10 @@ typedef struct ResolutionState {
   int has_pyproject;
   int has_description;
   int has_autoconf;
+  int has_compile_commands;
   int has_c_translation_unit;
   int has_cpp_translation_unit;
+  int has_scip_index;
   /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION, 4 = configure.ac. */
   int package_identity;
 } ResolutionState;
@@ -858,6 +860,65 @@ static ArchbirdStatus add_default_make(ResolutionState *state) {
   return status;
 }
 
+static ArchbirdStatus add_default_compile_commands(ResolutionState *state) {
+  AbObjectField *field = mutable_member(&state->effective, "builds");
+  AbValue builds = {0};
+  AbValue build = {0};
+  ArchbirdStatus status;
+  if (field) {
+    builds = field->value;
+    memset(&field->value, 0, sizeof(field->value));
+  } else {
+    builds.kind = AB_VALUE_ARRAY;
+  }
+  build.kind = AB_VALUE_OBJECT;
+  status =
+      object_set_string(state->engine, &build, "kind", "compile_commands", 16);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &build, "name",
+                               "compile_commands", 16);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &build, "path",
+                               "compile_commands.json", 21);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &build, "variant", "default", 7);
+  if (status == ARCHBIRD_OK)
+    status = array_append(state->engine, &builds, &build);
+  if (status == ARCHBIRD_OK)
+    status = object_set(state->engine, &state->effective, "builds", &builds);
+  ab_value_free(state->engine, &build);
+  ab_value_free(state->engine, &builds);
+  return status;
+}
+
+static ArchbirdStatus add_default_scip_index(ResolutionState *state) {
+  AbObjectField *field = mutable_member(&state->effective, "indexes");
+  AbValue indexes = {0};
+  AbValue index = {0};
+  ArchbirdStatus status;
+  if (field) {
+    indexes = field->value;
+    memset(&field->value, 0, sizeof(field->value));
+  } else {
+    indexes.kind = AB_VALUE_ARRAY;
+  }
+  index.kind = AB_VALUE_OBJECT;
+  status = object_set_string(state->engine, &index, "format", "scip", 4);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &index, "name", "scip", 4);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &index, "path", "index.scip", 10);
+  if (status == ARCHBIRD_OK)
+    status = object_set_bool(state->engine, &index, "required", 1);
+  if (status == ARCHBIRD_OK)
+    status = array_append(state->engine, &indexes, &index);
+  if (status == ARCHBIRD_OK)
+    status = object_set(state->engine, &state->effective, "indexes", &indexes);
+  ab_value_free(state->engine, &index);
+  ab_value_free(state->engine, &indexes);
+  return status;
+}
+
 static ArchbirdStatus add_default_autoconf(ResolutionState *state,
                                            const AbAutoconfMetadata *metadata) {
   AbObjectField *field;
@@ -1009,6 +1070,10 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
     state->files[index].bytes = (size_t)number;
     if (ab_value_string_is(path, "Makefile"))
       *has_make = 1;
+    if (ab_value_string_is(path, "compile_commands.json"))
+      state->has_compile_commands = 1;
+    if (ab_value_string_is(path, "index.scip"))
+      state->has_scip_index = 1;
     if (ab_value_string_is(path, "configure.ac"))
       state->has_autoconf = 1;
     if (string_has_suffix(&path->as.text, ".c"))
@@ -1363,6 +1428,11 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
     status = add_default_autoconf(state, autoconf);
   if (status == ARCHBIRD_OK && !state->configured && has_make)
     status = add_default_make(state);
+  if (status == ARCHBIRD_OK && !state->configured &&
+      state->has_compile_commands)
+    status = add_default_compile_commands(state);
+  if (status == ARCHBIRD_OK && !state->configured && state->has_scip_index)
+    status = add_default_scip_index(state);
   if (status == ARCHBIRD_OK)
     status = apply_overlays(state);
   if (status == ARCHBIRD_OK)
@@ -1437,6 +1507,8 @@ static ArchbirdStatus scope_discovered_records(ResolutionState *state) {
   status = scope_discovered_collection(state, "packages");
   if (status == ARCHBIRD_OK)
     status = scope_discovered_collection(state, "builds");
+  if (status == ARCHBIRD_OK)
+    status = scope_discovered_collection(state, "indexes");
   return status;
 }
 

@@ -42,6 +42,7 @@ typedef struct AbConfigBuild {
   AbString name;
   AbString kind;
   AbString path;
+  AbString variant;
 } AbConfigBuild;
 
 typedef struct AbConfigIndex {
@@ -49,6 +50,7 @@ typedef struct AbConfigIndex {
   AbString format;
   AbString path;
   AbString path_prefix;
+  AbString variant;
   uint32_t position_encoding_fallback;
   int required;
 } AbConfigIndex;

@@ -94,11 +94,20 @@ static ArchbirdStatus render_candidate(AbBuffer *buffer, const AbString *path,
                                        const AbString *symbol,
                                        const AbFact *fact) {
   ArchbirdStatus status = ab_buffer_literal(buffer, "{\"path\":");
+  const AbString *index =
+      fact ? ab_map_fact_string_attribute(fact, "index") : NULL;
   const AbString *syntax_recovery =
       fact ? ab_map_fact_string_attribute(fact, "syntax_recovery") : NULL;
+  const AbString *variant =
+      fact ? ab_map_fact_string_attribute(fact, "variant") : NULL;
   uint64_t line;
   if (status == ARCHBIRD_OK)
     status = json_string(buffer, path);
+  if (status == ARCHBIRD_OK && index && index->length) {
+    status = ab_buffer_literal(buffer, ",\"index\":");
+    if (status == ARCHBIRD_OK)
+      status = json_string(buffer, index);
+  }
   if (status == ARCHBIRD_OK && fact &&
       ab_map_fact_u64_attribute(fact, "line", &line)) {
     status = ab_buffer_literal(buffer, ",\"line\":");
@@ -114,6 +123,11 @@ static ArchbirdStatus render_candidate(AbBuffer *buffer, const AbString *path,
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, syntax_recovery);
   }
+  if (status == ARCHBIRD_OK && variant && variant->length) {
+    status = ab_buffer_literal(buffer, ",\"variant\":");
+    if (status == ARCHBIRD_OK)
+      status = json_string(buffer, variant);
+  }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "}");
   return status;
@@ -126,12 +140,19 @@ static ArchbirdStatus render_evidence(AbBuffer *buffer, const AbFact *fact,
   uint64_t recovery_nodes;
   const AbString *syntax_recovery =
       ab_map_fact_string_attribute(fact, "syntax_recovery");
+  const AbString *index = ab_map_fact_string_attribute(fact, "index");
+  const AbString *variant = ab_map_fact_string_attribute(fact, "variant");
   if (status == ARCHBIRD_OK)
     status = json_string(buffer, &fact->claim);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"fact_id\":");
   if (status == ARCHBIRD_OK)
     status = json_string(buffer, &fact->id);
+  if (status == ARCHBIRD_OK && index && index->length) {
+    status = ab_buffer_literal(buffer, ",\"index\":");
+    if (status == ARCHBIRD_OK)
+      status = json_string(buffer, index);
+  }
   if (status == ARCHBIRD_OK && ab_map_fact_u64_attribute(fact, "line", &line)) {
     status = ab_buffer_literal(buffer, ",\"line\":");
     if (status == ARCHBIRD_OK)
@@ -161,6 +182,11 @@ static ArchbirdStatus render_evidence(AbBuffer *buffer, const AbFact *fact,
       status = json_string(buffer, syntax_recovery);
   } else if (status == ARCHBIRD_OK) {
     status = ab_buffer_literal(buffer, "}");
+  }
+  if (status == ARCHBIRD_OK && variant && variant->length) {
+    status = ab_buffer_literal(buffer, ",\"variant\":");
+    if (status == ARCHBIRD_OK)
+      status = json_string(buffer, variant);
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "}");

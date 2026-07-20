@@ -133,6 +133,8 @@ test-py: build-py
 		$(PYTHON_NATIVE) $(CURDIR)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_map_correctness.py \
 		$(PYTHON_NATIVE) $(CURDIR) $(CURDIR)/test/fixtures/map_correctness
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_compile_commands.py \
+		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_modules.py \
 		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_identity.py \

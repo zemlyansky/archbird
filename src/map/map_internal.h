@@ -139,6 +139,7 @@ typedef struct AbMapBuildRoute {
   AbStringArray paths;
   AbString command;
   AbStringArray conditions;
+  AbString variant;
 } AbMapBuildRoute;
 
 typedef struct AbMapArtifactInput {
@@ -298,6 +299,7 @@ typedef struct AbMapIndex {
   AbString format;
   AbString path;
   AbString path_prefix;
+  AbString variant;
   AbString evidence_state;
   AbString sha256;
   AbString tool_name;

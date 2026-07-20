@@ -3038,7 +3038,8 @@ static ArchbirdStatus render_builds(AbBuffer *buffer, QueryContext *context) {
         required_string(context, row, "name", "map.builds[]");
     const AbValue *paths =
         required_array(context, row, "paths", "map.builds[]");
-    const char *fields[] = {"conditions", "deps", "name", "paths", "source"};
+    const char *fields[] = {"command", "conditions", "deps",
+                            "name",    "paths",      "source"};
     size_t path_index;
     size_t field;
     int selected;
@@ -3064,6 +3065,13 @@ static ArchbirdStatus render_builds(AbBuffer *buffer, QueryContext *context) {
       if (!value)
         return query_error(context, "map build projection is incomplete");
       status = render_named_value(buffer, fields[field], value, &first_field);
+    }
+    if (status == ARCHBIRD_OK) {
+      const AbValue *variant = ab_value_member(row, "variant");
+      if (variant && variant->kind != AB_VALUE_STRING)
+        return query_error(context, "map build variant is malformed");
+      if (variant)
+        status = render_named_value(buffer, "variant", variant, &first_field);
     }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "}");

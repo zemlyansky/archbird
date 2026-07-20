@@ -414,8 +414,12 @@ static ArchbirdStatus classify(ArchbirdEngine *engine,
   }
   for (index = 0; status == ARCHBIRD_OK && index < config->build_count;
        index++) {
-    if (exact(path, &config->builds[index].path))
+    if (exact(path, &config->builds[index].path)) {
       status = append_unique(engine, &row->roles, "build", 5);
+      if (status == ARCHBIRD_OK && config->builds[index].kind.length == 16 &&
+          !memcmp(config->builds[index].kind.data, "compile_commands", 16))
+        status = append_unique(engine, &row->roles, "index", 5);
+    }
   }
   for (index = 0; status == ARCHBIRD_OK && index < config->index_count;
        index++) {

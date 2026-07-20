@@ -221,17 +221,36 @@ Configuration can additionally declare:
 
 | Section | Purpose |
 | --- | --- |
-| `packages`, `builds`, `artifacts` | manifests, public entrypoints, Autoconf/Make/npm routes, logical outputs and loaders |
+| `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
 | `tests` | static cases, reviewed `case_routes`, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
-| `indexes` | one or more SCIP indexes with prefixes and position encoding |
+| `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `checks`, `limits` | basic Map-presence requirements and bounded resource policy |
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
 `src/**/*.c` is recursive. Components group selected files rather than
 discovering new source. `route_to` is broad asserted intent; `case_routes` is
 case-specific. Patterns use `archbird-pcre2-v1`, not Python `re`.
+
+Root `compile_commands.json` and `index.scip` files are consumed automatically
+in zero-config mode. Multiple compiler outputs can be named and kept separate:
+
+```json
+{
+  "builds": [
+    {"name": "cuda-db", "kind": "compile_commands", "path": "build/cuda/compile_commands.json", "variant": "cuda"}
+  ],
+  "indexes": [
+    {"name": "cuda-scip", "format": "scip", "path": "build/cuda/index.scip", "variant": "cuda"}
+  ]
+}
+```
+
+Archbird consumes compiler outputs but never invokes a compiler or indexer.
+Build routes expose repository source paths, compiler basenames, and command
+digests without leaking absolute build-machine paths. SCIP facts retain their
+variant, producer, source anchoring, coverage, and freshness.
 
 The embedded config is mirrored by `examples/minimal.archbird.json`; the
 source repository also contains a complete package/build/test example in

@@ -109,10 +109,13 @@ static ArchbirdStatus decode_summary(AbMapState *state,
   const AbString *format = string_attribute(fact, "format");
   const AbString *path = string_attribute(fact, "index_path");
   const AbString *prefix = string_attribute(fact, "path_prefix");
+  const AbString *variant = string_attribute(fact, "variant");
   ArchbirdStatus status;
-  if (!format || !path || !prefix || !ab_string_equal(format, &spec->format) ||
+  if (!format || !path || !prefix || !variant ||
+      !ab_string_equal(format, &spec->format) ||
       !ab_string_equal(path, &spec->path) ||
-      !ab_string_equal(prefix, &spec->path_prefix))
+      !ab_string_equal(prefix, &spec->path_prefix) ||
+      !ab_string_equal(variant, &spec->variant))
     return archbird_error_set(state->engine, ARCHBIRD_CONFLICT,
                               ARCHBIRD_NO_OFFSET,
                               "index summary does not match configured index");
@@ -127,6 +130,9 @@ static ArchbirdStatus decode_summary(AbMapState *state,
   if (status == ARCHBIRD_OK)
     status = ab_string_copy(state->engine, &out->path_prefix,
                             spec->path_prefix.data, spec->path_prefix.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_string_copy(state->engine, &out->variant, spec->variant.data,
+                            spec->variant.length);
   if (status == ARCHBIRD_OK)
     status =
         copy_attribute(state, fact, "evidence_state", &out->evidence_state);
@@ -352,7 +358,15 @@ ArchbirdStatus ab_map_render_indexes(AbBuffer *buffer,
       status = ab_buffer_literal(buffer, ",\"sha256\":");
     RENDER_STRING(",\"tool\":{\"name\":", sha256);
     RENDER_STRING(",\"version\":", tool_name);
-    RENDER_STRING("}}", tool_version);
+    RENDER_STRING("}", tool_version);
+    if (status == ARCHBIRD_OK && row->variant.length) {
+      status = ab_buffer_literal(buffer, ",\"variant\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_json_string(buffer, row->variant.data,
+                                       row->variant.length);
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "}");
 #undef RENDER_STRING
   }
   if (status == ARCHBIRD_OK)

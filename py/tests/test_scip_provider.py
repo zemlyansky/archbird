@@ -104,8 +104,18 @@ def main() -> int:
             },
         ],
         "indexes": [
-            {"name": "compiler", "format": "scip", "path": "index.scip"},
-            {"name": "secondary", "format": "scip", "path": "second.scip"},
+            {
+                "name": "compiler",
+                "format": "scip",
+                "path": "index.scip",
+                "variant": "primary",
+            },
+            {
+                "name": "secondary",
+                "format": "scip",
+                "path": "second.scip",
+                "variant": "secondary",
+            },
         ],
     }
     sources = {
@@ -171,9 +181,7 @@ def main() -> int:
     extension.project_finalize_sources(project)
     extension.project_set_config(project, canonical(config))
     for provider_id in ("lexical:c", "lexical:javascript", "lexical:r"):
-        extension.project_scan_builtin_provider(
-            project, provider_id, "primary"
-        )
+        extension.project_scan_builtin_provider(project, provider_id, "primary")
     manifest_sha = extension.project_manifest_sha256(project)
     extension.project_add_provider(
         project,
@@ -194,6 +202,9 @@ def main() -> int:
     semantic = json.loads(
         extension.project_provider_facts(project, counts["providers"] - 1)
     )
+    assert semantic["facts"] and all(
+        fact["attributes"]["variant"] == "secondary" for fact in semantic["facts"]
+    )
     definitions = [
         fact for fact in semantic["facts"] if fact["domain"] == "semantic-definitions"
     ]
@@ -202,7 +213,9 @@ def main() -> int:
     ]
     assert not any(fact["domain"] == "index-edges" for fact in semantic["facts"])
     assert [fact["span"] for fact in definitions] == [{"end": 7, "start": 4}]
-    assert sorted((fact["span"]["start"], fact["span"]["end"]) for fact in references) == [
+    assert sorted(
+        (fact["span"]["start"], fact["span"]["end"]) for fact in references
+    ) == [
         (8, 11),
         (8, 11),
         (29, 32),
@@ -217,9 +230,28 @@ def main() -> int:
     assert extension.project_merge_summary(project)["conflicts"] == 0
     mapped = json.loads(extension.project_map(project))
     assert mapped["diagnostics"] == [], mapped["diagnostics"]
-    assert [(row["name"], row["path"]) for row in mapped["indexes"]] == [
-        ("compiler", "index.scip"),
-        ("secondary", "second.scip"),
+    semantic_call = next(
+        row
+        for row in mapped["symbol_calls"]
+        if row["source"] == {"path": "py/api.py", "symbol": "invoke"}
+        and row["name"] == "add"
+    )
+    assert semantic_call["resolution"] == "unique", semantic_call
+    assert semantic_call["candidates"] == [
+        {"line": 1, "path": "src/core.c", "symbol": "add"}
+    ]
+    semantic_witnesses = [
+        row for row in semantic_call["evidence"] if row["claim"] == "semantic-target"
+    ]
+    assert [(row["index"], row["variant"]) for row in semantic_witnesses] in (
+        [("compiler", "primary")],
+        [("secondary", "secondary")],
+    )
+    assert [
+        (row["name"], row["path"], row["variant"]) for row in mapped["indexes"]
+    ] == [
+        ("compiler", "index.scip", "primary"),
+        ("secondary", "second.scip", "secondary"),
     ]
     for row in mapped["indexes"]:
         assert row["coverage"] == {
