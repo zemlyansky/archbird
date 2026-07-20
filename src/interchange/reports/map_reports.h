@@ -25,4 +25,9 @@ ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,
                                              ArchbirdReportDetail detail,
                                              size_t max_chars, AbBuffer *out);
 
+ArchbirdStatus ab_query_report_markdown_view_with_verification(
+    ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
+    const AbValue *verification, ArchbirdQueryView view,
+    ArchbirdReportDetail detail, size_t max_chars, AbBuffer *out);
+
 #endif

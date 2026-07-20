@@ -886,12 +886,600 @@ cleanup:
   return status;
 }
 
+static int report_list_contains(const AbReportStringList *list,
+                                const AbString *value) {
+  size_t low = 0;
+  size_t high;
+  if (!list || !value)
+    return 0;
+  high = list->count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    int compared = ab_string_compare(&list->items[middle], value);
+    if (!compared)
+      return 1;
+    if (compared < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  return 0;
+}
+
+static ArchbirdStatus overlay_selected_paths(ArchbirdEngine *engine,
+                                             const AbValue *query,
+                                             AbReportStringList *out) {
+  const AbValue *files = ab_report_array(query, "files");
+  const AbValue *metadata = ab_report_object(query, "query");
+  const AbValue *change_set =
+      metadata ? ab_value_member(metadata, "change_set") : NULL;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  ab_report_list_init(out, engine);
+  if (!files || !metadata)
+    return query_schema_error(engine, "query overlay input is malformed");
+  for (index = 0; status == ARCHBIRD_OK && index < files->as.array.count;
+       index++) {
+    const AbString *path =
+        ab_report_string(&files->as.array.items[index], "path");
+    if (!path)
+      status = query_schema_error(engine, "query overlay file is malformed");
+    else
+      status = ab_report_list_add(out, path->data, path->length);
+  }
+  if (status == ARCHBIRD_OK && change_set) {
+    const AbValue *entries = ab_report_array(change_set, "entries");
+    if (!entries)
+      status =
+          query_schema_error(engine, "query overlay change set is malformed");
+    for (index = 0;
+         status == ARCHBIRD_OK && entries && index < entries->as.array.count;
+         index++) {
+      const AbValue *entry = &entries->as.array.items[index];
+      const AbString *path = ab_report_string(entry, "path");
+      const AbString *previous = ab_report_string(entry, "previous_path");
+      if (!path)
+        status = query_schema_error(engine,
+                                    "query overlay change entry is malformed");
+      else
+        status = ab_report_list_add(out, path->data, path->length);
+      if (status == ARCHBIRD_OK && previous)
+        status = ab_report_list_add(out, previous->data, previous->length);
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    ab_report_list_sort_unique(out);
+  return status;
+}
+
+static int overlay_project_allowed(const AbString *project,
+                                   const AbReportStringList *aliases) {
+  if (!aliases || !aliases->count)
+    return 0;
+  return !project || !project->length || report_list_contains(aliases, project);
+}
+
+static ArchbirdStatus overlay_evidence_paths(ArchbirdEngine *engine,
+                                             const AbValue *evidence,
+                                             const AbReportStringList *selected,
+                                             const AbReportStringList *aliases,
+                                             int include_lines,
+                                             AbReportStringList *matches) {
+  size_t index;
+  if (!evidence)
+    return ARCHBIRD_OK;
+  if (evidence->kind != AB_VALUE_ARRAY)
+    return query_schema_error(engine,
+                              "verification overlay evidence is malformed");
+  for (index = 0; index < evidence->as.array.count; index++) {
+    const AbValue *row = &evidence->as.array.items[index];
+    const AbString *path = ab_report_string(row, "path");
+    const AbString *project = ab_report_string(row, "project");
+    ArchbirdStatus status;
+    if (!path || !project)
+      return query_schema_error(
+          engine, "verification overlay evidence row is malformed");
+    if (!path->length || !overlay_project_allowed(project, aliases) ||
+        !report_list_contains(selected, path))
+      continue;
+    if (include_lines) {
+      size_t line = ab_report_size(row, "line", SIZE_MAX);
+      if (line == SIZE_MAX)
+        return query_schema_error(
+            engine, "verification overlay evidence line is malformed");
+      if (line)
+        status = ab_report_list_addf(matches, "%.*s:%zu", (int)path->length,
+                                     path->data, line);
+      else
+        status = ab_report_list_add(matches, path->data, path->length);
+    } else {
+      status = ab_report_list_add(matches, path->data, path->length);
+    }
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  return ARCHBIRD_OK;
+}
+
+static const AbValue *overlay_fact(const AbValue *facts, const AbString *name) {
+  size_t index;
+  if (!facts || facts->kind != AB_VALUE_ARRAY || !name || !name->length)
+    return NULL;
+  for (index = 0; index < facts->as.array.count; index++) {
+    const AbString *candidate =
+        ab_report_string(&facts->as.array.items[index], "name");
+    if (candidate && ab_string_equal(candidate, name))
+      return &facts->as.array.items[index];
+  }
+  return NULL;
+}
+
+static ArchbirdStatus overlay_fact_paths(
+    ArchbirdEngine *engine, const AbValue *fact, const AbString *wanted_key,
+    const AbReportStringList *selected, const AbReportStringList *aliases,
+    int include_lines, AbReportStringList *matches) {
+  const AbValue *items;
+  const AbString *project;
+  size_t index;
+  if (!fact)
+    return ARCHBIRD_OK;
+  items = ab_report_array(fact, "items");
+  project = ab_report_string(fact, "project");
+  if (!items || !project)
+    return query_schema_error(engine, "verification overlay fact is malformed");
+  if (!overlay_project_allowed(project, aliases))
+    return ARCHBIRD_OK;
+  for (index = 0; index < items->as.array.count; index++) {
+    const AbValue *item = &items->as.array.items[index];
+    const AbString *key = ab_report_string(item, "key");
+    ArchbirdStatus status;
+    if (!key)
+      return query_schema_error(engine,
+                                "verification overlay fact item is malformed");
+    if (wanted_key && !ab_string_equal(key, wanted_key))
+      continue;
+    status = overlay_evidence_paths(engine, ab_value_member(item, "evidence"),
+                                    selected, aliases, include_lines, matches);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus
-render_query_view(ArchbirdEngine *engine, const AbValue *map,
-                  const AbValue *query, size_t node_limit,
-                  int include_neighborhood, int include_routed,
-                  int compact_header, ArchbirdQueryView view,
-                  ArchbirdReportDetail detail, AbBuffer *out) {
+overlay_operand_paths(ArchbirdEngine *engine, const AbValue *check,
+                      const AbValue *facts, const AbString *wanted_key,
+                      const AbReportStringList *selected,
+                      const AbReportStringList *aliases, int include_lines,
+                      AbReportStringList *matches) {
+  const AbValue *operands = ab_report_object(check, "operands");
+  size_t index;
+  if (!operands)
+    return query_schema_error(
+        engine, "verification overlay check operands are malformed");
+  for (index = 0; index < operands->as.object.count; index++) {
+    const AbValue *value = &operands->as.object.fields[index].value;
+    const AbValue *fact;
+    ArchbirdStatus status;
+    if (value->kind != AB_VALUE_STRING || !value->as.text.length)
+      continue;
+    fact = overlay_fact(facts, &value->as.text);
+    status = overlay_fact_paths(engine, fact, wanted_key, selected, aliases,
+                                include_lines, matches);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus overlay_check_paths(ArchbirdEngine *engine,
+                                          const AbValue *check,
+                                          const AbValue *facts,
+                                          const AbReportStringList *selected,
+                                          const AbReportStringList *aliases,
+                                          AbReportStringList *matches) {
+  const AbValue *findings = ab_report_array(check, "findings");
+  size_t index;
+  ArchbirdStatus status;
+  ab_report_list_init(matches, engine);
+  if (!findings)
+    return query_schema_error(engine,
+                              "verification overlay findings are malformed");
+  status = overlay_evidence_paths(engine, ab_value_member(check, "witnesses"),
+                                  selected, aliases, 0, matches);
+  for (index = 0; status == ARCHBIRD_OK && index < findings->as.array.count;
+       index++)
+    status = overlay_evidence_paths(
+        engine, ab_value_member(&findings->as.array.items[index], "evidence"),
+        selected, aliases, 0, matches);
+  if (status == ARCHBIRD_OK)
+    status = overlay_operand_paths(engine, check, facts, NULL, selected,
+                                   aliases, 0, matches);
+  if (status == ARCHBIRD_OK)
+    ab_report_list_sort_unique(matches);
+  return status;
+}
+
+static ArchbirdStatus
+overlay_finding_paths(ArchbirdEngine *engine, const AbValue *check,
+                      const AbValue *finding, const AbValue *facts,
+                      const AbReportStringList *selected,
+                      const AbReportStringList *aliases, int include_lines,
+                      AbReportStringList *matches) {
+  const AbString *key = ab_report_string(finding, "key");
+  ArchbirdStatus status;
+  ab_report_list_init(matches, engine);
+  if (!key)
+    return query_schema_error(engine,
+                              "verification overlay finding is malformed");
+  status = overlay_evidence_paths(engine, ab_value_member(finding, "evidence"),
+                                  selected, aliases, include_lines, matches);
+  if (status == ARCHBIRD_OK)
+    status = overlay_operand_paths(engine, check, facts, key, selected, aliases,
+                                   include_lines, matches);
+  if (status == ARCHBIRD_OK)
+    ab_report_list_sort_unique(matches);
+  return status;
+}
+
+static ArchbirdStatus
+overlay_freshness(ArchbirdEngine *engine, const AbValue *projects,
+                  const AbString *map_project, const AbString *map_config,
+                  const AbString *map_inputs, AbReportStringList *aliases,
+                  const char **out) {
+  size_t index;
+  size_t matches = 0;
+  size_t current = 0;
+  size_t complete = 0;
+  for (index = 0; index < projects->as.array.count; index++) {
+    const AbValue *row = &projects->as.array.items[index];
+    const AbString *project = ab_report_string(row, "project");
+    const AbString *name = ab_report_string(row, "name");
+    const AbString *config = ab_report_string(row, "config_sha256");
+    const AbString *inputs = ab_report_string(row, "input_sha256");
+    if (!project || !name || !config || !inputs)
+      return query_schema_error(
+          engine, "verification overlay project row is malformed");
+    if (!ab_string_equal(project, map_project))
+      continue;
+    matches++;
+    if (config->length && inputs->length)
+      complete++;
+    if (ab_string_equal(config, map_config) &&
+        ab_string_equal(inputs, map_inputs))
+      current++;
+  }
+  for (index = 0; index < projects->as.array.count; index++) {
+    const AbValue *row = &projects->as.array.items[index];
+    const AbString *project = ab_report_string(row, "project");
+    const AbString *name = ab_report_string(row, "name");
+    const AbString *config = ab_report_string(row, "config_sha256");
+    const AbString *inputs = ab_report_string(row, "input_sha256");
+    int exact;
+    ArchbirdStatus status;
+    if (!project || !name || !config || !inputs)
+      return query_schema_error(
+          engine, "verification overlay project row is malformed");
+    if (!ab_string_equal(project, map_project) || !name->length)
+      continue;
+    exact = ab_string_equal(config, map_config) &&
+            ab_string_equal(inputs, map_inputs);
+    if ((current && !exact) || (!current && matches != 1))
+      continue;
+    status = ab_report_list_add(aliases, name->data, name->length);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  ab_report_list_sort_unique(aliases);
+  if (!matches)
+    *out = "not-applicable";
+  else if (current)
+    *out = "current";
+  else if (matches > 1)
+    *out = "unknown";
+  else
+    *out = complete == matches ? "stale" : "unknown";
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus render_overlay_requirements(ArchbirdEngine *engine,
+                                                  const AbValue *requirements,
+                                                  AbBuffer *out) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!requirements || requirements->kind != AB_VALUE_ARRAY)
+    return query_schema_error(
+        engine, "verification overlay requirements are malformed");
+  if (!requirements->as.array.count)
+    return ARCHBIRD_OK;
+  status = ab_buffer_literal(out, " requirements=");
+  for (index = 0; status == ARCHBIRD_OK && index < requirements->as.array.count;
+       index++) {
+    const AbValue *requirement = &requirements->as.array.items[index];
+    if (requirement->kind != AB_VALUE_STRING || !requirement->as.text.length)
+      return query_schema_error(
+          engine, "verification overlay requirement is malformed");
+    if (index)
+      status = ab_buffer_literal(out, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(out, requirement->as.text.data,
+                                requirement->as.text.length);
+  }
+  return status;
+}
+
+static const char *overlay_producer(const AbValue *verification,
+                                    const AbValue *query) {
+  const AbValue *verification_tool = ab_report_object(verification, "tool");
+  const AbValue *query_tool = ab_report_object(query, "tool");
+  const AbString *left =
+      verification_tool
+          ? ab_report_string(verification_tool, "implementation_sha256")
+          : NULL;
+  const AbString *right =
+      query_tool ? ab_report_string(query_tool, "implementation_sha256") : NULL;
+  if (!left || !right || !left->length || !right->length)
+    return "unknown";
+  return ab_string_equal(left, right) ? "current" : "different";
+}
+
+static ArchbirdStatus render_overlay_path_list(const AbReportStringList *paths,
+                                               size_t limit, AbBuffer *out) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0;
+       status == ARCHBIRD_OK && index < paths->count && index < limit;
+       index++) {
+    if (index)
+      status = ab_buffer_literal(out, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(out, paths->items[index].data,
+                                paths->items[index].length);
+  }
+  if (status == ARCHBIRD_OK && paths->count > limit)
+    status = ab_report_appendf(out, ",…+%zu", paths->count - limit);
+  return status;
+}
+
+static ArchbirdStatus
+render_verification_overlay(ArchbirdEngine *engine, const AbValue *map,
+                            const AbValue *query, const AbValue *verification,
+                            ArchbirdReportDetail detail, AbBuffer *out) {
+  const AbValue *projects;
+  const AbValue *facts;
+  const AbValue *checks;
+  const AbValue *suite;
+  const AbValue *summary;
+  const AbValue *map_evidence = ab_report_object(map, "evidence");
+  const AbString *map_project = ab_report_string(map, "project");
+  const AbString *map_config =
+      map_evidence ? ab_report_string(map_evidence, "config_sha256") : NULL;
+  const AbString *map_inputs =
+      map_evidence ? ab_report_string(map_evidence, "input_sha256") : NULL;
+  const AbString *suite_name;
+  AbReportStringList selected;
+  AbReportStringList aliases;
+  const char *freshness = "unknown";
+  const char *producer = "unknown";
+  size_t relevant_checks = 0;
+  size_t relevant_findings = 0;
+  size_t emitted_checks = 0;
+  size_t emitted_findings = 0;
+  size_t check_limit = detail == ARCHBIRD_REPORT_DETAIL_COMPACT    ? 8
+                       : detail == ARCHBIRD_REPORT_DETAIL_STANDARD ? 24
+                                                                   : SIZE_MAX;
+  size_t finding_limit = detail == ARCHBIRD_REPORT_DETAIL_COMPACT    ? 8
+                         : detail == ARCHBIRD_REPORT_DETAIL_STANDARD ? 32
+                                                                     : SIZE_MAX;
+  size_t path_limit = detail == ARCHBIRD_REPORT_DETAIL_COMPACT ? 3 : 8;
+  size_t index;
+  uint64_t schema;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  ab_report_list_init(&selected, engine);
+  ab_report_list_init(&aliases, engine);
+  if (!verification || verification->kind != AB_VALUE_OBJECT ||
+      !ab_value_string_is(ab_value_member(verification, "artifact"),
+                          "verification") ||
+      !ab_value_u64(ab_value_member(verification, "schema_version"), &schema) ||
+      schema != 1)
+    return query_schema_error(
+        engine, "verification overlay must be a canonical schema-1 result");
+  projects = ab_report_array(verification, "projects");
+  facts = ab_report_array(verification, "facts");
+  checks = ab_report_array(verification, "checks");
+  suite = ab_report_object(verification, "suite");
+  summary = ab_report_object(verification, "summary");
+  suite_name = suite ? ab_report_string(suite, "name") : NULL;
+  if (!projects || !facts || !checks || !summary || !suite_name ||
+      !map_project || !map_config || !map_inputs) {
+    status = query_schema_error(engine,
+                                "verification overlay structure is malformed");
+    goto cleanup;
+  }
+  status = overlay_selected_paths(engine, query, &selected);
+  if (status != ARCHBIRD_OK)
+    goto cleanup;
+  status = overlay_freshness(engine, projects, map_project, map_config,
+                             map_inputs, &aliases, &freshness);
+  if (status != ARCHBIRD_OK)
+    goto cleanup;
+  producer = overlay_producer(verification, query);
+  for (index = 0; status == ARCHBIRD_OK && index < checks->as.array.count;
+       index++) {
+    const AbValue *check = &checks->as.array.items[index];
+    const AbValue *findings = ab_report_array(check, "findings");
+    AbReportStringList paths;
+    size_t finding_index;
+    status =
+        overlay_check_paths(engine, check, facts, &selected, &aliases, &paths);
+    if (status != ARCHBIRD_OK) {
+      ab_report_list_free(&paths);
+      break;
+    }
+    if (paths.count)
+      relevant_checks++;
+    for (finding_index = 0;
+         paths.count && findings && finding_index < findings->as.array.count;
+         finding_index++) {
+      AbReportStringList finding_paths;
+      status = overlay_finding_paths(
+          engine, check, &findings->as.array.items[finding_index], facts,
+          &selected, &aliases, 0, &finding_paths);
+      if (status == ARCHBIRD_OK && finding_paths.count)
+        relevant_findings++;
+      ab_report_list_free(&finding_paths);
+      if (status != ARCHBIRD_OK)
+        break;
+    }
+    ab_report_list_free(&paths);
+  }
+  if (status != ARCHBIRD_OK)
+    goto cleanup;
+  status = ab_report_literal_line(out, "## Architecture checks");
+  if (status == ARCHBIRD_OK)
+    status = ab_report_blank(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_report_linef(
+        out,
+        "Verification `%.*s`; evidence=%s; producer=%s; relevant=%zu/%zu "
+        "checks; findings=%zu; suite-blocking=%s.",
+        (int)suite_name->length, suite_name->data, freshness, producer,
+        relevant_checks, checks->as.array.count, relevant_findings,
+        ab_report_bool(summary, "blocking", 0) ? "yes" : "no");
+  if (status == ARCHBIRD_OK)
+    status = ab_report_blank(out);
+  if (!relevant_checks && status == ARCHBIRD_OK)
+    status = ab_report_literal_line(
+        out, "No check has exact source-path evidence in this change slice.");
+  if (relevant_checks && status == ARCHBIRD_OK)
+    status = ab_report_literal_line(out, "```text");
+  for (index = 0; status == ARCHBIRD_OK && index < checks->as.array.count;
+       index++) {
+    const AbValue *check = &checks->as.array.items[index];
+    const AbValue *findings = ab_report_array(check, "findings");
+    const AbString *id = ab_report_string(check, "id");
+    const AbString *check_status = ab_report_string(check, "status");
+    const AbString *severity = ab_report_string(check, "severity");
+    const AbString *owner = ab_report_string(check, "owner");
+    const AbValue *requirements = ab_value_member(check, "requirements");
+    AbReportStringList paths;
+    size_t finding_index;
+    size_t check_findings = 0;
+    status =
+        overlay_check_paths(engine, check, facts, &selected, &aliases, &paths);
+    if (status != ARCHBIRD_OK) {
+      ab_report_list_free(&paths);
+      break;
+    }
+    if (!paths.count) {
+      ab_report_list_free(&paths);
+      continue;
+    }
+    for (finding_index = 0;
+         findings && finding_index < findings->as.array.count;
+         finding_index++) {
+      AbReportStringList finding_paths;
+      status = overlay_finding_paths(
+          engine, check, &findings->as.array.items[finding_index], facts,
+          &selected, &aliases, 0, &finding_paths);
+      if (status == ARCHBIRD_OK && finding_paths.count)
+        check_findings++;
+      ab_report_list_free(&finding_paths);
+      if (status != ARCHBIRD_OK)
+        break;
+    }
+    if (status != ARCHBIRD_OK) {
+      ab_report_list_free(&paths);
+      break;
+    }
+    if (emitted_checks++ >= check_limit) {
+      ab_report_list_free(&paths);
+      continue;
+    }
+    if (!id || !check_status || !severity || !owner) {
+      ab_report_list_free(&paths);
+      status =
+          query_schema_error(engine, "verification overlay check is malformed");
+      break;
+    }
+    status = ab_report_appendf(
+        out, "%.*s %.*s %.*s owner=%.*s", (int)check_status->length,
+        check_status->data, (int)severity->length, severity->data,
+        (int)id->length, id->data, (int)owner->length, owner->data);
+    if (status == ARCHBIRD_OK)
+      status = render_overlay_requirements(engine, requirements, out);
+    if (status == ARCHBIRD_OK)
+      status = ab_report_appendf(out, " findings=%zu paths=", check_findings);
+    if (status == ARCHBIRD_OK)
+      status = render_overlay_path_list(&paths, path_limit, out);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(out, "\n");
+    for (finding_index = 0; status == ARCHBIRD_OK && findings &&
+                            finding_index < findings->as.array.count;
+         finding_index++) {
+      const AbValue *finding = &findings->as.array.items[finding_index];
+      const AbString *comparison = ab_report_string(finding, "comparison");
+      const AbString *key = ab_report_string(finding, "key");
+      const AbString *message = ab_report_string(finding, "message");
+      const AbString *disposition = ab_report_string(finding, "disposition");
+      const AbString *evidence_state =
+          ab_report_string(finding, "evidence_state");
+      const AbString *applicability =
+          ab_report_string(finding, "applicability");
+      AbReportStringList finding_paths;
+      status = overlay_finding_paths(engine, check, finding, facts, &selected,
+                                     &aliases, 1, &finding_paths);
+      if (status != ARCHBIRD_OK) {
+        ab_report_list_free(&finding_paths);
+        break;
+      }
+      if (!finding_paths.count || emitted_findings++ >= finding_limit) {
+        ab_report_list_free(&finding_paths);
+        continue;
+      }
+      if (!comparison || !key || !message || !disposition || !evidence_state ||
+          !applicability)
+        status = query_schema_error(
+            engine, "verification overlay finding fields are malformed");
+      if (status == ARCHBIRD_OK)
+        status = ab_report_appendf(
+            out, "  %.*s %.*s [%.*s,%.*s,%.*s]: %.*s @ ",
+            (int)comparison->length, comparison->data, (int)key->length,
+            key->data, (int)disposition->length, disposition->data,
+            (int)evidence_state->length, evidence_state->data,
+            (int)applicability->length, applicability->data,
+            (int)message->length, message->data);
+      if (status == ARCHBIRD_OK)
+        status = render_overlay_path_list(&finding_paths, path_limit, out);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(out, "\n");
+      ab_report_list_free(&finding_paths);
+    }
+    ab_report_list_free(&paths);
+  }
+  if (relevant_checks && status == ARCHBIRD_OK && relevant_checks > check_limit)
+    status = ab_report_linef(out, "… %zu relevant checks omitted by detail",
+                             relevant_checks - check_limit);
+  if (relevant_checks && status == ARCHBIRD_OK &&
+      relevant_findings > finding_limit)
+    status = ab_report_linef(out, "… %zu relevant findings omitted by detail",
+                             relevant_findings - finding_limit);
+  if (relevant_checks && status == ARCHBIRD_OK)
+    status = ab_report_literal_line(out, "```");
+  if (status == ARCHBIRD_OK)
+    status = ab_report_blank(out);
+
+cleanup:
+  ab_report_list_free(&aliases);
+  ab_report_list_free(&selected);
+  return status;
+}
+
+static ArchbirdStatus render_query_view(
+    ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
+    const AbValue *verification, size_t node_limit, int include_neighborhood,
+    int include_routed, int compact_header, ArchbirdQueryView view,
+    ArchbirdReportDetail detail, AbBuffer *out) {
   const AbValue *map_files = optional_array(map, "files");
   const AbValue *files = optional_array(query, "files");
   const AbValue *edges = optional_array(query, "edges");
@@ -1197,6 +1785,9 @@ render_query_view(ArchbirdEngine *engine, const AbValue *map,
     QUERY_TRY(ab_report_literal_line(out, "```"));
     QUERY_TRY(ab_report_blank(out));
   }
+  if (change_view && verification)
+    QUERY_TRY(render_verification_overlay(engine, map, query, verification,
+                                          detail, out));
   if (discovery->as.object.count && (!change_view || full_detail)) {
     const AbValue *coverage = ab_report_object(discovery, "coverage");
     size_t inventory = ab_report_size(coverage, "inventory_files", SIZE_MAX);
@@ -1959,14 +2550,13 @@ cleanup:
   return status;
 }
 
-static ArchbirdStatus render_query_once(ArchbirdEngine *engine,
-                                        const AbValue *map,
-                                        const AbValue *query, size_t node_limit,
-                                        ArchbirdQueryView view,
-                                        ArchbirdReportDetail detail,
-                                        AbBuffer *out) {
-  return render_query_view(engine, map, query, node_limit, 1, 1, 0, view,
-                           detail, out);
+static ArchbirdStatus
+render_query_once(ArchbirdEngine *engine, const AbValue *map,
+                  const AbValue *query, const AbValue *verification,
+                  size_t node_limit, ArchbirdQueryView view,
+                  ArchbirdReportDetail detail, AbBuffer *out) {
+  return render_query_view(engine, map, query, verification, node_limit, 1, 1,
+                           0, view, detail, out);
 }
 
 static ArchbirdStatus
@@ -2007,15 +2597,14 @@ render_query_budget_summary(ArchbirdEngine *engine, const AbValue *query,
   return status;
 }
 
-static ArchbirdStatus
-render_query_budget_candidate(ArchbirdEngine *engine, const AbValue *map,
-                              const AbValue *query, size_t budget,
-                              size_t node_limit, int include_neighborhood,
-                              int include_routed, ArchbirdQueryView view,
-                              ArchbirdReportDetail detail, AbBuffer *out) {
-  ArchbirdStatus status =
-      render_query_view(engine, map, query, node_limit, include_neighborhood,
-                        include_routed, 1, view, detail, out);
+static ArchbirdStatus render_query_budget_candidate(
+    ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
+    const AbValue *verification, size_t budget, size_t node_limit,
+    int include_neighborhood, int include_routed, ArchbirdQueryView view,
+    ArchbirdReportDetail detail, AbBuffer *out) {
+  ArchbirdStatus status = render_query_view(
+      engine, map, query, verification, node_limit, include_neighborhood,
+      include_routed, 1, view, detail, out);
   if (status == ARCHBIRD_OK)
     status =
         render_query_budget_summary(engine, query, budget, node_limit,
@@ -2023,37 +2612,36 @@ render_query_budget_candidate(ArchbirdEngine *engine, const AbValue *map,
   return status;
 }
 
-static ArchbirdStatus
-render_query_budget_length(ArchbirdEngine *engine, const AbValue *map,
-                           const AbValue *query, size_t budget,
-                           size_t node_limit, int include_neighborhood,
-                           int include_routed, ArchbirdQueryView view,
-                           ArchbirdReportDetail detail, size_t *out_length) {
+static ArchbirdStatus render_query_budget_length(
+    ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
+    const AbValue *verification, size_t budget, size_t node_limit,
+    int include_neighborhood, int include_routed, ArchbirdQueryView view,
+    ArchbirdReportDetail detail, size_t *out_length) {
   AbBuffer candidate;
   ArchbirdStatus status;
   ab_buffer_init(&candidate, engine);
-  status = render_query_budget_candidate(engine, map, query, budget, node_limit,
-                                         include_neighborhood, include_routed,
-                                         view, detail, &candidate);
+  status = render_query_budget_candidate(
+      engine, map, query, verification, budget, node_limit,
+      include_neighborhood, include_routed, view, detail, &candidate);
   if (status == ARCHBIRD_OK)
     *out_length = ab_report_codepoints(candidate.data, candidate.length);
   ab_buffer_free(&candidate);
   return status;
 }
 
-static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
-                                            const AbValue *map,
-                                            const AbValue *query, size_t budget,
-                                            ArchbirdQueryView view,
-                                            ArchbirdReportDetail detail,
-                                            AbBuffer *out) {
+static ArchbirdStatus
+render_query_budgeted(ArchbirdEngine *engine, const AbValue *map,
+                      const AbValue *query, const AbValue *verification,
+                      size_t budget, ArchbirdQueryView view,
+                      ArchbirdReportDetail detail, AbBuffer *out) {
   const AbValue *files = optional_array(query, "files");
   size_t minimum_length = 0;
   size_t visible_count = 0;
   int include_neighborhood = 0;
   int include_routed = 0;
-  ArchbirdStatus status = render_query_budget_length(
-      engine, map, query, budget, 0, 0, 0, view, detail, &minimum_length);
+  ArchbirdStatus status =
+      render_query_budget_length(engine, map, query, verification, budget, 0, 0,
+                                 0, view, detail, &minimum_length);
   if (status != ARCHBIRD_OK)
     return status;
   if (minimum_length > budget)
@@ -2065,9 +2653,9 @@ static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
   {
     size_t length = 0;
     include_neighborhood = 1;
-    status = render_query_budget_length(engine, map, query, budget, 0,
-                                        include_neighborhood, include_routed,
-                                        view, detail, &length);
+    status = render_query_budget_length(engine, map, query, verification,
+                                        budget, 0, include_neighborhood,
+                                        include_routed, view, detail, &length);
     if (status != ARCHBIRD_OK)
       return status;
     if (length > budget)
@@ -2076,9 +2664,9 @@ static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
   {
     size_t length = 0;
     include_routed = 1;
-    status = render_query_budget_length(engine, map, query, budget, 0,
-                                        include_neighborhood, include_routed,
-                                        view, detail, &length);
+    status = render_query_budget_length(engine, map, query, verification,
+                                        budget, 0, include_neighborhood,
+                                        include_routed, view, detail, &length);
     if (status != ARCHBIRD_OK)
       return status;
     if (length > budget)
@@ -2090,9 +2678,9 @@ static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
     while (low <= high) {
       size_t middle = low + (high - low) / 2;
       size_t length = 0;
-      status = render_query_budget_length(engine, map, query, budget, middle,
-                                          include_neighborhood, include_routed,
-                                          view, detail, &length);
+      status = render_query_budget_length(
+          engine, map, query, verification, budget, middle,
+          include_neighborhood, include_routed, view, detail, &length);
       if (status != ARCHBIRD_OK)
         return status;
       if (length <= budget) {
@@ -2103,7 +2691,7 @@ static ArchbirdStatus render_query_budgeted(ArchbirdEngine *engine,
       }
     }
   }
-  return render_query_budget_candidate(engine, map, query, budget,
+  return render_query_budget_candidate(engine, map, query, verification, budget,
                                        visible_count, include_neighborhood,
                                        include_routed, view, detail, out);
 }
@@ -2114,6 +2702,14 @@ ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,
                                              ArchbirdQueryView view,
                                              ArchbirdReportDetail detail,
                                              size_t max_chars, AbBuffer *out) {
+  return ab_query_report_markdown_view_with_verification(
+      engine, map, query, NULL, view, detail, max_chars, out);
+}
+
+ArchbirdStatus ab_query_report_markdown_view_with_verification(
+    ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
+    const AbValue *verification, ArchbirdQueryView view,
+    ArchbirdReportDetail detail, size_t max_chars, AbBuffer *out) {
   const AbValue *files;
   size_t low;
   size_t high;
@@ -2124,7 +2720,8 @@ ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,
   if (!engine || !map || !query || !out || view < ARCHBIRD_QUERY_VIEW_FOCUSED ||
       view > ARCHBIRD_QUERY_VIEW_CHANGES ||
       detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
-      detail > ARCHBIRD_REPORT_DETAIL_FULL)
+      detail > ARCHBIRD_REPORT_DETAIL_FULL ||
+      (verification && view != ARCHBIRD_QUERY_VIEW_CHANGES))
     return ARCHBIRD_INVALID_ARGUMENT;
   if (map->kind != AB_VALUE_OBJECT ||
       !ab_value_string_is(ab_value_member(map, "artifact"), "map") ||
@@ -2141,8 +2738,8 @@ ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,
   if (!files)
     return query_schema_error(engine, "query.files must be an array");
   if (!max_chars)
-    return render_query_once(engine, map, query, files->as.array.count, view,
-                             detail, out);
+    return render_query_once(engine, map, query, verification,
+                             files->as.array.count, view, detail, out);
   low = 0;
   high = files->as.array.count;
   while (low <= high) {
@@ -2150,8 +2747,8 @@ ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,
     AbBuffer candidate;
     size_t length;
     ab_buffer_init(&candidate, engine);
-    status =
-        render_query_once(engine, map, query, middle, view, detail, &candidate);
+    status = render_query_once(engine, map, query, verification, middle, view,
+                               detail, &candidate);
     if (status != ARCHBIRD_OK) {
       ab_buffer_free(&candidate);
       return status;
@@ -2171,15 +2768,17 @@ ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,
   if (best_count == SIZE_MAX) {
     AbBuffer minimum;
     ab_buffer_init(&minimum, engine);
-    status = render_query_once(engine, map, query, 0, view, detail, &minimum);
+    status = render_query_once(engine, map, query, verification, 0, view,
+                               detail, &minimum);
     ab_buffer_free(&minimum);
     if (status != ARCHBIRD_OK)
       return status;
-    return render_query_budgeted(engine, map, query, max_chars, view, detail,
-                                 out);
+    return render_query_budgeted(engine, map, query, verification, max_chars,
+                                 view, detail, out);
   }
   (void)best_length;
-  return render_query_once(engine, map, query, best_count, view, detail, out);
+  return render_query_once(engine, map, query, verification, best_count, view,
+                           detail, out);
 }
 
 ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,

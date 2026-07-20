@@ -1465,6 +1465,7 @@ def query_map_markdown(
     compact: bool = False,
     full: bool = False,
     max_chars: int = 0,
+    verification_result: bytes = b"",
 ) -> bytes:
     """Project a canonical Query as focused context or a change brief."""
 
@@ -1481,6 +1482,8 @@ def query_map_markdown(
     if (compact or full) and detail != "standard":
         raise ValueError("detail conflicts with compact/full alias")
     selected_detail = "compact" if compact else "full" if full else detail
+    if verification_result and view != "changes":
+        raise ValueError("verification_result requires the changes view")
     request = _query_request(
         focus=focus,
         paths=paths,
@@ -1501,6 +1504,7 @@ def query_map_markdown(
         views[view],
         details[selected_detail],
         max_chars=max_chars,
+        verification=verification_result,
     )
 
 

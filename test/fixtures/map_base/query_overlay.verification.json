@@ -1,0 +1,624 @@
+{
+  "artifact": "verification",
+  "attestations": [],
+  "baseline": {
+    "active": 0,
+    "coverage_regressions": {},
+    "enabled": false,
+    "owner": "",
+    "rationale": "",
+    "resolved": 0,
+    "sha256": ""
+  },
+  "checks": [
+    {
+      "assert": "set_equal",
+      "coverage": [
+        "add"
+      ],
+      "findings": [
+        {
+          "applicability": "applicable",
+          "baseline_state": "none",
+          "comparison": "extra",
+          "disposition": "open",
+          "evidence": [
+            {
+              "detail": "function twice",
+              "line": 5,
+              "path": "js/index.js",
+              "project": "subject",
+              "provenance": "derived",
+              "sha256": "622365a66911ba699f31e4b79b29b8863b6c26a0d3a260ca0302c015418c6834"
+            }
+          ],
+          "evidence_state": "current",
+          "fingerprint": "52c6e76c695fcbcd2bfbf4f21d9bf525c086d24b4f501f3c5cad64762da13de0",
+          "key": "twice",
+          "message": "unexpected actual fact twice",
+          "waiver": "",
+          "waiver_note": ""
+        }
+      ],
+      "id": "JAVASCRIPT-ENTRY",
+      "operands": {
+        "actual": "subject.javascript",
+        "exact": null,
+        "expected": "expected.javascript",
+        "mapping": "",
+        "max": null,
+        "min": null,
+        "reference_route": "",
+        "required_routes": []
+      },
+      "owner": "architecture",
+      "rationale": "The overlay must cite the checked JavaScript entrypoint.",
+      "requirements": [
+        "ARCH-JS-001"
+      ],
+      "severity": "error",
+      "status": "fail",
+      "tags": [],
+      "witnesses": [
+        {
+          "detail": "fact expected.javascript shape=set items=1 state=current",
+          "line": 0,
+          "path": "",
+          "project": "",
+          "provenance": "asserted",
+          "sha256": "f7b5ec25cde424dc0f3723fb0a6f637719878041e169cedae4d1e99bb26ec949"
+        },
+        {
+          "detail": "fact subject.javascript shape=set items=2 state=current",
+          "line": 0,
+          "path": "",
+          "project": "subject",
+          "provenance": "derived",
+          "sha256": "320cd4c99360d7db8991319178c89d1cf819c6edb48db0b67707a9cab3b60aac"
+        }
+      ]
+    },
+    {
+      "assert": "set_equal",
+      "coverage": [
+        "add"
+      ],
+      "findings": [
+        {
+          "applicability": "applicable",
+          "baseline_state": "none",
+          "comparison": "extra",
+          "disposition": "open",
+          "evidence": [
+            {
+              "detail": "function twice",
+              "line": 5,
+              "path": "py/pkg/api.py",
+              "project": "subject",
+              "provenance": "derived",
+              "sha256": "35e4c183682f1668cb2dd3c03447ecdd49099592744b65176b7c7af9fc4385d5"
+            }
+          ],
+          "evidence_state": "current",
+          "fingerprint": "1e87a5ba8be409e4e497d361ba9b8cac832924605c53f266a1999df42b7ac712",
+          "key": "twice",
+          "message": "unexpected actual fact twice",
+          "waiver": "",
+          "waiver_note": ""
+        }
+      ],
+      "id": "PYTHON-ENTRY",
+      "operands": {
+        "actual": "subject.python",
+        "exact": null,
+        "expected": "expected.javascript",
+        "mapping": "",
+        "max": null,
+        "min": null,
+        "reference_route": "",
+        "required_routes": []
+      },
+      "owner": "architecture",
+      "rationale": "An unrelated subject check must not enter a JavaScript change.",
+      "requirements": [
+        "ARCH-PY-001"
+      ],
+      "severity": "error",
+      "status": "fail",
+      "tags": [],
+      "witnesses": [
+        {
+          "detail": "fact expected.javascript shape=set items=1 state=current",
+          "line": 0,
+          "path": "",
+          "project": "",
+          "provenance": "asserted",
+          "sha256": "f7b5ec25cde424dc0f3723fb0a6f637719878041e169cedae4d1e99bb26ec949"
+        },
+        {
+          "detail": "fact subject.python shape=set items=2 state=current",
+          "line": 0,
+          "path": "",
+          "project": "subject",
+          "provenance": "derived",
+          "sha256": "557f5fe6f6f5d7ba67ff01005ab83c92a433eefffb570a0ad4dbc8d8debffa20"
+        }
+      ]
+    },
+    {
+      "assert": "required_subset",
+      "coverage": [
+        "core_mul"
+      ],
+      "findings": [],
+      "id": "REFERENCE-ONLY",
+      "operands": {
+        "actual": "reference.core",
+        "exact": null,
+        "expected": "expected.core",
+        "mapping": "",
+        "max": null,
+        "min": null,
+        "reference_route": "",
+        "required_routes": []
+      },
+      "owner": "architecture",
+      "rationale": "Reference-only evidence must not enter a subject change.",
+      "requirements": [
+        "ARCH-REF-001"
+      ],
+      "severity": "error",
+      "status": "pass",
+      "tags": [],
+      "witnesses": [
+        {
+          "detail": "fact expected.core shape=set items=1 state=current",
+          "line": 0,
+          "path": "",
+          "project": "",
+          "provenance": "asserted",
+          "sha256": "b18438884ade76b957bd192ceb1a33f0a1dea000fa2d1bd1041779174ff0667c"
+        },
+        {
+          "detail": "fact reference.core shape=set items=1 state=current",
+          "line": 0,
+          "path": "",
+          "project": "reference",
+          "provenance": "derived",
+          "sha256": "000cb9419ecc854fb79c6aa76380ad86c5a50d8948343b00d81ea4c5e28ed8b7"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "attestations": [],
+    "candidate": false,
+    "extractors": [
+      {
+        "attribute": "",
+        "auto_start": 1,
+        "call": "",
+        "class": "",
+        "configured_only": false,
+        "exclude": [],
+        "from_paths": [],
+        "group": "",
+        "include": [],
+        "kind": "literal_set",
+        "kinds": [],
+        "layer": "",
+        "name": "expected.core",
+        "name_value": "",
+        "path": "",
+        "paths": [],
+        "project": "",
+        "public_only": false,
+        "rows": [],
+        "selector": "",
+        "selector_argument": 0,
+        "selectors": [],
+        "strip_prefix": "",
+        "strip_suffix": "",
+        "to_paths": [],
+        "values": [
+          "core_mul"
+        ],
+        "values_from_argument": 0
+      },
+      {
+        "attribute": "",
+        "auto_start": 1,
+        "call": "",
+        "class": "",
+        "configured_only": false,
+        "exclude": [],
+        "from_paths": [],
+        "group": "",
+        "include": [],
+        "kind": "literal_set",
+        "kinds": [],
+        "layer": "",
+        "name": "expected.javascript",
+        "name_value": "",
+        "path": "",
+        "paths": [],
+        "project": "",
+        "public_only": false,
+        "rows": [],
+        "selector": "",
+        "selector_argument": 0,
+        "selectors": [],
+        "strip_prefix": "",
+        "strip_suffix": "",
+        "to_paths": [],
+        "values": [
+          "add"
+        ],
+        "values_from_argument": 0
+      },
+      {
+        "attribute": "",
+        "auto_start": 1,
+        "call": "",
+        "class": "",
+        "configured_only": false,
+        "exclude": [],
+        "from_paths": [],
+        "group": "",
+        "include": [],
+        "kind": "symbols",
+        "kinds": [],
+        "layer": "core",
+        "name": "reference.core",
+        "name_value": "",
+        "path": "",
+        "paths": [
+          "src/core.c"
+        ],
+        "project": "reference",
+        "public_only": true,
+        "rows": [],
+        "selector": "",
+        "selector_argument": 0,
+        "selectors": [],
+        "strip_prefix": "",
+        "strip_suffix": "",
+        "to_paths": [],
+        "values": null,
+        "values_from_argument": 0
+      },
+      {
+        "attribute": "",
+        "auto_start": 1,
+        "call": "",
+        "class": "",
+        "configured_only": false,
+        "exclude": [],
+        "from_paths": [],
+        "group": "",
+        "include": [],
+        "kind": "symbols",
+        "kinds": [],
+        "layer": "javascript",
+        "name": "subject.javascript",
+        "name_value": "",
+        "path": "",
+        "paths": [
+          "js/index.js"
+        ],
+        "project": "subject",
+        "public_only": false,
+        "rows": [],
+        "selector": "",
+        "selector_argument": 0,
+        "selectors": [],
+        "strip_prefix": "",
+        "strip_suffix": "",
+        "to_paths": [],
+        "values": null,
+        "values_from_argument": 0
+      },
+      {
+        "attribute": "",
+        "auto_start": 1,
+        "call": "",
+        "class": "",
+        "configured_only": false,
+        "exclude": [],
+        "from_paths": [],
+        "group": "",
+        "include": [],
+        "kind": "symbols",
+        "kinds": [],
+        "layer": "python",
+        "name": "subject.python",
+        "name_value": "",
+        "path": "",
+        "paths": [
+          "py/pkg/api.py"
+        ],
+        "project": "subject",
+        "public_only": false,
+        "rows": [],
+        "selector": "",
+        "selector_argument": 0,
+        "selectors": [],
+        "strip_prefix": "",
+        "strip_suffix": "",
+        "to_paths": [],
+        "values": null,
+        "values_from_argument": 0
+      }
+    ],
+    "mappings": [],
+    "waivers": []
+  },
+  "diagnostics": [],
+  "facts": [
+    {
+      "items": [
+        {
+          "attributes": {},
+          "evidence": [
+            {
+              "detail": "extractor expected.core",
+              "line": 0,
+              "path": "query_overlay.verify.json",
+              "project": "",
+              "provenance": "asserted",
+              "sha256": "8bd2197db749121f4827c205fdfe84fda6efbb3bd3befeaf93a89c7ca87b9661"
+            }
+          ],
+          "key": "core_mul",
+          "label": "core_mul",
+          "message": "",
+          "state": "current",
+          "value": null
+        }
+      ],
+      "message": "",
+      "name": "expected.core",
+      "project": "",
+      "provenance": "asserted",
+      "sha256": "b18438884ade76b957bd192ceb1a33f0a1dea000fa2d1bd1041779174ff0667c",
+      "shape": "set",
+      "state": "current"
+    },
+    {
+      "items": [
+        {
+          "attributes": {},
+          "evidence": [
+            {
+              "detail": "extractor expected.javascript",
+              "line": 0,
+              "path": "query_overlay.verify.json",
+              "project": "",
+              "provenance": "asserted",
+              "sha256": "8bd2197db749121f4827c205fdfe84fda6efbb3bd3befeaf93a89c7ca87b9661"
+            }
+          ],
+          "key": "add",
+          "label": "add",
+          "message": "",
+          "state": "current",
+          "value": null
+        }
+      ],
+      "message": "",
+      "name": "expected.javascript",
+      "project": "",
+      "provenance": "asserted",
+      "sha256": "f7b5ec25cde424dc0f3723fb0a6f637719878041e169cedae4d1e99bb26ec949",
+      "shape": "set",
+      "state": "current"
+    },
+    {
+      "items": [
+        {
+          "attributes": {},
+          "evidence": [
+            {
+              "detail": "function core_mul",
+              "line": 5,
+              "path": "src/core.c",
+              "project": "reference",
+              "provenance": "derived",
+              "sha256": "f1ed3eabe197a9d037015fc8aa335b400a7e966f6476c165d6c60ecd576bb379"
+            }
+          ],
+          "key": "core_mul",
+          "label": "core_mul",
+          "message": "",
+          "state": "current",
+          "value": null
+        }
+      ],
+      "message": "",
+      "name": "reference.core",
+      "project": "reference",
+      "provenance": "derived",
+      "sha256": "000cb9419ecc854fb79c6aa76380ad86c5a50d8948343b00d81ea4c5e28ed8b7",
+      "shape": "set",
+      "state": "current"
+    },
+    {
+      "items": [
+        {
+          "attributes": {},
+          "evidence": [
+            {
+              "detail": "function add",
+              "line": 1,
+              "path": "js/index.js",
+              "project": "subject",
+              "provenance": "derived",
+              "sha256": "622365a66911ba699f31e4b79b29b8863b6c26a0d3a260ca0302c015418c6834"
+            }
+          ],
+          "key": "add",
+          "label": "add",
+          "message": "",
+          "state": "current",
+          "value": null
+        },
+        {
+          "attributes": {},
+          "evidence": [
+            {
+              "detail": "function twice",
+              "line": 5,
+              "path": "js/index.js",
+              "project": "subject",
+              "provenance": "derived",
+              "sha256": "622365a66911ba699f31e4b79b29b8863b6c26a0d3a260ca0302c015418c6834"
+            }
+          ],
+          "key": "twice",
+          "label": "twice",
+          "message": "",
+          "state": "current",
+          "value": null
+        }
+      ],
+      "message": "",
+      "name": "subject.javascript",
+      "project": "subject",
+      "provenance": "derived",
+      "sha256": "320cd4c99360d7db8991319178c89d1cf819c6edb48db0b67707a9cab3b60aac",
+      "shape": "set",
+      "state": "current"
+    },
+    {
+      "items": [
+        {
+          "attributes": {},
+          "evidence": [
+            {
+              "detail": "function add",
+              "line": 1,
+              "path": "py/pkg/api.py",
+              "project": "subject",
+              "provenance": "derived",
+              "sha256": "35e4c183682f1668cb2dd3c03447ecdd49099592744b65176b7c7af9fc4385d5"
+            }
+          ],
+          "key": "add",
+          "label": "add",
+          "message": "",
+          "state": "current",
+          "value": null
+        },
+        {
+          "attributes": {},
+          "evidence": [
+            {
+              "detail": "function twice",
+              "line": 5,
+              "path": "py/pkg/api.py",
+              "project": "subject",
+              "provenance": "derived",
+              "sha256": "35e4c183682f1668cb2dd3c03447ecdd49099592744b65176b7c7af9fc4385d5"
+            }
+          ],
+          "key": "twice",
+          "label": "twice",
+          "message": "",
+          "state": "current",
+          "value": null
+        }
+      ],
+      "message": "",
+      "name": "subject.python",
+      "project": "subject",
+      "provenance": "derived",
+      "sha256": "557f5fe6f6f5d7ba67ff01005ab83c92a433eefffb570a0ad4dbc8d8debffa20",
+      "shape": "set",
+      "state": "current"
+    }
+  ],
+  "projects": [
+    {
+      "capabilities": [],
+      "config_sha256": "323749d4ad346494f4d82d334f9195d9bb4c63a14dc586241a886ddc3c46f411",
+      "input_sha256": "5c467154b51e9b5caffb2241a6817bf248300fa509fe6ea2a055f2155659e339",
+      "name": "reference",
+      "parameters": {},
+      "producer": {
+        "implementation_sha256": "f06168c03fbf1d0d40d9994a770d79f338b270f67ea9fd6d902c0205a5a86ecf",
+        "name": "archbird",
+        "version": "0.10.0"
+      },
+      "profile": "",
+      "project": "sample",
+      "revision": "",
+      "revision_provenance": "not_declared",
+      "source_lock": {
+        "files": [],
+        "state": "not_declared"
+      }
+    },
+    {
+      "capabilities": [],
+      "config_sha256": "3cbaeaa6828988b9893d5629fb8b04d5d82b306231a562d7a83dcb73e3b973ef",
+      "input_sha256": "5a03e56f07420f946550b41e7160fd57a3b1a7d6494dbe8e7bfc128d8a1360c7",
+      "name": "subject",
+      "parameters": {},
+      "producer": {
+        "implementation_sha256": "9b62522a09d505c8c6750cd8f9bc9896c6cc5778bc84059ec8952dc26124415d",
+        "name": "archbird",
+        "version": "0.0.1"
+      },
+      "profile": "",
+      "project": "map-base",
+      "revision": "",
+      "revision_provenance": "not_declared",
+      "source_lock": {
+        "files": [],
+        "state": "not_declared"
+      }
+    }
+  ],
+  "schema_version": 1,
+  "suite": {
+    "description": "Canonical path-backed Verify result for Query overlays.",
+    "name": "query-overlay",
+    "policy_date": "",
+    "sha256": "8bd2197db749121f4827c205fdfe84fda6efbb3bd3befeaf93a89c7ca87b9661"
+  },
+  "summary": {
+    "blocking": true,
+    "checks": {
+      "fail": 2,
+      "not_applicable": 0,
+      "pass": 1,
+      "unknown": 0,
+      "waived": 0
+    },
+    "coverage": 3,
+    "coverage_aggregation": "sum_of_unique_keys_per_check",
+    "coverage_regressions": 0,
+    "coverage_unit": "check_fact_or_route_key",
+    "findings": {
+      "applicability": {
+        "applicable": 2
+      },
+      "baseline_state": {},
+      "comparison": {
+        "extra": 2
+      },
+      "disposition": {
+        "open": 2
+      },
+      "evidence_state": {
+        "current": 2
+      },
+      "total": 2
+    }
+  },
+  "tool": {
+    "implementation_sha256": "9b62522a09d505c8c6750cd8f9bc9896c6cc5778bc84059ec8952dc26124415d",
+    "name": "archbird",
+    "version": "0.0.1"
+  }
+}

@@ -953,12 +953,14 @@ static PyObject *py_map_query_markdown(PyObject *self, PyObject *args,
 
 static PyObject *py_map_query_markdown_view(PyObject *self, PyObject *args,
                                             PyObject *kwargs) {
-  static char *keywords[] = {"map",    "query",     "view",
-                             "detail", "max_chars", NULL};
+  static char *keywords[] = {"map",       "query",        "view", "detail",
+                             "max_chars", "verification", NULL};
   const char *map;
   const char *query;
+  const char *verification = NULL;
   Py_ssize_t map_length;
   Py_ssize_t query_length;
+  Py_ssize_t verification_length = 0;
   Py_ssize_t max_chars = 0;
   int view;
   int detail;
@@ -968,8 +970,9 @@ static PyObject *py_map_query_markdown_view(PyObject *self, PyObject *args,
   PyObject *result;
   (void)self;
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#y#ii|n:map_query_markdown_view", keywords, &map,
-          &map_length, &query, &query_length, &view, &detail, &max_chars))
+          args, kwargs, "y#y#ii|ny#:map_query_markdown_view", keywords, &map,
+          &map_length, &query, &query_length, &view, &detail, &max_chars,
+          &verification, &verification_length))
     return NULL;
   if (max_chars < 0) {
     PyErr_SetString(PyExc_ValueError,
@@ -977,11 +980,15 @@ static PyObject *py_map_query_markdown_view(PyObject *self, PyObject *args,
     return NULL;
   }
   status = saved_artifact_engine(
-      larger_input((size_t)map_length, (size_t)query_length), &engine);
+      larger_input(larger_input((size_t)map_length, (size_t)query_length),
+                   (size_t)verification_length),
+      &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_map_query_markdown_view(
+    status = archbird_map_query_markdown_view_with_verification(
         engine, (const uint8_t *)map, (size_t)map_length,
-        (const uint8_t *)query, (size_t)query_length, (ArchbirdQueryView)view,
+        (const uint8_t *)query, (size_t)query_length,
+        verification_length ? (const uint8_t *)verification : NULL,
+        (size_t)verification_length, (ArchbirdQueryView)view,
         (ArchbirdReportDetail)detail, (size_t)max_chars, output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);

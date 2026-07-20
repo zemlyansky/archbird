@@ -45,6 +45,8 @@ typedef struct CountingOutput {
 static int failures;
 static uint8_t *report_map;
 static size_t report_map_length;
+static uint8_t *report_verification;
+static size_t report_verification_length;
 
 static void fail(const char *name, const char *message) {
   fprintf(stderr, "FAIL %s: %s\n", name, message);
@@ -388,6 +390,7 @@ typedef enum ReportExerciseKind {
   REPORT_EXERCISE_MAP_ARCHITECTURE,
   REPORT_EXERCISE_QUERY,
   REPORT_EXERCISE_QUERY_CHANGES,
+  REPORT_EXERCISE_QUERY_VERIFICATION,
   REPORT_EXERCISE_QUERY_BUDGET
 } ReportExerciseKind;
 
@@ -435,6 +438,13 @@ static ArchbirdStatus exercise_report(TestAllocator *allocator,
         sizeof(query) - 1, ARCHBIRD_QUERY_VIEW_CHANGES,
         ARCHBIRD_REPORT_DETAIL_STANDARD, 0, count_write, &output);
     break;
+  case REPORT_EXERCISE_QUERY_VERIFICATION:
+    status = archbird_map_query_markdown_view_with_verification(
+        engine, report_map, report_map_length, (const uint8_t *)query,
+        sizeof(query) - 1, report_verification, report_verification_length,
+        ARCHBIRD_QUERY_VIEW_CHANGES, ARCHBIRD_REPORT_DETAIL_STANDARD, 0,
+        count_write, &output);
+    break;
   case REPORT_EXERCISE_QUERY_BUDGET:
     status = archbird_map_query_markdown(
         engine, report_map, report_map_length, (const uint8_t *)query,
@@ -481,6 +491,11 @@ static ArchbirdStatus exercise_budgeted_query_report(TestAllocator *allocator) {
 
 static ArchbirdStatus exercise_change_query_report(TestAllocator *allocator) {
   return exercise_report(allocator, REPORT_EXERCISE_QUERY_CHANGES);
+}
+
+static ArchbirdStatus
+exercise_verification_query_report(TestAllocator *allocator) {
+  return exercise_report(allocator, REPORT_EXERCISE_QUERY_VERIFICATION);
 }
 
 static ArchbirdStatus exercise_verify(TestAllocator *allocator) {
@@ -678,8 +693,8 @@ static void test_invalid_options(void) {
          "allocator user data without callbacks was accepted");
 }
 
-static int load_report_map(void) {
-  FILE *file = fopen(ARCHBIRD_ALLOCATOR_REPORT_MAP, "rb");
+static int load_fixture(const char *path, uint8_t **bytes, size_t *size) {
+  FILE *file = fopen(path, "rb");
   long length;
   if (!file)
     return 0;
@@ -688,22 +703,26 @@ static int load_report_map(void) {
     fclose(file);
     return 0;
   }
-  report_map = (uint8_t *)malloc((size_t)length);
-  if (!report_map ||
-      fread(report_map, 1, (size_t)length, file) != (size_t)length) {
-    free(report_map);
-    report_map = NULL;
+  *bytes = (uint8_t *)malloc((size_t)length);
+  if (!*bytes || fread(*bytes, 1, (size_t)length, file) != (size_t)length) {
+    free(*bytes);
+    *bytes = NULL;
     fclose(file);
     return 0;
   }
   fclose(file);
-  report_map_length = (size_t)length;
+  *size = (size_t)length;
   return 1;
 }
 
 int main(void) {
-  if (!load_report_map()) {
-    fail("report-map-fixture", "cannot load the feature-rich saved Map");
+  if (!load_fixture(ARCHBIRD_ALLOCATOR_REPORT_MAP, &report_map,
+                    &report_map_length) ||
+      !load_fixture(ARCHBIRD_ALLOCATOR_VERIFICATION, &report_verification,
+                    &report_verification_length)) {
+    fail("report-fixtures", "cannot load report allocator fixtures");
+    free(report_map);
+    free(report_verification);
     return 1;
   }
   test_invalid_options();
@@ -722,13 +741,18 @@ int main(void) {
   run_failure_sweep("query-report-every-n", exercise_query_report);
   run_failure_sweep("query-change-report-every-n",
                     exercise_change_query_report);
+  run_failure_sweep("query-verification-report-every-n",
+                    exercise_verification_query_report);
   run_failure_sweep("query-report-budget-every-n",
                     exercise_budgeted_query_report);
   run_failure_sweep("verify-every-n", exercise_verify);
   run_failure_sweep("act-every-n", exercise_act);
   free(report_map);
+  free(report_verification);
   report_map = NULL;
   report_map_length = 0;
+  report_verification = NULL;
+  report_verification_length = 0;
   if (failures)
     return 1;
   puts("native allocator tests passed: JSON, PCRE2, config resolution, "

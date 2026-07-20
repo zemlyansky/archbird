@@ -391,6 +391,19 @@ ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown_view(
     ArchbirdReportDetail detail, size_t max_chars, ArchbirdWriteFn write_fn,
     void *user_data);
 
+/*
+ * Render a change brief with an optional canonical schema-1 Verification
+ * result. The overlay correlates only exact source paths and reports Map/
+ * Verification producer and input freshness; it does not modify either
+ * canonical artifact or infer that a check applies without evidence overlap.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown_view_with_verification(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *query_json, size_t query_length,
+    const uint8_t *verification_json, size_t verification_length,
+    ArchbirdQueryView view, ArchbirdReportDetail detail, size_t max_chars,
+    ArchbirdWriteFn write_fn, void *user_data);
+
 ARCHBIRD_API ArchbirdStatus archbird_map_diff(
     ArchbirdEngine *engine, const uint8_t *before_json, size_t before_length,
     const uint8_t *after_json, size_t after_length, uint32_t json_flags,

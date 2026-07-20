@@ -1379,12 +1379,17 @@ function queryMapMarkdown(mapJson, options = {}) {
     throw new RangeError("detail conflicts with compact/full alias");
   }
   const selectedDetail = compact ? "compact" : (full ? "full" : detail);
+  const verificationResult = options.verificationResult ?? Buffer.alloc(0);
+  if (verificationResult.length && view !== "changes") {
+    throw new RangeError("verificationResult requires the changes view");
+  }
   return native.mapQueryMarkdownView(
     Buffer.from(mapJson),
     Buffer.from(JSON.stringify(request)),
     views[view],
     details[selectedDetail],
     options.maxChars ?? 0,
+    Buffer.from(verificationResult),
   );
 }
 

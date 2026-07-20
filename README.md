@@ -64,6 +64,9 @@ archbird query --map .archbird/map.json \
 
 archbird query . --git-diff HEAD \
   --view changes --detail compact --check
+
+archbird query . --git-diff HEAD --view changes \
+  --verification-result .archbird/verify.json --check
 ```
 
 Query selectors accept exact or partial symbols, paths, mapped directories,
@@ -84,6 +87,13 @@ seed the architecture neighborhood; deletions and paths outside the Map remain
 visible instead of being invented as current code. External diff drivers and
 text-conversion commands are disabled. Untracked files require an explicit
 `--path` until they enter Git's diff.
+
+`--verification-result PATH` adds the architecture checks and findings
+whose subject-side source paths overlap the selected change. The brief shows
+their check IDs, requirement IDs, owners, severity, source paths, and whether
+the verification input and producer still match the current Map. It does not
+rerun verification, match reference-only evidence, or treat a path-free check
+as relevant.
 
 The default is an architecture-first overview for a person or coding agent;
 canonical JSON still contains every selected file and mapped fact. Choose the

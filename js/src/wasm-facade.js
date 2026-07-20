@@ -402,11 +402,19 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
         "_ab_wasm_map_query_markdown",
         sizeValue(maxChars, "maxChars"),
       ),
-    mapQueryMarkdownView: (map, query, view = 0, detail = 1, maxChars = 0) =>
-      twoInputs(
+    mapQueryMarkdownView: (
+      map,
+      query,
+      view = 0,
+      detail = 1,
+      maxChars = 0,
+      verification = Buffer.alloc(0),
+    ) =>
+      threeInputs(
         map,
         query,
-        "_ab_wasm_map_query_markdown_view",
+        verification,
+        "_ab_wasm_map_query_markdown_view_with_verification",
         sizeValue(view, "view"),
         sizeValue(detail, "detail"),
         sizeValue(maxChars, "maxChars"),

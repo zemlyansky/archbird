@@ -1065,12 +1065,14 @@ static napi_value map_query_markdown(napi_env env, napi_callback_info info) {
 
 static napi_value map_query_markdown_view(napi_env env,
                                           napi_callback_info info) {
-  size_t argc = 5;
-  napi_value argv[5];
+  size_t argc = 6;
+  napi_value argv[6];
   const uint8_t *map;
   const uint8_t *query;
+  const uint8_t *verification = NULL;
   size_t map_length;
   size_t query_length;
+  size_t verification_length = 0;
   size_t view;
   size_t detail;
   size_t max_chars;
@@ -1083,13 +1085,17 @@ static napi_value map_query_markdown_view(napi_env env,
       !get_buffer(env, argv[1], &query, &query_length) ||
       !get_optional_size(env, argc, argv, 2, 0, "view", &view) ||
       !get_optional_size(env, argc, argv, 3, 1, "detail", &detail) ||
-      !get_optional_size(env, argc, argv, 4, 0, "maxChars", &max_chars))
+      !get_optional_size(env, argc, argv, 4, 0, "maxChars", &max_chars) ||
+      (argc > 5 &&
+       !get_buffer(env, argv[5], &verification, &verification_length)))
     return NULL;
-  status =
-      saved_artifact_engine(larger_input(map_length, query_length), &engine);
+  status = saved_artifact_engine(
+      larger_input(larger_input(map_length, query_length), verification_length),
+      &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_map_query_markdown_view(
-        engine, map, map_length, query, query_length, (ArchbirdQueryView)view,
+    status = archbird_map_query_markdown_view_with_verification(
+        engine, map, map_length, query, query_length, verification,
+        verification_length, (ArchbirdQueryView)view,
         (ArchbirdReportDetail)detail, max_chars, output_write, &output);
   result = render_result(env, engine, status, &output);
   archbird_engine_destroy(engine);

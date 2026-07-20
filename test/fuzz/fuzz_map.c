@@ -14,6 +14,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
       engine, fuzz_map_json, sizeof(fuzz_map_json) - 1, data, size,
       ARCHBIRD_QUERY_VIEW_CHANGES, ARCHBIRD_REPORT_DETAIL_STANDARD, 0,
       fuzz_discard, NULL);
+  (void)archbird_map_query_markdown_view_with_verification(
+      engine, fuzz_map_json, sizeof(fuzz_map_json) - 1, data, size, data, size,
+      ARCHBIRD_QUERY_VIEW_CHANGES, ARCHBIRD_REPORT_DETAIL_STANDARD, 0,
+      fuzz_discard, NULL);
 #else
   ArchbirdGraphOptions options;
   size_t format;
@@ -39,6 +43,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   (void)archbird_map_query_markdown_view(
       engine, data, size, fuzz_query_json, sizeof(fuzz_query_json) - 1,
       ARCHBIRD_QUERY_VIEW_CHANGES, ARCHBIRD_REPORT_DETAIL_COMPACT, 4096,
+      fuzz_discard, NULL);
+  (void)archbird_map_query_markdown_view_with_verification(
+      engine, data, size, fuzz_query_json, sizeof(fuzz_query_json) - 1, data,
+      size, ARCHBIRD_QUERY_VIEW_CHANGES, ARCHBIRD_REPORT_DETAIL_COMPACT, 4096,
       fuzz_discard, NULL);
   for (format = ARCHBIRD_GRAPH_GRAPHML; format <= ARCHBIRD_GRAPH_MERMAID;
        format++) {

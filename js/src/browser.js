@@ -371,12 +371,17 @@ async function createBrowserArchbird(moduleOptions = {}) {
 
     queryMarkdown(options = {}) {
       const projection = queryProjection(options);
+      const verificationResult = options.verificationResult ?? Buffer.alloc(0);
+      if (verificationResult.length && projection.view !== 1) {
+        throw new RangeError("verificationResult requires the changes view");
+      }
       return core.mapQueryMarkdownView(
         this.mapJson(),
         Buffer.from(JSON.stringify(queryRequest(options))),
         projection.view,
         projection.detail,
         options.maxChars ?? 0,
+        Buffer.from(verificationResult),
       );
     }
 

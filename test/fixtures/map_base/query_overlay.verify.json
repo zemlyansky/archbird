@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "suite": "query-overlay",
+  "description": "Canonical path-backed Verify result for Query overlays.",
+  "projects": {
+    "reference": {"map": "../report_map.json"},
+    "subject": {"config": "archbird.json"}
+  },
+  "extractors": {
+    "expected.javascript": {
+      "kind": "literal_set",
+      "values": ["add"]
+    },
+    "expected.core": {
+      "kind": "literal_set",
+      "values": ["core_mul"]
+    },
+    "subject.javascript": {
+      "kind": "symbols",
+      "project": "subject",
+      "layer": "javascript",
+      "paths": ["js/index.js"],
+      "public_only": false
+    },
+    "subject.python": {
+      "kind": "symbols",
+      "project": "subject",
+      "layer": "python",
+      "paths": ["py/pkg/api.py"],
+      "public_only": false
+    },
+    "reference.core": {
+      "kind": "symbols",
+      "project": "reference",
+      "layer": "core",
+      "paths": ["src/core.c"],
+      "public_only": true
+    }
+  },
+  "checks": [
+    {
+      "id": "JAVASCRIPT-ENTRY",
+      "assert": "set_equal",
+      "expected": "expected.javascript",
+      "actual": "subject.javascript",
+      "severity": "error",
+      "owner": "architecture",
+      "requirement": "ARCH-JS-001",
+      "rationale": "The overlay must cite the checked JavaScript entrypoint."
+    },
+    {
+      "id": "PYTHON-ENTRY",
+      "assert": "set_equal",
+      "expected": "expected.javascript",
+      "actual": "subject.python",
+      "severity": "error",
+      "owner": "architecture",
+      "requirement": "ARCH-PY-001",
+      "rationale": "An unrelated subject check must not enter a JavaScript change."
+    },
+    {
+      "id": "REFERENCE-ONLY",
+      "assert": "required_subset",
+      "expected": "expected.core",
+      "actual": "reference.core",
+      "severity": "error",
+      "owner": "architecture",
+      "requirement": "ARCH-REF-001",
+      "rationale": "Reference-only evidence must not enter a subject change."
+    }
+  ]
+}

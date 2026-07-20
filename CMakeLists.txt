@@ -816,7 +816,8 @@ if(BUILD_TESTING)
   target_include_directories(archbird_native_allocator_test PRIVATE
     src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
   target_compile_definitions(archbird_native_allocator_test PRIVATE
-    "ARCHBIRD_ALLOCATOR_REPORT_MAP=\"${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/report_map.json\"")
+    "ARCHBIRD_ALLOCATOR_REPORT_MAP=\"${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/report_map.json\""
+    "ARCHBIRD_ALLOCATOR_VERIFICATION=\"${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/map_base/query_overlay.verification.json\"")
   target_compile_features(archbird_native_allocator_test PRIVATE c_std_11)
   set_target_properties(archbird_native_allocator_test PROPERTIES
     C_EXTENSIONS OFF)

@@ -76,6 +76,10 @@ Saved-Map functions `queryMap()` and `queryMapMarkdown()` accept
 `producerPolicy: "compatible"` (default) or `"current"`. The current policy
 rejects a missing or different core producer digest; it is independent of the
 live-source comparison performed by `auditMapFreshness()`.
+`queryMapMarkdown(map, { view: "changes", verificationResult: resultJson })`
+adds only checks with exact subject-side source-path overlap and reports input
+and producer freshness. The browser `Project.queryMarkdown()` accepts the same
+option.
 
 ### Browser API
 
@@ -121,6 +125,9 @@ npx archbird query --map .archbird/map.json \
 
 npx archbird query . --git-diff HEAD \
   --view changes --detail compact --check
+
+npx archbird query . --git-diff HEAD --view changes \
+  --verification-result .archbird/verify.json --check
 ```
 
 `query --view changes` presents the same complete Query artifact as a coding
@@ -132,6 +139,11 @@ inventing an edit or changing canonical JSON.
 change set. Current paths seed Query; deletions and paths outside the Map stay
 explicit. External diff/text-conversion commands are disabled, and untracked
 files require an explicit `--path`.
+
+`--verification-result PATH` adds overlapping subject-side architecture checks
+and findings, including requirement IDs and freshness. It does not rerun
+verification or infer relevance from prose, reference-only facts, or checks
+without exact source-path evidence.
 
 Unchecked saved-Map queries accept supported older producers. Add `--check`
 when the result will drive a decision; the shared core then requires the saved

@@ -239,6 +239,14 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
             "seeds while deletions remain explicit change evidence"
         ),
     )
+    result.add_argument(
+        "--verification-result",
+        metavar="PATH",
+        help=(
+            "overlay exact-path-relevant checks and findings from one canonical "
+            "verification result onto a Markdown changes view"
+        ),
+    )
     result.add_argument("--depth", type=int, default=1)
     result.add_argument("--test-depth", type=int, default=8)
     result.add_argument(
@@ -1167,6 +1175,12 @@ def _query_main(
             )
         if args.map and args.git_diff:
             raise ValueError("--git-diff requires a live repository, not --map")
+        if args.verification_result and (
+            args.format != "markdown" or args.view != "changes"
+        ):
+            raise ValueError(
+                "--verification-result requires --format markdown --view changes"
+            )
         if args.max_chars < 0:
             raise ValueError("--max-chars must be nonnegative")
         if args.max_seed_distance is not None and args.max_seed_distance < 0:
@@ -1264,6 +1278,11 @@ def _query_main(
                 compact=args.compact,
                 full=args.full,
                 max_chars=args.max_chars,
+                verification_result=(
+                    Path(args.verification_result).read_bytes()
+                    if args.verification_result
+                    else b""
+                ),
                 **query_options,
             )
         )

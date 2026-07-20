@@ -60,6 +60,17 @@ const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js
   assert.match(changeBrief, /## Affected code/);
   assert.match(changeBrief, /## Routes, tests, and delivery/);
   assert.match(changeBrief, /## Evidence limits/);
+  const overlay = fs.readFileSync(
+    path.join(fixture, "query_overlay.verification.json"),
+  );
+  const overlayBrief = project.queryMarkdown({
+    paths: ["js/index.js"],
+    depth: 0,
+    view: "changes",
+    verificationResult: overlay,
+  }).toString("utf8");
+  assert.match(overlayBrief, /## Architecture checks/);
+  assert.match(overlayBrief, /fail error JAVASCRIPT-ENTRY/);
   assert.match(project.mapMarkdown().toString("utf8"), /^# map-base/);
   const componentGraphJson = project.graphViewJson();
   const symbolGraphJson = project.graphViewJson({

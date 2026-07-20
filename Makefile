@@ -158,6 +158,8 @@ test-js: build-js build-py
 	$(NODE) test/test_readme_examples.js $(CURDIR) js/src/cli.js $(NODE_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_git_diff_cli.py \
 		$(CURDIR) $(NODE) $(NODE_NATIVE)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_verification_overlay.py \
+		$(CURDIR) $(NODE) $(NODE_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_resolution_frontend_parity.py \
 		$(PYTHON_NATIVE) $(NODE) $(NODE_NATIVE) $(CURDIR)
 

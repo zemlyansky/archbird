@@ -475,6 +475,7 @@ function selectorDefinitions() {
     package: { type: "multiple" },
     artifact: { type: "multiple" },
     gitDiff: { flag: "git-diff", type: "string" },
+    verificationResult: { flag: "verification-result", type: "string" },
     direction: { type: "string" },
     depth: { default: 1, type: "number" },
     testDepth: { flag: "test-depth", default: 8, type: "number" },
@@ -630,6 +631,12 @@ function queryMain(argv, command) {
   if (options.map && options.gitDiff) {
     throw new Error("--git-diff requires a live repository, not --map");
   }
+  if (options.verificationResult &&
+      (options.format !== "markdown" || (options.view || "focused") !== "changes")) {
+    throw new Error(
+      "--verification-result requires --format markdown --view changes",
+    );
+  }
   if (options.maxSeedDistance !== undefined && options.maxSeedDistance < 0) {
     throw new Error("--max-seed-distance must be nonnegative");
   }
@@ -693,6 +700,9 @@ function queryMain(argv, command) {
         detail: options.detail,
         full: options.full,
         maxChars: options.maxChars,
+        verificationResult: options.verificationResult
+          ? read(options.verificationResult)
+          : Buffer.alloc(0),
         view: options.view || "focused",
       }), options.output);
     } else throw new Error("--format must be json or markdown");
