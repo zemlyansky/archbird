@@ -3,6 +3,8 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const { TextDecoder } = require("node:util");
 const archbird = require("./index");
 
 const COMMANDS = new Set([
@@ -71,6 +73,7 @@ function usage(command = "map") {
   };
   const selectorHelp = ["query", "impact"].includes(command)
     ? "\n--symbol accepts PATTERN or repository-relative PATH:PATTERN; repeated selectors form a union.\n" +
+      "--git-diff REVISION seeds tracked current paths and retains deletions as change evidence.\n" +
       "Context profiles exact|change|architecture|audit control Markdown; " +
       "--max-chars is only the final guard.\n"
     : "";
@@ -471,6 +474,7 @@ function selectorDefinitions() {
     component: { type: "multiple" },
     package: { type: "multiple" },
     artifact: { type: "multiple" },
+    gitDiff: { flag: "git-diff", type: "string" },
     direction: { type: "string" },
     depth: { default: 1, type: "number" },
     testDepth: { flag: "test-depth", default: 8, type: "number" },
@@ -489,6 +493,95 @@ function selectorDefinitions() {
     maxChars: { flag: "max-chars", default: 0, type: "number" },
     testSymbolObservations: { flag: "test-symbol-observations", type: "multiple" },
     format: { default: "markdown", type: "string" },
+  };
+}
+
+const GIT_CHANGE_STATUS = Object.freeze({
+  A: "added",
+  B: "broken-pair",
+  C: "copied",
+  D: "deleted",
+  M: "modified",
+  R: "renamed",
+  T: "type-changed",
+  U: "unmerged",
+  X: "unknown",
+});
+
+function gitChangeSet(repository, revision) {
+  if (
+    !revision || revision !== revision.trim() || revision.startsWith("-") ||
+    revision.includes("\0") || revision.includes("\n") || revision.includes("\r")
+  ) {
+    throw new Error("--git-diff requires one safe Git revision or range");
+  }
+  const completed = spawnSync(
+    "git",
+    [
+      "-C", repository, "diff", "--no-ext-diff", "--no-textconv",
+      "--name-status", "-z", "--find-renames", revision, "--",
+    ],
+    {
+      encoding: null,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+      maxBuffer: 64 * 1024 * 1024,
+      windowsHide: true,
+    },
+  );
+  if (completed.error) throw new Error(`cannot run git diff: ${completed.error.message}`);
+  if (completed.status !== 0) {
+    const detail = Buffer.from(completed.stderr || []).toString("utf8").trim();
+    throw new Error(`git diff failed for ${JSON.stringify(revision)}: ${detail}`);
+  }
+  const output = Buffer.from(completed.stdout || []);
+  const fields = [];
+  let start = 0;
+  for (let index = 0; index < output.length; index += 1) {
+    if (output[index] !== 0) continue;
+    fields.push(output.subarray(start, index));
+    start = index + 1;
+  }
+  if (start !== output.length) throw new Error("git diff emitted unterminated name-status evidence");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const entries = [];
+  for (let index = 0; index < fields.length;) {
+    const rawStatus = fields[index++].toString("ascii");
+    const code = rawStatus.slice(0, 1);
+    const status = GIT_CHANGE_STATUS[code];
+    const pathCount = ["C", "R"].includes(code) ? 2 : 1;
+    if (!status || index + pathCount > fields.length) {
+      throw new Error("git diff emitted malformed name-status evidence");
+    }
+    let paths;
+    try {
+      paths = fields.slice(index, index + pathCount).map((value) => decoder.decode(value));
+    } catch (error) {
+      throw new Error("git diff path is not UTF-8 and cannot enter canonical evidence");
+    }
+    index += pathCount;
+    const entry = { path: paths.at(-1), status };
+    if (pathCount === 2) entry.previous_path = paths[0];
+    entries.push(entry);
+  }
+  if (!entries.length) throw new Error(`git diff ${JSON.stringify(revision)} contains no changed paths`);
+  entries.sort((left, right) => {
+    for (const key of ["path", "status", "previous_path"]) {
+      const compared = Buffer.compare(
+        Buffer.from(left[key] || "", "utf8"),
+        Buffer.from(right[key] || "", "utf8"),
+      );
+      if (compared) return compared;
+    }
+    return 0;
+  });
+  for (let index = 1; index < entries.length; index += 1) {
+    if (JSON.stringify(entries[index - 1]) === JSON.stringify(entries[index])) {
+      throw new Error("git diff emitted duplicate change entries");
+    }
+  }
+  return {
+    entries,
+    source: { identity: revision, kind: "git-diff" },
   };
 }
 
@@ -534,6 +627,9 @@ function queryMain(argv, command) {
   if (options.map && options.testSymbolObservations.length) {
     throw new Error("--test-symbol-observations requires a live repository, not --map");
   }
+  if (options.map && options.gitDiff) {
+    throw new Error("--git-diff requires a live repository, not --map");
+  }
   if (options.maxSeedDistance !== undefined && options.maxSeedDistance < 0) {
     throw new Error("--max-seed-distance must be nonnegative");
   }
@@ -545,8 +641,12 @@ function queryMain(argv, command) {
   }
   const progress = new Progress(options.progress);
   let source;
+  let changeSet = null;
   if (options.map) source = read(options.map);
   else {
+    if (options.gitDiff) {
+      changeSet = gitChangeSet(repositoryInputs(options).repository, options.gitDiff);
+    }
     const current = project(options, progress);
     progress.emit({ phase: "rendering", artifact: "canonical Map" });
     source = current.mapJson();
@@ -556,6 +656,7 @@ function queryMain(argv, command) {
   const queryOptions = {
     artifacts: options.artifact,
     components: options.component,
+    changeSet,
     depth: options.depth,
     direction: options.direction || (command === "impact" ? "upstream" : "both"),
     focus: options.focus,

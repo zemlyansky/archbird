@@ -91,12 +91,20 @@ archbird impact --map .archbird/map.json \
 archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' \
   --view changes --detail compact --check
+
+archbird query . --git-diff HEAD \
+  --view changes --detail compact --check
 ```
 
 `query --view changes` presents the same complete Query artifact as a coding
 packet. It groups change seeds, affected code, strongest routes, ranked tests,
 packages/builds/artifacts, uncertainty, and collapsed evidence without
 inventing an edit or changing canonical JSON.
+
+`--git-diff REVISION` converts Git's tracked name/status output into a typed
+change set. Current paths seed Query; deletions and paths outside the Map stay
+explicit. External diff/text-conversion commands are disabled, and untracked
+files require an explicit `--path`.
 
 Unchecked saved-Map queries accept supported older producers. Add `--check`
 when the result will drive a decision; the shared core then requires the saved

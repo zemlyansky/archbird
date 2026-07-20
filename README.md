@@ -61,6 +61,9 @@ archbird impact --map .archbird/map.json \
 archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' \
   --view changes --detail compact --check
+
+archbird query . --git-diff HEAD \
+  --view changes --detail compact --check
 ```
 
 Query selectors accept exact or partial symbols, paths, mapped directories,
@@ -74,6 +77,13 @@ but presents it as a coding packet: change seeds, affected code, strongest
 routes, ranked tests, packages/builds/artifacts, explicit uncertainty, and a
 ledger of collapsed evidence. It does not infer an edit or change the canonical
 Query.
+
+`--git-diff REVISION` asks the host CLI for Git's tracked name/status changes
+and passes a typed change set to the same core Query operation. Current paths
+seed the architecture neighborhood; deletions and paths outside the Map remain
+visible instead of being invented as current code. External diff drivers and
+text-conversion commands are disabled. Untracked files require an explicit
+`--path` until they enter Git's diff.
 
 The default is an architecture-first overview for a person or coding agent;
 canonical JSON still contains every selected file and mapped fact. Choose the

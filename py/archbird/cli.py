@@ -9,6 +9,7 @@ from pathlib import Path
 import platform
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -229,6 +230,15 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
     result.add_argument("--component", action="append", default=[])
     result.add_argument("--package", action="append", default=[])
     result.add_argument("--artifact", action="append", default=[])
+    result.add_argument(
+        "--git-diff",
+        metavar="REVISION",
+        help=(
+            "seed a change query from `git diff REVISION`; tracked additions, "
+            "copies, modifications, and rename destinations become current-Map "
+            "seeds while deletions remain explicit change evidence"
+        ),
+    )
     result.add_argument("--depth", type=int, default=1)
     result.add_argument("--test-depth", type=int, default=8)
     result.add_argument(
@@ -934,6 +944,98 @@ def _has_discovery_overrides(args: argparse.Namespace) -> bool:
     )
 
 
+_GIT_CHANGE_STATUS = {
+    "A": "added",
+    "B": "broken-pair",
+    "C": "copied",
+    "D": "deleted",
+    "M": "modified",
+    "R": "renamed",
+    "T": "type-changed",
+    "U": "unmerged",
+    "X": "unknown",
+}
+
+
+def _git_change_set(repository: Path, revision: str) -> dict[str, object]:
+    if (
+        not revision
+        or revision != revision.strip()
+        or revision.startswith("-")
+        or "\0" in revision
+        or "\n" in revision
+        or "\r" in revision
+    ):
+        raise ValueError("--git-diff requires one safe Git revision or range")
+    environment = os.environ.copy()
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            revision,
+            "--",
+        ],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"git diff failed for {revision!r}: {detail}")
+    if completed.stdout and not completed.stdout.endswith(b"\0"):
+        raise ValueError("git diff emitted unterminated name-status evidence")
+    fields = completed.stdout.split(b"\0")
+    if fields:
+        fields.pop()
+    entries: list[dict[str, str]] = []
+    index = 0
+    while index < len(fields):
+        try:
+            raw_status = fields[index].decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ValueError("git diff emitted a non-ASCII status") from error
+        index += 1
+        code = raw_status[:1]
+        status = _GIT_CHANGE_STATUS.get(code)
+        path_count = 2 if code in {"C", "R"} else 1
+        if status is None or index + path_count > len(fields):
+            raise ValueError("git diff emitted malformed name-status evidence")
+        try:
+            paths = [
+                fields[index + offset].decode("utf-8")
+                for offset in range(path_count)
+            ]
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                "git diff path is not UTF-8 and cannot enter canonical evidence"
+            ) from error
+        index += path_count
+        entry = {"path": paths[-1], "status": status}
+        if path_count == 2:
+            entry["previous_path"] = paths[0]
+        entries.append(entry)
+    if not entries:
+        raise ValueError(f"git diff {revision!r} contains no changed paths")
+    entries.sort(
+        key=lambda row: (row["path"], row["status"], row.get("previous_path", ""))
+    )
+    if any(entries[index] == entries[index - 1] for index in range(1, len(entries))):
+        raise ValueError("git diff emitted duplicate change entries")
+    return {
+        "entries": entries,
+        "source": {"identity": revision, "kind": "git-diff"},
+    }
+
+
 def _project_from_args(
     args: argparse.Namespace, progress: Optional[_Progress] = None
 ) -> Project:
@@ -1063,6 +1165,8 @@ def _query_main(
             raise ValueError(
                 "--test-symbol-observations requires a live repository, not --map"
             )
+        if args.map and args.git_diff:
+            raise ValueError("--git-diff requires a live repository, not --map")
         if args.max_chars < 0:
             raise ValueError("--max-chars must be nonnegative")
         if args.max_seed_distance is not None and args.max_seed_distance < 0:
@@ -1075,9 +1179,13 @@ def _query_main(
             raise ValueError("--compact and --full conflict")
         if (args.compact or args.full) and args.detail != "standard":
             raise ValueError("--detail conflicts with --compact/--full")
+        change_set = None
         if args.map:
             map_json = Path(args.map).read_bytes()
         else:
+            if args.git_diff:
+                repository, _, _ = _repository_inputs(args)
+                change_set = _git_change_set(repository, args.git_diff)
             current = _project_from_args(args, progress)
             progress.emit({"phase": "rendering", "artifact": "canonical Map"})
             map_json = current.map_json()
@@ -1092,6 +1200,7 @@ def _query_main(
             "components": args.component,
             "packages": args.package,
             "artifacts": args.artifact,
+            "change_set": change_set,
             "direction": args.direction,
             "producer_policy": (
                 "current" if args.check and args.map else "compatible"

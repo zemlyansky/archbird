@@ -15,6 +15,7 @@ typedef struct QueryRequest {
   const AbValue *components;
   const AbValue *packages;
   const AbValue *artifacts;
+  const AbValue *change_set;
   const AbValue *context;
   const AbString *direction;
   const AbString *producer_policy;
@@ -221,6 +222,133 @@ static int string_array_valid(const AbValue *value) {
   return 1;
 }
 
+static int repository_path_valid(const AbString *path) {
+  size_t segment = 0;
+  size_t index;
+  if (!path || !path->length || path->data[0] == '/' ||
+      path->data[path->length - 1] == '/')
+    return 0;
+  for (index = 0; index <= path->length; index++) {
+    if (index < path->length && path->data[index] != '/') {
+      if (path->data[index] == '\\' || path->data[index] == '\0')
+        return 0;
+      continue;
+    }
+    if (index == segment ||
+        (index - segment == 1 && path->data[segment] == '.') ||
+        (index - segment == 2 && path->data[segment] == '.' &&
+         path->data[segment + 1] == '.'))
+      return 0;
+    segment = index + 1;
+  }
+  return 1;
+}
+
+static int change_status_allowed(const AbString *status) {
+  static const char *const allowed[] = {
+      "added",   "broken-pair",  "copied",  "deleted", "modified",
+      "renamed", "type-changed", "unknown", "unmerged"};
+  size_t index;
+  for (index = 0; index < sizeof(allowed) / sizeof(allowed[0]); index++)
+    if (string_literal(status, allowed[index]))
+      return 1;
+  return 0;
+}
+
+static int change_entry_compare(const AbValue *left, const AbValue *right) {
+  static const char *const fields[] = {"path", "status", "previous_path"};
+  size_t index;
+  for (index = 0; index < sizeof(fields) / sizeof(fields[0]); index++) {
+    const AbValue *left_value = ab_value_member(left, fields[index]);
+    const AbValue *right_value = ab_value_member(right, fields[index]);
+    AbString empty = {NULL, 0};
+    const AbString *left_text = left_value ? &left_value->as.text : &empty;
+    const AbString *right_text = right_value ? &right_value->as.text : &empty;
+    int compared = ab_string_compare(left_text, right_text);
+    if (compared)
+      return compared;
+  }
+  return 0;
+}
+
+static ArchbirdStatus validate_change_set(QueryContext *context,
+                                          const AbValue *value) {
+  const AbValue *source;
+  const AbValue *entries;
+  size_t index;
+  if (!value)
+    return ARCHBIRD_OK;
+  if (value->kind != AB_VALUE_OBJECT)
+    return query_error(context, "query.change_set must be an object");
+  for (index = 0; index < value->as.object.count; index++) {
+    const AbString *name = &value->as.object.fields[index].name;
+    if (!string_literal(name, "entries") && !string_literal(name, "source"))
+      return query_error(context, "query.change_set contains an unknown field");
+  }
+  source = ab_value_member(value, "source");
+  entries = ab_value_member(value, "entries");
+  if (!source || source->kind != AB_VALUE_OBJECT || !entries ||
+      entries->kind != AB_VALUE_ARRAY || !entries->as.array.count)
+    return query_error(
+        context,
+        "query.change_set requires source object and nonempty entries array");
+  {
+    const AbValue *kind = ab_value_member(source, "kind");
+    const AbValue *identity = ab_value_member(source, "identity");
+    for (index = 0; index < source->as.object.count; index++) {
+      const AbString *name = &source->as.object.fields[index].name;
+      if (!string_literal(name, "identity") && !string_literal(name, "kind"))
+        return query_error(context,
+                           "query.change_set.source contains an unknown field");
+    }
+    if (!kind || kind->kind != AB_VALUE_STRING ||
+        (!string_literal(&kind->as.text, "git-diff") &&
+         !string_literal(&kind->as.text, "path-list")) ||
+        !identity || identity->kind != AB_VALUE_STRING ||
+        !identity->as.text.length)
+      return query_error(context,
+                         "query.change_set.source kind/identity are invalid");
+  }
+  for (index = 0; index < entries->as.array.count; index++) {
+    const AbValue *entry = &entries->as.array.items[index];
+    const AbValue *path;
+    const AbValue *status;
+    const AbValue *previous;
+    size_t field;
+    if (entry->kind != AB_VALUE_OBJECT)
+      return query_error(context, "query.change_set.entries[] must be objects");
+    for (field = 0; field < entry->as.object.count; field++) {
+      const AbString *name = &entry->as.object.fields[field].name;
+      if (!string_literal(name, "path") &&
+          !string_literal(name, "previous_path") &&
+          !string_literal(name, "status"))
+        return query_error(
+            context, "query.change_set.entries[] contains an unknown field");
+    }
+    path = ab_value_member(entry, "path");
+    status = ab_value_member(entry, "status");
+    previous = ab_value_member(entry, "previous_path");
+    if (!path || path->kind != AB_VALUE_STRING ||
+        !repository_path_valid(&path->as.text) || !status ||
+        status->kind != AB_VALUE_STRING ||
+        !change_status_allowed(&status->as.text) ||
+        (previous && (previous->kind != AB_VALUE_STRING ||
+                      !repository_path_valid(&previous->as.text))))
+      return query_error(context,
+                         "query.change_set.entries[] path/status are invalid");
+    if ((string_literal(&status->as.text, "copied") ||
+         string_literal(&status->as.text, "renamed")) != (previous != NULL))
+      return query_error(
+          context,
+          "copied/renamed change entries require previous_path exclusively");
+    if (index &&
+        change_entry_compare(&entries->as.array.items[index - 1], entry) >= 0)
+      return query_error(
+          context, "query.change_set.entries[] must be sorted and unique");
+  }
+  return ARCHBIRD_OK;
+}
+
 static int context_string_allowed(const AbString *value,
                                   const char *const *allowed,
                                   size_t allowed_count) {
@@ -354,6 +482,7 @@ static ArchbirdStatus decode_request(QueryContext *context,
   context->request.components = optional_array(request, "components");
   context->request.packages = optional_array(request, "packages");
   context->request.artifacts = optional_array(request, "artifacts");
+  context->request.change_set = ab_value_member(request, "change_set");
   if (!string_array_valid(context->request.focus) ||
       !string_array_valid(context->request.paths) ||
       !string_array_valid(context->request.symbols) ||
@@ -361,6 +490,8 @@ static ArchbirdStatus decode_request(QueryContext *context,
       !string_array_valid(context->request.packages) ||
       !string_array_valid(context->request.artifacts))
     return query_error(context, "query selectors must be arrays of strings");
+  if (validate_change_set(context, context->request.change_set) != ARCHBIRD_OK)
+    return ARCHBIRD_INVALID_SCHEMA;
   if (validate_context_request(context, ab_value_member(request, "context")) !=
       ARCHBIRD_OK)
     return ARCHBIRD_INVALID_SCHEMA;
@@ -403,7 +534,8 @@ static ArchbirdStatus decode_request(QueryContext *context,
       !context->request.symbols->as.array.count &&
       !context->request.components->as.array.count &&
       !context->request.packages->as.array.count &&
-      !context->request.artifacts->as.array.count)
+      !context->request.artifacts->as.array.count &&
+      !context->request.change_set)
     return query_error(context, "query requires at least one focus selector");
   return ARCHBIRD_OK;
 }
@@ -956,10 +1088,32 @@ static ArchbirdStatus select_artifacts(QueryContext *context,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus select_change_set(QueryContext *context) {
+  const AbValue *entries;
+  size_t index;
+  if (!context->request.change_set)
+    return ARCHBIRD_OK;
+  entries = ab_value_member(context->request.change_set, "entries");
+  for (index = 0; index < entries->as.array.count; index++) {
+    const AbValue *entry = &entries->as.array.items[index];
+    const AbValue *path = ab_value_member(entry, "path");
+    const AbValue *status = ab_value_member(entry, "status");
+    size_t file_index;
+    if (string_literal(&status->as.text, "deleted"))
+      continue;
+    file_index = find_file(context, &path->as.text);
+    if (file_index != SIZE_MAX)
+      context->files[file_index].seed = 1;
+  }
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus select_initial(QueryContext *context) {
   size_t index;
   ArchbirdStatus status;
-  status = select_files(context, context->request.focus);
+  status = select_change_set(context);
+  if (status == ARCHBIRD_OK)
+    status = select_files(context, context->request.focus);
   if (status == ARCHBIRD_OK)
     status = select_files(context, context->request.paths);
   if (status == ARCHBIRD_OK)
@@ -3468,6 +3622,30 @@ static ArchbirdStatus render_focus_labels(AbBuffer *buffer,
       first = 0;
     }
   }
+  if (status == ARCHBIRD_OK && context->request.change_set) {
+    const AbValue *entries =
+        ab_value_member(context->request.change_set, "entries");
+    size_t index;
+    for (index = 0; status == ARCHBIRD_OK && index < entries->as.array.count;
+         index++) {
+      const AbValue *path =
+          ab_value_member(&entries->as.array.items[index], "path");
+      AbBuffer label;
+      if (!first)
+        status = ab_buffer_literal(buffer, ",");
+      ab_buffer_init(&label, context->engine);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&label, "change:");
+      if (status == ARCHBIRD_OK)
+        status =
+            ab_buffer_append(&label, path->as.text.data, path->as.text.length);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_json_string(buffer, (const char *)label.data,
+                                       label.length);
+      ab_buffer_free(&label);
+      first = 0;
+    }
+  }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "]");
   return status;
@@ -3525,6 +3703,11 @@ static ArchbirdStatus render_query_metadata(AbBuffer *buffer,
   ArchbirdStatus status = ab_buffer_literal(buffer, "{\"depth\":");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_u64(buffer, context->request.depth);
+  if (status == ARCHBIRD_OK && context->request.change_set) {
+    status = ab_buffer_literal(buffer, ",\"change_set\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, context->request.change_set);
+  }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"context\":");
   if (status == ARCHBIRD_OK)
@@ -3741,7 +3924,7 @@ ArchbirdStatus archbird_map_query(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = build_test_rows(&context);
   if (status == ARCHBIRD_OK && !any_initial_match(&context) &&
-      !context.has_focused_tests)
+      !context.has_focused_tests && !context.request.change_set)
     status =
         query_error(&context, "query selectors matched no indexed evidence");
   if (status == ARCHBIRD_OK)

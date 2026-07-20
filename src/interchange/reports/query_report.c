@@ -907,6 +907,7 @@ render_query_view(ArchbirdEngine *engine, const AbValue *map,
   const AbValue *focus;
   const AbValue *seeds;
   const AbValue *seed_identities;
+  const AbValue *change_set;
   const AbString *scope;
   const AbString *producer_policy;
   const AbString *producer_compatibility;
@@ -940,6 +941,7 @@ render_query_view(ArchbirdEngine *engine, const AbValue *map,
   focus = optional_array(metadata, "focus");
   seeds = optional_array(metadata, "seeds");
   seed_identities = optional_array(metadata, "seed_identities");
+  change_set = ab_value_member(metadata, "change_set");
   scope = string_or_empty(metadata, "scope");
   producer_policy = string_or_empty(metadata, "producer_policy");
   producer_compatibility = string_or_empty(metadata, "producer_compatibility");
@@ -1132,6 +1134,67 @@ render_query_view(ArchbirdEngine *engine, const AbValue *map,
         "the live repository when consuming a snapshot.",
         (int)compatibility_length, compatibility_data, (int)policy_length,
         policy_data));
+    QUERY_TRY(ab_report_blank(out));
+  }
+  if (change_view && change_set) {
+    const AbValue *source = ab_report_object(change_set, "source");
+    const AbValue *entries = ab_report_array(change_set, "entries");
+    const AbString *kind = source ? ab_report_string(source, "kind") : NULL;
+    const AbString *identity =
+        source ? ab_report_string(source, "identity") : NULL;
+    size_t mapped = 0;
+    size_t shown;
+    if (!source || !entries || !kind || !identity) {
+      status = query_schema_error(engine, "query change set is malformed");
+      goto cleanup;
+    }
+    for (index = 0; index < entries->as.array.count; index++) {
+      const AbString *path =
+          ab_report_string(&entries->as.array.items[index], "path");
+      if (!path) {
+        status = query_schema_error(engine, "query change entry is malformed");
+        goto cleanup;
+      }
+      mapped += path_is_mapped(map_files, path);
+    }
+    QUERY_TRY(ab_report_literal_line(out, "## Changed paths"));
+    QUERY_TRY(ab_report_blank(out));
+    QUERY_TRY(ab_report_linef(
+        out,
+        "Source: %.*s `%.*s`; entries=%zu; mapped=%zu; "
+        "outside-current-map=%zu.",
+        (int)kind->length, kind->data, (int)identity->length, identity->data,
+        entries->as.array.count, mapped, entries->as.array.count - mapped));
+    QUERY_TRY(ab_report_blank(out));
+    QUERY_TRY(ab_report_literal_line(out, "```text"));
+    shown = entries->as.array.count;
+    if (compact_detail && shown > compact_edges)
+      shown = compact_edges;
+    for (index = 0; index < shown; index++) {
+      const AbValue *entry = &entries->as.array.items[index];
+      const AbString *path = ab_report_string(entry, "path");
+      const AbString *change_status = ab_report_string(entry, "status");
+      const AbString *previous = ab_report_string(entry, "previous_path");
+      if (!path || !change_status) {
+        status = query_schema_error(engine, "query change entry is malformed");
+        goto cleanup;
+      }
+      if (previous)
+        QUERY_TRY(ab_report_linef(
+            out, "%.*s %.*s <- %.*s%s", (int)change_status->length,
+            change_status->data, (int)path->length, path->data,
+            (int)previous->length, previous->data,
+            path_is_mapped(map_files, path) ? "" : " [outside map]"));
+      else
+        QUERY_TRY(ab_report_linef(
+            out, "%.*s %.*s%s", (int)change_status->length, change_status->data,
+            (int)path->length, path->data,
+            path_is_mapped(map_files, path) ? "" : " [outside map]"));
+    }
+    if (entries->as.array.count > shown)
+      QUERY_TRY(ab_report_linef(out, "… %zu changed paths omitted by detail",
+                                entries->as.array.count - shown));
+    QUERY_TRY(ab_report_literal_line(out, "```"));
     QUERY_TRY(ab_report_blank(out));
   }
   if (discovery->as.object.count && (!change_view || full_detail)) {

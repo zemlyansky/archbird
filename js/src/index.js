@@ -1295,6 +1295,7 @@ function queryRequest(
     components = [],
     packages = [],
     artifacts = [],
+    changeSet = null,
     context = null,
     direction = "both",
     producerPolicy = "compatible",
@@ -1314,6 +1315,7 @@ function queryRequest(
     symbols,
     test_depth: testDepth,
   };
+  if (changeSet !== null) request.change_set = changeSet;
   if (context !== null) request.context = context;
   return canonicalForDigest(request);
 }

@@ -156,6 +156,8 @@ test-js: build-js build-py
 		$(NODE) --expose-gc js/test/test_frontend.js $(NODE_NATIVE) $(CURDIR)
 	$(NODE) test/test_cli_progress.js js/src/cli.js $(CURDIR) $(NODE_NATIVE)
 	$(NODE) test/test_readme_examples.js $(CURDIR) js/src/cli.js $(NODE_NATIVE)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_git_diff_cli.py \
+		$(CURDIR) $(NODE) $(NODE_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_resolution_frontend_parity.py \
 		$(PYTHON_NATIVE) $(NODE) $(NODE_NATIVE) $(CURDIR)
 

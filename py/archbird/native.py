@@ -878,6 +878,7 @@ class Project:
         components: Sequence[str] = (),
         packages: Sequence[str] = (),
         artifacts: Sequence[str] = (),
+        change_set: Optional[Mapping[str, object]] = None,
         context: Optional[Mapping[str, object]] = None,
         direction: str = "both",
         depth: int = 1,
@@ -892,6 +893,7 @@ class Project:
             components=components,
             packages=packages,
             artifacts=artifacts,
+            change_set=change_set,
             context=context,
             direction=direction,
             depth=depth,
@@ -911,6 +913,7 @@ class Project:
         components: Sequence[str] = (),
         packages: Sequence[str] = (),
         artifacts: Sequence[str] = (),
+        change_set: Optional[Mapping[str, object]] = None,
         context: Optional[Mapping[str, object]] = None,
         direction: str = "both",
         depth: int = 1,
@@ -931,6 +934,7 @@ class Project:
             components=components,
             packages=packages,
             artifacts=artifacts,
+            change_set=change_set,
             context=context,
             direction=direction,
             depth=depth,
@@ -1354,6 +1358,7 @@ def _query_request(
     components: Sequence[str] = (),
     packages: Sequence[str] = (),
     artifacts: Sequence[str] = (),
+    change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
     direction: str = "both",
     producer_policy: str = "compatible",
@@ -1374,6 +1379,8 @@ def _query_request(
     }
     if context is not None:
         request["context"] = dict(context)
+    if change_set is not None:
+        request["change_set"] = dict(change_set)
     return _canonical(request)
 
 
@@ -1386,6 +1393,7 @@ def query_map_json(
     components: Sequence[str] = (),
     packages: Sequence[str] = (),
     artifacts: Sequence[str] = (),
+    change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
     direction: str = "both",
     producer_policy: str = "compatible",
@@ -1401,6 +1409,7 @@ def query_map_json(
         context=context,
         packages=packages,
         artifacts=artifacts,
+        change_set=change_set,
         direction=direction,
         producer_policy=producer_policy,
         depth=depth,
@@ -1445,6 +1454,7 @@ def query_map_markdown(
     components: Sequence[str] = (),
     packages: Sequence[str] = (),
     artifacts: Sequence[str] = (),
+    change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
     direction: str = "both",
     producer_policy: str = "compatible",
@@ -1479,6 +1489,7 @@ def query_map_markdown(
         context=context,
         packages=packages,
         artifacts=artifacts,
+        change_set=change_set,
         direction=direction,
         producer_policy=producer_policy,
         depth=depth,
