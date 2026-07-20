@@ -24,10 +24,13 @@ ArchbirdStatus ab_c_collect_public_names(ArchbirdEngine *engine,
                                          size_t source_length,
                                          AbNameSet *names);
 
-ArchbirdStatus ab_scan_c_file(
-    ArchbirdEngine *engine, const AbSourceManifest *manifest,
-    const AbManifestFile *file, const uint8_t *source, size_t source_length,
-    const uint8_t source_manifest_sha256[32], const AbNameSet *public_names,
-    const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle);
+ArchbirdStatus ab_scan_c_file(ArchbirdEngine *engine,
+                              const AbSourceManifest *manifest,
+                              const AbManifestFile *file, const uint8_t *source,
+                              size_t source_length,
+                              const AbManifestFile *const *inputs,
+                              size_t input_count, const AbNameSet *public_names,
+                              const uint8_t implementation_sha256[32],
+                              AbProviderBundle *out_bundle);
 
 #endif

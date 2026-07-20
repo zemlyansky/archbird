@@ -40,6 +40,11 @@ PATTERN_OPTIONS = _native.PATTERN_OPTIONS
 
 _NATIVE_CACHE_PROVIDERS = (
     (
+        "lexical:c",
+        lambda source: source.language in {"c", "cpp"},
+        "support",
+    ),
+    (
         "lexical:javascript",
         lambda source: source.language
         in {"javascript", "typescript", "vue"},
@@ -614,13 +619,6 @@ class Project:
                 phase="providers", provider="lexical:python", state="complete"
             )
         else:
-            # C lexical facts still depend on configured public headers and
-            # remain deliberately manifest-bound until that closure is explicit.
-            report(phase="providers", provider="lexical:c", state="start")
-            _native.project_scan_builtin_provider(
-                self._capsule, "lexical:c", support_mode
-            )
-            report(phase="providers", provider="lexical:c", state="complete")
             namespace = _native_cache_namespace()
             for provider_id, matches, provider_mode in (
                 _NATIVE_CACHE_PROVIDERS

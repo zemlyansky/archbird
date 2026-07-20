@@ -33,6 +33,8 @@ const NATIVE_SEMANTIC_PROVIDERS = Object.freeze(["semantic:scip"]);
 const HOST_PROVIDERS = Object.freeze(["compiler:typescript"]);
 
 const NATIVE_CACHE_PROVIDERS = [
+  ["lexical:c",
+    (source) => ["c", "cpp"].includes(source.language), "support"],
   ["lexical:javascript",
     (source) => ["javascript", "typescript", "vue"].includes(source.language), "support"],
   ["lexical:python",
@@ -492,10 +494,6 @@ class Project {
         report({ phase: "providers", provider: providerId, state: "complete" });
       }
     } else {
-      // C lexical facts still close over configured public headers.
-      report({ phase: "providers", provider: "lexical:c", state: "start" });
-      native.projectScanBuiltinProvider(this._handle, "lexical:c", supportMode);
-      report({ phase: "providers", provider: "lexical:c", state: "complete" });
       const namespace = nativeCacheNamespace();
       for (const [providerId, matches, providerMode] of
         NATIVE_CACHE_PROVIDERS) {

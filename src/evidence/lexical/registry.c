@@ -182,7 +182,8 @@ static void implementation_digest(const char *hex, uint8_t digest[32]) {
 static ArchbirdStatus
 scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
           const AbSourceManifest *manifest, size_t file_index,
-          const AbLexicalProvider *provider, const uint8_t manifest_digest[32],
+          const AbLexicalProvider *provider,
+          const AbManifestFile *const *source_inputs, size_t source_input_count,
           const AbNameSet *cached_public_names, AbProviderBundle *out_bundle) {
   const AbManifestFile *file = &manifest->files[file_index];
   uint8_t provider_digest[32];
@@ -192,10 +193,10 @@ scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
     size_t header_index;
     ArchbirdStatus status;
     if (cached_public_names)
-      return ab_scan_c_file(engine, manifest, file,
-                            ab_project_source_bytes(project, file_index),
-                            file->byte_length, manifest_digest,
-                            cached_public_names, provider_digest, out_bundle);
+      return ab_scan_c_file(
+          engine, manifest, file, ab_project_source_bytes(project, file_index),
+          file->byte_length, source_inputs, source_input_count,
+          cached_public_names, provider_digest, out_bundle);
     for (header_index = 0; header_index < manifest->file_count;
          header_index++) {
       const AbManifestFile *header = &manifest->files[header_index];
@@ -209,10 +210,10 @@ scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
         return status;
       }
     }
-    status = ab_scan_c_file(engine, manifest, file,
-                            ab_project_source_bytes(project, file_index),
-                            file->byte_length, manifest_digest, &public_names,
-                            provider_digest, out_bundle);
+    status = ab_scan_c_file(
+        engine, manifest, file, ab_project_source_bytes(project, file_index),
+        file->byte_length, source_inputs, source_input_count, &public_names,
+        provider_digest, out_bundle);
     ab_name_set_free(&public_names);
     return status;
   }
@@ -227,6 +228,48 @@ scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
   return ab_scan_r_file(engine, manifest, file,
                         ab_project_source_bytes(project, file_index),
                         file->byte_length, provider_digest, out_bundle);
+}
+
+static ArchbirdStatus c_source_inputs(ArchbirdEngine *engine,
+                                      const AbSourceManifest *manifest,
+                                      const AbManifestFile *file,
+                                      const AbManifestFile ***out_inputs,
+                                      size_t *out_count) {
+  const AbManifestFile **inputs;
+  size_t count = 0;
+  size_t index;
+  if (!engine || !manifest || !file || !out_inputs || !out_count)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  *out_inputs = NULL;
+  *out_count = 0;
+  for (index = 0; index < manifest->file_count; index++) {
+    const AbManifestFile *candidate = &manifest->files[index];
+    if (candidate == file ||
+        (c_language(candidate) && public_header_for_layer(candidate, file)))
+      count++;
+  }
+  if (!count)
+    return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+                              "C provider has no source-input closure");
+  if (count > SIZE_MAX / sizeof(*inputs))
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "C provider source-input closure is too large");
+  inputs = (const AbManifestFile **)ab_malloc(engine, count * sizeof(*inputs));
+  if (!inputs)
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory storing C provider source inputs");
+  count = 0;
+  for (index = 0; index < manifest->file_count; index++) {
+    const AbManifestFile *candidate = &manifest->files[index];
+    if (candidate == file ||
+        (c_language(candidate) && public_header_for_layer(candidate, file)))
+      inputs[count++] = candidate;
+  }
+  *out_inputs = inputs;
+  *out_count = count;
+  return ARCHBIRD_OK;
 }
 
 static int public_name_cache_matches(const AbPublicNameCache *cache,
@@ -292,7 +335,6 @@ static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
                                      const AbLexicalProvider *selected,
                                      ArchbirdProviderMode mode) {
   const AbSourceManifest *manifest;
-  const uint8_t *manifest_digest;
   AbProviderBundle *bundles = NULL;
   AbPublicNameCache *public_name_caches = NULL;
   size_t public_name_cache_count = 0;
@@ -303,7 +345,6 @@ static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
   if (!engine || !project)
     return ARCHBIRD_INVALID_ARGUMENT;
   manifest = ab_project_manifest(project);
-  manifest_digest = ab_project_manifest_sha256_bytes(project);
   for (file_index = 0; file_index < manifest->file_count; file_index++) {
     const AbLexicalProvider *provider =
         provider_for_file(&manifest->files[file_index]);
@@ -325,6 +366,8 @@ static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
     const AbManifestFile *file = &manifest->files[file_index];
     const AbLexicalProvider *provider = provider_for_file(file);
     const AbNameSet *public_names = NULL;
+    const AbManifestFile **source_inputs = NULL;
+    size_t source_input_count = 0;
     if (!provider || (selected && provider != selected))
       continue;
     if (provider->kind == AB_LEXICAL_C) {
@@ -333,9 +376,15 @@ static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
           &public_name_cache_count, &public_name_cache_capacity, &public_names);
       if (status != ARCHBIRD_OK)
         goto done;
+      status = c_source_inputs(engine, manifest, file, &source_inputs,
+                               &source_input_count);
+      if (status != ARCHBIRD_OK)
+        goto done;
     }
     status = scan_file(engine, project, manifest, file_index, provider,
-                       manifest_digest, public_names, &bundles[bundle_count]);
+                       source_inputs, source_input_count, public_names,
+                       &bundles[bundle_count]);
+    ab_free(engine, source_inputs);
     if (status != ARCHBIRD_OK)
       goto done;
     bundle_count++;
@@ -389,6 +438,8 @@ ab_scan_lexical_provider_file(ArchbirdEngine *engine, ArchbirdProject *project,
   const AbSourceManifest *manifest;
   const AbLexicalProvider *provider;
   AbProviderBundle bundle = {0};
+  const AbManifestFile **source_inputs = NULL;
+  size_t source_input_count = 0;
   size_t file_index;
   ArchbirdStatus status;
   if (!engine || !project || !provider_id || !path || !path_length)
@@ -407,10 +458,17 @@ ab_scan_lexical_provider_file(ArchbirdEngine *engine, ArchbirdProject *project,
     return archbird_error_set(engine, ARCHBIRD_INVALID_ARGUMENT,
                               ARCHBIRD_NO_OFFSET,
                               "provider does not support the selected file");
+  if (provider->kind == AB_LEXICAL_C) {
+    status = c_source_inputs(engine, manifest, &manifest->files[file_index],
+                             &source_inputs, &source_input_count);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
   status = scan_file(engine, project, manifest, file_index, provider,
-                     ab_project_manifest_sha256_bytes(project), NULL, &bundle);
+                     source_inputs, source_input_count, NULL, &bundle);
   if (status == ARCHBIRD_OK)
     status = ab_project_take_provider_bundle(engine, project, mode, &bundle);
+  ab_free(engine, source_inputs);
   ab_provider_bundle_free(engine, &bundle);
   return status;
 }

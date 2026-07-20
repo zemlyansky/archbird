@@ -939,6 +939,8 @@ static void test_shared_public_header_names(void) {
   ArchbirdProject *project = NULL;
   char output_bytes[8192];
   OutputBuffer output = {output_bytes, 0, sizeof(output_bytes)};
+  char provider_bytes[8192];
+  OutputBuffer provider_output = {provider_bytes, 0, sizeof(provider_bytes)};
 
   archbird_engine_options_init(&options);
   expect("public-cache-engine", archbird_engine_create(&options, &engine),
@@ -966,12 +968,39 @@ static void test_shared_public_header_names(void) {
          ARCHBIRD_OK);
   expect("public-cache-finalize-sources",
          archbird_project_finalize_sources(engine, project), ARCHBIRD_OK);
-  expect("public-cache-scan",
-         archbird_project_scan_builtin_provider(engine, project, "lexical:c", 9,
-                                                ARCHBIRD_PROVIDER_PRIMARY),
+  expect("public-cache-scan-header",
+         archbird_project_scan_builtin_provider_file(
+             engine, project, "lexical:c", 9, "include/api.h", 13,
+             ARCHBIRD_PROVIDER_PRIMARY),
+         ARCHBIRD_OK);
+  expect("public-cache-scan-a",
+         archbird_project_scan_builtin_provider_file(
+             engine, project, "lexical:c", 9, "src/a.c", 7,
+             ARCHBIRD_PROVIDER_PRIMARY),
+         ARCHBIRD_OK);
+  expect("public-cache-scan-b",
+         archbird_project_scan_builtin_provider_file(
+             engine, project, "lexical:c", 9, "src/b.c", 7,
+             ARCHBIRD_PROVIDER_PRIMARY),
          ARCHBIRD_OK);
   if (archbird_project_provider_count(project) != 3) {
     fputs("FAIL shared public-header provider count\n", stderr);
+    failures++;
+  }
+  expect("public-cache-provider-inputs",
+         archbird_project_render_provider_facts(engine, project, 1, 0,
+                                                write_output, &provider_output),
+         ARCHBIRD_OK);
+  if (!strstr(provider_output.data, "\"path\":\"include/api.h\",\"project\":"
+                                    "\"public-header-cache\",\"source_sha256\":"
+                                    "\"0fbac5b4709336ed3627d580f479af459078b24b"
+                                    "79c4a008d10053cb7d111292\"") ||
+      !strstr(provider_output.data, "\"path\":\"src/a.c\",\"project\":"
+                                    "\"public-header-cache\",\"source_sha256\":"
+                                    "\"fc8985fd2208b19b2191cc2ea9959cd7d2835fa8"
+                                    "fcd9ccc1e61418e19f0a60b1\"") ||
+      strstr(provider_output.data, "\"path\":\"src/b.c\"")) {
+    fputs("FAIL C provider source-input closure\n", stderr);
     failures++;
   }
   expect("public-cache-finalize-providers",

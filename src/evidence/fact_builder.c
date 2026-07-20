@@ -146,6 +146,70 @@ ArchbirdStatus ab_bundle_builder_init_file_manifest(
                       configuration_sha256);
 }
 
+ArchbirdStatus ab_bundle_builder_init_file_sources(
+    AbBundleBuilder *builder, ArchbirdEngine *engine,
+    const AbSourceManifest *manifest, const AbManifestFile *file,
+    const AbManifestFile *const *inputs, size_t input_count,
+    const char *producer_name, const char *producer_version,
+    const uint8_t implementation_sha256[32],
+    const uint8_t configuration_sha256[32]) {
+  AbProviderInput *expanded;
+  size_t index;
+  ArchbirdStatus status;
+  if (!inputs || !input_count)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_bundle_builder_init_file(
+      builder, engine, manifest, file, producer_name, producer_version,
+      implementation_sha256, configuration_sha256);
+  if (status != ARCHBIRD_OK)
+    return status;
+  ab_string_free(engine, &builder->bundle.inputs[0].project);
+  ab_string_free(engine, &builder->bundle.inputs[0].path);
+  ab_free(engine, builder->bundle.inputs);
+  builder->bundle.inputs = NULL;
+  builder->bundle.input_count = 0;
+  if (input_count > engine->options.max_values ||
+      input_count > SIZE_MAX / sizeof(*expanded)) {
+    ab_bundle_builder_abort(builder);
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "provider source-input limit exceeded");
+  }
+  expanded =
+      (AbProviderInput *)ab_calloc(engine, input_count, sizeof(*expanded));
+  if (!expanded) {
+    ab_bundle_builder_abort(builder);
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory storing provider source inputs");
+  }
+  builder->bundle.inputs = expanded;
+  builder->bundle.input_count = input_count;
+  for (index = 0; index < input_count; index++) {
+    const AbManifestFile *input = inputs[index];
+    if (!input || (index && ab_string_compare(&inputs[index - 1]->path,
+                                              &input->path) >= 0)) {
+      ab_bundle_builder_abort(builder);
+      return archbird_error_set(
+          engine, ARCHBIRD_INVALID_ARGUMENT, ARCHBIRD_NO_OFFSET,
+          "provider source inputs must be unique and sorted");
+    }
+    status = ab_string_copy(engine, &expanded[index].project,
+                            manifest->project.data, manifest->project.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_string_copy(engine, &expanded[index].path, input->path.data,
+                              input->path.length);
+    if (status != ARCHBIRD_OK) {
+      ab_bundle_builder_abort(builder);
+      return status;
+    }
+    expanded[index].has_path = 1;
+    memcpy(expanded[index].source_sha256, input->sha256, 32);
+    expanded[index].has_source_sha256 = 1;
+  }
+  return ARCHBIRD_OK;
+}
+
 ArchbirdStatus ab_bundle_builder_init_project(
     AbBundleBuilder *builder, ArchbirdEngine *engine,
     const AbSourceManifest *manifest, const uint8_t source_manifest_sha256[32],

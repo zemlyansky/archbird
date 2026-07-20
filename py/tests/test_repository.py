@@ -197,6 +197,50 @@ def main() -> int:
             "Python provider cache cold/warm accounting is incomplete: "
             f"{cached_cold.cache_stats!r} -> {cached_warm.cache_stats!r}"
         )
+    c_cache_root = repository / "build/test-c-input-cache-python"
+    shutil.rmtree(c_cache_root, ignore_errors=True)
+
+    def c_cache_sources(header: bytes, note: bytes) -> tuple[Source, ...]:
+        return (
+            Source(
+                "include/api.h", header, language="c", layer="core",
+                roles=("public-header", "source"),
+            ),
+            Source("notes/state.txt", note, language="text", layer="docs"),
+            Source(
+                "src/api.c", b"int api(void) { return 1; }\n",
+                language="c", layer="core",
+            ),
+        )
+
+    c_cold = Project(
+        "c-input-cache", c_cache_sources(b"int api(void);\n", b"before\n")
+    )
+    c_cold.scan(cache_dir=c_cache_root, map_cache=False)
+    c_unrelated = Project(
+        "c-input-cache", c_cache_sources(b"int api(void);\n", b"after\n")
+    )
+    c_unrelated.scan(cache_dir=c_cache_root, map_cache=False)
+    if c_unrelated.cache_stats["hits"] != 4 or c_unrelated.cache_stats["misses"]:
+        raise AssertionError(
+            "unrelated source invalidated C provider input closure: "
+            f"{c_cold.cache_stats!r} -> {c_unrelated.cache_stats!r}"
+        )
+    c_header_changed = Project(
+        "c-input-cache",
+        c_cache_sources(b"int api(void);\nint added(void);\n", b"after\n"),
+    )
+    c_header_changed.scan(cache_dir=c_cache_root, map_cache=False)
+    if (
+        c_header_changed.cache_stats["hits"] != 1
+        or c_header_changed.cache_stats["misses"] != 3
+        or c_header_changed.cache_stats["invalid"] != 1
+    ):
+        raise AssertionError(
+            "public-header change did not invalidate dependent C facts: "
+            f"{c_header_changed.cache_stats!r}"
+        )
+    shutil.rmtree(c_cache_root, ignore_errors=True)
     map_cache_root = repository / "build/test-map-cache-python"
     shutil.rmtree(map_cache_root, ignore_errors=True)
     map_cold = Project.from_config(

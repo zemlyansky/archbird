@@ -573,6 +573,46 @@ assert.ok(cachedCold.cacheStats.misses > 0);
 assert.equal(cachedCold.cacheStats.writes, cachedCold.cacheStats.misses);
 assert.equal(cachedWarm.cacheStats.hits, cachedCold.cacheStats.writes);
 assert.equal(cachedWarm.cacheStats.misses, 0);
+const cInputCacheRoot = path.resolve(
+  process.argv[3], "build/test-c-input-cache-node",
+);
+fs.rmSync(cInputCacheRoot, { force: true, recursive: true });
+const cInputSources = (header, note) => [
+  new Source("include/api.h", Buffer.from(header), {
+    language: "c", layer: "core", roles: ["public-header", "source"],
+  }),
+  new Source("notes/state.txt", Buffer.from(note), {
+    language: "text", layer: "docs",
+  }),
+  new Source("src/api.c", Buffer.from("int api(void) { return 1; }\n"), {
+    language: "c", layer: "core",
+  }),
+];
+const cInputCold = new Project(
+  "c-input-cache", cInputSources("int api(void);\n", "before\n"),
+);
+cInputCold.scan("primary", {
+  typescript: false, cacheDir: cInputCacheRoot, mapCache: false,
+});
+const cInputUnrelated = new Project(
+  "c-input-cache", cInputSources("int api(void);\n", "after\n"),
+);
+cInputUnrelated.scan("primary", {
+  typescript: false, cacheDir: cInputCacheRoot, mapCache: false,
+});
+assert.equal(cInputUnrelated.cacheStats.hits, 4);
+assert.equal(cInputUnrelated.cacheStats.misses, 0);
+const cInputHeaderChanged = new Project(
+  "c-input-cache",
+  cInputSources("int api(void);\nint added(void);\n", "after\n"),
+);
+cInputHeaderChanged.scan("primary", {
+  typescript: false, cacheDir: cInputCacheRoot, mapCache: false,
+});
+assert.equal(cInputHeaderChanged.cacheStats.hits, 1);
+assert.equal(cInputHeaderChanged.cacheStats.misses, 3);
+assert.equal(cInputHeaderChanged.cacheStats.invalid, 1);
+fs.rmSync(cInputCacheRoot, { force: true, recursive: true });
 const mapCacheRoot = path.resolve(
   process.argv[3],
   "build/test-map-cache-node",

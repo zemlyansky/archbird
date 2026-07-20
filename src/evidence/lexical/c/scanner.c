@@ -678,11 +678,14 @@ done:
   return status;
 }
 
-ArchbirdStatus ab_scan_c_file(
-    ArchbirdEngine *engine, const AbSourceManifest *manifest,
-    const AbManifestFile *file, const uint8_t *source, size_t source_length,
-    const uint8_t source_manifest_sha256[32], const AbNameSet *public_names,
-    const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle) {
+ArchbirdStatus ab_scan_c_file(ArchbirdEngine *engine,
+                              const AbSourceManifest *manifest,
+                              const AbManifestFile *file, const uint8_t *source,
+                              size_t source_length,
+                              const AbManifestFile *const *inputs,
+                              size_t input_count, const AbNameSet *public_names,
+                              const uint8_t implementation_sha256[32],
+                              AbProviderBundle *out_bundle) {
   static const char config_identity[] = "archbird-native-c-lexical-v1";
   static const char boundary_calls[] =
       "direct identifier calls excluding controls, known types, typedefs, "
@@ -706,8 +709,8 @@ ArchbirdStatus ab_scan_c_file(
                            strlen(config_identity), configuration_sha256);
   if (status != ARCHBIRD_OK)
     return status;
-  status = ab_bundle_builder_init_file_manifest(
-      &builder, engine, manifest, file, source_manifest_sha256,
+  status = ab_bundle_builder_init_file_sources(
+      &builder, engine, manifest, file, inputs, input_count,
       "archbird-native-c-lexical", "1", implementation_sha256,
       configuration_sha256);
   if (status != ARCHBIRD_OK)

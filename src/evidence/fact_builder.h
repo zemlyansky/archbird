@@ -24,6 +24,14 @@ ArchbirdStatus ab_bundle_builder_init_file_manifest(
     const char *producer_version, const uint8_t implementation_sha256[32],
     const uint8_t configuration_sha256[32]);
 
+ArchbirdStatus ab_bundle_builder_init_file_sources(
+    AbBundleBuilder *builder, ArchbirdEngine *engine,
+    const AbSourceManifest *manifest, const AbManifestFile *file,
+    const AbManifestFile *const *inputs, size_t input_count,
+    const char *producer_name, const char *producer_version,
+    const uint8_t implementation_sha256[32],
+    const uint8_t configuration_sha256[32]);
+
 ArchbirdStatus ab_bundle_builder_init_project(
     AbBundleBuilder *builder, ArchbirdEngine *engine,
     const AbSourceManifest *manifest, const uint8_t source_manifest_sha256[32],
