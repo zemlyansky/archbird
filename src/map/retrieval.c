@@ -289,6 +289,44 @@ static unsigned field_match(const AbString *field, const AbString *term,
   return best;
 }
 
+uint64_t ab_map_retrieval_text_score(const AbRetrievalResult *result,
+                                     const AbString *primary,
+                                     unsigned primary_weight,
+                                     const AbString *secondary,
+                                     unsigned secondary_weight) {
+  uint64_t score = 0;
+  size_t matched_terms = 0;
+  size_t term_index;
+  if (!result)
+    return 0;
+  for (term_index = 0; term_index < result->term_count; term_index++) {
+    const char *match = NULL;
+    unsigned strength =
+        field_match(primary, &result->terms[term_index], &match);
+    unsigned weight = primary_weight;
+    unsigned secondary_strength =
+        field_match(secondary, &result->terms[term_index], &match);
+    uint64_t rarity;
+    uint64_t contribution;
+    if (secondary_strength * secondary_weight > strength * weight) {
+      strength = secondary_strength;
+      weight = secondary_weight;
+    }
+    if (!strength)
+      continue;
+    matched_terms++;
+    rarity = 64 + (((uint64_t)result->candidate_count + 1) * 256) /
+                      (result->document_frequency[term_index] + 1);
+    if (rarity > 2048)
+      rarity = 2048;
+    contribution = (uint64_t)strength * weight * rarity;
+    if (result->term_count > 1 && strength < 44)
+      contribution /= 4;
+    score += contribution;
+  }
+  return score * (uint64_t)matched_terms * matched_terms;
+}
+
 static ArchbirdStatus grow_candidates(ArchbirdEngine *engine,
                                       RetrievalCandidate **items, size_t *count,
                                       size_t *capacity) {
@@ -714,7 +752,6 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
                                AbRetrievalResult *out) {
   RetrievalCandidate *candidates = NULL;
   size_t candidate_count = 0;
-  size_t document_frequency[AB_RETRIEVAL_MAX_TERMS] = {0};
   size_t index;
   size_t term_index;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -752,7 +789,7 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
   for (index = 0; index < candidate_count; index++)
     for (term_index = 0; term_index < out->term_count; term_index++)
       if (candidates[index].strengths[term_index])
-        document_frequency[term_index]++;
+        out->document_frequency[term_index]++;
   for (index = 0; index < candidate_count; index++) {
     RetrievalCandidate *candidate = &candidates[index];
     size_t matched_terms = 0;
@@ -763,7 +800,7 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
         continue;
       matched_terms++;
       rarity = 64 + (((uint64_t)candidate_count + 1) * 256) /
-                        (document_frequency[term_index] + 1);
+                        (out->document_frequency[term_index] + 1);
       if (rarity > 2048)
         rarity = 2048;
       contribution = (uint64_t)candidate->strengths[term_index] *

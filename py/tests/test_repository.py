@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import errno
 import hashlib
@@ -28,9 +29,7 @@ def load_extension(path: Path) -> None:
 
 def main() -> int:
     if len(sys.argv) != 3:
-        raise SystemExit(
-            "usage: test_python_repository.py EXTENSION REPOSITORY_ROOT"
-        )
+        raise SystemExit("usage: test_python_repository.py EXTENSION REPOSITORY_ROOT")
     repository = Path(sys.argv[2]).resolve()
     sys.path.insert(0, str(repository))
     import archbird
@@ -58,10 +57,10 @@ def main() -> int:
         default_provider_cache_max_bytes,
     )
     import archbird.provider_cache as provider_cache_module
-    if (
-        len(_native.IMPLEMENTATION_SHA256) != 64
-        or any(character not in "0123456789abcdef"
-               for character in _native.IMPLEMENTATION_SHA256)
+
+    if len(_native.IMPLEMENTATION_SHA256) != 64 or any(
+        character not in "0123456789abcdef"
+        for character in _native.IMPLEMENTATION_SHA256
     ):
         raise AssertionError("native core implementation identity is invalid")
 
@@ -102,7 +101,8 @@ def main() -> int:
                     }
                 ],
                 "producer": {
-                    "configuration_sha256": ("1" if provider_name == "primary" else "2") * 64,
+                    "configuration_sha256": ("1" if provider_name == "primary" else "2")
+                    * 64,
                     "implementation_sha256": "3" * 64,
                     "name": f"fixture-{provider_name}",
                     "version": "1",
@@ -120,24 +120,24 @@ def main() -> int:
             separators=(",", ":"),
         ).encode()
 
-    conflict_project.add_provider(
-        conflicting_provider("primary", "a"), "primary"
-    )
-    conflict_project.add_provider(
-        conflicting_provider("augment", "b"), "augment"
-    )
+    conflict_project.add_provider(conflicting_provider("primary", "a"), "primary")
+    conflict_project.add_provider(conflicting_provider("augment", "b"), "augment")
     try:
         conflict_project.finalize_providers()
     except RuntimeError as error:
         compact_conflicts = json.loads(error.merge_conflicts_json)
     else:
         raise AssertionError("conflicting providers unexpectedly finalized")
-    if compact_conflicts["artifact"] != "archbird-provider-merge-conflicts" or compact_conflicts["summary"] != {
+    if compact_conflicts[
+        "artifact"
+    ] != "archbird-provider-merge-conflicts" or compact_conflicts["summary"] != {
         "conflicts": 1,
         "providers_in_conflicts": 2,
         "providers_total": 2,
     }:
-        raise AssertionError(f"compact provider conflict evidence is incomplete: {compact_conflicts!r}")
+        raise AssertionError(
+            f"compact provider conflict evidence is incomplete: {compact_conflicts!r}"
+        )
     if [
         compact_conflicts["conflicts"][0][side]["name"]
         for side in ("left_fact", "right_fact")
@@ -158,9 +158,7 @@ def main() -> int:
     if first != second:
         raise AssertionError("repository Map output is not repeatable")
     draft = json.loads(
-        draft_verification_suite(
-            project, project_config="archbird.json", pretty=False
-        )
+        draft_verification_suite(project, project_config="archbird.json", pretty=False)
     )
     if not draft["candidate"] or draft["suite"] != "map-base-architecture":
         raise AssertionError("Python host did not produce a candidate suite")
@@ -189,11 +187,15 @@ def main() -> int:
     cache_root = repository / "build/test-provider-cache-python"
     shutil.rmtree(cache_root, ignore_errors=True)
     cached_cold = Project.from_config(
-        fixture / "archbird.json", root=fixture, cache_dir=cache_root,
+        fixture / "archbird.json",
+        root=fixture,
+        cache_dir=cache_root,
         map_cache=False,
     )
     cached_warm = Project.from_config(
-        fixture / "archbird.json", root=fixture, cache_dir=cache_root,
+        fixture / "archbird.json",
+        root=fixture,
+        cache_dir=cache_root,
         map_cache=False,
     )
     if cached_cold.map_json() != first or cached_warm.map_json() != first:
@@ -214,19 +216,22 @@ def main() -> int:
     def c_cache_sources(header: bytes, note: bytes) -> tuple[Source, ...]:
         return (
             Source(
-                "include/api.h", header, language="c", layer="core",
+                "include/api.h",
+                header,
+                language="c",
+                layer="core",
                 roles=("public-header", "source"),
             ),
             Source("notes/state.txt", note, language="text", layer="docs"),
             Source(
-                "src/api.c", b"int api(void) { return 1; }\n",
-                language="c", layer="core",
+                "src/api.c",
+                b"int api(void) { return 1; }\n",
+                language="c",
+                layer="core",
             ),
         )
 
-    c_cold = Project(
-        "c-input-cache", c_cache_sources(b"int api(void);\n", b"before\n")
-    )
+    c_cold = Project("c-input-cache", c_cache_sources(b"int api(void);\n", b"before\n"))
     c_cold.scan(cache_dir=c_cache_root, map_cache=False)
     c_unrelated = Project(
         "c-input-cache", c_cache_sources(b"int api(void);\n", b"after\n")
@@ -264,11 +269,21 @@ def main() -> int:
     if map_warm.map_json() != map_cold_json:
         raise AssertionError("Python complete Map cache changed canonical bytes")
     if map_cold.map_cache_stats != {
-        "errors": 0, "hits": 0, "invalid": 0, "misses": 1,
-        "no_space": 0, "skipped": 0, "writes": 1,
+        "errors": 0,
+        "hits": 0,
+        "invalid": 0,
+        "misses": 1,
+        "no_space": 0,
+        "skipped": 0,
+        "writes": 1,
     } or map_warm.map_cache_stats != {
-        "errors": 0, "hits": 1, "invalid": 0, "misses": 0,
-        "no_space": 0, "skipped": 0, "writes": 0,
+        "errors": 0,
+        "hits": 1,
+        "invalid": 0,
+        "misses": 0,
+        "no_space": 0,
+        "skipped": 0,
+        "writes": 0,
     }:
         raise AssertionError(
             "Python complete Map cache accounting is incomplete: "
@@ -285,9 +300,10 @@ def main() -> int:
     map_recovered = Project.from_config(
         fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
     )
-    if map_recovered.map_json() != map_cold_json or map_recovered.map_cache_stats[
-        "invalid"
-    ] != 1:
+    if (
+        map_recovered.map_json() != map_cold_json
+        or map_recovered.map_cache_stats["invalid"] != 1
+    ):
         raise AssertionError("Python complete Map cache did not reject corruption")
     changed_fixture = repository / "build/test-map-cache-source-python"
     shutil.rmtree(changed_fixture, ignore_errors=True)
@@ -300,7 +316,8 @@ def main() -> int:
     changed_map_json = changed_map.map_json()
     changed_source = changed_fixture / "py/pkg/api.py"
     changed_source.write_bytes(
-        changed_source.read_bytes() + b"\ndef cache_invalidation_probe():\n    return 2\n"
+        changed_source.read_bytes()
+        + b"\ndef cache_invalidation_probe():\n    return 2\n"
     )
     changed_map_again = Project.from_config(
         changed_fixture / "archbird.json",
@@ -348,9 +365,7 @@ def main() -> int:
         "source_sha256": "1" * 64,
     }
     bounded.store(b"a" * 60, **cache_parameters)
-    second_parameters = dict(
-        cache_parameters, path="b.py", source_sha256="2" * 64
-    )
+    second_parameters = dict(cache_parameters, path="b.py", source_sha256="2" * 64)
     bounded.store(b"b" * 60, **second_parameters)
     if bounded.stats.bytes > 100 or bounded.stats.evictions != 1:
         raise AssertionError(f"Python cache budget was not enforced: {bounded.stats}")
@@ -386,7 +401,10 @@ def main() -> int:
         [Source("src/a.py", b"def a():\n    return 2\n", language="python")],
     )
     changed_repeat.scan(cache_dir=cache_root, map_cache=False)
-    if changed_repeat.cache_stats["hits"] != 0 or changed_repeat.cache_stats["misses"] != 3:
+    if (
+        changed_repeat.cache_stats["hits"] != 0
+        or changed_repeat.cache_stats["misses"] != 3
+    ):
         raise AssertionError(
             "changed Python source reused stale provider facts: "
             f"{changed_repeat.cache_stats!r}"
@@ -504,7 +522,9 @@ def main() -> int:
         != {"configured:0": "src/zero_python/__init__.py"}
         or "answer" not in python_package["exports"]
     ):
-        raise AssertionError(f"zero-config Python package is incomplete: {python_package!r}")
+        raise AssertionError(
+            f"zero-config Python package is incomplete: {python_package!r}"
+        )
     if not any(
         edge["kind"] == "imported-call"
         and edge["source"] == "tests/test_main.py"
@@ -527,8 +547,7 @@ def main() -> int:
             for case in candidate_test["cases"]
         ]
         != [("test_main", "test_definition")]
-        or candidate_test["cases"][0]["routes"]
-        != {"src/zero_python/__init__.py": 1}
+        or candidate_test["cases"][0]["routes"] != {"src/zero_python/__init__.py": 1}
     ):
         raise AssertionError(
             f"zero-config test candidates became inaccurate: {candidate_test!r}"
@@ -540,17 +559,11 @@ def main() -> int:
     }:
         raise AssertionError("config-free Map lost discovery coverage evidence")
     c_registry_fixture = repository / "test/fixtures/zero_config_c_registry"
-    c_registry_map = json.loads(
-        Project.from_repository(c_registry_fixture).map_json()
-    )
+    c_registry_map = json.loads(Project.from_repository(c_registry_fixture).map_json())
     c_registry_test = next(
-        row
-        for row in c_registry_map["tests"]
-        if row["path"] == "test/test_widget.c"
+        row for row in c_registry_map["tests"] if row["path"] == "test/test_widget.c"
     )
-    c_registry_cases = {
-        row["selector"]: row for row in c_registry_test["cases"]
-    }
+    c_registry_cases = {row["selector"]: row for row in c_registry_test["cases"]}
     if sorted(c_registry_cases) != [
         "direct",
         "widget/explicit",
@@ -565,16 +578,17 @@ def main() -> int:
         != "test_registration_candidate"
         or c_registry_cases["widget/forwarded"]["evidence_kind"]
         != "test_registration_candidate"
-        or c_registry_cases["widget/explicit"]["routes"]
-        != {"test/test_widget.c": 1}
-        or c_registry_cases["widget/forwarded"]["routes"]
-        != {"test/test_widget.c": 1}
+        or c_registry_cases["widget/explicit"]["routes"] != {"test/test_widget.c": 1}
+        or c_registry_cases["widget/forwarded"]["routes"] != {"test/test_widget.c": 1}
     ):
         raise AssertionError(
             f"zero-config C registry routes are inaccurate: {c_registry_cases!r}"
         )
     zero_report = zero_project.map_markdown(view="audit").decode("utf-8")
-    if "unsupported-known=1" not in zero_report or "Coverage warning:" not in zero_report:
+    if (
+        "unsupported-known=1" not in zero_report
+        or "Coverage warning:" not in zero_report
+    ):
         raise AssertionError("Map Markdown hid unsupported-language coverage")
     if {row["path"] for row in zero_map["files"]} & {
         "ignored/drop.py",
@@ -663,9 +677,7 @@ def main() -> int:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    file_scoped_same = json.loads(
-        diff_maps_json(file_scoped_json, file_scoped_json)
-    )
+    file_scoped_same = json.loads(diff_maps_json(file_scoped_json, file_scoped_json))
     if any(
         file_scoped_same["sections"][name][kind]
         for name in ("symbol_calls", "symbol_references")
@@ -725,9 +737,10 @@ def main() -> int:
     if okf_first != analyze_okf_source(okf_source):
         raise AssertionError("native Python OKF index is not repeatable")
     okf_document = json.loads(okf_first)
-    if okf_document["artifact"] != "okf-index" or okf_document["summary"][
-        "concepts"
-    ] != 1:
+    if (
+        okf_document["artifact"] != "okf-index"
+        or okf_document["summary"]["concepts"] != 1
+    ):
         raise AssertionError("native Python OKF index is invalid")
     try:
         export_graph(first, format="mermaid", view="files", max_nodes=1)
@@ -749,8 +762,7 @@ def main() -> int:
         or retrieval["hits"][0]["path"] != "py/pkg/api.py"
         or retrieval["hits"][0]["name"] != "twice"
         or not any(
-            reason["match"] == "edit-1"
-            for reason in retrieval["hits"][0]["reasons"]
+            reason["match"] == "edit-1" for reason in retrieval["hits"][0]["reasons"]
         )
     ):
         raise AssertionError(f"unexpected deterministic retrieval: {retrieval!r}")
@@ -780,8 +792,7 @@ def main() -> int:
         package_retrieval["hits"][0]["kind"] != "package"
         or package_retrieval["hits"][0]["name"] != "sample"
         or not any(
-            reason["field"] == "package.dependency"
-            and reason["value"] == "@sample/dep"
+            reason["field"] == "package.dependency" and reason["value"] == "@sample/dep"
             for reason in package_retrieval["hits"][0]["reasons"]
         )
     ):
@@ -860,6 +871,173 @@ def main() -> int:
             raise AssertionError(
                 f"retrieval lost {expected_match} witness for {query}: {shorthand!r}"
             )
+    route_ranking_map = copy.deepcopy(shorthand_map)
+    primary = next(row for row in route_ranking_map["files"] if row["path"] == "ws.c")
+    primary["path"] = "src/session.c"
+    primary["symbols"] = [
+        {
+            "kind": "function",
+            "line": 3,
+            "name": "WebSocketSession",
+            "scope": "global",
+            "signature": "void WebSocketSession(void)",
+        }
+    ]
+    noise = next(row for row in route_ranking_map["files"] if row["path"] == "codec.c")
+    noise["path"] = "src/memory.c"
+    noise["symbols"] = [
+        {
+            "kind": "function",
+            "line": 7,
+            "name": "free",
+            "scope": "global",
+            "signature": "void free(void *)",
+        }
+    ]
+    route_ranking_map["files"].sort(key=lambda row: row["path"])
+
+    def route_evidence(
+        *, fact_id: str, relation: str, target: str, target_symbol: str
+    ) -> dict[str, object]:
+        return {
+            "claim": "syntax-structure",
+            "fact_id": fact_id,
+            "line": 1,
+            "provenance": "derived",
+            "provider": "fixture",
+            "relation": relation,
+            "scope": "case",
+            "span": {"end": 1, "start": 0},
+            "target": target,
+            "target_symbol": target_symbol,
+        }
+
+    route_ranking_map["tests"] = [
+        {
+            "cases": [
+                {
+                    "configured_routes": [],
+                    "line": 10,
+                    "route_evidence": [
+                        route_evidence(
+                            fact_id="strong-candidate",
+                            relation="call-candidate",
+                            target="src/session.c",
+                            target_symbol="WebSocketSession",
+                        )
+                    ],
+                    "routes": {"src/session.c": 1},
+                    "selector": "websocket session survives early cleanup",
+                },
+                {
+                    "configured_routes": [],
+                    "line": 20,
+                    "route_evidence": [
+                        route_evidence(
+                            fact_id="weak-direct",
+                            relation="call",
+                            target="src/memory.c",
+                            target_symbol="free",
+                        )
+                    ],
+                    "routes": {"src/memory.c": 1},
+                    "selector": "unrelated allocator smoke",
+                },
+            ],
+            "count": 2,
+            "framework": "fixture",
+            "group": "fixture",
+            "path": "test/routes.c",
+            "routes": {"src/memory.c": 1, "src/session.c": 1},
+        }
+    ]
+    route_ranked = json.loads(
+        query_map_json(
+            json.dumps(
+                route_ranking_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            search=["WebSocket session early free"],
+            search_limit=100,
+            depth=0,
+            test_depth=0,
+        )
+    )
+    ranked_matches = route_ranked["test_matches"]
+    if (
+        len(ranked_matches) != 2
+        or ranked_matches[0]["selector"] != "websocket session survives early cleanup"
+        or ranked_matches[0]["classification"] != "candidate"
+        or ranked_matches[1]["classification"] != "direct"
+        or ranked_matches[0]["seed_retrieval_score"]
+        <= ranked_matches[1]["seed_retrieval_score"]
+        or ranked_matches[0]["seed_retrieval_rank"]
+        >= ranked_matches[1]["seed_retrieval_rank"]
+        or ranked_matches[0]["ranking_affinity"] == 0
+    ):
+        raise AssertionError(
+            f"test ranking discarded retrieval-seed relevance: {ranked_matches!r}"
+        )
+    symbol_hop_map = copy.deepcopy(route_ranking_map)
+    symbol_hop_map["tests"] = []
+    final_file = copy.deepcopy(primary)
+    final_file["path"] = "src/final.c"
+    final_file["symbols"] = [
+        {
+            "kind": "function",
+            "line": 11,
+            "name": "finalize_session",
+            "scope": "global",
+            "signature": "void finalize_session(void)",
+        }
+    ]
+    symbol_hop_map["files"].append(final_file)
+    symbol_hop_map["files"].sort(key=lambda row: row["path"])
+
+    def symbol_call(
+        source_path: str,
+        source_symbol: str,
+        target_path: str,
+        target_symbol: str,
+    ) -> dict[str, object]:
+        return {
+            "candidates": [{"line": 1, "path": target_path, "symbol": target_symbol}],
+            "evidence": [],
+            "name": target_symbol,
+            "resolution": "unique",
+            "source": {"path": source_path, "symbol": source_symbol},
+        }
+
+    symbol_hop_map["symbol_calls"] = [
+        symbol_call("src/session.c", "WebSocketSession", "src/memory.c", "free"),
+        symbol_call("src/memory.c", "free", "src/final.c", "finalize_session"),
+    ]
+    symbol_hop_map["symbol_references"] = []
+    symbol_hop_bytes = json.dumps(
+        symbol_hop_map, sort_keys=True, separators=(",", ":")
+    ).encode()
+    symbol_hop_files = []
+    for depth in (0, 1, 2):
+        symbol_hop_files.append(
+            {
+                row["path"]
+                for row in json.loads(
+                    query_map_json(
+                        symbol_hop_bytes,
+                        symbols=["src/session.c:WebSocketSession"],
+                        depth=depth,
+                        test_depth=0,
+                    )
+                )["files"]
+            }
+        )
+    if symbol_hop_files != [
+        {"src/session.c"},
+        {"src/memory.c", "src/session.c"},
+        {"src/final.c", "src/memory.c", "src/session.c"},
+    ]:
+        raise AssertionError(
+            f"symbol relation traversal ignored the requested depth: {symbol_hop_files!r}"
+        )
     supported_legacy_map = json.loads(report_map_json)
     for package in supported_legacy_map["packages"]:
         package.pop("aliases", None)
@@ -929,9 +1107,7 @@ def main() -> int:
         b"# Focused architecture map: map-base\n"
     ):
         raise AssertionError("native Python query Markdown is invalid")
-    change_brief = project.query_markdown(
-        paths=["py/pkg"], depth=0, view="changes"
-    )
+    change_brief = project.query_markdown(paths=["py/pkg"], depth=0, view="changes")
     if not change_brief.startswith(b"# Change brief: map-base\n"):
         raise AssertionError("native Python change brief is invalid")
     for expected in (
@@ -952,9 +1128,7 @@ def main() -> int:
         {"compact": True, "detail": "full"},
     ):
         try:
-            project.query_markdown(
-                paths=["py/pkg"], depth=0, **invalid_options
-            )
+            project.query_markdown(paths=["py/pkg"], depth=0, **invalid_options)
         except ValueError:
             pass
         else:
@@ -962,9 +1136,7 @@ def main() -> int:
                 f"Python accepted invalid query projection: {invalid_options!r}"
             )
     context_policy = {"profile": "exact", "quotas": {"files": 1}}
-    context_query = project.query(
-        paths=["py/pkg"], depth=0, context=context_policy
-    )
+    context_query = project.query(paths=["py/pkg"], depth=0, context=context_policy)
     if (
         context_query["query"]["context"] != context_policy
         or len(context_query["files"]) != 2
@@ -979,9 +1151,10 @@ def main() -> int:
         or "## Selection manifest" not in context_report
     ):
         raise AssertionError("Python context profile was not applied")
-    if project.config_sha256 != json.loads(
-        project.manifest_json
-    )["configuration_sha256"]:
+    if (
+        project.config_sha256
+        != json.loads(project.manifest_json)["configuration_sha256"]
+    ):
         raise AssertionError("manifest and decoded config identities differ")
     published_okf = publish_okf_bundle(first)
     if published_okf != publish_okf_bundle(first):
@@ -1027,8 +1200,7 @@ def main() -> int:
     if archbird.PATTERN_UNICODE != "UCD 16.0.0":
         raise AssertionError("unexpected configured-pattern Unicode data")
     if archbird.PATTERN_OPTIONS != (
-        "UTF,UCP,NEWLINE_LF,BSR_UNICODE,NEVER_BACKSLASH_C,"
-        "NEVER_CALLOUT,JIT_DISABLED"
+        "UTF,UCP,NEWLINE_LF,BSR_UNICODE,NEVER_BACKSLASH_C,NEVER_CALLOUT,JIT_DISABLED"
     ):
         raise AssertionError("unexpected configured-pattern options")
     workspace = Workspace.from_config(repository / "test/fixtures/workspace.json")
@@ -1158,17 +1330,21 @@ def main() -> int:
     )
     if unchanged_change["status"] != "missing":
         raise AssertionError("Python Act frontend accepted an unchanged provider")
-    if not contract.verify(
-        provider_json, provider_json, format="markdown"
-    ).startswith(b"# Architecture change result"):
+    if not contract.verify(provider_json, provider_json, format="markdown").startswith(
+        b"# Architecture change result"
+    ):
         raise AssertionError("Python Act Markdown report is invalid")
-    if json.loads(
-        contract.verify(provider_json, provider_json, format="sarif")
-    )["version"] != "2.1.0":
+    if (
+        json.loads(contract.verify(provider_json, provider_json, format="sarif"))[
+            "version"
+        ]
+        != "2.1.0"
+    ):
         raise AssertionError("Python Act SARIF report is invalid")
-    if ET.fromstring(
-        contract.verify(provider_json, provider_json, format="junit")
-    ).tag != "testsuite":
+    if (
+        ET.fromstring(contract.verify(provider_json, provider_json, format="junit")).tag
+        != "testsuite"
+    ):
         raise AssertionError("Python Act JUnit report is invalid")
     from archbird.cli import main as cli_main
 
@@ -1237,8 +1413,7 @@ def main() -> int:
         retrieval_document = json.loads(retrieval_output.read_bytes())
         if (
             status
-            or retrieval_document["query"]["retrieval"]["hits"][0]["name"]
-            != "twice"
+            or retrieval_document["query"]["retrieval"]["hits"][0]["name"] != "twice"
         ):
             raise AssertionError("native Python retrieval CLI failed")
         checked_query = Path(directory) / "checked-query.json"
@@ -1329,7 +1504,9 @@ def main() -> int:
             or cross_version_document["tool"]["implementation_sha256"]
             != _native.IMPLEMENTATION_SHA256
         ):
-            raise AssertionError("plain cross-version saved Map query was not preserved")
+            raise AssertionError(
+                "plain cross-version saved Map query was not preserved"
+            )
         qualified_output = Path(directory) / "qualified-query.json"
         status = cli_main(
             [
@@ -1350,8 +1527,7 @@ def main() -> int:
         )
         qualified_document = json.loads(qualified_output.read_bytes())
         if status or [
-            (row["path"], row["name"])
-            for row in qualified_document["matched_symbols"]
+            (row["path"], row["name"]) for row in qualified_document["matched_symbols"]
         ] != [("py/pkg/api.py", "add")]:
             raise AssertionError("path-qualified Python CLI symbol selection failed")
         map_report = Path(directory) / "map.md"
@@ -1373,7 +1549,10 @@ def main() -> int:
         ):
             raise AssertionError("native Python default Map Markdown CLI failed")
         merge_conflicts = json.loads(merge_conflicts_report.read_bytes())
-        if merge_conflicts["artifact"] != "archbird-provider-merge-conflicts" or merge_conflicts["summary"]["conflicts"] != 0:
+        if (
+            merge_conflicts["artifact"] != "archbird-provider-merge-conflicts"
+            or merge_conflicts["summary"]["conflicts"] != 0
+        ):
             raise AssertionError("native Python CLI merge conflict ledger failed")
         zero_map_path = Path(directory) / "zero-map.json"
         status = cli_main(
@@ -1387,7 +1566,10 @@ def main() -> int:
                 str(zero_map_path),
             ]
         )
-        if status or json.loads(zero_map_path.read_bytes())["project"] != "zero-fixture":
+        if (
+            status
+            or json.loads(zero_map_path.read_bytes())["project"] != "zero-fixture"
+        ):
             raise AssertionError("native Python config-free Map CLI failed")
         configured_map_path = Path(directory) / "configured-map.json"
         status = cli_main(
@@ -1403,8 +1585,10 @@ def main() -> int:
             ]
         )
         configured_map = json.loads(configured_map_path.read_bytes())
-        if status or configured_map["project"] != "cli-fixture" or any(
-            row["path"] == "src/main.js" for row in configured_map["files"]
+        if (
+            status
+            or configured_map["project"] != "cli-fixture"
+            or any(row["path"] == "src/main.js" for row in configured_map["files"])
         ):
             raise AssertionError("CLI > config > discovery precedence failed")
 
@@ -1540,16 +1724,19 @@ def main() -> int:
         initialized_document = json.loads(initialized.read_bytes())
         if status or initialized_document["project"] != "zero-fixture":
             raise AssertionError("native Python config init failed")
-        if cli_main(
-            [
-                "config",
-                "init",
-                str(zero_fixture),
-                "--no-config",
-                "--output",
-                str(initialized),
-            ]
-        ) != 2:
+        if (
+            cli_main(
+                [
+                    "config",
+                    "init",
+                    str(zero_fixture),
+                    "--no-config",
+                    "--output",
+                    str(initialized),
+                ]
+            )
+            != 2
+        ):
             raise AssertionError("config init replaced a file without --force")
         if cli_main(
             [
@@ -1635,7 +1822,10 @@ def main() -> int:
                 str(workspace_output),
             ]
         )
-        if status or json.loads(workspace_output.read_bytes())["artifact"] != "workspace":
+        if (
+            status
+            or json.loads(workspace_output.read_bytes())["artifact"] != "workspace"
+        ):
             raise AssertionError("native Python workspace CLI failed")
         for graph_format in ("graphml", "mermaid"):
             graph_output = Path(directory) / f"map.{graph_format}"
@@ -1650,9 +1840,7 @@ def main() -> int:
                 ]
             )
             if status or not graph_output.read_bytes().strip():
-                raise AssertionError(
-                    f"native Python {graph_format} export CLI failed"
-                )
+                raise AssertionError(f"native Python {graph_format} export CLI failed")
         okf_output = Path(directory) / "okf"
         status = cli_main(
             [
@@ -1714,7 +1902,11 @@ def main() -> int:
                 str(provider_report),
             ]
         )
-        if status or json.loads(baseline_output.read_bytes())["artifact"] != "verification-baseline":
+        if (
+            status
+            or json.loads(baseline_output.read_bytes())["artifact"]
+            != "verification-baseline"
+        ):
             raise AssertionError("native Python verify --freeze failed")
         status = cli_main(
             [
@@ -1728,7 +1920,11 @@ def main() -> int:
                 str(output),
             ]
         )
-        if status or json.loads(output.read_text(encoding="utf-8"))["artifact"] != "verification":
+        if (
+            status
+            or json.loads(output.read_text(encoding="utf-8"))["artifact"]
+            != "verification"
+        ):
             raise AssertionError("native Python verification CLI failed")
         for report_format in ("markdown", "sarif", "junit"):
             report_output = Path(directory) / f"verification.{report_format}"
@@ -1761,7 +1957,10 @@ def main() -> int:
                 str(proposal_path),
             ]
         )
-        if status or json.loads(proposal_path.read_bytes())["artifact"] != "change-proposal":
+        if (
+            status
+            or json.loads(proposal_path.read_bytes())["artifact"] != "change-proposal"
+        ):
             raise AssertionError("native Python plan CLI failed")
         contract_path = Path(directory) / "provider.change-contract.json"
         status = cli_main(
@@ -1781,7 +1980,10 @@ def main() -> int:
                 str(contract_path),
             ]
         )
-        if status or json.loads(contract_path.read_bytes())["artifact"] != "change-contract":
+        if (
+            status
+            or json.loads(contract_path.read_bytes())["artifact"] != "change-contract"
+        ):
             raise AssertionError("native Python contract CLI failed")
         status = cli_main(
             [

@@ -37,6 +37,7 @@ typedef struct AbRetrievalHit {
 
 typedef struct AbRetrievalResult {
   AbString terms[AB_RETRIEVAL_MAX_TERMS];
+  size_t document_frequency[AB_RETRIEVAL_MAX_TERMS];
   size_t term_count;
   AbRetrievalHit *hits;
   size_t hit_count;
@@ -50,5 +51,10 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
                                AbRetrievalResult *out);
 void ab_map_retrieval_free(ArchbirdEngine *engine, AbRetrievalResult *result);
 const char *ab_map_retrieval_kind_name(AbRetrievalKind kind);
+uint64_t ab_map_retrieval_text_score(const AbRetrievalResult *result,
+                                     const AbString *primary,
+                                     unsigned primary_weight,
+                                     const AbString *secondary,
+                                     unsigned secondary_weight);
 
 #endif
