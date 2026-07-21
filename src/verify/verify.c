@@ -298,7 +298,7 @@ archbird_verification_plan(ArchbirdEngine *engine, const uint8_t *suite_json,
   return status;
 }
 
-ArchbirdStatus ab_verification_context_analyze(
+ArchbirdStatus ab_verification_context_prepare(
     ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
     const uint8_t *verification_input_json, size_t verification_input_length,
     AbValue *suite_document, AbValue *input_document,
@@ -327,8 +327,15 @@ ArchbirdStatus ab_verification_context_analyze(
                                       &context->input);
   if (status == ARCHBIRD_OK)
     status = ab_verify_collect_project_diagnostics(context);
-  if (status == ARCHBIRD_OK)
-    status = ab_verify_attestations_load(context);
+  return status;
+}
+
+ArchbirdStatus
+ab_verification_context_evaluate(AbVerificationContext *context) {
+  ArchbirdStatus status;
+  if (!context || !context->engine)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_verify_attestations_load(context);
   if (status == ARCHBIRD_OK)
     status = ab_verify_extract_all(context);
   if (status == ARCHBIRD_OK)
@@ -339,6 +346,19 @@ ArchbirdStatus ab_verification_context_analyze(
     status = ab_verify_apply_baseline(context);
   if (status == ARCHBIRD_OK)
     ab_verify_diagnostics_finish(context);
+  return status;
+}
+
+ArchbirdStatus ab_verification_context_analyze(
+    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
+    const uint8_t *verification_input_json, size_t verification_input_length,
+    AbValue *suite_document, AbValue *input_document,
+    AbVerificationContext *context) {
+  ArchbirdStatus status = ab_verification_context_prepare(
+      engine, suite_json, suite_length, verification_input_json,
+      verification_input_length, suite_document, input_document, context);
+  if (status == ARCHBIRD_OK)
+    status = ab_verification_context_evaluate(context);
   return status;
 }
 

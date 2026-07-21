@@ -3,7 +3,9 @@
 #include "map_internal.h"
 #include "sha256.h"
 #include "verify_checks.h"
+#include "verify_membership.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +31,7 @@ static const char *fact_shape(const AbValue *kind) {
       ab_verify_string_is(kind, "c_enum") ||
       ab_verify_string_is(kind, "c_designated_initializer") ||
       ab_verify_string_is(kind, "file_metrics") ||
+      ab_verify_string_is(kind, "component_membership") ||
       ab_verify_string_is(kind, "provider_surface") ||
       ab_verify_string_is(kind, "literal_values"))
     return "values";
@@ -194,6 +197,77 @@ static ArchbirdStatus item_add_string_attribute(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     item->attribute_count++;
   return status;
+}
+
+static ArchbirdStatus
+item_add_membership_components(ArchbirdEngine *engine, AbVerifyFactItem *item,
+                               const AbVerifyMembershipIndex *index,
+                               const AbVerifyMembershipFile *file) {
+  AbObjectField *fields;
+  AbObjectField *field;
+  size_t assignment_index;
+  ArchbirdStatus status;
+  if (item->attribute_count == SIZE_MAX / sizeof(*fields))
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "too many verification fact attributes");
+  fields = (AbObjectField *)ab_realloc(
+      engine, item->attributes, (item->attribute_count + 1) * sizeof(*fields));
+  if (!fields)
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory storing membership components");
+  item->attributes = fields;
+  field = &item->attributes[item->attribute_count];
+  memset(field, 0, sizeof(*field));
+  status = copy_literal(engine, &field->name, "components");
+  if (status == ARCHBIRD_OK) {
+    field->value.kind = AB_VALUE_ARRAY;
+    field->value.as.array.count = file->assignment_count;
+    if (file->assignment_count >
+        SIZE_MAX / sizeof(*field->value.as.array.items))
+      status = archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "too many component memberships");
+    else if (file->assignment_count) {
+      field->value.as.array.items = (AbValue *)ab_calloc(
+          engine, file->assignment_count, sizeof(*field->value.as.array.items));
+      if (!field->value.as.array.items)
+        status = archbird_error_set(
+            engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+            "out of memory storing membership component names");
+    }
+  }
+  for (assignment_index = 0;
+       status == ARCHBIRD_OK && assignment_index < file->assignment_count;
+       assignment_index++) {
+    const AbVerifyMembershipAssignment *assignment =
+        &index->assignments[file->assignment_start + assignment_index];
+    const AbString *name = index->components[assignment->component_index].name;
+    AbValue *value = &field->value.as.array.items[assignment_index];
+    value->kind = AB_VALUE_STRING;
+    status = ab_string_copy(engine, &value->as.text, name->data, name->length);
+  }
+  if (status == ARCHBIRD_OK)
+    item->attribute_count++;
+  else {
+    ab_string_free(engine, &field->name);
+    ab_value_free(engine, &field->value);
+    memset(field, 0, sizeof(*field));
+  }
+  return status;
+}
+
+static ArchbirdStatus u64_value(ArchbirdEngine *engine, uint64_t number,
+                                AbValue *out) {
+  char text[32];
+  int length = snprintf(text, sizeof(text), "%" PRIu64, number);
+  if (length < 0 || (size_t)length >= sizeof(text))
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "failed to encode membership count");
+  out->kind = AB_VALUE_INTEGER;
+  return ab_string_copy(engine, &out->as.text, text, (size_t)length);
 }
 
 static ArchbirdStatus asserted_evidence(AbVerificationContext *context,
@@ -1219,6 +1293,122 @@ static ArchbirdStatus extract_file_metrics(AbVerificationContext *context,
   return status;
 }
 
+static ArchbirdStatus
+extract_component_membership(AbVerificationContext *context,
+                             const AbObjectField *extractor,
+                             AbVerifyFactSet *fact) {
+  static const AbString unassigned = {(char *)"unassigned", 10};
+  static const AbString exclusive = {(char *)"exclusive", 9};
+  static const AbString overlap = {(char *)"overlap", 7};
+  const AbValue *spec = &extractor->value;
+  const AbValue *project_name = ab_value_member(spec, "project");
+  const AbValue *map = project_map(context, spec);
+  AbVerifyMembershipIndex index = {0};
+  size_t file_index;
+  ArchbirdStatus status =
+      ab_verify_fact_init(context->engine, fact, &extractor->name, "values",
+                          "derived", &project_name->as.text);
+  if (status != ARCHBIRD_OK)
+    return status;
+  status = ab_verify_membership_index_build(context->engine, map, &index);
+  if (status != ARCHBIRD_OK) {
+    ab_verify_fact_free(context->engine, fact);
+    return status;
+  }
+  if (!index.current) {
+    const char *message = index.message;
+    ab_verify_membership_index_free(context->engine, &index);
+    ab_verify_fact_free(context->engine, fact);
+    return ab_verify_fact_unknown(
+        context->engine, fact, &extractor->name, &project_name->as.text,
+        "values", message ? message : "component membership is unavailable");
+  }
+  for (file_index = 0; status == ARCHBIRD_OK && file_index < index.file_count;
+       file_index++) {
+    const AbVerifyMembershipFile *file = &index.files[file_index];
+    const AbValue *sha = ab_value_member(file->row, "sha256");
+    const AbValue *layer = ab_value_member(file->row, "layer");
+    const AbValue *language = ab_value_member(file->row, "language");
+    const AbString *membership = !file->assignment_count       ? &unassigned
+                                 : file->assignment_count == 1 ? &exclusive
+                                                               : &overlap;
+    AbString normalized = {0};
+    int selected = 0;
+    AbValue count = {0};
+    AbVerifyFactItem item = {0};
+    AbVerifyEvidence evidence = {0};
+    AbBuffer detail;
+    status = ab_verify_normalized_name(context->engine, spec, file->path,
+                                       &normalized, &selected);
+    if (status != ARCHBIRD_OK || !selected) {
+      ab_string_free(context->engine, &normalized);
+      continue;
+    }
+    status =
+        u64_value(context->engine, (uint64_t)file->assignment_count, &count);
+    if (status == ARCHBIRD_OK)
+      status = ab_verify_item_init(context->engine, &item, &normalized,
+                                   file->path, &count);
+    if (status == ARCHBIRD_OK)
+      status =
+          item_add_membership_components(context->engine, &item, &index, file);
+    if (status == ARCHBIRD_OK && language && language->kind == AB_VALUE_STRING)
+      status = item_add_string_attribute(context->engine, &item, "language",
+                                         &language->as.text);
+    if (status == ARCHBIRD_OK && layer && layer->kind == AB_VALUE_STRING)
+      status = item_add_string_attribute(context->engine, &item, "layer",
+                                         &layer->as.text);
+    if (status == ARCHBIRD_OK)
+      status = item_add_string_attribute(context->engine, &item, "membership",
+                                         membership);
+    ab_buffer_init(&detail, context->engine);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&detail, "components=[");
+    if (status == ARCHBIRD_OK) {
+      size_t assignment_offset;
+      for (assignment_offset = 0;
+           status == ARCHBIRD_OK && assignment_offset < file->assignment_count;
+           assignment_offset++) {
+        const AbVerifyMembershipAssignment *assignment =
+            &index.assignments[file->assignment_start + assignment_offset];
+        const AbString *name =
+            index.components[assignment->component_index].name;
+        if (assignment_offset)
+          status = ab_buffer_literal(&detail, ",");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_json_string(&detail, name->data, name->length);
+      }
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&detail, "]");
+    if (status == ARCHBIRD_OK)
+      status =
+          derived_evidence(context->engine, &project_name->as.text, file->path,
+                           0, sha->as.text.data, &detail, &evidence);
+    if (status == ARCHBIRD_OK)
+      status = ab_verify_item_add_evidence(context->engine, &item, &evidence);
+    if (status == ARCHBIRD_OK)
+      status = ab_verify_fact_add_item(context->engine, fact, &item);
+    ab_buffer_free(&detail);
+    ab_verify_evidence_free(context->engine, &evidence);
+    ab_value_free(context->engine, &count);
+    ab_string_free(context->engine, &normalized);
+    if (status != ARCHBIRD_OK)
+      ab_verify_fact_item_free(context->engine, &item);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_verify_fact_selection_exact(
+        context->engine, fact, "mapped_source_file", (uint64_t)index.file_count,
+        (uint64_t)fact->item_count,
+        (uint64_t)(index.file_count - fact->item_count), 0, 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_verify_fact_finish(context->engine, fact);
+  ab_verify_membership_index_free(context->engine, &index);
+  if (status != ARCHBIRD_OK)
+    ab_verify_fact_free(context->engine, fact);
+  return status;
+}
+
 static ArchbirdStatus edge_evidence(AbVerificationContext *context,
                                     const AbString *project_name,
                                     const AbValue *map, const AbValue *edge,
@@ -2209,6 +2399,8 @@ static ArchbirdStatus extract_map_fact(AbVerificationContext *context,
     return extract_file_edges(context, extractor, fact);
   if (ab_verify_string_is(kind, "file_metrics"))
     return extract_file_metrics(context, extractor, fact);
+  if (ab_verify_string_is(kind, "component_membership"))
+    return extract_component_membership(context, extractor, fact);
   if (ab_verify_string_is(kind, "component_edges"))
     return extract_component_edges(context, extractor, fact);
   if (ab_verify_string_is(kind, "test_routes"))
@@ -2298,6 +2490,7 @@ ArchbirdStatus ab_verify_extract_all(AbVerificationContext *context) {
     else if (ab_verify_string_is(kind, "symbols") ||
              ab_verify_string_is(kind, "file_edges") ||
              ab_verify_string_is(kind, "file_metrics") ||
+             ab_verify_string_is(kind, "component_membership") ||
              ab_verify_string_is(kind, "component_edges") ||
              ab_verify_string_is(kind, "test_routes") ||
              ab_verify_string_is(kind, "test_selectors") ||

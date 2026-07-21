@@ -1443,6 +1443,9 @@ class Verification:
         *,
         check: Optional[str] = None,
         extractor: Optional[str] = None,
+        project: Optional[str] = None,
+        component: Optional[str] = None,
+        limit: Optional[int] = None,
         format: str = "json",
         pretty: bool = True,
     ) -> bytes:
@@ -1457,6 +1460,14 @@ class Verification:
             request["check"] = check
         if extractor is not None:
             request["extractor"] = extractor
+        if project is not None:
+            request["project"] = project
+        if component is not None:
+            request["component"] = component
+        if limit is not None:
+            if limit < 0:
+                raise ValueError("limit must be nonnegative")
+            request["limit"] = limit
         return verification_debug(
             self.suite_json,
             self.input_json,

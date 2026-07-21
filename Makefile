@@ -145,6 +145,8 @@ test-py: build-py
 		$(PYTHON_NATIVE) $(CURDIR)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_verify_debug.py \
 		$(PYTHON_NATIVE) $(CURDIR)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_verify_membership.py \
+		$(PYTHON_NATIVE) $(CURDIR)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_freshness.py $(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_fuzz_seeds.py \
 		$(PYTHON_NATIVE) $(CURDIR)/test/fuzz/corpus

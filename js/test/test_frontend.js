@@ -204,6 +204,10 @@ fs.writeFileSync(path.join(metricFixture, "archbird.json"), JSON.stringify({
     language: "javascript",
     globs: ["src/**/*.js"],
   }],
+  components: [
+    { name: "primary", paths: ["src/small.js"] },
+    { name: "shared", paths: ["src/small.js"] },
+  ],
 }));
 const configuredRecipeSuite = compileVerificationRecipe(Buffer.from(JSON.stringify({
   artifact: "verification-recipe-request",
@@ -281,6 +285,65 @@ assert.equal(cliDebug.status, 0, cliDebug.stderr);
 assert.deepEqual(
   JSON.parse(cliDebug.stdout).selections.map((row) => row.extractor),
   ["recipe.file-bytes"],
+);
+const membershipSuitePath = path.join(metricFixture, "membership.verify.json");
+fs.writeFileSync(membershipSuitePath, JSON.stringify({
+  schema_version: 1,
+  suite: "node-membership",
+  projects: { subject: { config: "archbird.json" } },
+  extractors: {
+    membership: { kind: "component_membership", project: "subject" },
+  },
+  checks: [{
+    id: "ASSIGNED",
+    assert: "numeric_bounds",
+    actual: "membership",
+    min: 1,
+    owner: "test",
+    rationale: "Every mapped source belongs to a component.",
+  }],
+}));
+const membershipVerification = Verification.fromConfig(membershipSuitePath);
+assert.deepEqual(
+  membershipVerification.result().checks[0].findings.map((row) => row.key),
+  ["src/large.js"],
+);
+const componentDebug = JSON.parse(membershipVerification.debug("component", {
+  component: "primary",
+}));
+assert.deepEqual(
+  componentDebug.memberships[0].files.map((row) => row.path),
+  ["src/small.js"],
+);
+const boundedComponentDebug = JSON.parse(membershipVerification.debug("component", {
+  component: "primary",
+  limit: 0,
+}));
+assert.deepEqual(boundedComponentDebug.memberships[0].files, []);
+assert.deepEqual(boundedComponentDebug.memberships[0].selection, {
+  matched: 1,
+  rendered: 0,
+  truncated: true,
+});
+assert.deepEqual(
+  JSON.parse(membershipVerification.debug("unassigned"))
+    .memberships[0].files.map((row) => row.path),
+  ["src/large.js"],
+);
+assert.deepEqual(
+  JSON.parse(membershipVerification.debug("overlap"))
+    .memberships[0].files.map((row) => row.path),
+  ["src/small.js"],
+);
+const membershipCli = spawnSync(process.execPath, [
+  recipeCli,
+  "verify", "debug", "component", "primary",
+  "--config", membershipSuitePath, "--format", "json", "--limit", "0",
+], { encoding: "utf8", env: process.env });
+assert.equal(membershipCli.status, 0, membershipCli.stderr);
+assert.deepEqual(
+  JSON.parse(membershipCli.stdout).memberships[0].selection,
+  { matched: 1, rendered: 0, truncated: true },
 );
 fs.rmSync(metricFixture, { force: true, recursive: true });
 
@@ -1230,7 +1293,7 @@ const selfVerification = Verification.fromConfig(
 assert.deepEqual(selfVerification.resultJson(), selfVerification.resultJson());
 assert.deepEqual(
   selfVerification.result().checks.map((row) => row.status),
-  ["pass", "pass", "pass"],
+  ["pass", "pass", "pass", "pass"],
 );
 assert.equal(selfVerification.hasErrors(), false);
 assert.deepEqual(

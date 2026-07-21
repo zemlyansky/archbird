@@ -695,12 +695,14 @@ def verification_debug_parser() -> argparse.ArgumentParser:
             "reviewed verification suite."
         ),
     )
-    result.add_argument("view", choices=("selection", "unknown"))
     result.add_argument(
-        "root_path",
-        nargs="?",
-        metavar="ROOT",
-        help="repository containing a conventional verification suite (default: .)",
+        "view", choices=("selection", "unknown", "component", "unassigned", "overlap")
+    )
+    result.add_argument(
+        "targets",
+        nargs="*",
+        metavar="TARGET",
+        help="component name where required, then optional repository root",
     )
     result.add_argument("-c", "--config", help="verification suite JSON")
     result.add_argument(
@@ -713,6 +715,13 @@ def verification_debug_parser() -> argparse.ArgumentParser:
     result.add_argument("--baseline", help="optional reviewed baseline")
     result.add_argument("--check", dest="check_id", help="exact check ID filter")
     result.add_argument("--extractor", help="exact extractor name filter")
+    result.add_argument("--project", help="exact verification project filter")
+    result.add_argument(
+        "--limit",
+        type=int,
+        default=200,
+        help="maximum membership file witnesses to render (default: 200)",
+    )
     result.add_argument("--jobs", type=int, default=0)
     _add_cache_options(result)
     result.add_argument("--format", choices=("json", "markdown"), default="markdown")
@@ -1829,14 +1838,28 @@ def _verify_main(argv: Sequence[str]) -> int:
 def _verification_debug_main(argv: Sequence[str]) -> int:
     args = verification_debug_parser().parse_args(argv)
     try:
-        if args.root_path is not None and args.config is not None:
+        if args.view == "component":
+            if not 1 <= len(args.targets) <= 2:
+                raise ValueError(
+                    "component view requires COMPONENT and accepts one optional ROOT"
+                )
+            component = args.targets[0]
+            root_path = args.targets[1] if len(args.targets) == 2 else None
+        else:
+            if len(args.targets) > 1:
+                raise ValueError(f"{args.view} view accepts at most one ROOT")
+            component = None
+            root_path = args.targets[0] if args.targets else None
+        if root_path is not None and args.config is not None:
             raise ValueError("positional ROOT cannot be combined with --config")
         if args.jobs < 0:
             raise ValueError("--jobs must be zero or positive")
+        if args.limit < 0:
+            raise ValueError("--limit must be nonnegative")
         suite_path = (
             Path(args.config)
             if args.config is not None
-            else _discover_verification_suite(args.root_path)
+            else _discover_verification_suite(root_path)
         )
         verification = Verification.from_config(
             suite_path,
@@ -1851,6 +1874,13 @@ def _verification_debug_main(argv: Sequence[str]) -> int:
                 args.view,
                 check=args.check_id,
                 extractor=args.extractor,
+                project=args.project,
+                component=component,
+                limit=(
+                    args.limit
+                    if args.view in {"component", "unassigned", "overlap"}
+                    else None
+                ),
                 format=args.format,
                 pretty=args.pretty,
             ),

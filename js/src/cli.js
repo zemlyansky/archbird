@@ -65,9 +65,9 @@ function usage(command = "map") {
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
-    verify: "archbird verify [ROOT | --config SUITE.verify.json | --init PROJECT.json] [--baseline FILE | --freeze FILE] [--check]\narchbird verify recipe list|show|run|compile ...\narchbird verify debug selection|unknown [ROOT] [--check ID | --extractor NAME]",
+    verify: "archbird verify [ROOT | --config SUITE.verify.json | --init PROJECT.json] [--baseline FILE | --freeze FILE] [--check]\narchbird verify recipe list|show|run|compile ...\narchbird verify debug selection|unknown [ROOT] [--check ID | --extractor NAME]\narchbird verify debug component COMPONENT [ROOT] [--project NAME]\narchbird verify debug unassigned|overlap [ROOT] [--project NAME]",
     "verify-recipe": "archbird verify recipe list|show|run|compile [max-file-bytes] [OPTIONS]",
-    "verify-debug": "archbird verify debug selection|unknown [ROOT | --config SUITE.verify.json] [--check ID] [--extractor NAME] [--format json|markdown]",
+    "verify-debug": "archbird verify debug selection|unknown [ROOT | --config SUITE.verify.json] [--check ID] [--extractor NAME] [--format json|markdown]\narchbird verify debug component COMPONENT [ROOT | --config SUITE.verify.json] [--project NAME]\narchbird verify debug unassigned|overlap [ROOT | --config SUITE.verify.json] [--project NAME]",
     plan: "archbird plan --verification RESULT.json --finding FINGERPRINT",
     contract: "archbird contract --proposal PROPOSAL.json --objective TEXT --owner NAME --rationale TEXT",
     "verify-plan": "archbird verify-plan --proposal P.json --contract C.json --before-verification B.json --after-verification A.json [--check]",
@@ -1171,20 +1171,36 @@ function verificationDebugMain(argv) {
     baseline: { type: "string" },
     checkId: { flag: "check", type: "string" },
     extractor: { type: "string" },
+    project: { type: "string" },
+    limit: { default: 200, type: "number" },
     projectRoot: { flag: "project-root", type: "multiple" },
     format: { default: "markdown", type: "string" },
-  }, { positionals: 2 });
+  }, { positionals: 3 });
   if (options.help) { process.stdout.write(usage("verify-debug")); return 0; }
   const view = options._[0];
-  const root = options._[1];
-  if (!new Set(["selection", "unknown"]).has(view)) {
-    throw new Error("verify debug requires view selection or unknown");
+  const targets = options._.slice(1);
+  let component = null;
+  let root = null;
+  if (!new Set(["selection", "unknown", "component", "unassigned", "overlap"]).has(view)) {
+    throw new Error("verify debug requires view selection, unknown, component, unassigned, or overlap");
+  }
+  if (view === "component") {
+    if (targets.length < 1 || targets.length > 2) {
+      throw new Error("component view requires COMPONENT and accepts one optional ROOT");
+    }
+    [component, root = null] = targets;
+  } else {
+    if (targets.length > 1) throw new Error(`${view} view accepts at most one ROOT`);
+    [root = null] = targets;
   }
   if (root && options.config) {
     throw new Error("positional ROOT cannot be combined with --config");
   }
   if (!new Set(["json", "markdown"]).has(options.format)) {
     throw new Error("--format must be json or markdown");
+  }
+  if (!Number.isSafeInteger(options.limit) || options.limit < 0) {
+    throw new Error("--limit must be a nonnegative safe integer");
   }
   const suitePath = options.config || discoverVerificationSuite(root);
   const verification = archbird.Verification.fromConfig(suitePath, {
@@ -1199,6 +1215,11 @@ function verificationDebugMain(argv) {
   write(verification.debug(view, {
     check: options.checkId || null,
     extractor: options.extractor || null,
+    project: options.project || null,
+    component,
+    limit: new Set(["component", "unassigned", "overlap"]).has(view)
+      ? options.limit
+      : null,
     format: options.format,
     pretty: options.pretty,
   }), options.output);

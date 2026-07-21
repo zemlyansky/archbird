@@ -54,6 +54,8 @@ async function main() {
       files: 2,
       freshness: "current",
       indexes: 1,
+      membershipFinding: "src/defs.js",
+      membershipOverlap: "src/defs.js",
       project: "browser-release",
       semanticEdges: 1,
       version: "0.0.1",

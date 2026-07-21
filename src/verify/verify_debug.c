@@ -3,6 +3,7 @@
 #include "json_value.h"
 #include "render_internal.h"
 #include "verify_checks.h"
+#include "verify_debug_membership.h"
 #include "verify_runtime.h"
 
 #include <string.h>
@@ -18,6 +19,9 @@ typedef struct DebugRequest {
   const AbString *view;
   const AbString *check;
   const AbString *extractor;
+  const AbString *project;
+  const AbString *component;
+  size_t limit;
 } DebugRequest;
 
 static int string_is(const AbString *value, const char *literal) {
@@ -37,7 +41,8 @@ static int nonblank_string(const AbValue *value) {
 
 static int fields_allowed(const AbValue *object) {
   static const char *const names[] = {
-      "artifact", "check", "extractor", "schema_version", "view",
+      "artifact", "check",   "component",      "extractor",
+      "limit",    "project", "schema_version", "view",
   };
   size_t field_index;
   if (!object || object->kind != AB_VALUE_OBJECT)
@@ -80,29 +85,49 @@ static int extractor_exists(const AbVerifySuiteView *suite,
 }
 
 static ArchbirdStatus decode_request(ArchbirdEngine *engine,
-                                     const AbVerifySuiteView *suite,
+                                     AbVerificationContext *context,
                                      const AbValue *document,
                                      DebugRequest *out) {
   const AbValue *schema = ab_value_member(document, "schema_version");
   const AbValue *view = ab_value_member(document, "view");
   const AbValue *check = ab_value_member(document, "check");
   const AbValue *extractor = ab_value_member(document, "extractor");
+  const AbValue *project = ab_value_member(document, "project");
+  const AbValue *component = ab_value_member(document, "component");
+  const AbValue *limit = ab_value_member(document, "limit");
+  int membership_view;
   uint64_t schema_number;
+  uint64_t limit_number = 200;
   if (!fields_allowed(document) ||
       !value_is(ab_value_member(document, "artifact"),
                 "verification-debug-request") ||
       !schema || !ab_value_u64(schema, &schema_number) || schema_number != 1 ||
-      (!value_is(view, "selection") && !value_is(view, "unknown")) ||
+      (!value_is(view, "selection") && !value_is(view, "unknown") &&
+       !value_is(view, "component") && !value_is(view, "unassigned") &&
+       !value_is(view, "overlap")) ||
       (check && !nonblank_string(check)) ||
-      (extractor && !nonblank_string(extractor)))
+      (extractor && !nonblank_string(extractor)) ||
+      (project && !nonblank_string(project)) ||
+      (component && !nonblank_string(component)) ||
+      (limit && (!ab_value_u64(limit, &limit_number) ||
+                 limit_number > (uint64_t)SIZE_MAX)))
     return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                               ARCHBIRD_NO_OFFSET,
                               "invalid verification debug request");
-  if (check && !check_with_id(suite, &check->as.text, NULL))
+  membership_view = ab_verify_debug_is_membership_view(&view->as.text);
+  if (membership_view && (check || extractor))
+    return archbird_error_set(
+        engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+        "membership debug views do not accept check/extractor filters");
+  if (!membership_view && (project || component || limit))
+    return archbird_error_set(
+        engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+        "project/component/limit filters require a membership debug view");
+  if (check && !check_with_id(&context->suite, &check->as.text, NULL))
     return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                               ARCHBIRD_NO_OFFSET,
                               "verification debug check is unknown");
-  if (extractor && !extractor_exists(suite, &extractor->as.text))
+  if (extractor && !extractor_exists(&context->suite, &extractor->as.text))
     return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                               ARCHBIRD_NO_OFFSET,
                               "verification debug extractor is unknown");
@@ -110,7 +135,12 @@ static ArchbirdStatus decode_request(ArchbirdEngine *engine,
   out->view = &view->as.text;
   out->check = check ? &check->as.text : NULL;
   out->extractor = extractor ? &extractor->as.text : NULL;
-  return ARCHBIRD_OK;
+  out->project = project ? &project->as.text : NULL;
+  out->component = component ? &component->as.text : NULL;
+  out->limit = (size_t)limit_number;
+  return membership_view ? ab_verify_debug_membership_validate(
+                               context, out->view, out->project, out->component)
+                         : ARCHBIRD_OK;
 }
 
 static int check_references(const AbValue *check, const AbString *extractor) {
@@ -132,6 +162,8 @@ static int fact_selected(const AbVerificationContext *context,
                          const DebugRequest *request,
                          const AbVerifyFactSet *fact) {
   const AbValue *check;
+  if (ab_verify_debug_is_membership_view(request->view))
+    return 0;
   if (request->extractor && !ab_string_equal(request->extractor, &fact->name))
     return 0;
   if (!request->check)
@@ -142,6 +174,8 @@ static int fact_selected(const AbVerificationContext *context,
 
 static int check_selected(const DebugRequest *request, const AbValue *check) {
   const AbValue *id = ab_value_member(check, "id");
+  if (ab_verify_debug_is_membership_view(request->view))
+    return 0;
   if (request->check && !ab_string_equal(request->check, &id->as.text))
     return 0;
   if (request->extractor && !check_references(check, request->extractor))
@@ -155,6 +189,8 @@ static int attestation_selected(const AbVerificationContext *context,
   const AbValue *check;
   const AbValue *actual;
   const AbValue *expected;
+  if (ab_verify_debug_is_membership_view(request->view))
+    return 0;
   if (request->extractor)
     return 0;
   if (!request->check)
@@ -186,6 +222,8 @@ static const char *selection_unit(const AbObjectField *spec,
   if (value_is(kind, "symbols"))
     return "symbol";
   if (value_is(kind, "file_metrics"))
+    return "mapped_source_file";
+  if (value_is(kind, "component_membership"))
     return "mapped_source_file";
   if (value_is(kind, "file_edges") || value_is(kind, "component_edges") ||
       value_is(kind, "literal_relation"))
@@ -586,6 +624,21 @@ static ArchbirdStatus render_filters(AbBuffer *buffer,
     DEBUG_TRY(render_string(buffer, request->extractor));
   else
     DEBUG_TRY(ab_buffer_literal(buffer, "null"));
+  DEBUG_TRY(ab_buffer_literal(buffer, ",\"project\":"));
+  if (request->project)
+    DEBUG_TRY(render_string(buffer, request->project));
+  else
+    DEBUG_TRY(ab_buffer_literal(buffer, "null"));
+  DEBUG_TRY(ab_buffer_literal(buffer, ",\"component\":"));
+  if (request->component)
+    DEBUG_TRY(render_string(buffer, request->component));
+  else
+    DEBUG_TRY(ab_buffer_literal(buffer, "null"));
+  DEBUG_TRY(ab_buffer_literal(buffer, ",\"limit\":"));
+  if (ab_verify_debug_is_membership_view(request->view))
+    DEBUG_TRY(ab_buffer_u64(buffer, (uint64_t)request->limit));
+  else
+    DEBUG_TRY(ab_buffer_literal(buffer, "null"));
   return ab_buffer_literal(buffer, "}");
 }
 
@@ -624,6 +677,13 @@ static ArchbirdStatus render_json(AbBuffer *buffer,
   DEBUG_TRY(render_diagnostics(buffer, context));
   DEBUG_TRY(ab_buffer_literal(buffer, ",\"filters\":"));
   DEBUG_TRY(render_filters(buffer, request));
+  DEBUG_TRY(ab_buffer_literal(buffer, ",\"memberships\":"));
+  if (ab_verify_debug_is_membership_view(request->view))
+    DEBUG_TRY(ab_verify_debug_membership_render_json(
+        buffer, context, request->view, request->project, request->component,
+        request->limit));
+  else
+    DEBUG_TRY(ab_buffer_literal(buffer, "[]"));
   DEBUG_TRY(ab_buffer_literal(buffer, ",\"projects\":"));
   DEBUG_TRY(render_projects(buffer, context));
   DEBUG_TRY(ab_buffer_literal(buffer, ",\"schema_version\":1,\"selections\":"));
@@ -788,7 +848,27 @@ static ArchbirdStatus render_markdown(AbBuffer *buffer,
   DEBUG_TRY(ab_buffer_literal(buffer, "`; view `"));
   DEBUG_TRY(
       ab_buffer_append(buffer, request->view->data, request->view->length));
-  DEBUG_TRY(ab_buffer_literal(buffer, "`.\n\n## Selections\n\n```text\n"));
+  DEBUG_TRY(ab_buffer_literal(buffer, "`.\n\n"));
+  if (ab_verify_debug_is_membership_view(request->view)) {
+    DEBUG_TRY(ab_verify_debug_membership_render_markdown(
+        buffer, context, request->view, request->project, request->component,
+        request->limit));
+    if (context->diagnostic_count) {
+      DEBUG_TRY(ab_buffer_literal(buffer, "## Diagnostics\n\n"));
+      for (index = 0; index < context->diagnostic_count; index++) {
+        const AbVerifyDiagnostic *row = &context->diagnostics[index];
+        DEBUG_TRY(ab_buffer_literal(buffer, "- severity="));
+        DEBUG_TRY(
+            ab_buffer_append(buffer, row->severity.data, row->severity.length));
+        DEBUG_TRY(append_markdown_field(buffer, "code", &row->code));
+        DEBUG_TRY(append_markdown_field(buffer, "path", &row->path));
+        DEBUG_TRY(append_markdown_field(buffer, "message", &row->message));
+        DEBUG_TRY(ab_buffer_literal(buffer, "\n"));
+      }
+    }
+    return ARCHBIRD_OK;
+  }
+  DEBUG_TRY(ab_buffer_literal(buffer, "## Selections\n\n```text\n"));
   for (index = 0; index < context->fact_count; index++) {
     const AbVerifyFactSet *fact = &context->facts[index];
     const AbVerifySelection *selection = &fact->selection;
@@ -878,15 +958,19 @@ ArchbirdStatus archbird_verification_debug(
   ab_buffer_init(&rendered, engine);
   status = ab_build_identity_validate(engine);
   if (status == ARCHBIRD_OK)
-    status = ab_verification_context_analyze(
+    status = ab_verification_context_prepare(
         engine, suite_json, suite_length, verification_input_json,
         verification_input_length, &suite_document, &input_document, &context);
   if (status == ARCHBIRD_OK)
     status = ab_json_value_decode(engine, request_json, request_length,
                                   &request_document);
   if (status == ARCHBIRD_OK)
-    status =
-        decode_request(engine, &context.suite, &request_document, &request);
+    status = decode_request(engine, &context, &request_document, &request);
+  if (status == ARCHBIRD_OK &&
+      !ab_verify_debug_is_membership_view(request.view))
+    status = ab_verification_context_evaluate(&context);
+  else if (status == ARCHBIRD_OK)
+    ab_verify_diagnostics_finish(&context);
   if (status == ARCHBIRD_OK && format == ARCHBIRD_VERIFICATION_JSON)
     status = render_json(&rendered, &context, &request);
   else if (status == ARCHBIRD_OK)

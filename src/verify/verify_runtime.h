@@ -166,6 +166,12 @@ ArchbirdStatus ab_verification_context_analyze(
     const uint8_t *verification_input_json, size_t verification_input_length,
     AbValue *suite_document, AbValue *input_document,
     AbVerificationContext *context);
+ArchbirdStatus ab_verification_context_prepare(
+    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
+    const uint8_t *verification_input_json, size_t verification_input_length,
+    AbValue *suite_document, AbValue *input_document,
+    AbVerificationContext *context);
+ArchbirdStatus ab_verification_context_evaluate(AbVerificationContext *context);
 ArchbirdStatus ab_verify_add_diagnostic(AbVerificationContext *context,
                                         const char *severity, const char *code,
                                         const char *message,

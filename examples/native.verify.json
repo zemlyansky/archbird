@@ -46,7 +46,9 @@
         {"source": "base", "kind": "*", "target": "json-parser"},
         {"source": "base", "kind": "*", "target": "regex-engine"},
         {"source": "evidence", "kind": "*", "target": "base"},
+        {"source": "evidence", "kind": "*", "target": "abi"},
         {"source": "evidence", "kind": "*", "target": "json-parser"},
+        {"source": "evidence", "kind": "*", "target": "manifest-readers"},
         {"source": "provider-registry", "kind": "*", "target": "abi"},
         {"source": "provider-registry", "kind": "*", "target": "base"},
         {"source": "provider-registry", "kind": "*", "target": "evidence"},
@@ -126,6 +128,10 @@
         {"source": "javascript-tests", "kind": "*", "target": "javascript-host"}
       ]
     },
+    "architecture.membership": {
+      "kind": "component_membership",
+      "project": "subject"
+    },
     "core.tests": {
       "kind": "test_routes",
       "project": "subject",
@@ -151,6 +157,16 @@
       "rationale": "The native component graph must remain acyclic while subsystems are ported incrementally.",
       "requirement": "ARCHBIRD-NATIVE-ARCH-001",
       "actual": "architecture.actual"
+    },
+    {
+      "id": "NATIVE-COMPONENT-COVERAGE",
+      "assert": "numeric_bounds",
+      "severity": "error",
+      "owner": "native-core",
+      "rationale": "Every mapped source file must belong to at least one reviewed component; intentional component overlaps remain permitted.",
+      "requirement": "ARCHBIRD-NATIVE-ARCH-001",
+      "actual": "architecture.membership",
+      "min": 1
     },
     {
       "id": "NATIVE-JSON-TEST-ROUTE",

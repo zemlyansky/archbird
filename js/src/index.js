@@ -1022,6 +1022,9 @@ class Verification {
   debug(view, {
     check = null,
     extractor = null,
+    project = null,
+    component = null,
+    limit = null,
     format = "json",
     pretty = true,
   } = {}) {
@@ -1032,6 +1035,14 @@ class Verification {
     };
     if (check !== null) request.check = check;
     if (extractor !== null) request.extractor = extractor;
+    if (project !== null) request.project = project;
+    if (component !== null) request.component = component;
+    if (limit !== null) {
+      if (!Number.isSafeInteger(limit) || limit < 0) {
+        throw new Error("limit must be a nonnegative safe integer");
+      }
+      request.limit = limit;
+    }
     return verificationDebug(
       this.suiteJson,
       this.inputJson,

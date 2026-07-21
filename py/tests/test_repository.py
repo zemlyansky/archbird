@@ -1361,11 +1361,15 @@ def main() -> int:
         raise AssertionError("Python host did not return verification evidence")
     if verification_document["summary"]["blocking"]:
         raise AssertionError(verification_document["checks"])
-    if [row["status"] for row in verification_document["checks"]] != [
-        "pass",
-        "pass",
-        "pass",
-    ]:
+    self_check_statuses = {
+        row["id"]: row["status"] for row in verification_document["checks"]
+    }
+    if self_check_statuses != {
+        "NATIVE-COMPONENT-EDGES": "pass",
+        "NATIVE-COMPONENT-ACYCLIC": "pass",
+        "NATIVE-COMPONENT-COVERAGE": "pass",
+        "NATIVE-JSON-TEST-ROUTE": "pass",
+    }:
         raise AssertionError("reviewed self verification did not pass")
     behavioral_verification = Verification.from_config(
         repository / "test/fixtures/verification/verification.json"

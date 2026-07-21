@@ -15,7 +15,10 @@ const config = {
       globs: ["src/**/*.js"],
     },
   ],
-  components: [{ name: "frontend", paths: ["src/**"] }],
+  components: [
+    { name: "frontend", paths: ["src/**"] },
+    { name: "shared", paths: ["src/defs.js"] },
+  ],
   indexes: [
     {
       name: "compiler",
@@ -46,12 +49,51 @@ const config = {
   const freshness = JSON.parse(
     archbird.auditMapFreshness(mapBytes, mapBytes).toString("utf8"),
   );
+  const suite = JSON.stringify({
+    schema_version: 1,
+    suite: "browser-membership",
+    projects: { subject: { map: "ARCHBIRD.json" } },
+    extractors: {
+      membership: { kind: "component_membership", project: "subject" },
+    },
+    checks: [{
+      id: "EXCLUSIVE",
+      assert: "numeric_bounds",
+      actual: "membership",
+      max: 1,
+      owner: "test",
+      rationale: "Exercise Wasm membership verification.",
+    }],
+  });
+  const verificationInput = JSON.stringify({
+    artifact: "verification-input",
+    schema_version: 1,
+    suite_path: "browser.verify.json",
+    projects: [{ name: "subject", map, sources: [] }],
+    provided_facts: [],
+    attestations: [],
+    baseline: null,
+  });
+  const verification = JSON.parse(
+    archbird.core.verificationAnalyze(suite, verificationInput).toString("utf8"),
+  );
+  const overlap = JSON.parse(archbird.core.verificationDebug(
+    suite,
+    verificationInput,
+    JSON.stringify({
+      artifact: "verification-debug-request",
+      schema_version: 1,
+      view: "overlap",
+    }),
+  ).toString("utf8"));
   project.dispose();
   document.body.textContent = JSON.stringify({
     engine: archbird.ENGINE.kind,
     files: map.files.length,
     freshness: freshness.status,
     indexes: map.indexes.length,
+    membershipFinding: verification.checks[0].findings[0].key,
+    membershipOverlap: overlap.memberships[0].files[0].path,
     project: map.project,
     semanticEdges: map.edges.filter((edge) => edge.kind === "semantic-reference").length,
     version: archbird.VERSION,

@@ -438,10 +438,10 @@ static int supported_extractor(const AbValue *kind) {
       "c_enum",           "c_designated_initializer",
       "c_macro_set",      "symbols",
       "file_edges",       "file_metrics",
-      "component_edges",  "test_routes",
-      "test_selectors",   "provider_surface",
-      "literal_set",      "literal_values",
-      "literal_relation",
+      "component_edges",  "component_membership",
+      "test_routes",      "test_selectors",
+      "provider_surface", "literal_set",
+      "literal_values",   "literal_relation",
   };
   size_t index;
   for (index = 0; index < sizeof(names) / sizeof(names[0]); index++)

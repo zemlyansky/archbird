@@ -404,6 +404,9 @@ archbird verify debug selection . --check CORE-FILE-SIZE
 archbird verify debug unknown . --format json
 archbird verify debug selection --config architecture.verify.json \
   --extractor architecture.actual --format json
+archbird verify debug component core .
+archbird verify debug unassigned .
+archbird verify debug overlap . --project subject --limit 50
 ```
 
 The debug artifact reports every selected extractor as `complete`, `bounded`,
@@ -418,12 +421,50 @@ visible even when a rule intentionally targets mapped source files. Explicit
 `selection_complete` and `enumeration_complete` fields distinguish unknown
 coverage from known truncation; the `unknown` view localizes stale or unknown
 facts, attestations, checks, findings, witnesses, and verification diagnostics.
+The component views use the canonical Map file/component inventory. They report
+exact mapped, assigned, unassigned, overlapping, and empty-component counts,
+plus file witnesses. A multi-project component lookup requires `--project`;
+unknown component names are errors instead of empty success.
+Membership views render at most 200 file witnesses by default; `--limit`
+changes only that projection. Exact `matched`, `rendered`, and `truncated`
+counts remain visible, and verification checks always evaluate every mapped
+file.
+
+Promote reviewed membership intent into the ordinary verification kernel rather
+than relying on a debug command:
+
+```json
+{
+  "extractors": {
+    "architecture.membership": {
+      "kind": "component_membership",
+      "project": "subject"
+    }
+  },
+  "checks": [
+    {
+      "id": "COMPONENT-COVERAGE",
+      "assert": "numeric_bounds",
+      "actual": "architecture.membership",
+      "min": 1,
+      "owner": "architecture",
+      "rationale": "Every mapped source belongs to a reviewed component."
+    }
+  ]
+}
+```
+
+The fact value is the number of components assigned to each mapped source.
+Use `min: 1` to reject unassigned files, `max: 1` to reject overlap, or
+`exact: 1` when both policies are intended. Overlap is not inherently invalid:
+build fixtures, generated adapters, and test support can legitimately belong to
+multiple architectural views.
 
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, numeric bounds, required/forbidden/allowed edges, acyclicity,
 minimum test routes, and behavioral-attestation equality. Extractors cover
-literal facts, symbols, values, file metrics, component/file edges, exact test
-selectors, test routes, provider surfaces, Python enums and sets, C
+literal facts, symbols, values, file metrics, component membership,
+component/file edges, exact test selectors, test routes, provider surfaces, Python enums and sets, C
 enums/designated initializers/macros, and supplied attestations.
 
 Facts have three non-interchangeable provenances:
