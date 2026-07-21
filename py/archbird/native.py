@@ -1437,6 +1437,34 @@ class Verification:
             pretty=pretty,
         )
 
+    def debug(
+        self,
+        view: str,
+        *,
+        check: Optional[str] = None,
+        extractor: Optional[str] = None,
+        format: str = "json",
+        pretty: bool = True,
+    ) -> bytes:
+        """Explain selection completeness or unresolved verification evidence."""
+
+        request: dict[str, object] = {
+            "artifact": "verification-debug-request",
+            "schema_version": 1,
+            "view": view,
+        }
+        if check is not None:
+            request["check"] = check
+        if extractor is not None:
+            request["extractor"] = extractor
+        return verification_debug(
+            self.suite_json,
+            self.input_json,
+            _canonical(request),
+            format=format,
+            pretty=pretty,
+        )
+
     def has_errors(self) -> bool:
         return bool(self.result()["summary"]["blocking"])
 
@@ -2074,6 +2102,25 @@ def verification_analyze_json(
     )
 
 
+def verification_debug(
+    suite_json: bytes,
+    input_json: bytes,
+    request_json: bytes,
+    *,
+    format: str = "json",
+    pretty: bool = True,
+) -> bytes:
+    """Render native selection or unknown-evidence debugging."""
+
+    return _native.verification_debug(
+        suite_json,
+        input_json,
+        request_json,
+        format=format,
+        pretty=pretty,
+    )
+
+
 def verification_recipe_catalog(
     recipe: str = "", *, pretty: bool = False
 ) -> bytes:
@@ -2688,6 +2735,7 @@ __all__ = [
     "query_map_json",
     "resolve_discovery",
     "verification_analyze_json",
+    "verification_debug",
     "verification_plan_json",
     "verification_report",
 ]

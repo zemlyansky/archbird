@@ -65,8 +65,9 @@ function usage(command = "map") {
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
-    verify: "archbird verify [ROOT | --config SUITE.verify.json | --init PROJECT.json] [--baseline FILE | --freeze FILE] [--check]\narchbird verify recipe list|show|run|compile ...",
+    verify: "archbird verify [ROOT | --config SUITE.verify.json | --init PROJECT.json] [--baseline FILE | --freeze FILE] [--check]\narchbird verify recipe list|show|run|compile ...\narchbird verify debug selection|unknown [ROOT] [--check ID | --extractor NAME]",
     "verify-recipe": "archbird verify recipe list|show|run|compile [max-file-bytes] [OPTIONS]",
+    "verify-debug": "archbird verify debug selection|unknown [ROOT | --config SUITE.verify.json] [--check ID] [--extractor NAME] [--format json|markdown]",
     plan: "archbird plan --verification RESULT.json --finding FINGERPRINT",
     contract: "archbird contract --proposal PROPOSAL.json --objective TEXT --owner NAME --rationale TEXT",
     "verify-plan": "archbird verify-plan --proposal P.json --contract C.json --before-verification B.json --after-verification A.json [--check]",
@@ -1157,8 +1158,56 @@ function verificationRecipeMain(argv) {
   }
 }
 
+function verificationDebugMain(argv) {
+  const options = parse(argv, {
+    config: COMMON.config,
+    output: COMMON.output,
+    pretty: COMMON.pretty,
+    help: COMMON.help,
+    noTypescript: COMMON.noTypescript,
+    cacheDir: COMMON.cacheDir,
+    cacheMaxBytes: COMMON.cacheMaxBytes,
+    noCache: COMMON.noCache,
+    baseline: { type: "string" },
+    checkId: { flag: "check", type: "string" },
+    extractor: { type: "string" },
+    projectRoot: { flag: "project-root", type: "multiple" },
+    format: { default: "markdown", type: "string" },
+  }, { positionals: 2 });
+  if (options.help) { process.stdout.write(usage("verify-debug")); return 0; }
+  const view = options._[0];
+  const root = options._[1];
+  if (!new Set(["selection", "unknown"]).has(view)) {
+    throw new Error("verify debug requires view selection or unknown");
+  }
+  if (root && options.config) {
+    throw new Error("positional ROOT cannot be combined with --config");
+  }
+  if (!new Set(["json", "markdown"]).has(options.format)) {
+    throw new Error("--format must be json or markdown");
+  }
+  const suitePath = options.config || discoverVerificationSuite(root);
+  const verification = archbird.Verification.fromConfig(suitePath, {
+    baseline: options.baseline || null,
+    cacheDir: options.noCache
+      ? null
+      : (options.cacheDir || archbird.defaultProviderCacheDir()),
+    cacheMaxBytes: cacheMaxBytes(options),
+    projectRoots: projectRoots(options.projectRoot),
+    typescript: !options.noTypescript,
+  });
+  write(verification.debug(view, {
+    check: options.checkId || null,
+    extractor: options.extractor || null,
+    format: options.format,
+    pretty: options.pretty,
+  }), options.output);
+  return 0;
+}
+
 function verifyMain(argv) {
   if (argv[0] === "recipe") return verificationRecipeMain(argv.slice(1));
+  if (argv[0] === "debug") return verificationDebugMain(argv.slice(1));
   const options = parse(argv, {
     ...COMMON,
     init: { type: "string" },

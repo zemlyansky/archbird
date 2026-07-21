@@ -482,6 +482,27 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
       oneInput(request, "_ab_wasm_verification_recipe_compile", boolFlags(pretty)),
     verificationAnalyze: (suite, input, pretty = false) =>
       twoInputs(suite, input, "_ab_wasm_verification_analyze", boolFlags(pretty)),
+    verificationDebug(suite, input, request, format = "json", pretty = false) {
+      const formatNumber = formatValue(
+        format,
+        ["json", "markdown"],
+        "verification debug format",
+      );
+      return withInputs(
+        [suite, input, request],
+        ([suiteInput, inputInput, requestInput]) =>
+          result(module._ab_wasm_verification_debug(
+            suiteInput.pointer,
+            suiteInput.length,
+            inputInput.pointer,
+            inputInput.length,
+            requestInput.pointer,
+            requestInput.length,
+            formatNumber,
+            boolFlags(pretty),
+          )),
+      );
+    },
     verificationDraft: (map, projectConfig, pretty = false) =>
       twoInputs(map, projectConfig, "_ab_wasm_verification_draft", boolFlags(pretty, true)),
     verificationFreeze(suite, input, owner, rationale, pretty = false) {

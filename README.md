@@ -397,6 +397,28 @@ plan declares whether each project needs provider evidence; inventory-only
 recipes and suites skip lexical, syntax, and semantic scans while graph-backed
 checks retain the complete provider pipeline.
 
+Inspect what a reviewed check actually selected without changing its result:
+
+```bash
+archbird verify debug selection . --check CORE-FILE-SIZE
+archbird verify debug unknown . --format json
+archbird verify debug selection --config architecture.verify.json \
+  --extractor architecture.actual --format json
+```
+
+The debug artifact reports every selected extractor as `complete`, `bounded`,
+`incomplete`, or `unknown`. Counts distinguish the known candidate universe,
+normalized unique selection, evaluated and unknown items, excluded and
+unsupported entities, and enumeration truncation. An unavailable count is
+`null`, never an inferred zero. Literal facts and mapped-file metrics provide
+exact populations; extractors whose providers do not expose their complete
+pre-selection universe remain explicitly bounded. Project discovery coverage
+is reported separately so known unsupported source languages and assets remain
+visible even when a rule intentionally targets mapped source files. Explicit
+`selection_complete` and `enumeration_complete` fields distinguish unknown
+coverage from known truncation; the `unknown` view localizes stale or unknown
+facts, attestations, checks, findings, witnesses, and verification diagnostics.
+
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, numeric bounds, required/forbidden/allowed edges, acyclicity,
 minimum test routes, and behavioral-attestation equality. Extractors cover

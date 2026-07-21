@@ -210,6 +210,44 @@ def main() -> int:
         raise AssertionError(mismatch_check)
     if not mismatch["summary"]["blocking"]:
         raise AssertionError(mismatch["summary"])
+    debug_request = canonical(
+        {
+            "artifact": "verification-debug-request",
+            "schema_version": 1,
+            "view": "unknown",
+            "check": "SOURCE-LOCK-SYMBOLS",
+        }
+    )
+    mismatch_debug = json.loads(
+        extension.verification_debug(
+            canonical(suite("0" * 64)),
+            canonical(evidence(source)),
+            debug_request,
+            "json",
+            False,
+        )
+    )
+    if (
+        mismatch_debug["selections"][0]["classification"] != "incomplete"
+        or not any(
+            row["scope"] == "fact" and row["state"] == "stale"
+            for row in mismatch_debug["unknowns"]
+        )
+        or not any(
+            row["scope"] == "check" and row["state"] == "unknown"
+            for row in mismatch_debug["unknowns"]
+        )
+    ):
+        raise AssertionError(mismatch_debug)
+    mismatch_debug_markdown = extension.verification_debug(
+        canonical(suite("0" * 64)),
+        canonical(evidence(source)),
+        debug_request,
+        "markdown",
+        False,
+    ).decode()
+    if "scope=fact extractor=subject.symbols" not in mismatch_debug_markdown:
+        raise AssertionError(mismatch_debug_markdown)
     mismatch_markdown = extension.verification_report(
         canonical(suite("0" * 64)),
         canonical(evidence(source)),

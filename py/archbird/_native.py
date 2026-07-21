@@ -1134,6 +1134,29 @@ def verification_analyze(suite: bytes, input: bytes, pretty=False) -> bytes:
     )
 
 
+def verification_debug(
+    suite: bytes,
+    input: bytes,
+    request: bytes,
+    format: str = "json",
+    pretty: bool = False,
+) -> bytes:
+    try:
+        native_format = {"json": 0, "markdown": 1}[format]
+    except KeyError as error:
+        raise ValueError(
+            "verification debug format must be json or markdown"
+        ) from error
+    return _simple_render(
+        "archbird_verification_debug",
+        [_bytes(suite), _bytes(input), _bytes(request)],
+        suffix_types=(ctypes.c_int,),
+        suffix_values=(native_format,),
+        flags=_json_flags(pretty),
+        saved_artifact=True,
+    )
+
+
 def verification_report(
     suite: bytes,
     input: bytes,

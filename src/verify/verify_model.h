@@ -25,6 +25,24 @@ typedef struct AbVerifyFactItem {
   AbString message;
 } AbVerifyFactItem;
 
+typedef struct AbVerifySelection {
+  AbString unit;
+  uint64_t universe;
+  uint64_t selected;
+  uint64_t evaluated;
+  uint64_t excluded;
+  uint64_t unsupported;
+  uint64_t unknown;
+  int has_universe;
+  int has_selected;
+  int has_evaluated;
+  int has_excluded;
+  int has_unsupported;
+  int has_unknown;
+  int has_truncated;
+  int truncated;
+} AbVerifySelection;
+
 typedef struct AbVerifyFactSet {
   AbString name;
   AbString shape;
@@ -35,6 +53,7 @@ typedef struct AbVerifyFactSet {
   size_t item_capacity;
   AbString state;
   AbString message;
+  AbVerifySelection selection;
   char sha256[65];
 } AbVerifyFactSet;
 
@@ -51,6 +70,15 @@ ArchbirdStatus ab_verify_fact_add_item(ArchbirdEngine *engine,
 
 ArchbirdStatus ab_verify_fact_finish(ArchbirdEngine *engine,
                                      AbVerifyFactSet *fact);
+
+ArchbirdStatus
+ab_verify_fact_selection_exact(ArchbirdEngine *engine, AbVerifyFactSet *fact,
+                               const char *unit, uint64_t universe,
+                               uint64_t selected, uint64_t excluded,
+                               uint64_t unsupported, int truncated);
+
+const char *
+ab_verify_fact_selection_classification(const AbVerifyFactSet *fact);
 
 ArchbirdStatus ab_verify_fact_render(AbBuffer *buffer,
                                      const AbVerifyFactSet *fact,

@@ -905,6 +905,23 @@ static ArchbirdStatus extract_literal(AbVerificationContext *context,
     }
   }
   ab_verify_evidence_free(context->engine, &evidence);
+  if (status == ARCHBIRD_OK) {
+    size_t universe =
+        ab_verify_string_is(kind, "literal_relation") ? rows->as.array.count
+        : ab_verify_string_is(kind, "literal_values") ? values->as.object.count
+                                                      : values->as.array.count;
+    if (fact->item_count > universe) {
+      status = archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "literal extractor produced too many facts");
+    } else {
+      status = ab_verify_fact_selection_exact(
+          context->engine, fact,
+          ab_verify_string_is(kind, "literal_relation") ? "relation" : "value",
+          (uint64_t)universe, (uint64_t)fact->item_count,
+          (uint64_t)(universe - fact->item_count), 0, 0);
+    }
+  }
   if (status == ARCHBIRD_OK)
     status = ab_verify_fact_finish(context->engine, fact);
   if (status != ARCHBIRD_OK)
@@ -1031,6 +1048,7 @@ static ArchbirdStatus extract_file_metrics(AbVerificationContext *context,
       coverage ? ab_value_member(coverage, "oversized") : NULL;
   const AbValue *metric = ab_value_member(spec, "metric");
   size_t file_index;
+  uint64_t source_oversized_count = 0;
   uint64_t oversized_count = 0;
   ArchbirdStatus status =
       ab_verify_fact_init(context->engine, fact, &extractor->name, "values",
@@ -1143,6 +1161,7 @@ static ArchbirdStatus extract_file_metrics(AbVerificationContext *context,
       AbBuffer detail;
       if (!ab_verify_string_is(code, "discovery-file-oversized"))
         continue;
+      source_oversized_count++;
       status = ab_verify_normalized_name(context->engine, spec, &path->as.text,
                                          &normalized, &selected);
       if (status != ARCHBIRD_OK || !selected) {
@@ -1177,6 +1196,20 @@ static ArchbirdStatus extract_file_metrics(AbVerificationContext *context,
       ab_string_free(context->engine, &normalized);
       if (status != ARCHBIRD_OK)
         ab_verify_fact_item_free(context->engine, &item);
+    }
+  }
+  if (status == ARCHBIRD_OK) {
+    uint64_t universe = (uint64_t)files->as.array.count;
+    if (source_oversized_count > UINT64_MAX - universe) {
+      status = archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "too many mapped source file metrics");
+    } else {
+      universe += source_oversized_count;
+      status = ab_verify_fact_selection_exact(
+          context->engine, fact, "mapped_source_file", universe,
+          (uint64_t)fact->item_count, universe - (uint64_t)fact->item_count, 0,
+          0);
     }
   }
   if (status == ARCHBIRD_OK)

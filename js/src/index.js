@@ -1019,6 +1019,27 @@ class Verification {
     });
   }
 
+  debug(view, {
+    check = null,
+    extractor = null,
+    format = "json",
+    pretty = true,
+  } = {}) {
+    const request = {
+      artifact: "verification-debug-request",
+      schema_version: 1,
+      view,
+    };
+    if (check !== null) request.check = check;
+    if (extractor !== null) request.extractor = extractor;
+    return verificationDebug(
+      this.suiteJson,
+      this.inputJson,
+      Buffer.from(JSON.stringify(canonicalForDigest(request))),
+      { format, pretty },
+    );
+  }
+
   hasErrors() {
     return Boolean(this.result().summary.blocking);
   }
@@ -1527,6 +1548,24 @@ function verificationAnalyze(suiteJson, inputJson, { pretty = false } = {}) {
   );
 }
 
+function verificationDebug(
+  suiteJson,
+  inputJson,
+  requestJson,
+  { format = "json", pretty = true } = {},
+) {
+  if (format !== "json" && format !== "markdown") {
+    throw new RangeError("verification debug format must be json or markdown");
+  }
+  return native.verificationDebug(
+    Buffer.from(suiteJson),
+    Buffer.from(inputJson),
+    Buffer.from(requestJson),
+    format,
+    pretty,
+  );
+}
+
 function draftVerificationSuite(
   mapJson,
   { projectConfig, pretty = true } = {},
@@ -1809,6 +1848,7 @@ module.exports = {
   queryMapMarkdown,
   renderMapMarkdown,
   verificationAnalyze,
+  verificationDebug,
   verificationFreeze,
   verificationPlan,
   verificationRecipeCatalog,

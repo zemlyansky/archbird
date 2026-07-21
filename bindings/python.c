@@ -1354,6 +1354,53 @@ static PyObject *py_verification_analyze(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_verification_debug(PyObject *self, PyObject *args,
+                                       PyObject *kwargs) {
+  static char *keywords[] = {"suite",  "input",  "request",
+                             "format", "pretty", NULL};
+  const char *suite;
+  const char *input;
+  const char *request;
+  const char *format = "json";
+  Py_ssize_t suite_length;
+  Py_ssize_t input_length;
+  Py_ssize_t request_length;
+  int pretty = 0;
+  ArchbirdVerificationFormat native_format;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#y#|sp:verification_debug",
+                                   keywords, &suite, &suite_length, &input,
+                                   &input_length, &request, &request_length,
+                                   &format, &pretty))
+    return NULL;
+  if (!strcmp(format, "json"))
+    native_format = ARCHBIRD_VERIFICATION_JSON;
+  else if (!strcmp(format, "markdown"))
+    native_format = ARCHBIRD_VERIFICATION_MARKDOWN;
+  else {
+    PyErr_SetString(PyExc_ValueError,
+                    "verification debug format must be json or markdown");
+    return NULL;
+  }
+  status = saved_artifact_engine(
+      larger_input(larger_input((size_t)suite_length, (size_t)input_length),
+                   (size_t)request_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_debug(
+        engine, (const uint8_t *)suite, (size_t)suite_length,
+        (const uint8_t *)input, (size_t)input_length, (const uint8_t *)request,
+        (size_t)request_length, native_format,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_verification_draft(PyObject *self, PyObject *args,
                                        PyObject *kwargs) {
   static char *keywords[] = {"map", "project_config", "pretty", NULL};
@@ -1704,6 +1751,9 @@ static PyMethodDef archbird_methods[] = {
     {"verification_analyze", (PyCFunction)py_verification_analyze,
      METH_VARARGS | METH_KEYWORDS,
      "Evaluate a verification suite over host-supplied evidence."},
+    {"verification_debug", (PyCFunction)py_verification_debug,
+     METH_VARARGS | METH_KEYWORDS,
+     "Explain selection completeness or unresolved verification evidence."},
     {"verification_plan", (PyCFunction)py_verification_plan,
      METH_VARARGS | METH_KEYWORDS,
      "Validate a verification suite and expose its host-loading plan."},

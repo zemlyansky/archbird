@@ -687,6 +687,40 @@ def verification_parser() -> argparse.ArgumentParser:
     return result
 
 
+def verification_debug_parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog="archbird verify debug",
+        description=(
+            "Explain selection completeness or unresolved evidence for a "
+            "reviewed verification suite."
+        ),
+    )
+    result.add_argument("view", choices=("selection", "unknown"))
+    result.add_argument(
+        "root_path",
+        nargs="?",
+        metavar="ROOT",
+        help="repository containing a conventional verification suite (default: .)",
+    )
+    result.add_argument("-c", "--config", help="verification suite JSON")
+    result.add_argument(
+        "--project-root",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="local project root override; never enters canonical evidence",
+    )
+    result.add_argument("--baseline", help="optional reviewed baseline")
+    result.add_argument("--check", dest="check_id", help="exact check ID filter")
+    result.add_argument("--extractor", help="exact extractor name filter")
+    result.add_argument("--jobs", type=int, default=0)
+    _add_cache_options(result)
+    result.add_argument("--format", choices=("json", "markdown"), default="markdown")
+    result.add_argument("--pretty", action="store_true", help="pretty JSON")
+    result.add_argument("-o", "--output", default="-")
+    return result
+
+
 _BYTE_SIZE_UNITS = {
     "": 1,
     "b": 1,
@@ -1792,6 +1826,42 @@ def _verify_main(argv: Sequence[str]) -> int:
         return 2
 
 
+def _verification_debug_main(argv: Sequence[str]) -> int:
+    args = verification_debug_parser().parse_args(argv)
+    try:
+        if args.root_path is not None and args.config is not None:
+            raise ValueError("positional ROOT cannot be combined with --config")
+        if args.jobs < 0:
+            raise ValueError("--jobs must be zero or positive")
+        suite_path = (
+            Path(args.config)
+            if args.config is not None
+            else _discover_verification_suite(args.root_path)
+        )
+        verification = Verification.from_config(
+            suite_path,
+            project_roots=_project_roots(args.project_root),
+            baseline=args.baseline,
+            jobs=args.jobs,
+            cache_dir=_cache_dir(args),
+            cache_max_bytes=_cache_max_bytes(args),
+        )
+        _write(
+            verification.debug(
+                args.view,
+                check=args.check_id,
+                extractor=args.extractor,
+                format=args.format,
+                pretty=args.pretty,
+            ),
+            args.output,
+        )
+        return 0
+    except (ConfigError, OSError, RuntimeError, ValueError) as error:
+        print(f"archbird: error: {error}", file=sys.stderr)
+        return 2
+
+
 def _recipe_request(
     args: argparse.Namespace, *, project: Mapping[str, object]
 ) -> bytes:
@@ -2137,6 +2207,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if arguments and arguments[0] == "verify":
         if len(arguments) > 1 and arguments[1] == "recipe":
             return _verification_recipe_main(arguments[2:])
+        if len(arguments) > 1 and arguments[1] == "debug":
+            return _verification_debug_main(arguments[2:])
         return _verify_main(arguments[1:])
     if arguments and arguments[0] == "plan":
         return _plan_main(arguments[1:])

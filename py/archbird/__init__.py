@@ -59,6 +59,7 @@ _NATIVE_EXPORTS = (
     "render_map_markdown",
     "resolve_discovery",
     "verification_analyze_json",
+    "verification_debug",
     "verification_plan_json",
     "verification_recipe_catalog",
     "verification_report",

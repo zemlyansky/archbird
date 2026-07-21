@@ -922,6 +922,25 @@ AB_WASM_EXPORT int ab_wasm_verification_analyze(const uint8_t *suite,
   return stateless_end(engine, status);
 }
 
+AB_WASM_EXPORT int
+ab_wasm_verification_debug(const uint8_t *suite, size_t suite_length,
+                           const uint8_t *input, size_t input_length,
+                           const uint8_t *request, size_t request_length,
+                           uint32_t format, uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(larger_input(suite_length, input_length), request_length),
+      &engine);
+  if (format > (uint32_t)ARCHBIRD_VERIFICATION_MARKDOWN)
+    status = ARCHBIRD_INVALID_ARGUMENT;
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_debug(engine, suite, suite_length, input,
+                                         input_length, request, request_length,
+                                         (ArchbirdVerificationFormat)format,
+                                         flags, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
 AB_WASM_EXPORT int ab_wasm_verification_draft(const uint8_t *map,
                                               size_t map_length,
                                               const char *project_config,

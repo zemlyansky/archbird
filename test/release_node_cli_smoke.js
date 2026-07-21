@@ -203,6 +203,15 @@ const providerSuite = path.join(
   repository,
   "test/fixtures/act/provider/provider.verify.json",
 );
+const providerDebug = JSON.parse(run([
+  "verify", "debug", "selection", "--config", providerSuite,
+  "--check", "PROVIDER-RENAME", "--format", "json",
+]));
+assert.equal(providerDebug.artifact, "verification-debug");
+assert.deepEqual(
+  providerDebug.checks.map((row) => row.id),
+  ["PROVIDER-RENAME"],
+);
 const verificationBytes = run(["verify", "--config", providerSuite, "--format", "json"]);
 const verification = JSON.parse(verificationBytes);
 const finding = verification.checks
@@ -232,4 +241,4 @@ const result = JSON.parse(run([
 ]));
 assert.equal(result.artifact, "change-result");
 assert.equal(result.status, "missing");
-console.log(`packaged Node CLI Map/Verify/Act/recipe passed through ${engine}`);
+console.log(`packaged Node CLI Map/Verify/Act/recipe/debug passed through ${engine}`);

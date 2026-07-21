@@ -66,6 +66,7 @@ void ab_verify_fact_free(ArchbirdEngine *engine, AbVerifyFactSet *fact) {
   ab_free(engine, fact->items);
   ab_string_free(engine, &fact->state);
   ab_string_free(engine, &fact->message);
+  ab_string_free(engine, &fact->selection.unit);
   memset(fact, 0, sizeof(*fact));
 }
 
@@ -88,9 +89,64 @@ ArchbirdStatus ab_verify_fact_init(ArchbirdEngine *engine,
     status = copy_literal(engine, &fact->state, "current");
   if (status == ARCHBIRD_OK)
     status = copy_literal(engine, &fact->message, "");
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(engine, &fact->selection.unit, "item");
   if (status != ARCHBIRD_OK)
     ab_verify_fact_free(engine, fact);
   return status;
+}
+
+ArchbirdStatus
+ab_verify_fact_selection_exact(ArchbirdEngine *engine, AbVerifyFactSet *fact,
+                               const char *unit, uint64_t universe,
+                               uint64_t selected, uint64_t excluded,
+                               uint64_t unsupported, int truncated) {
+  ArchbirdStatus status;
+  if (!engine || !fact || !unit || selected > universe || excluded > universe ||
+      selected + excluded < selected || selected + excluded != universe)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  ab_string_free(engine, &fact->selection.unit);
+  status = copy_literal(engine, &fact->selection.unit, unit);
+  if (status != ARCHBIRD_OK)
+    return status;
+  fact->selection.universe = universe;
+  fact->selection.selected = selected;
+  fact->selection.excluded = excluded;
+  fact->selection.unsupported = unsupported;
+  fact->selection.truncated = !!truncated;
+  fact->selection.has_universe = 1;
+  fact->selection.has_selected = 1;
+  fact->selection.has_excluded = 1;
+  fact->selection.has_unsupported = 1;
+  fact->selection.has_truncated = 1;
+  return ARCHBIRD_OK;
+}
+
+const char *
+ab_verify_fact_selection_classification(const AbVerifyFactSet *fact) {
+  uint64_t accounted;
+  if (!fact ||
+      (fact->state.length == 7 && memcmp(fact->state.data, "unknown", 7) == 0))
+    return "unknown";
+  if (!(fact->state.length == 7 && memcmp(fact->state.data, "current", 7) == 0))
+    return "incomplete";
+  if ((fact->selection.has_truncated && fact->selection.truncated) ||
+      (fact->selection.has_unsupported && fact->selection.unsupported) ||
+      (fact->selection.has_unknown && fact->selection.unknown))
+    return "incomplete";
+  if (fact->selection.has_selected && fact->selection.has_evaluated &&
+      fact->selection.has_unknown) {
+    accounted = fact->selection.evaluated + fact->selection.unknown;
+    if (accounted < fact->selection.evaluated ||
+        accounted != fact->selection.selected)
+      return "incomplete";
+  }
+  if (fact->selection.has_universe && fact->selection.has_selected &&
+      fact->selection.has_evaluated && fact->selection.has_excluded &&
+      fact->selection.has_unsupported && fact->selection.has_unknown &&
+      fact->selection.has_truncated)
+    return "complete";
+  return "bounded";
 }
 
 ArchbirdStatus
@@ -370,6 +426,26 @@ ArchbirdStatus ab_verify_fact_finish(ArchbirdEngine *engine,
       write++;
     }
     item->evidence_count = write;
+  }
+  if (!(fact->state.length == 7 &&
+        memcmp(fact->state.data, "unknown", 7) == 0)) {
+    uint64_t evaluated = 0;
+    uint64_t unknown = 0;
+    for (item_index = 0; item_index < fact->item_count; item_index++) {
+      const AbString *state = &fact->items[item_index].state;
+      if (state->length == 7 && memcmp(state->data, "unknown", 7) == 0)
+        unknown++;
+      else
+        evaluated++;
+    }
+    if (!fact->selection.has_selected) {
+      fact->selection.selected = (uint64_t)fact->item_count;
+      fact->selection.has_selected = 1;
+    }
+    fact->selection.evaluated = evaluated;
+    fact->selection.unknown = unknown;
+    fact->selection.has_evaluated = 1;
+    fact->selection.has_unknown = 1;
   }
   ab_buffer_init(&canonical, engine);
   status = render_digest_document(&canonical, fact);

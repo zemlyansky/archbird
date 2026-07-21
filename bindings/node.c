@@ -1537,6 +1537,57 @@ static napi_value verification_analyze(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value verification_debug(napi_env env, napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5];
+  const uint8_t *suite;
+  const uint8_t *input;
+  const uint8_t *request;
+  size_t suite_length;
+  size_t input_length;
+  size_t request_length;
+  char *format = NULL;
+  size_t format_length = 0;
+  int pretty;
+  ArchbirdVerificationFormat native_format;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 4 || !get_buffer(env, argv[0], &suite, &suite_length) ||
+      !get_buffer(env, argv[1], &input, &input_length) ||
+      !get_buffer(env, argv[2], &request, &request_length))
+    return NULL;
+  format = get_string(env, argv[3], &format_length);
+  if (!format || !get_optional_bool(env, argc, argv, 4, 0, &pretty)) {
+    free(format);
+    return NULL;
+  }
+  if (format_length == 4 && !memcmp(format, "json", 4))
+    native_format = ARCHBIRD_VERIFICATION_JSON;
+  else if (format_length == 8 && !memcmp(format, "markdown", 8))
+    native_format = ARCHBIRD_VERIFICATION_MARKDOWN;
+  else {
+    free(format);
+    napi_throw_range_error(
+        env, NULL, "verification debug format must be json or markdown");
+    return NULL;
+  }
+  free(format);
+  status = saved_artifact_engine(
+      larger_input(larger_input(suite_length, input_length), request_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_debug(
+        engine, suite, suite_length, input, input_length, request,
+        request_length, native_format, pretty ? ARCHBIRD_JSON_PRETTY : 0,
+        output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value verification_draft(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -1873,6 +1924,8 @@ static napi_value init(napi_env env, napi_value exports) {
       {"verificationReport", NULL, verification_report, NULL, NULL, NULL,
        napi_default, NULL},
       {"verificationAnalyze", NULL, verification_analyze, NULL, NULL, NULL,
+       napi_default, NULL},
+      {"verificationDebug", NULL, verification_debug, NULL, NULL, NULL,
        napi_default, NULL},
       {"verificationFreeze", NULL, verification_freeze, NULL, NULL, NULL,
        napi_default, NULL},

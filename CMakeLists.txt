@@ -1174,6 +1174,15 @@ if(Python3_Development.Module_FOUND)
               ${CMAKE_CURRENT_SOURCE_DIR}
     )
     add_test(
+      NAME archbird_native_verify_debug
+      COMMAND ${CMAKE_COMMAND} -E env
+              ${ARCHBIRD_REPOSITORY_TEST_ENV}
+              ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_debug.py
+              $<TARGET_FILE:archbird_python>
+              ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(
       NAME archbird_native_scip_python_host
       COMMAND ${CMAKE_COMMAND} -E env
               ${ARCHBIRD_REPOSITORY_TEST_ENV}

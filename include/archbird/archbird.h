@@ -509,6 +509,19 @@ ARCHBIRD_API ArchbirdStatus archbird_verification_analyze_report(
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*
+ * Evaluate the same reviewed suite and render a deterministic selection or
+ * unknown-evidence debug projection.  request_json is a strict schema-1
+ * "verification-debug-request" with view="selection" or view="unknown" and
+ * optional exact check/extractor filters.  JSON and Markdown are supported.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_verification_debug(
+    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
+    const uint8_t *verification_input_json, size_t verification_input_length,
+    const uint8_t *request_json, size_t request_length,
+    ArchbirdVerificationFormat format, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data);
+
+/*
  * Draft a candidate-only component dependency suite from one canonical Map.
  * project_config is the portable path that the resulting suite will use; the
  * core performs no path resolution and never promotes the draft to reviewed

@@ -37,6 +37,7 @@ const {
   PATTERN_OPTIONS,
   PATTERN_UNICODE,
   verificationAnalyze,
+  verificationDebug,
   verificationRecipeCatalog,
 } = require(path.resolve(process.argv[3], "js/src/index.js"));
 
@@ -147,6 +148,25 @@ const verificationResult = JSON.parse(
 );
 assert.equal(verificationResult.artifact, "verification");
 assert.equal(verificationResult.checks[0].status, "pass");
+const verificationDebugResult = JSON.parse(verificationDebug(
+  Buffer.from(JSON.stringify(verificationSuite)),
+  Buffer.from(JSON.stringify(verificationInput)),
+  Buffer.from(JSON.stringify({
+    artifact: "verification-debug-request",
+    schema_version: 1,
+    view: "selection",
+    check: "NODE-BINDING",
+  })),
+));
+assert.equal(verificationDebugResult.artifact, "verification-debug");
+assert.deepEqual(
+  verificationDebugResult.selections.map((row) => row.extractor),
+  ["actual", "expected"],
+);
+assert.deepEqual(
+  verificationDebugResult.selections.map((row) => row.classification),
+  ["complete", "complete"],
+);
 
 const recipeCatalog = JSON.parse(verificationRecipeCatalog());
 assert.deepEqual(recipeCatalog.recipes.map((row) => row.name), ["max-file-bytes"]);
@@ -207,6 +227,18 @@ assert.deepEqual(
   ["src/large.js"],
 );
 assert.deepEqual(metricResult.projects[0].capabilities, []);
+const metricDebug = JSON.parse(metricVerification.debug("selection", {
+  check: "MAX-FILE-BYTES",
+}));
+assert.deepEqual(metricDebug.selections[0].counts, {
+  evaluated: 2,
+  excluded: 0,
+  selected: 2,
+  universe: 2,
+  unknown: 0,
+  unsupported: 0,
+});
+assert.equal(metricDebug.selections[0].classification, "complete");
 const metricProject = Project.fromRepository(metricFixture, { scan: false });
 metricProject.finalizeProviders();
 const mappedMetricVerification = Verification.fromMap(
@@ -240,6 +272,16 @@ const cliCompile = spawnSync(process.execPath, [
 ], { encoding: "utf8", env: process.env });
 assert.equal(cliCompile.status, 0, cliCompile.stderr);
 assert.match(cliCompile.stdout, /"max":18446744073709551615/);
+const cliDebug = spawnSync(process.execPath, [
+  recipeCli,
+  "verify", "debug", "selection", metricFixture,
+  "--check", "MAX-FILE-BYTES", "--format", "json",
+], { encoding: "utf8", env: process.env });
+assert.equal(cliDebug.status, 0, cliDebug.stderr);
+assert.deepEqual(
+  JSON.parse(cliDebug.stdout).selections.map((row) => row.extractor),
+  ["recipe.file-bytes"],
+);
 fs.rmSync(metricFixture, { force: true, recursive: true });
 
 const source = Buffer.from(`
