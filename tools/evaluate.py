@@ -38,6 +38,8 @@ RESERVATION_ARTIFACT = "archbird-evaluation-reservation"
 RESERVATION_COMPARISON_ARTIFACT = "archbird-evaluation-reservation-comparison"
 PROTOCOL_ARTIFACT = "archbird-evaluation-protocol"
 STATE_ARTIFACT = "archbird-evaluation-state"
+HELD_OUT_CLAIM_ARTIFACT = "archbird-evaluation-held-out-claim"
+HELD_OUT_CLAIM_FILE = "held-out-opened.json"
 
 
 class EvaluationError(RuntimeError):
@@ -556,6 +558,9 @@ def initial_state() -> Mapping[str, Any]:
         "current_run_sha256": None,
         "current_run_comparison": None,
         "generation": 0,
+        "held_out_opened_corpus_sha256": None,
+        "held_out_opened_label": None,
+        "held_out_run_sha256": None,
         "previous_corpus_sha256": None,
         "previous_reservation_sha256": None,
         "previous_run_sha256": None,
@@ -564,10 +569,115 @@ def initial_state() -> Mapping[str, Any]:
 
 
 def read_state(root: Path) -> Mapping[str, Any]:
-    state = read_json(root / "state.json", "evaluation state")
+    state = dict(read_json(root / "state.json", "evaluation state"))
     if state.get("artifact") != STATE_ARTIFACT or state.get("schema_version") != SCHEMA_VERSION:
         raise EvaluationError("evaluation state has unsupported identity")
+    for key in (
+        "held_out_opened_corpus_sha256",
+        "held_out_opened_label",
+        "held_out_run_sha256",
+    ):
+        state.setdefault(key, None)
+    opened = state["held_out_opened_corpus_sha256"]
+    label = state["held_out_opened_label"]
+    run = state["held_out_run_sha256"]
+    if opened is not None and (
+        not isinstance(opened, str) or not SHA256_RE.fullmatch(opened)
+    ):
+        raise EvaluationError("evaluation state held-out corpus digest is invalid")
+    if label is not None and (not isinstance(label, str) or not label):
+        raise EvaluationError("evaluation state held-out label is invalid")
+    if run is not None and (not isinstance(run, str) or not SHA256_RE.fullmatch(run)):
+        raise EvaluationError("evaluation state held-out run digest is invalid")
+    if opened is None and (label is not None or run is not None):
+        raise EvaluationError("evaluation state has incomplete held-out opening evidence")
     return state
+
+
+def read_held_out_claim(root: Path) -> Mapping[str, Any] | None:
+    path = root / HELD_OUT_CLAIM_FILE
+    if not path.exists():
+        return None
+    claim = read_json(path, "held-out opening claim")
+    exact_keys(
+        claim,
+        {
+            "artifact",
+            "corpus_sha256",
+            "evaluator",
+            "label",
+            "provenance",
+            "schema_version",
+        },
+        set(),
+        "held-out opening claim",
+    )
+    if (
+        claim["artifact"] != HELD_OUT_CLAIM_ARTIFACT
+        or claim["schema_version"] != SCHEMA_VERSION
+        or claim["provenance"] != "observed"
+    ):
+        raise EvaluationError("held-out opening claim has unsupported identity")
+    if not isinstance(claim["corpus_sha256"], str) or not SHA256_RE.fullmatch(
+        claim["corpus_sha256"]
+    ):
+        raise EvaluationError("held-out opening claim corpus digest is invalid")
+    if not isinstance(claim["label"], str) or not claim["label"]:
+        raise EvaluationError("held-out opening claim label is invalid")
+    evaluator = claim["evaluator"]
+    if (
+        not isinstance(evaluator, dict)
+        or set(evaluator) != {"implementation_sha256"}
+        or not isinstance(evaluator["implementation_sha256"], str)
+        or not SHA256_RE.fullmatch(evaluator["implementation_sha256"])
+    ):
+        raise EvaluationError("held-out opening claim evaluator is invalid")
+    return claim
+
+
+def reject_after_held_out_open(root: Path, operation: str) -> None:
+    claim = read_held_out_claim(root)
+    if claim is not None:
+        raise EvaluationError(
+            "held-out set was already opened for corpus "
+            f"{claim['corpus_sha256']} by run label {claim['label']!r}; "
+            f"{operation} is prohibited by the frozen protocol"
+        )
+
+
+def claim_held_out_opening(root: Path, corpus_sha256: str, label: str) -> None:
+    claim = {
+        "artifact": HELD_OUT_CLAIM_ARTIFACT,
+        "corpus_sha256": corpus_sha256,
+        "evaluator": {"implementation_sha256": sha256_file(Path(__file__))},
+        "label": label,
+        "provenance": "observed",
+        "schema_version": SCHEMA_VERSION,
+    }
+    path = root / HELD_OUT_CLAIM_FILE
+    encoded = canonical(claim) + b"\n"
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        reject_after_held_out_open(root, "another evaluation run")
+        raise AssertionError("unreachable")
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(encoded)
+            output.flush()
+            os.fsync(output.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    state = dict(read_state(root))
+    state.update(
+        {
+            "generation": int(state["generation"]) + 1,
+            "held_out_opened_corpus_sha256": corpus_sha256,
+            "held_out_opened_label": label,
+        }
+    )
+    write_json(root / "state.json", state)
 
 
 def initialize(root: Path) -> None:
@@ -911,6 +1021,7 @@ def compare_reservations(
 
 
 def freeze_reservation(root: Path) -> str:
+    reject_after_held_out_open(root, "repository reservation changes")
     state = dict(read_state(root))
     document = reservation_document(root)
     encoded = canonical(document) + b"\n"
@@ -951,6 +1062,7 @@ def freeze_reservation(root: Path) -> str:
 
 
 def freeze_corpus(root: Path) -> str:
+    reject_after_held_out_open(root, "corpus changes")
     state = dict(read_state(root))
     document, cases, protocol_bytes = corpus_document(root)
     encoded = canonical(document) + b"\n"
@@ -1411,20 +1523,22 @@ def run_historical_verification(
             "sha256": sha256_file(result_path),
         }
     before_findings = {
-        str(finding.get("key"))
+        finding["key"]
         for check in documents["before"].get("checks", [])
         if isinstance(check, dict)
         for finding in check.get("findings", [])
         if isinstance(finding, dict)
+        and isinstance(finding.get("key"), str)
         and finding.get("comparison") == "missing"
         and finding.get("evidence_state") == "current"
     }
     after_findings = {
-        str(finding.get("key"))
+        finding["key"]
         for check in documents["after"].get("checks", [])
         if isinstance(check, dict)
         for finding in check.get("findings", [])
         if isinstance(finding, dict)
+        and isinstance(finding.get("key"), str)
         and finding.get("comparison") == "missing"
         and finding.get("evidence_state") == "current"
     }
@@ -1439,24 +1553,25 @@ def run_historical_verification(
         for check in documents["after"].get("checks", [])
         if isinstance(check, dict)
     }
-    evidence_current = (
-        before_check_states <= {"fail"} and after_check_states <= {"pass"}
-    )
+    evidence_current = before_check_states == {"fail"} and after_check_states == {
+        "pass"
+    }
     metrics: dict[str, Any] = {
         "verification_after_presence_recall": (
             len(truth - after_findings) / len(truth)
-            if after_check_states <= {"pass"}
+            if after_check_states == {"pass"}
             else None
         ),
         "verification_before_missing_recall": (
             len(truth.intersection(before_findings)) / len(truth)
-            if before_check_states <= {"fail"}
+            if before_check_states == {"fail"}
             else None
         ),
+        "verification_false_findings": len(before_findings - truth)
+        + len(after_findings - truth),
         "verification_transition_accuracy": (
             float(
-                truth.issubset(before_findings)
-                and not truth.intersection(after_findings)
+                before_findings == truth and not after_findings
             )
             if evidence_current
             else None
@@ -1511,6 +1626,7 @@ def run_historical_verification(
             and isinstance(candidate.get("path"), str)
         )
     expected_paths = [identity.split("::", 1)[0] for identity in identities]
+    metrics["act_proposal_recall"] = len(proposals) / len(identities)
     metrics.update(
         rank_metrics("act_candidate_path", proposal_paths, expected_paths)
     )
@@ -2028,8 +2144,34 @@ def aggregate_cases(
     }
 
 
-def run_evaluation(root: Path, archbird: Path, label: str, corpus_sha256: str | None) -> str:
+def run_evaluation(
+    root: Path,
+    archbird: Path,
+    label: str,
+    corpus_sha256: str | None,
+    open_held_out: bool,
+) -> str:
+    reject_after_held_out_open(root, "another evaluation run")
     corpus_sha256, corpus, corpus_directory = load_corpus(root, corpus_sha256)
+    entries = list(corpus["cases"])
+    held_out = [entry for entry in entries if entry.get("split") == "held_out"]
+    if open_held_out:
+        current = read_state(root).get("current_corpus_sha256")
+        if current != corpus_sha256:
+            raise EvaluationError(
+                "held-out scoring requires the current frozen corpus"
+            )
+        if not held_out:
+            raise EvaluationError("current corpus contains no held-out cases")
+        selected_entries = entries
+    else:
+        selected_entries = [
+            entry for entry in entries if entry.get("split") != "held_out"
+        ]
+        if not selected_entries:
+            raise EvaluationError(
+                "corpus contains only held-out cases; use --open-held-out once"
+            )
     if not archbird.is_file() or not os.access(archbird, os.X_OK):
         raise EvaluationError(f"Archbird executable is unavailable: {archbird}")
     version = subprocess.run(
@@ -2062,8 +2204,10 @@ def run_evaluation(root: Path, archbird: Path, label: str, corpus_sha256: str | 
     }
     stage = Path(tempfile.mkdtemp(prefix=".run-", dir=root / "work"))
     try:
+        if open_held_out:
+            claim_held_out_opening(root, corpus_sha256, label)
         cases = []
-        for entry in corpus["cases"]:
+        for entry in selected_entries:
             print(f"evaluating {entry['id']} ...", flush=True)
             cases.append(run_case(root, corpus_directory, entry, archbird, stage))
         tool_evidence = next((case.get("map_tool") for case in cases if case.get("map_tool") is not None), None)
@@ -2090,6 +2234,7 @@ def run_evaluation(root: Path, archbird: Path, label: str, corpus_sha256: str | 
                 "platform": platform.platform(),
                 "python": platform.python_version(),
             },
+            "held_out_opened": open_held_out,
             "label": label,
             "provenance": "observed",
             "schema_version": SCHEMA_VERSION,
@@ -2121,6 +2266,7 @@ def run_evaluation(root: Path, archbird: Path, label: str, corpus_sha256: str | 
             {
                 "current_run_sha256": run_sha256,
                 "generation": int(state["generation"]) + 1,
+                "held_out_run_sha256": run_sha256 if open_held_out else None,
                 "previous_run_sha256": previous,
             }
         )
@@ -2142,7 +2288,10 @@ def metric_direction(name: str) -> str | None:
         for token in ("recall", "mrr", "precision", "accuracy", "satisfied")
     ):
         return "higher"
-    if any(token in name for token in ("distractor", "duration", "rss")):
+    if any(
+        token in name
+        for token in ("distractor", "duration", "false_findings", "rss")
+    ):
         return "lower"
     return None
 
@@ -2152,6 +2301,8 @@ def metric_family(name: str) -> str:
         return "performance"
     if "distractor" in name:
         return "context"
+    if "false_findings" in name:
+        return "quality"
     if any(
         token in name
         for token in ("recall", "mrr", "precision", "accuracy", "satisfied")
@@ -2295,6 +2446,9 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
 def show(root: Path) -> None:
     state = read_state(root)
     print(json.dumps(state, indent=2, sort_keys=True))
+    claim = read_held_out_claim(root)
+    if claim is not None:
+        print(json.dumps(claim, indent=2, sort_keys=True))
     current = state.get("current_run_sha256")
     previous = state.get("previous_run_sha256")
     if isinstance(current, str):
@@ -2329,6 +2483,14 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--archbird", type=Path, required=True)
     run.add_argument("--label", required=True)
     run.add_argument("--corpus")
+    run.add_argument(
+        "--open-held-out",
+        action="store_true",
+        help=(
+            "irreversibly open and score held-out cases exactly once; ordinary "
+            "runs keep them sealed"
+        ),
+    )
     compare = commands.add_parser("compare", help="compare two immutable run digests")
     compare.add_argument("--before", required=True)
     compare.add_argument("--after", required=True)
@@ -2363,7 +2525,13 @@ def main() -> int:
         elif args.command == "freeze":
             freeze_corpus(root)
         elif args.command == "run":
-            run_evaluation(root, args.archbird.resolve(), args.label, args.corpus)
+            run_evaluation(
+                root,
+                args.archbird.resolve(),
+                args.label,
+                args.corpus,
+                args.open_held_out,
+            )
         elif args.command == "compare":
             comparison = compare_runs(root, args.before, args.after)
             if args.record:

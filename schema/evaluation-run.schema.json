@@ -22,6 +22,7 @@
     "artifact": {"const": "archbird-evaluation-run"},
     "provenance": {"const": "observed"},
     "corpus_sha256": {"$ref": "#/$defs/sha256"},
+    "held_out_opened": {"type": "boolean"},
     "label": {"type": "string", "minLength": 1},
     "evaluator": {
       "type": "object",

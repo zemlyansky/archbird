@@ -69,7 +69,10 @@ def main() -> int:
         "def target():\n    return 2\n\ndef helper():\n    return target()\n",
         encoding="utf-8",
     )
-    git(source, "add", "src/a.py")
+    (source / "tests/test_regression.py").write_text(
+        "def test_regression():\n    assert True\n", encoding="utf-8"
+    )
+    git(source, "add", "src/a.py", "tests/test_regression.py")
     git(source, "commit", "-m", "change target")
     after = git(source, "rev-parse", "HEAD")
 
@@ -94,14 +97,17 @@ if sys.argv[1:] == ['support']:
     'version':'0.test',
   }, separators=(',', ':'), sort_keys=True))
   raise SystemExit(0)
+command = sys.argv[1]
+variant = os.environ.get('ARCHBIRD_EVAL_TEST_VARIANT')
 out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 out.parent.mkdir(parents=True, exist_ok=True)
-if sys.argv[1] == 'map':
+if command == 'map':
+  if variant == 'fail':
+    raise SystemExit(3)
   value = {'artifact':'map','schema_version':7,'project':'fixture','files':[],
            'source_tool':{'name':'archbird','version':'0.test',
              'implementation_sha256':'1'*64}}
-else:
-  variant = os.environ.get('ARCHBIRD_EVAL_TEST_VARIANT')
+elif command in ('query', 'impact'):
   good = variant in ('good', 'context')
   files = ([{'distance':0,'path':'src/a.py','symbols':[{'name':'target'}]}]
            if good else [{'distance':0,'path':'src/other.py','symbols':[{'name':'other'}]}])
@@ -111,6 +117,38 @@ else:
   matched = ([{'path':'src/a.py','name':'target'}] if good else [])
   value = {'artifact':'query','schema_version':7,'files':files,
            'matched_symbols':matched,'test_matches':matches}
+elif command == 'verify':
+  before = pathlib.Path.cwd().name == 'before'
+  variant = os.environ.get('ARCHBIRD_EVAL_TEST_VARIANT')
+  findings = ([{
+    'comparison':'missing',
+    'evidence_state':'current',
+    'fingerprint':'4'*64,
+    'key':'tests/test_regression.py::test_regression',
+  }] if before else [])
+  if before and variant == 'bad':
+    findings.append({
+      'comparison':'missing',
+      'evidence_state':'current',
+      'fingerprint':'5'*64,
+      'key':'tests/test_unrelated.py::test_unrelated',
+    })
+  value = {'artifact':'verification','schema_version':1,'checks':[{
+    'findings':findings,
+    'id':'HISTORICAL-INTRODUCED-TESTS',
+    'status':'fail' if before else 'pass',
+  }]}
+elif command == 'plan':
+  value = {'artifact':'change-proposal','schema_version':1,'candidates':[{
+    'id':'test-regression',
+    'path':'tests/test_regression.py',
+  }]}
+elif command == 'contract':
+  value = {'artifact':'change-contract','schema_version':1}
+elif command == 'verify-plan':
+  value = {'artifact':'change-result','schema_version':1,'status':'satisfied'}
+else:
+  raise SystemExit(f'unsupported fake command: {command}')
 out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
 """,
         encoding="utf-8",
@@ -123,6 +161,15 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     missing.pop("ARCHBIRD_EVAL_ROOT", None)
     assert run("init", environment=missing, check=False).returncode == 2
     run("init", environment=environment)
+    legacy_state = json.loads((root / "state.json").read_text())
+    for key in (
+        "held_out_opened_corpus_sha256",
+        "held_out_opened_label",
+        "held_out_run_sha256",
+    ):
+        legacy_state.pop(key)
+    write_json(root / "state.json", legacy_state)
+    run("show", environment=environment)
     reservation_plan = {
         "artifact": "archbird-evaluation-reservation-plan",
         "provenance": "asserted",
@@ -198,7 +245,7 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         "artifact": "archbird-evaluation-case",
         "ground_truth": {
             "architecture_obligations": [],
-            "introduced_tests": [],
+            "introduced_tests": ["tests/test_regression.py::test_regression"],
             "notes": "Synthetic exact-impact acceptance case.",
             "relevant_files": ["src/a.py", "tests/test_a.py"],
             "relevant_symbols": ["src/a.py:helper", "src/a.py:target"],
@@ -228,18 +275,30 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     }
     case_path = root / "authoring/cases/fixture-target-change.json"
     write_json(case_path, case)
+    held_out_case = json.loads(json.dumps(case))
+    held_out_case["id"] = "fixture-held-out-change"
+    held_out_case["split"] = "held_out"
+    write_json(root / "authoring/cases/fixture-held-out-change.json", held_out_case)
     run("sync", "--fetch", "--reservations", "validation", environment=environment)
     run("validate", environment=environment)
     run("freeze", environment=environment)
     state = json.loads((root / "state.json").read_text())
     first_corpus = state["current_corpus_sha256"]
     corpus = json.loads((root / f"corpora/{first_corpus}/corpus.json").read_text())
-    assert corpus["cases"][0]["diff_files"] == ["src/a.py"]
+    assert corpus["cases"][0]["diff_files"] == [
+        "src/a.py",
+        "tests/test_regression.py",
+    ]
 
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "bad"
     run("run", "--archbird", str(fake), "--label", "bad", environment=environment)
     first_run = json.loads((root / "state.json").read_text())["current_run_sha256"]
     first = json.loads((root / f"runs/{first_run}/result.json").read_text())
+    run_schema = json.loads(
+        (REPOSITORY / "schema/evaluation-run.schema.json").read_text()
+    )
+    assert set(first).issubset(run_schema["properties"])
+    assert first["held_out_opened"] is False
     assert first["cases"][0]["metrics"]["relevant_file_recall_all"] == 0.0
     assert first["tool"]["launcher"] == {
         "path": str(fake.resolve()),
@@ -260,6 +319,8 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     row = comparison["cases"][0]
     assert row["metrics"]["relevant_file_recall_all"]["classification"] == "improved"
     assert row["metrics"]["relevant_test_recall_all"]["classification"] == "improved"
+    assert row["metrics"]["verification_false_findings"]["classification"] == "improved"
+    assert row["metrics"]["verification_transition_accuracy"]["classification"] == "improved"
     assert comparison["summary"]["reviewed_quality"]["improved"] == 1
     second = json.loads((root / f"runs/{second_run}/result.json").read_text())
     assert second["aggregate"]["reviewed_by_split"]["development"]["cases"] == 1
@@ -304,6 +365,12 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert second["cases"][0]["artifacts"]["issue_query"]["bytes"] > 0
     assert second["cases"][0]["metrics"]["seed_file_recall_all"] == 1.0
     assert second["cases"][0]["metrics"]["seed_file_truth"] == 1
+    assert second["cases"][0]["metrics"]["verification_before_missing_recall"] == 1.0
+    assert second["cases"][0]["metrics"]["verification_after_presence_recall"] == 1.0
+    assert second["cases"][0]["metrics"]["verification_false_findings"] == 0
+    assert second["cases"][0]["metrics"]["verification_transition_accuracy"] == 1.0
+    assert second["cases"][0]["metrics"]["act_proposal_recall"] == 1.0
+    assert second["cases"][0]["metrics"]["act_transition_satisfied"] == 1.0
 
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "context"
     run("run", "--archbird", str(fake), "--label", "context", environment=environment)
@@ -342,6 +409,69 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert reservation_comparison["changed"] == ["reserved-fixture"]
     assert reservation_comparison["added"] == []
     assert reservation_comparison["removed"] == []
+
+    failed_root = TEMPORARY / "failed-held-out-open"
+    shutil.copytree(root, failed_root)
+    failed_environment = {**environment, "ARCHBIRD_EVAL_ROOT": str(failed_root)}
+    failed_environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "fail"
+    failed = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "failed-held-out-score",
+        "--open-held-out",
+        environment=failed_environment,
+        check=False,
+    )
+    assert failed.returncode == 2
+    failed_claim = json.loads((failed_root / "held-out-opened.json").read_text())
+    assert failed_claim["label"] == "failed-held-out-score"
+    failed_retry = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "forbidden-failed-retry",
+        environment=failed_environment,
+        check=False,
+    )
+    assert failed_retry.returncode == 2
+    assert "already opened" in failed_retry.stderr
+
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "context"
+    run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "held-out-score",
+        "--open-held-out",
+        environment=environment,
+    )
+    state = json.loads((root / "state.json").read_text())
+    held_out_run = json.loads(
+        (root / f"runs/{state['held_out_run_sha256']}/result.json").read_text()
+    )
+    assert held_out_run["held_out_opened"] is True
+    assert held_out_run["aggregate"]["reviewed_by_split"]["development"]["cases"] == 1
+    assert held_out_run["aggregate"]["reviewed_by_split"]["held_out"]["cases"] == 1
+    claim = json.loads((root / "held-out-opened.json").read_text())
+    assert claim["corpus_sha256"] == state["held_out_opened_corpus_sha256"]
+    assert claim["label"] == "held-out-score"
+    blocked = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "forbidden-retry",
+        environment=environment,
+        check=False,
+    )
+    assert blocked.returncode == 2
+    assert "already opened" in blocked.stderr
+    assert run("freeze", environment=environment, check=False).returncode == 2
+    assert run("reserve", environment=environment, check=False).returncode == 2
     print("evaluation harness tests passed")
     return 0
 

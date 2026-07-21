@@ -344,7 +344,7 @@ static int64_t parse_unary(ExpressionParser *parser) {
   if (!parser->valid)
     return 0;
   if (invert)
-    value = (int64_t) ~(uint64_t)value;
+    value = (int64_t)~(uint64_t)value;
   if (negate) {
     if (value == INT64_MIN) {
       parser->valid = 0;
