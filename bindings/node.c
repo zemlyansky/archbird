@@ -1454,6 +1454,61 @@ static napi_value verification_plan(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value verification_recipe_catalog(napi_env env,
+                                              napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  char *recipe = NULL;
+  size_t recipe_length = 0;
+  int pretty;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 1)
+    return NULL;
+  recipe = get_string(env, argv[0], &recipe_length);
+  if (!recipe || !get_optional_bool(env, argc, argv, 1, 0, &pretty)) {
+    free(recipe);
+    return NULL;
+  }
+  status = input_engine(recipe_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_recipe_catalog(
+        engine, recipe, recipe_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
+        output_write, &output);
+  free(recipe);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static napi_value verification_recipe_compile(napi_env env,
+                                              napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  const uint8_t *request;
+  size_t request_length;
+  int pretty;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 1 || !get_buffer(env, argv[0], &request, &request_length) ||
+      !get_optional_bool(env, argc, argv, 1, 0, &pretty))
+    return NULL;
+  status = input_engine(request_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_recipe_compile(
+        engine, request, request_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
+        output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value verification_analyze(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -1825,6 +1880,10 @@ static napi_value init(napi_env env, napi_value exports) {
        napi_default, NULL},
       {"verificationPlan", NULL, verification_plan, NULL, NULL, NULL,
        napi_default, NULL},
+      {"verificationRecipeCompile", NULL, verification_recipe_compile, NULL,
+       NULL, NULL, napi_default, NULL},
+      {"verificationRecipeCatalog", NULL, verification_recipe_catalog, NULL,
+       NULL, NULL, napi_default, NULL},
       {"workspaceAnalyze", NULL, workspace_analyze, NULL, NULL, NULL,
        napi_default, NULL},
       {"workspacePlan", NULL, workspace_plan, NULL, NULL, NULL, napi_default,

@@ -885,6 +885,28 @@ AB_WASM_EXPORT int ab_wasm_verification_plan(const uint8_t *suite,
   return stateless_end(engine, status);
 }
 
+AB_WASM_EXPORT int ab_wasm_verification_recipe_catalog(const char *recipe,
+                                                       size_t recipe_length,
+                                                       uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_input(recipe_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_recipe_catalog(
+        engine, recipe, recipe_length, flags, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_verification_recipe_compile(const uint8_t *request,
+                                                       size_t request_length,
+                                                       uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_input(request_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_recipe_compile(
+        engine, request, request_length, flags, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
 AB_WASM_EXPORT int ab_wasm_verification_analyze(const uint8_t *suite,
                                                 size_t suite_length,
                                                 const uint8_t *input,

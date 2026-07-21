@@ -370,12 +370,39 @@ reconstruct implementation evidence without configuration, but conformance
 requires reviewed architecture intent. Use explicit `--config` for a
 nonstandard filename or when invoking the suite from outside its repository.
 
+For objective one-shot policy, a recipe command supplies the intent explicitly
+and needs no suite file:
+
+```bash
+archbird verify recipe list
+archbird verify recipe show max-file-bytes --pretty
+archbird verify recipe run max-file-bytes . \
+  --max 1MiB --include 'src/**' --check
+
+# Materialize the same policy as an ordinary reviewable Verify suite.
+archbird verify recipe compile max-file-bytes \
+  --max 1MiB --include 'src/**' \
+  --owner architecture \
+  --rationale "Keep source files reviewable" \
+  --output archbird.verify.json
+```
+
+Byte sizes are exact integers; `KiB`/`MiB`/`GiB` are binary units and
+`KB`/`MB`/`GB` are decimal units. A recipe selector that matches no files is a
+failure unless `--allow-empty` is asserted. Live recipe execution combines Map
+file evidence with discovery-resolution evidence, so source files omitted by
+the normal ingestion limit are still checked. A saved Map without that exact
+omission evidence remains unknown rather than passing. The native verification
+plan declares whether each project needs provider evidence; inventory-only
+recipes and suites skip lexical, syntax, and semantic scans while graph-backed
+checks retain the complete provider pipeline.
+
 Verify supports set/value equality, mapped names/values, directional subsets,
-cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
-and behavioral-attestation equality. Extractors cover literal facts, symbols,
-values, component/file edges, exact test selectors, test routes, provider
-surfaces, Python enums and sets, C enums/designated initializers/macros, and
-supplied attestations.
+cardinality, numeric bounds, required/forbidden/allowed edges, acyclicity,
+minimum test routes, and behavioral-attestation equality. Extractors cover
+literal facts, symbols, values, file metrics, component/file edges, exact test
+selectors, test routes, provider surfaces, Python enums and sets, C
+enums/designated initializers/macros, and supplied attestations.
 
 Facts have three non-interchangeable provenances:
 

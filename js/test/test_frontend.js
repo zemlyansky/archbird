@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { scipFixture } = require("../../test/scip_fixture");
 const { ProviderCache } = require("../src/provider-cache");
 
@@ -15,6 +16,7 @@ const {
   ChangeProposal,
   auditMapFreshness,
   analyzeOkfSource,
+  compileVerificationRecipe,
   exportGraph,
   draftVerificationSuite,
   IMPLEMENTATION_SHA256,
@@ -35,6 +37,7 @@ const {
   PATTERN_OPTIONS,
   PATTERN_UNICODE,
   verificationAnalyze,
+  verificationRecipeCatalog,
 } = require(path.resolve(process.argv[3], "js/src/index.js"));
 
 assert.equal(NATIVE_ABI_VERSION, 0);
@@ -144,6 +147,100 @@ const verificationResult = JSON.parse(
 );
 assert.equal(verificationResult.artifact, "verification");
 assert.equal(verificationResult.checks[0].status, "pass");
+
+const recipeCatalog = JSON.parse(verificationRecipeCatalog());
+assert.deepEqual(recipeCatalog.recipes.map((row) => row.name), ["max-file-bytes"]);
+const recipeSuite = JSON.parse(compileVerificationRecipe(Buffer.from(JSON.stringify({
+  artifact: "verification-recipe-request",
+  schema_version: 1,
+  recipe: "max-file-bytes",
+  project: { map: "ARCHBIRD.json" },
+  arguments: { max: 1048576, include: ["src/**"] },
+  check: {
+    id: "MAX-FILE-BYTES",
+    owner: "test",
+    rationale: "Exercise the shared recipe compiler.",
+  },
+}))));
+assert.equal(recipeSuite.extractors["recipe.file-bytes"].kind, "file_metrics");
+assert.equal(recipeSuite.checks[0].assert, "numeric_bounds");
+assert.equal(recipeSuite.checks[0].max, 1048576);
+
+const metricFixture = path.resolve(
+  process.argv[3],
+  "build/test-verify-recipe-node",
+);
+fs.rmSync(metricFixture, { force: true, recursive: true });
+fs.mkdirSync(path.join(metricFixture, "src"), { recursive: true });
+fs.writeFileSync(path.join(metricFixture, "src/small.js"), "x=1;\n");
+fs.writeFileSync(path.join(metricFixture, "src/large.js"), "x".repeat(20));
+fs.writeFileSync(path.join(metricFixture, "archbird.json"), JSON.stringify({
+  schema_version: 1,
+  project: "recipe-configured-node",
+  limits: { max_file_bytes: 100 },
+  layers: [{
+    name: "javascript",
+    role: "core",
+    language: "javascript",
+    globs: ["src/**/*.js"],
+  }],
+}));
+const configuredRecipeSuite = compileVerificationRecipe(Buffer.from(JSON.stringify({
+  artifact: "verification-recipe-request",
+  schema_version: 1,
+  recipe: "max-file-bytes",
+  project: { config: "archbird.json" },
+  arguments: { max: 10, include: ["src/**"] },
+  check: {
+    id: "MAX-FILE-BYTES",
+    owner: "test",
+    rationale: "Exercise inventory-only configured verification.",
+  },
+})));
+const metricSuitePath = path.join(metricFixture, "archbird.verify.json");
+fs.writeFileSync(metricSuitePath, configuredRecipeSuite);
+const metricVerification = Verification.fromConfig(metricSuitePath);
+const metricResult = metricVerification.result();
+assert.equal(metricResult.checks[0].status, "fail");
+assert.deepEqual(
+  metricResult.checks[0].findings.map((row) => row.key),
+  ["src/large.js"],
+);
+assert.deepEqual(metricResult.projects[0].capabilities, []);
+const metricProject = Project.fromRepository(metricFixture, { scan: false });
+metricProject.finalizeProviders();
+const mappedMetricVerification = Verification.fromMap(
+  configuredRecipeSuite,
+  metricProject.mapJson(),
+  { resolutionJson: metricProject.resolutionJson },
+);
+assert.deepEqual(
+  mappedMetricVerification.result().checks[0].findings.map((row) => row.key),
+  ["src/large.js"],
+);
+metricProject.dispose();
+
+const recipeCli = path.resolve(process.argv[3], "js/src/cli.js");
+const cliFailure = spawnSync(process.execPath, [
+  recipeCli,
+  "verify", "recipe", "run", "max-file-bytes", metricFixture,
+  "--max", "10B", "--format", "json", "--check", "--progress", "never",
+], { encoding: "utf8", env: process.env });
+assert.equal(cliFailure.status, 1, cliFailure.stderr);
+assert.deepEqual(
+  JSON.parse(cliFailure.stdout).checks[0].findings.map((row) => row.key),
+  ["src/large.js"],
+);
+const cliCompile = spawnSync(process.execPath, [
+  recipeCli,
+  "verify", "recipe", "compile", "max-file-bytes",
+  "--max", "18446744073709551615B",
+  "--owner", "test", "--rationale", "Exercise exact uint64 parsing.",
+  "--output", "-",
+], { encoding: "utf8", env: process.env });
+assert.equal(cliCompile.status, 0, cliCompile.stderr);
+assert.match(cliCompile.stdout, /"max":18446744073709551615/);
+fs.rmSync(metricFixture, { force: true, recursive: true });
 
 const source = Buffer.from(`
 const fs = require("node:fs");

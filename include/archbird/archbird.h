@@ -520,6 +520,26 @@ ARCHBIRD_API ArchbirdStatus archbird_verification_draft(
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
 /*
+ * Render the portable built-in verification recipe catalog.  An empty recipe
+ * name lists every recipe; a non-empty name returns exactly one recipe or
+ * fails when it is unknown.  Recipes describe explicit policy inputs and do
+ * not infer architectural intent from the current repository graph.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_verification_recipe_catalog(
+    ArchbirdEngine *engine, const char *recipe, size_t recipe_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Compile a schema-1 verification-recipe-request into an ordinary reviewed
+ * verification suite.  The resulting suite is evaluated by the existing
+ * Verify kernel and can be stored, reviewed, baselined, or consumed by any
+ * frontend.  The core performs no repository I/O.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_verification_recipe_compile(
+    ArchbirdEngine *engine, const uint8_t *request_json, size_t request_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/*
  * Render a reviewed violation/coverage baseline from the same suite and input
  * used by Verify.  Existing baseline state in verification_input_json is
  * carried forward so resolved findings and coverage form a monotonic ratchet.

@@ -1383,6 +1383,58 @@ static PyObject *py_verification_draft(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_verification_recipe_catalog(PyObject *self, PyObject *args,
+                                                PyObject *kwargs) {
+  static char *keywords[] = {"recipe", "pretty", NULL};
+  const char *recipe = "";
+  Py_ssize_t recipe_length = 0;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+                                   "|s#p:verification_recipe_catalog", keywords,
+                                   &recipe, &recipe_length, &pretty))
+    return NULL;
+  status = input_engine((size_t)recipe_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_recipe_catalog(
+        engine, recipe, (size_t)recipe_length,
+        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
+        output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_verification_recipe_compile(PyObject *self, PyObject *args,
+                                                PyObject *kwargs) {
+  static char *keywords[] = {"request", "pretty", NULL};
+  const char *request;
+  Py_ssize_t request_length;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+                                   "y#|p:verification_recipe_compile", keywords,
+                                   &request, &request_length, &pretty))
+    return NULL;
+  status = input_engine((size_t)request_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_verification_recipe_compile(
+        engine, (const uint8_t *)request, (size_t)request_length,
+        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
+        output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_verification_freeze(PyObject *self, PyObject *args,
                                         PyObject *kwargs) {
   static char *keywords[] = {"suite",     "input",  "owner",
@@ -1643,6 +1695,12 @@ static PyMethodDef archbird_methods[] = {
     {"verification_draft", (PyCFunction)py_verification_draft,
      METH_VARARGS | METH_KEYWORDS,
      "Draft a candidate-only component dependency suite."},
+    {"verification_recipe_catalog", (PyCFunction)py_verification_recipe_catalog,
+     METH_VARARGS | METH_KEYWORDS,
+     "List portable built-in verification recipes."},
+    {"verification_recipe_compile", (PyCFunction)py_verification_recipe_compile,
+     METH_VARARGS | METH_KEYWORDS,
+     "Compile explicit recipe arguments into a verification suite."},
     {"verification_analyze", (PyCFunction)py_verification_analyze,
      METH_VARARGS | METH_KEYWORDS,
      "Evaluate a verification suite over host-supplied evidence."},

@@ -186,6 +186,10 @@ static ArchbirdStatus render_extractor(AbBuffer *buffer,
   VERIFY_RENDER_TRY(render_value_or(buffer, row, "kinds", "[]"));
   VERIFY_RENDER_TRY(ab_buffer_literal(buffer, ",\"layer\":"));
   VERIFY_RENDER_TRY(render_value_or(buffer, row, "layer", "\"\""));
+  if (ab_verify_string_is(kind, "file_metrics")) {
+    VERIFY_RENDER_TRY(ab_buffer_literal(buffer, ",\"metric\":"));
+    VERIFY_RENDER_TRY(render_value_or(buffer, row, "metric", "\"\""));
+  }
   VERIFY_RENDER_TRY(ab_buffer_literal(buffer, ",\"name\":"));
   VERIFY_RENDER_TRY(
       ab_buffer_json_string(buffer, field->name.data, field->name.length));

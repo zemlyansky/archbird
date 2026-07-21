@@ -323,15 +323,21 @@ class Project:
         )
         if not repository.is_dir():
             raise ConfigError(f"root is not a directory: {repository}")
-        inventory = _inventory(config_json, repository)
-        plan = json.loads(_native.discovery_plan(config_json, inventory))
-        sources = _read_sources(repository, plan)
+        resolution_json = resolve_discovery(
+            repository,
+            config=config_json,
+            ignore=False,
+        )
+        resolution = json.loads(resolution_json)
+        sources = _read_sources(repository, resolution)
         project = cls(
-            plan["project"],
+            resolution["project"],
             sources,
-            configuration_sha256=plan["configuration_sha256"],
+            configuration_sha256=resolution["configuration_sha256"],
+            resolution=resolution,
         )
         project.root = repository
+        project.resolution_json = resolution_json
         project.set_config(config_json)
         if scan:
             project.scan(
@@ -1108,6 +1114,7 @@ class Verification:
             raise ConfigError(f"cannot read verification suite: {path}: {error}") from error
         plan = json.loads(verification_plan_json(suite_json))
         suite = _strict_document(suite_json, "verification suite")
+        extractors = suite.get("extractors", {})
         base = path.parent
         overrides = {
             str(name): Path(value).resolve()
@@ -1142,10 +1149,19 @@ class Verification:
                 project = Project.from_config(
                     config_path,
                     root=root,
+                    scan=False,
                     jobs=jobs,
                     cache_dir=cache_dir,
                     cache_max_bytes=cache_max_bytes,
                 )
+                if row["provider_scan"]:
+                    project.scan(
+                        jobs=jobs,
+                        cache_dir=cache_dir,
+                        cache_max_bytes=cache_max_bytes,
+                    )
+                else:
+                    project.finalize_providers()
                 map_document = _strict_document(
                     project.map_json(), f"project {name} map"
                 )
@@ -1222,7 +1238,6 @@ class Verification:
             project_inputs[name] = project_input
             repository_roots[name] = repository_root
 
-        extractors = suite.get("extractors", {})
         provided_facts = []
         for row in plan["sources"]:
             if row["provider"] != "python-ast":
@@ -1351,6 +1366,46 @@ class Verification:
             "baseline": baseline_document,
         }
         return cls(suite_json, _canonical(input_document), path=path)
+
+    @classmethod
+    def from_map(
+        cls,
+        suite_json: bytes,
+        map_json: bytes,
+        *,
+        resolution_json: Optional[bytes] = None,
+        path: Union[str, Path] = "recipe.verify.json",
+    ) -> "Verification":
+        """Evaluate a map-only suite without materializing temporary files."""
+
+        suite = _strict_document(suite_json, "verification suite")
+        map_document = _strict_document(map_json, "project map")
+        plan = json.loads(verification_plan_json(_canonical(suite)))
+        projects = plan.get("projects")
+        if not isinstance(projects, list) or len(projects) != 1:
+            raise ConfigError("map-only verification requires exactly one project")
+        if plan.get("sources") or plan.get("attestations"):
+            raise ConfigError(
+                "map-only verification cannot satisfy source or attestation inputs"
+            )
+        project_name = projects[0].get("name")
+        if not isinstance(project_name, str) or not project_name:
+            raise ConfigError("verification plan has an invalid project name")
+        project_input = {"name": project_name, "map": map_document, "sources": []}
+        if resolution_json is not None:
+            project_input["resolution"] = _strict_document(
+                resolution_json, "project discovery resolution"
+            )
+        input_document = {
+            "schema_version": 1,
+            "artifact": "verification-input",
+            "suite_path": Path(path).name,
+            "projects": [project_input],
+            "provided_facts": [],
+            "attestations": [],
+            "baseline": None,
+        }
+        return cls(_canonical(suite), _canonical(input_document), path=Path(path))
 
     def result_json(self, *, pretty: bool = False) -> bytes:
         return verification_analyze_json(
@@ -2019,6 +2074,22 @@ def verification_analyze_json(
     )
 
 
+def verification_recipe_catalog(
+    recipe: str = "", *, pretty: bool = False
+) -> bytes:
+    """Return the shared native verification recipe catalog."""
+
+    return _native.verification_recipe_catalog(recipe, pretty=pretty)
+
+
+def compile_verification_recipe(
+    request_json: bytes, *, pretty: bool = False
+) -> bytes:
+    """Compile explicit recipe arguments into an ordinary Verify suite."""
+
+    return _native.verification_recipe_compile(request_json, pretty=pretty)
+
+
 def verification_report(
     suite_json: bytes,
     input_json: bytes,
@@ -2300,10 +2371,6 @@ def _inventory_state(
         tuple(sorted(pruned)),
         tuple(sorted(file_sizes)),
     )
-
-
-def _inventory(config_json: bytes, root: Path) -> Tuple[str, ...]:
-    return _inventory_state(config_json, root)[0]
 
 
 def _config_bytes(config: Optional[Union[str, Path, bytes]]) -> bytes:

@@ -1043,6 +1043,39 @@ def verification_draft(map: bytes, project_config: str, pretty=False) -> bytes:
     )
 
 
+def verification_recipe_catalog(recipe="", pretty=False) -> bytes:
+    name = _text(recipe, "verification recipe")
+    function = _declare(
+        "archbird_verification_recipe_catalog",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _one_shot(
+        lambda engine, write: function(
+            engine,
+            name or None,
+            len(name),
+            _json_flags(pretty, True),
+            write,
+            None,
+        )
+    )
+
+
+def verification_recipe_compile(request: bytes, pretty=False) -> bytes:
+    return _simple_render(
+        "archbird_verification_recipe_compile",
+        [_bytes(request)],
+        flags=_json_flags(pretty, True),
+    )
+
+
 def verification_freeze(
     suite: bytes,
     input: bytes,

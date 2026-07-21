@@ -476,6 +476,10 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
       twoInputs(config, maps, "_ab_wasm_workspace_analyze", boolFlags(pretty)),
     verificationPlan: (suite, pretty = false) =>
       oneInput(suite, "_ab_wasm_verification_plan", boolFlags(pretty)),
+    verificationRecipeCatalog: (recipe = "", pretty = false) =>
+      oneInput(recipe, "_ab_wasm_verification_recipe_catalog", boolFlags(pretty)),
+    verificationRecipeCompile: (request, pretty = false) =>
+      oneInput(request, "_ab_wasm_verification_recipe_compile", boolFlags(pretty)),
     verificationAnalyze: (suite, input, pretty = false) =>
       twoInputs(suite, input, "_ab_wasm_verification_analyze", boolFlags(pretty)),
     verificationDraft: (map, projectConfig, pretty = false) =>

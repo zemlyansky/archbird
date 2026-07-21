@@ -28,6 +28,7 @@ static const char *fact_shape(const AbValue *kind) {
   if (ab_verify_string_is(kind, "python_enum") ||
       ab_verify_string_is(kind, "c_enum") ||
       ab_verify_string_is(kind, "c_designated_initializer") ||
+      ab_verify_string_is(kind, "file_metrics") ||
       ab_verify_string_is(kind, "provider_surface") ||
       ab_verify_string_is(kind, "literal_values"))
     return "values";
@@ -364,6 +365,16 @@ static const AbValue *project_map(AbVerificationContext *context,
           ? ab_verify_input_project(&context->input, &project_name->as.text)
           : NULL;
   return project ? ab_value_member(project, "map") : NULL;
+}
+
+static const AbValue *project_resolution(AbVerificationContext *context,
+                                         const AbValue *spec) {
+  const AbValue *project_name = ab_value_member(spec, "project");
+  const AbValue *project =
+      project_name
+          ? ab_verify_input_project(&context->input, &project_name->as.text)
+          : NULL;
+  return project ? ab_value_member(project, "resolution") : NULL;
 }
 
 static const AbValue *map_file(const AbValue *map, const AbString *path) {
@@ -987,6 +998,176 @@ static ArchbirdStatus extract_symbols(AbVerificationContext *context,
         status = derived_evidence(context->engine, &project_name->as.text,
                                   &path->as.text, line_number,
                                   sha->as.text.data, &detail, &evidence);
+      if (status == ARCHBIRD_OK)
+        status = ab_verify_item_add_evidence(context->engine, &item, &evidence);
+      if (status == ARCHBIRD_OK)
+        status = ab_verify_fact_add_item(context->engine, fact, &item);
+      ab_buffer_free(&detail);
+      ab_verify_evidence_free(context->engine, &evidence);
+      ab_string_free(context->engine, &normalized);
+      if (status != ARCHBIRD_OK)
+        ab_verify_fact_item_free(context->engine, &item);
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_verify_fact_finish(context->engine, fact);
+  if (status != ARCHBIRD_OK)
+    ab_verify_fact_free(context->engine, fact);
+  return status;
+}
+
+static ArchbirdStatus extract_file_metrics(AbVerificationContext *context,
+                                           const AbObjectField *extractor,
+                                           AbVerifyFactSet *fact) {
+  const AbValue *spec = &extractor->value;
+  const AbValue *project_name = ab_value_member(spec, "project");
+  const AbValue *map = project_map(context, spec);
+  const AbValue *resolution = project_resolution(context, spec);
+  const AbValue *files = map ? ab_value_member(map, "files") : NULL;
+  const AbValue *discovery = map ? ab_value_member(map, "discovery") : NULL;
+  const AbValue *coverage =
+      discovery ? ab_value_member(discovery, "coverage") : NULL;
+  const AbValue *oversized =
+      coverage ? ab_value_member(coverage, "oversized") : NULL;
+  const AbValue *metric = ab_value_member(spec, "metric");
+  size_t file_index;
+  uint64_t oversized_count = 0;
+  ArchbirdStatus status =
+      ab_verify_fact_init(context->engine, fact, &extractor->name, "values",
+                          "derived", &project_name->as.text);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (!files || files->kind != AB_VALUE_ARRAY) {
+    ab_verify_fact_free(context->engine, fact);
+    return ab_verify_fact_unknown(context->engine, fact, &extractor->name,
+                                  &project_name->as.text, "values",
+                                  "project map has no file inventory");
+  }
+  if (!oversized || !ab_value_u64(oversized, &oversized_count)) {
+    ab_verify_fact_free(context->engine, fact);
+    return ab_verify_fact_unknown(
+        context->engine, fact, &extractor->name, &project_name->as.text,
+        "values", "project map has no valid oversized-file coverage");
+  }
+  if (oversized_count && !resolution) {
+    ab_verify_fact_free(context->engine, fact);
+    return ab_verify_fact_unknown(
+        context->engine, fact, &extractor->name, &project_name->as.text,
+        "values",
+        "project discovery omitted oversized files; file metrics are "
+        "incomplete");
+  }
+  for (file_index = 0; file_index < files->as.array.count; file_index++) {
+    const AbValue *file = &files->as.array.items[file_index];
+    const AbValue *path = ab_value_member(file, "path");
+    const AbValue *value = ab_value_member(file, "bytes");
+    const AbValue *sha = ab_value_member(file, "sha256");
+    uint64_t number;
+    if (!ab_verify_path_is_repository(path) || !value ||
+        !ab_value_u64(value, &number) || !lowercase_sha256_value(sha)) {
+      ab_verify_fact_free(context->engine, fact);
+      return ab_verify_fact_unknown(
+          context->engine, fact, &extractor->name, &project_name->as.text,
+          "values", "project map has an invalid file metric inventory");
+    }
+  }
+  for (file_index = 0;
+       status == ARCHBIRD_OK && file_index < files->as.array.count;
+       file_index++) {
+    const AbValue *file = &files->as.array.items[file_index];
+    const AbValue *path = ab_value_member(file, "path");
+    const AbValue *value = ab_value_member(file, "bytes");
+    const AbValue *sha = ab_value_member(file, "sha256");
+    const AbValue *layer = ab_value_member(file, "layer");
+    const AbValue *language = ab_value_member(file, "language");
+    AbString normalized = {0};
+    int selected = 0;
+    AbVerifyFactItem item = {0};
+    AbVerifyEvidence evidence = {0};
+    AbBuffer detail;
+    status = ab_verify_normalized_name(context->engine, spec, &path->as.text,
+                                       &normalized, &selected);
+    if (status != ARCHBIRD_OK || !selected) {
+      ab_string_free(context->engine, &normalized);
+      continue;
+    }
+    status = ab_verify_item_init(context->engine, &item, &normalized,
+                                 &path->as.text, value);
+    if (status == ARCHBIRD_OK)
+      status = item_add_string_attribute(context->engine, &item, "metric",
+                                         &metric->as.text);
+    if (status == ARCHBIRD_OK && layer && layer->kind == AB_VALUE_STRING)
+      status = item_add_string_attribute(context->engine, &item, "layer",
+                                         &layer->as.text);
+    if (status == ARCHBIRD_OK && language && language->kind == AB_VALUE_STRING)
+      status = item_add_string_attribute(context->engine, &item, "language",
+                                         &language->as.text);
+    ab_buffer_init(&detail, context->engine);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(&detail, metric->as.text.data,
+                                metric->as.text.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&detail, "=");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&detail, value);
+    if (status == ARCHBIRD_OK)
+      status = derived_evidence(context->engine, &project_name->as.text,
+                                &path->as.text, 0, sha->as.text.data, &detail,
+                                &evidence);
+    if (status == ARCHBIRD_OK)
+      status = ab_verify_item_add_evidence(context->engine, &item, &evidence);
+    if (status == ARCHBIRD_OK)
+      status = ab_verify_fact_add_item(context->engine, fact, &item);
+    ab_buffer_free(&detail);
+    ab_verify_evidence_free(context->engine, &evidence);
+    ab_string_free(context->engine, &normalized);
+    if (status != ARCHBIRD_OK)
+      ab_verify_fact_item_free(context->engine, &item);
+  }
+  if (status == ARCHBIRD_OK && oversized_count) {
+    const AbValue *diagnostics = ab_value_member(resolution, "diagnostics");
+    const AbValue *resolution_sha = ab_value_member(resolution, "sha256");
+    size_t diagnostic_index;
+    for (diagnostic_index = 0; status == ARCHBIRD_OK &&
+                               diagnostic_index < diagnostics->as.array.count;
+         diagnostic_index++) {
+      const AbValue *diagnostic =
+          &diagnostics->as.array.items[diagnostic_index];
+      const AbValue *code = ab_value_member(diagnostic, "code");
+      const AbValue *path = ab_value_member(diagnostic, "path");
+      const AbValue *value = ab_value_member(diagnostic, "bytes");
+      AbString normalized = {0};
+      int selected = 0;
+      AbVerifyFactItem item = {0};
+      AbVerifyEvidence evidence = {0};
+      AbBuffer detail;
+      if (!ab_verify_string_is(code, "discovery-file-oversized"))
+        continue;
+      status = ab_verify_normalized_name(context->engine, spec, &path->as.text,
+                                         &normalized, &selected);
+      if (status != ARCHBIRD_OK || !selected) {
+        ab_string_free(context->engine, &normalized);
+        continue;
+      }
+      status = ab_verify_item_init(context->engine, &item, &normalized,
+                                   &path->as.text, value);
+      if (status == ARCHBIRD_OK)
+        status = item_add_string_attribute(context->engine, &item, "metric",
+                                           &metric->as.text);
+      ab_buffer_init(&detail, context->engine);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&detail, "discovery-file-oversized ");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_append(&detail, metric->as.text.data,
+                                  metric->as.text.length);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&detail, "=");
+      if (status == ARCHBIRD_OK)
+        status = ab_value_render(&detail, value);
+      if (status == ARCHBIRD_OK)
+        status = derived_evidence(
+            context->engine, &project_name->as.text, &path->as.text, 0,
+            resolution_sha->as.text.data, &detail, &evidence);
       if (status == ARCHBIRD_OK)
         status = ab_verify_item_add_evidence(context->engine, &item, &evidence);
       if (status == ARCHBIRD_OK)
@@ -1993,6 +2174,8 @@ static ArchbirdStatus extract_map_fact(AbVerificationContext *context,
     return extract_symbols(context, extractor, fact);
   if (ab_verify_string_is(kind, "file_edges"))
     return extract_file_edges(context, extractor, fact);
+  if (ab_verify_string_is(kind, "file_metrics"))
+    return extract_file_metrics(context, extractor, fact);
   if (ab_verify_string_is(kind, "component_edges"))
     return extract_component_edges(context, extractor, fact);
   if (ab_verify_string_is(kind, "test_routes"))
@@ -2081,6 +2264,7 @@ ArchbirdStatus ab_verify_extract_all(AbVerificationContext *context) {
       status = extract_literal(context, extractor, &context->facts[index]);
     else if (ab_verify_string_is(kind, "symbols") ||
              ab_verify_string_is(kind, "file_edges") ||
+             ab_verify_string_is(kind, "file_metrics") ||
              ab_verify_string_is(kind, "component_edges") ||
              ab_verify_string_is(kind, "test_routes") ||
              ab_verify_string_is(kind, "test_selectors") ||

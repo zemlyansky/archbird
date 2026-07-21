@@ -65,7 +65,8 @@ function usage(command = "map") {
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
-    verify: "archbird verify [ROOT | --config SUITE.verify.json | --init PROJECT.json] [--baseline FILE | --freeze FILE] [--check]",
+    verify: "archbird verify [ROOT | --config SUITE.verify.json | --init PROJECT.json] [--baseline FILE | --freeze FILE] [--check]\narchbird verify recipe list|show|run|compile ...",
+    "verify-recipe": "archbird verify recipe list|show|run|compile [max-file-bytes] [OPTIONS]",
     plan: "archbird plan --verification RESULT.json --finding FINGERPRINT",
     contract: "archbird contract --proposal PROPOSAL.json --objective TEXT --owner NAME --rationale TEXT",
     "verify-plan": "archbird verify-plan --proposal P.json --contract C.json --before-verification B.json --after-verification A.json [--check]",
@@ -149,6 +150,53 @@ function required(options, ...names) {
   }
 }
 
+const BYTE_SIZE_UNITS = new Map([
+  ["", 1n], ["b", 1n],
+  ["k", 1024n], ["kib", 1024n],
+  ["m", 1024n ** 2n], ["mib", 1024n ** 2n],
+  ["g", 1024n ** 3n], ["gib", 1024n ** 3n],
+  ["t", 1024n ** 4n], ["tib", 1024n ** 4n],
+  ["kb", 1000n], ["mb", 1000n ** 2n],
+  ["gb", 1000n ** 3n], ["tb", 1000n ** 4n],
+]);
+
+function byteSize(raw) {
+  const match = /^([0-9]+)([A-Za-z]*)$/.exec(raw || "");
+  const unit = match && BYTE_SIZE_UNITS.get(match[2].toLowerCase());
+  if (!match || unit === undefined) {
+    throw new Error(
+      "--max: expected an integer byte size such as 1048576, 1MiB, or 1MB",
+    );
+  }
+  const result = BigInt(match[1]) * unit;
+  if (result > (1n << 64n) - 1n) {
+    throw new Error("--max: byte size exceeds the unsigned 64-bit limit");
+  }
+  return result;
+}
+
+function recipeRequest(options, project) {
+  const check = {
+    id: options.id,
+    owner: options.owner,
+    rationale: options.rationale,
+    severity: options.severity,
+  };
+  if (options.requirement !== undefined) check.requirement = options.requirement;
+  if (options.tag.length) check.tags = options.tag;
+  const pieces = [
+    '{"artifact":"verification-recipe-request","schema_version":1,"recipe":',
+    JSON.stringify(options.recipe),
+    ',"project":', JSON.stringify(project),
+    ',"arguments":{"max":', options.maximum.toString(),
+    ',"include":', JSON.stringify(options.include),
+    ',"exclude":', JSON.stringify(options.exclude),
+    ',"allow_empty":', options.allowEmpty ? "true" : "false",
+    '},"check":', JSON.stringify(check), '}',
+  ];
+  return Buffer.from(pieces.join(""));
+}
+
 function read(name) {
   return fs.readFileSync(path.resolve(name));
 }
@@ -160,6 +208,16 @@ function write(value, output = "-") {
     : Buffer.concat([bytes, Buffer.from("\n")]);
   if (output === "-") process.stdout.write(encoded);
   else fs.writeFileSync(path.resolve(output), encoded);
+}
+
+function pathLexists(value) {
+  try {
+    fs.lstatSync(value);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function hasErrors(document) {
@@ -939,7 +997,168 @@ function discoverVerificationSuite(rootName) {
   return candidates[0];
 }
 
+function recipeCheckDefinitions({ reviewed }) {
+  return {
+    max: { type: "string" },
+    include: { type: "multiple" },
+    exclude: { type: "multiple" },
+    allowEmpty: { flag: "allow-empty", type: "boolean" },
+    id: { default: "MAX-FILE-BYTES", type: "string" },
+    owner: {
+      default: reviewed ? undefined : "command-line",
+      type: "string",
+    },
+    rationale: {
+      default: reviewed ? undefined : "Explicit one-shot max-file-bytes policy.",
+      type: "string",
+    },
+    severity: { default: "error", type: "string" },
+    requirement: { type: "string" },
+    tag: { type: "multiple" },
+  };
+}
+
+function checkedRecipe(options) {
+  if (options.recipe !== "max-file-bytes") {
+    throw new Error(`unknown verification recipe: ${options.recipe}`);
+  }
+  required(options, "max");
+  options.maximum = byteSize(options.max);
+  if (!["error", "warning", "info"].includes(options.severity)) {
+    throw new Error("--severity must be error, warning, or info");
+  }
+  return options;
+}
+
+function verificationRecipeMain(argv) {
+  const command = argv[0];
+  if (!command || ["--help", "-h"].includes(command)) {
+    process.stdout.write(usage("verify-recipe"));
+    return 0;
+  }
+  if (command === "list") {
+    const options = parse(argv.slice(1), {
+      pretty: COMMON.pretty, output: COMMON.output, help: COMMON.help,
+    });
+    if (options.help) { process.stdout.write(usage("verify-recipe")); return 0; }
+    write(archbird.verificationRecipeCatalog("", { pretty: options.pretty }), options.output);
+    return 0;
+  }
+  if (command === "show") {
+    const options = parse(argv.slice(1), {
+      pretty: COMMON.pretty, output: COMMON.output, help: COMMON.help,
+    }, { positionals: 1 });
+    if (options.help) { process.stdout.write(usage("verify-recipe")); return 0; }
+    if (!options._[0]) throw new Error("verify recipe show requires a recipe name");
+    write(
+      archbird.verificationRecipeCatalog(options._[0], { pretty: options.pretty }),
+      options.output,
+    );
+    return 0;
+  }
+  if (command === "compile") {
+    const options = parse(argv.slice(1), {
+      ...recipeCheckDefinitions({ reviewed: true }),
+      mapPath: { flag: "map-path", default: "ARCHBIRD.json", type: "string" },
+      pretty: COMMON.pretty,
+      force: { type: "boolean" },
+      output: {
+        aliases: ["o"], default: "archbird.verify.json", type: "string",
+      },
+      help: COMMON.help,
+    }, { positionals: 1 });
+    if (options.help) { process.stdout.write(usage("verify-recipe")); return 0; }
+    options.recipe = options._[0];
+    checkedRecipe(options);
+    required(options, "owner", "rationale");
+    const destination = path.resolve(options.output);
+    if (options.output !== "-" && pathLexists(destination) && !options.force) {
+      throw new Error(`refusing to replace existing verification suite: ${destination}`);
+    }
+    write(
+      archbird.compileVerificationRecipe(
+        recipeRequest(options, { map: options.mapPath }),
+        { pretty: options.pretty },
+      ),
+      options.output,
+    );
+    return 0;
+  }
+  if (command !== "run") {
+    throw new Error(`unknown verify recipe command: ${command}`);
+  }
+  const options = parse(argv.slice(1), {
+    ...COMMON,
+    noConfig: { flag: "no-config", type: "boolean" },
+    project: { type: "string" },
+    progress: { default: "auto", type: "string" },
+    ...recipeCheckDefinitions({ reviewed: false }),
+    format: { default: "markdown", type: "string" },
+    full: { type: "boolean" },
+    maxFindings: { flag: "max-findings", default: 200, type: "number" },
+  }, { positionals: 2 });
+  if (options.help) { process.stdout.write(usage("verify-recipe")); return 0; }
+  options.recipe = options._[0];
+  options._ = options._.slice(1);
+  checkedRecipe(options);
+  if (!["json", "markdown", "sarif", "junit"].includes(options.format)) {
+    throw new Error("--format must be json, markdown, sarif, or junit");
+  }
+  const suiteJson = archbird.compileVerificationRecipe(
+    recipeRequest(options, { map: "CURRENT.json" }),
+  );
+  const plan = JSON.parse(archbird.verificationPlan(suiteJson).toString("utf8"));
+  if (!Array.isArray(plan.projects) || plan.projects.length !== 1) {
+    throw new Error("verification recipe must select exactly one project");
+  }
+  const progress = new Progress(options.progress);
+  const { repository, configJson } = repositoryInputs(options);
+  progress.emit({ phase: "discovery", state: "start" });
+  const current = archbird.Project.fromRepository(repository, {
+    config: configJson.length ? configJson : null,
+    project: options.project || null,
+    scan: false,
+    typescript: !options.noTypescript,
+  });
+  try {
+    progress.emit({ phase: "selected", files: current.sources.length });
+    if (plan.projects[0].provider_scan) {
+      current.scan("primary", {
+        cacheDir: options.noCache
+          ? null
+          : (options.cacheDir || archbird.defaultProviderCacheDir()),
+        cacheMaxBytes: cacheMaxBytes(options),
+        typescript: !options.noTypescript,
+        progress: (event) => progress.emit(event),
+      });
+    } else {
+      progress.emit({ phase: "joining", state: "start" });
+      current.finalizeProviders();
+      progress.emit({ phase: "joining", state: "complete" });
+    }
+    warnCacheStats(current.cacheStats);
+    const mapJson = current.mapJson();
+    warnMapCacheStats(current.mapCacheStats);
+    const verification = archbird.Verification.fromMap(suiteJson, mapJson, {
+      resolutionJson: current.resolutionJson,
+    });
+    progress.emit({ phase: "rendering", artifact: "verification" });
+    const encoded = verification.report({
+      format: options.format,
+      full: options.full,
+      maxFindings: options.maxFindings,
+      pretty: options.pretty || options.format === "sarif",
+    });
+    write(encoded, options.output);
+    progress.finish();
+    return options.check && verification.hasErrors() ? 1 : 0;
+  } finally {
+    current.dispose();
+  }
+}
+
 function verifyMain(argv) {
+  if (argv[0] === "recipe") return verificationRecipeMain(argv.slice(1));
   const options = parse(argv, {
     ...COMMON,
     init: { type: "string" },

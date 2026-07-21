@@ -150,6 +150,109 @@ static ArchbirdStatus validate_map(InputContext *context, const AbValue *map,
   return ARCHBIRD_OK;
 }
 
+static int lowercase_sha256(const AbValue *value) {
+  size_t index;
+  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
+    return 0;
+  for (index = 0; index < value->as.text.length; index++) {
+    char byte = value->as.text.data[index];
+    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
+      return 0;
+  }
+  return 1;
+}
+
+static ArchbirdStatus validate_resolution(InputContext *context,
+                                          const AbValue *resolution,
+                                          const AbValue *map,
+                                          const char *where) {
+  const AbValue *coverage;
+  const AbValue *diagnostics;
+  const AbValue *resolution_project;
+  const AbValue *map_project;
+  const AbValue *resolution_config;
+  const AbValue *map_evidence;
+  const AbValue *map_config;
+  const AbValue *map_discovery;
+  const AbValue *map_coverage;
+  const AbValue *map_oversized;
+  const AbValue *resolution_sha;
+  const AbValue *map_resolution_sha;
+  uint64_t schema;
+  uint64_t declared_oversized;
+  uint64_t mapped_oversized;
+  size_t oversized_count = 0;
+  size_t index;
+  if (!resolution)
+    return ARCHBIRD_OK;
+  if (resolution->kind != AB_VALUE_OBJECT ||
+      !ab_verify_string_is(ab_value_member(resolution, "artifact"),
+                           "archbird-config-resolution") ||
+      !ab_value_u64(ab_value_member(resolution, "schema_version"), &schema) ||
+      schema != 1)
+    return invalid(context, where, "invalid discovery resolution identity");
+  coverage = ab_value_member(resolution, "coverage");
+  diagnostics = ab_value_member(resolution, "diagnostics");
+  resolution_sha = ab_value_member(resolution, "sha256");
+  if (!coverage || coverage->kind != AB_VALUE_OBJECT ||
+      !ab_value_u64(ab_value_member(coverage, "oversized"),
+                    &declared_oversized) ||
+      !diagnostics || diagnostics->kind != AB_VALUE_ARRAY ||
+      !lowercase_sha256(resolution_sha))
+    return invalid(context, where, "invalid discovery resolution evidence");
+  for (index = 0; index < diagnostics->as.array.count; index++) {
+    const AbValue *row = &diagnostics->as.array.items[index];
+    const AbValue *code = ab_value_member(row, "code");
+    size_t previous;
+    uint64_t bytes;
+    if (!ab_verify_string_is(code, "discovery-file-oversized"))
+      continue;
+    if (!ab_verify_path_is_repository(ab_value_member(row, "path")) ||
+        !ab_value_u64(ab_value_member(row, "bytes"), &bytes))
+      return invalid(context, where, "invalid oversized-file evidence");
+    for (previous = 0; previous < index; previous++) {
+      const AbValue *old = &diagnostics->as.array.items[previous];
+      if (ab_verify_string_is(ab_value_member(old, "code"),
+                              "discovery-file-oversized") &&
+          ab_string_equal(&ab_value_member(row, "path")->as.text,
+                          &ab_value_member(old, "path")->as.text))
+        return invalid(context, where, "duplicate oversized-file evidence");
+    }
+    oversized_count++;
+  }
+  if (oversized_count != declared_oversized)
+    return invalid(context, where, "incomplete oversized-file evidence");
+  map_discovery = ab_value_member(map, "discovery");
+  map_coverage =
+      map_discovery ? ab_value_member(map_discovery, "coverage") : NULL;
+  map_resolution_sha =
+      map_discovery ? ab_value_member(map_discovery, "sha256") : NULL;
+  map_oversized =
+      map_coverage ? ab_value_member(map_coverage, "oversized") : NULL;
+  if (!lowercase_sha256(map_resolution_sha) ||
+      !ab_string_equal(&resolution_sha->as.text, &map_resolution_sha->as.text))
+    return invalid(context, where,
+                   "resolution digest does not match project map");
+  if (!map_oversized || !ab_value_u64(map_oversized, &mapped_oversized) ||
+      mapped_oversized != declared_oversized)
+    return invalid(context, where,
+                   "resolution oversized count does not match project map");
+  resolution_project = ab_value_member(resolution, "project");
+  map_project = ab_value_member(map, "project");
+  resolution_config = ab_value_member(resolution, "configuration_sha256");
+  map_evidence = ab_value_member(map, "evidence");
+  map_config =
+      map_evidence ? ab_value_member(map_evidence, "config_sha256") : NULL;
+  if (!resolution_project || resolution_project->kind != AB_VALUE_STRING ||
+      !map_project || map_project->kind != AB_VALUE_STRING ||
+      !ab_string_equal(&resolution_project->as.text, &map_project->as.text) ||
+      !resolution_config || resolution_config->kind != AB_VALUE_STRING ||
+      !map_config || map_config->kind != AB_VALUE_STRING ||
+      !ab_string_equal(&resolution_config->as.text, &map_config->as.text))
+    return invalid(context, where, "resolution does not match project map");
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus validate_sources(InputContext *context,
                                        const AbValue *sources,
                                        const char *where) {
@@ -201,7 +304,7 @@ static ArchbirdStatus validate_sources(InputContext *context,
 
 static ArchbirdStatus validate_projects(InputContext *context,
                                         const AbValue *projects) {
-  static const char *const allowed[] = {"map", "name", "sources"};
+  static const char *const allowed[] = {"map", "name", "resolution", "sources"};
   size_t index;
   if (!projects || projects->kind != AB_VALUE_ARRAY ||
       projects->as.array.count != context->suite->projects->as.object.count)
@@ -211,7 +314,7 @@ static ArchbirdStatus validate_projects(InputContext *context,
     const AbValue *row = &projects->as.array.items[index];
     const AbValue *name;
     size_t previous;
-    if (reject_unknown(context, row, "input.projects", allowed, 3) !=
+    if (reject_unknown(context, row, "input.projects", allowed, 4) !=
         ARCHBIRD_OK)
       return ARCHBIRD_INVALID_SCHEMA;
     name = ab_value_member(row, "name");
@@ -226,6 +329,9 @@ static ArchbirdStatus validate_projects(InputContext *context,
     }
     if (validate_map(context, ab_value_member(row, "map"),
                      "input.projects.map") != ARCHBIRD_OK ||
+        validate_resolution(context, ab_value_member(row, "resolution"),
+                            ab_value_member(row, "map"),
+                            "input.projects.resolution") != ARCHBIRD_OK ||
         validate_sources(context, ab_value_member(row, "sources"),
                          "input.projects.sources") != ARCHBIRD_OK)
       return ARCHBIRD_INVALID_SCHEMA;

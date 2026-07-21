@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import signal
 import stat
 import subprocess
@@ -32,6 +33,7 @@ from .native import (
     change_proposal,
     change_verify,
     compile_test_observations,
+    compile_verification_recipe,
     draft_verification_suite,
     diff_maps_json,
     export_graph,
@@ -41,6 +43,8 @@ from .native import (
     query_map_json,
     render_map_markdown,
     resolve_discovery,
+    verification_plan_json,
+    verification_recipe_catalog,
 )
 from .adapters.okf.parser import okf_query_input, parse_okf_bundle
 
@@ -680,6 +684,133 @@ def verification_parser() -> argparse.ArgumentParser:
         help="exit nonzero when verification contains blocking evidence",
     )
     result.add_argument("--version", action="version", version=__version__)
+    return result
+
+
+_BYTE_SIZE_UNITS = {
+    "": 1,
+    "b": 1,
+    "k": 1024,
+    "kib": 1024,
+    "m": 1024**2,
+    "mib": 1024**2,
+    "g": 1024**3,
+    "gib": 1024**3,
+    "t": 1024**4,
+    "tib": 1024**4,
+    "kb": 1000,
+    "mb": 1000**2,
+    "gb": 1000**3,
+    "tb": 1000**4,
+}
+
+
+def _byte_size(value: str) -> int:
+    match = re.fullmatch(r"([0-9]+)([A-Za-z]*)", value)
+    if match is None or match.group(2).lower() not in _BYTE_SIZE_UNITS:
+        raise argparse.ArgumentTypeError(
+            "expected an integer byte size such as 1048576, 1MiB, or 1MB"
+        )
+    number = int(match.group(1)) * _BYTE_SIZE_UNITS[match.group(2).lower()]
+    if number > (1 << 64) - 1:
+        raise argparse.ArgumentTypeError("byte size exceeds the unsigned 64-bit limit")
+    return number
+
+
+def _add_recipe_check_options(
+    result: argparse.ArgumentParser, *, reviewed: bool
+) -> None:
+    result.add_argument("--max", required=True, type=_byte_size)
+    result.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="select mapped repository-relative paths; repeatable",
+    )
+    result.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="omit paths from recipe selection; repeatable",
+    )
+    result.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="permit an empty selection as explicit policy",
+    )
+    result.add_argument("--id", default="MAX-FILE-BYTES")
+    result.add_argument(
+        "--owner", required=reviewed, default=None if reviewed else "command-line"
+    )
+    result.add_argument(
+        "--rationale",
+        required=reviewed,
+        default=None if reviewed else "Explicit one-shot max-file-bytes policy.",
+    )
+    result.add_argument(
+        "--severity", choices=("error", "warning", "info"), default="error"
+    )
+    result.add_argument("--requirement")
+    result.add_argument("--tag", action="append", default=[])
+
+
+def verification_recipe_parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog="archbird verify recipe",
+        description=(
+            "Inspect or run portable verification recipes backed by the normal "
+            "Verify evidence and check kernel."
+        ),
+    )
+    commands = result.add_subparsers(dest="command", required=True)
+    listing = commands.add_parser("list", help="list available recipes")
+    listing.add_argument("--pretty", action="store_true")
+    listing.add_argument("-o", "--output", default="-")
+    showing = commands.add_parser("show", help="show one recipe contract")
+    showing.add_argument("recipe")
+    showing.add_argument("--pretty", action="store_true")
+    showing.add_argument("-o", "--output", default="-")
+
+    compiling = commands.add_parser(
+        "compile", help="compile explicit recipe policy into a reviewed suite"
+    )
+    compiling.add_argument("recipe", choices=("max-file-bytes",))
+    _add_recipe_check_options(compiling, reviewed=True)
+    compiling.add_argument(
+        "--map-path",
+        default="ARCHBIRD.json",
+        help="portable Map path recorded in the generated suite",
+    )
+    compiling.add_argument("--pretty", action="store_true")
+    compiling.add_argument("--force", action="store_true")
+    compiling.add_argument("-o", "--output", default="archbird.verify.json")
+
+    running = commands.add_parser(
+        "run", help="run explicit recipe policy against a fresh repository Map"
+    )
+    running.add_argument("recipe", choices=("max-file-bytes",))
+    running.add_argument("root_path", nargs="?", metavar="ROOT")
+    source = running.add_mutually_exclusive_group()
+    source.add_argument("-c", "--config", help="project configuration JSON")
+    source.add_argument("--no-config", action="store_true")
+    running.add_argument("--root", dest="root_override")
+    running.add_argument("--project")
+    running.add_argument("--jobs", type=int, default=0)
+    _add_cache_options(running)
+    _add_progress_options(running)
+    _add_recipe_check_options(running, reviewed=False)
+    running.add_argument(
+        "--format",
+        choices=("json", "markdown", "sarif", "junit"),
+        default="markdown",
+    )
+    running.add_argument("--full", action="store_true")
+    running.add_argument("--max-findings", type=int, default=200)
+    running.add_argument("--pretty", action="store_true")
+    running.add_argument("--check", action="store_true")
+    running.add_argument("-o", "--output", default="-")
     return result
 
 
@@ -1661,6 +1792,119 @@ def _verify_main(argv: Sequence[str]) -> int:
         return 2
 
 
+def _recipe_request(
+    args: argparse.Namespace, *, project: Mapping[str, object]
+) -> bytes:
+    check: dict[str, object] = {
+        "id": args.id,
+        "owner": args.owner,
+        "rationale": args.rationale,
+        "severity": args.severity,
+    }
+    if args.requirement is not None:
+        check["requirement"] = args.requirement
+    if args.tag:
+        check["tags"] = args.tag
+    request = {
+        "artifact": "verification-recipe-request",
+        "schema_version": 1,
+        "recipe": args.recipe,
+        "project": dict(project),
+        "arguments": {
+            "max": args.max,
+            "include": args.include,
+            "exclude": args.exclude,
+            "allow_empty": args.allow_empty,
+        },
+        "check": check,
+    }
+    return json.dumps(
+        request,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _verification_recipe_main(argv: Sequence[str]) -> int:
+    args = verification_recipe_parser().parse_args(argv)
+    try:
+        if args.command in {"list", "show"}:
+            encoded = verification_recipe_catalog(
+                "" if args.command == "list" else args.recipe,
+                pretty=args.pretty,
+            )
+            _write(encoded, args.output)
+            return 0
+        if args.command == "compile":
+            encoded = compile_verification_recipe(
+                _recipe_request(args, project={"map": args.map_path}),
+                pretty=args.pretty,
+            )
+            destination = Path(args.output)
+            if args.output != "-" and os.path.lexists(destination) and not args.force:
+                raise ConfigError(
+                    f"refusing to replace existing verification suite: {destination}"
+                )
+            _write(encoded, args.output)
+            return 0
+
+        if args.jobs < 0:
+            raise ValueError("--jobs must be zero or positive")
+        if args.max_findings < 0:
+            raise ValueError("--max-findings must be nonnegative")
+        suite_json = compile_verification_recipe(
+            _recipe_request(args, project={"map": "CURRENT.json"}),
+            pretty=False,
+        )
+        plan = json.loads(verification_plan_json(suite_json))
+        if len(plan["projects"]) != 1:
+            raise RuntimeError("verification recipe must select exactly one project")
+        repository, config_json, _ = _repository_inputs(args)
+        progress = _Progress(args.progress)
+        progress.emit({"phase": "discovery", "state": "start"})
+        project = Project.from_repository(
+            repository,
+            config=config_json or None,
+            project=args.project,
+            scan=False,
+            jobs=args.jobs,
+        )
+        progress.emit({"phase": "selected", "files": len(project.sources)})
+        if plan["projects"][0]["provider_scan"]:
+            project.scan(
+                jobs=args.jobs,
+                cache_dir=_cache_dir(args),
+                cache_max_bytes=_cache_max_bytes(args),
+                progress=progress.emit,
+            )
+        else:
+            progress.emit({"phase": "joining", "state": "start"})
+            project.finalize_providers()
+            progress.emit({"phase": "joining", "state": "complete"})
+        _warn_cache_stats(project.cache_stats)
+        _warn_map_cache_stats(project.map_cache_stats)
+        verification = Verification.from_map(
+            suite_json,
+            project.map_json(),
+            resolution_json=project.resolution_json,
+            path="recipe.verify.json",
+        )
+        progress.emit({"phase": "rendering", "artifact": "verification"})
+        encoded = verification.report(
+            args.format,
+            full=args.full,
+            max_findings=args.max_findings,
+            pretty=args.pretty or args.format == "sarif",
+        )
+        _write(encoded, args.output)
+        progress.finish()
+        return int(args.check and verification.has_errors())
+    except (ConfigError, OSError, RuntimeError, ValueError) as error:
+        print(f"archbird: error: {error}", file=sys.stderr)
+        return 2
+
+
 def _plan_main(argv: Sequence[str]) -> int:
     args = plan_parser().parse_args(argv)
     try:
@@ -1891,6 +2135,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if arguments and arguments[0] == "workspace":
         return _workspace_main(arguments[1:])
     if arguments and arguments[0] == "verify":
+        if len(arguments) > 1 and arguments[1] == "recipe":
+            return _verification_recipe_main(arguments[2:])
         return _verify_main(arguments[1:])
     if arguments and arguments[0] == "plan":
         return _plan_main(arguments[1:])

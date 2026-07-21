@@ -1473,6 +1473,140 @@ static ArchbirdStatus cardinality_check(ArchbirdEngine *engine,
   return status;
 }
 
+static ArchbirdStatus numeric_bounds_check(ArchbirdEngine *engine,
+                                           const AbValue *check,
+                                           const AbVerifyFactSet *actual,
+                                           AbVerifyCheckResult *result) {
+  const AbValue *exact = ab_value_member(check, "exact");
+  const AbValue *minimum = ab_value_member(check, "min");
+  const AbValue *maximum = ab_value_member(check, "max");
+  const AbValue *allow_empty = ab_value_member(check, "allow_empty");
+  uint64_t exact_value = 0;
+  uint64_t minimum_value = 0;
+  uint64_t maximum_value = 0;
+  size_t index;
+  ArchbirdStatus status = result_init(engine, result, check, actual, NULL);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (string_literal(&actual->state, "current") &&
+      !string_literal(&actual->shape, "values")) {
+    AbVerifyFinding finding = {0};
+    status = shape_finding(engine, check,
+                           "numeric_bounds requires a values fact, got ",
+                           actual, NULL, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_add_finding(engine, result, &finding);
+    finding_free(engine, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_set_status(engine, result);
+    return status;
+  }
+  {
+    AbVerifyFinding finding = {0};
+    int unavailable = 0;
+    status = unavailable_finding(engine, check, actual, &finding, &unavailable);
+    if (status == ARCHBIRD_OK && unavailable)
+      status = result_add_finding(engine, result, &finding);
+    finding_free(engine, &finding);
+    if (status != ARCHBIRD_OK || unavailable) {
+      if (status == ARCHBIRD_OK)
+        status = result_set_status(engine, result);
+      return status;
+    }
+  }
+  if (!actual->item_count && (!allow_empty || !allow_empty->as.boolean)) {
+    static const AbString key = {(char *)"selection:empty", 15};
+    AbVerifyFinding finding = {0};
+    status = finding_init_literal(
+        engine, &finding, check, "missing", &key,
+        "metric selection matched no items; set allow_empty=true only when an "
+        "empty selection is intentional",
+        "current");
+    if (status == ARCHBIRD_OK)
+      status = finding_add_fact_summary(engine, &finding, actual);
+    if (status == ARCHBIRD_OK)
+      status = result_add_finding(engine, result, &finding);
+    finding_free(engine, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_set_status(engine, result);
+    return status;
+  }
+  if (exact)
+    (void)ab_value_u64(exact, &exact_value);
+  if (minimum)
+    (void)ab_value_u64(minimum, &minimum_value);
+  if (maximum)
+    (void)ab_value_u64(maximum, &maximum_value);
+  for (index = 0; status == ARCHBIRD_OK && index < actual->item_count;
+       index++) {
+    const AbVerifyFactItem *item = &actual->items[index];
+    uint64_t value = 0;
+    int current = string_literal(&item->state, "current");
+    int numeric = current && ab_value_u64(&item->value, &value);
+    int valid = numeric && (!exact || value == exact_value) &&
+                (!minimum || value >= minimum_value) &&
+                (!maximum || value <= maximum_value);
+    if (!current) {
+      AbVerifyFinding finding = {0};
+      status = item_unknown_finding(engine, check, item, &finding);
+      if (status == ARCHBIRD_OK)
+        status = result_add_finding(engine, result, &finding);
+      finding_free(engine, &finding);
+    } else if (!numeric || !valid) {
+      AbBuffer message;
+      AbVerifyFinding finding = {0};
+      size_t evidence_index;
+      ab_buffer_init(&message, engine);
+      status = ab_buffer_append(&message, item->label.data, item->label.length);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&message, " is ");
+      if (status == ARCHBIRD_OK)
+        status = ab_value_render(&message, &item->value);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(
+            &message, numeric ? "; expected "
+                              : "; expected a non-negative integer metric");
+      if (status == ARCHBIRD_OK && numeric && exact) {
+        status = ab_buffer_literal(&message, "exactly ");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_u64(&message, exact_value);
+      } else if (status == ARCHBIRD_OK && numeric) {
+        status = ab_buffer_literal(&message, "between ");
+        if (status == ARCHBIRD_OK)
+          status = minimum ? ab_buffer_u64(&message, minimum_value)
+                           : ab_buffer_literal(&message, "0");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(&message, " and ");
+        if (status == ARCHBIRD_OK)
+          status = maximum ? ab_buffer_u64(&message, maximum_value)
+                           : ab_buffer_literal(&message, "unbounded");
+      }
+      if (status == ARCHBIRD_OK)
+        status =
+            finding_init_n(engine, &finding, check, "different", &item->key,
+                           (const char *)message.data, message.length,
+                           numeric ? "current" : "unknown");
+      for (evidence_index = 0;
+           status == ARCHBIRD_OK && evidence_index < item->evidence_count;
+           evidence_index++)
+        status = finding_add_evidence(engine, &finding,
+                                      &item->evidence[evidence_index]);
+      if (status == ARCHBIRD_OK)
+        status = result_add_finding(engine, result, &finding);
+      finding_free(engine, &finding);
+      ab_buffer_free(&message);
+    } else {
+      status = coverage_add(engine, result, &item->key);
+    }
+  }
+  if (status == ARCHBIRD_OK && result->finding_count > 1)
+    qsort(result->findings, result->finding_count, sizeof(*result->findings),
+          finding_compare_key);
+  if (status == ARCHBIRD_OK)
+    status = result_set_status(engine, result);
+  return status;
+}
+
 static int string_array_view_contains(const AbString **rows, size_t count,
                                       const AbString *value) {
   size_t index;
@@ -2370,6 +2504,8 @@ ArchbirdStatus ab_verify_evaluate_check(AbVerificationContext *context,
     return acyclic_check(context->engine, check, actual, result);
   if (ab_value_string_is(assertion, "cardinality"))
     return cardinality_check(context->engine, check, actual, result);
+  if (ab_value_string_is(assertion, "numeric_bounds"))
+    return numeric_bounds_check(context->engine, check, actual, result);
   if (ab_value_string_is(assertion, "min_test_routes"))
     return min_test_routes_check(context->engine, check, actual, result);
   return archbird_error_set(context->engine, ARCHBIRD_CONFLICT,
@@ -2744,6 +2880,10 @@ ArchbirdStatus ab_verify_check_render(AbBuffer *buffer,
   CHECK_RENDER_TRY(render_value_or(buffer, check, "id", "\"\""));
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"operands\":{\"actual\":"));
   CHECK_RENDER_TRY(render_value_or(buffer, check, "actual", "\"\""));
+  if (ab_verify_string_is(ab_value_member(check, "assert"), "numeric_bounds")) {
+    CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"allow_empty\":"));
+    CHECK_RENDER_TRY(render_value_or(buffer, check, "allow_empty", "false"));
+  }
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"exact\":"));
   CHECK_RENDER_TRY(render_value_or(buffer, check, "exact", "null"));
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"expected\":"));

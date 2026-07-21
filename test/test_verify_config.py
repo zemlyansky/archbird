@@ -171,6 +171,11 @@ def main() -> int:
         raise AssertionError("native/oracle verification suite digest differs")
     if [row["name"] for row in plan["projects"]] != ["reference", "subject"]:
         raise AssertionError(plan)
+    if {row["name"]: row["provider_scan"] for row in plan["projects"]} != {
+        "reference": False,
+        "subject": True,
+    }:
+        raise AssertionError(f"unexpected verification evidence plan: {plan!r}")
     if {row["provider"] for row in plan["sources"]} != {
         "native-c",
         "python-ast",

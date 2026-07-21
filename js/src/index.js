@@ -244,13 +244,20 @@ class Project {
     if (!fs.statSync(repository).isDirectory()) {
       throw new Error(`root is not a directory: ${repository}`);
     }
-    const inventory = inventoryPaths(configJson, repository);
-    const plan = JSON.parse(
-      native.discoveryPlan(configJson, inventory).toString("utf8"),
-    );
-    const project = new Project(plan.project, readSources(repository, plan), {
-      configurationSha256: plan.configuration_sha256,
+    const resolutionJson = resolveDiscovery(repository, {
+      config: configJson,
+      ignore: false,
     });
+    const resolution = JSON.parse(resolutionJson.toString("utf8"));
+    const project = new Project(
+      resolution.project,
+      readSources(repository, resolution),
+      {
+        configurationSha256: resolution.configuration_sha256,
+        resolution,
+      },
+    );
+    project.resolutionJson = resolutionJson;
     project.root = repository;
     project.setConfig(configJson);
     if (scan) project.scan("primary", {
@@ -770,6 +777,52 @@ class Verification {
     this.configPath = configPath;
   }
 
+  static fromMap(
+    suiteJson,
+    mapJson,
+    { resolutionJson = null, configPath = "recipe.verify.json" } = {},
+  ) {
+    const suite = strictDocument(suiteJson, "verification suite");
+    const mapDocument = strictDocument(mapJson, "project map");
+    const plan = JSON.parse(
+      verificationPlan(Buffer.from(JSON.stringify(canonicalForDigest(suite))))
+        .toString("utf8"),
+    );
+    if (!Array.isArray(plan.projects) || plan.projects.length !== 1) {
+      throw new Error("map-only verification requires exactly one project");
+    }
+    if (plan.sources.length || plan.attestations.length) {
+      throw new Error(
+        "map-only verification cannot satisfy source or attestation inputs",
+      );
+    }
+    const projectName = plan.projects[0].name;
+    if (typeof projectName !== "string" || !projectName) {
+      throw new Error("verification plan has an invalid project name");
+    }
+    const project = { name: projectName, map: mapDocument, sources: [] };
+    if (resolutionJson !== null) {
+      project.resolution = strictDocument(
+        resolutionJson,
+        "project discovery resolution",
+      );
+    }
+    const input = canonicalForDigest({
+      schema_version: 1,
+      artifact: "verification-input",
+      suite_path: path.basename(configPath),
+      projects: [project],
+      provided_facts: [],
+      attestations: [],
+      baseline: null,
+    });
+    return new Verification(
+      Buffer.from(JSON.stringify(canonicalForDigest(suite))),
+      Buffer.from(JSON.stringify(input)),
+      { configPath },
+    );
+  }
+
   static fromConfig(
     configPath,
     {
@@ -814,12 +867,19 @@ class Verification {
       let repositoryRoot;
       let available = new Map();
       if (row.config !== null) {
-        project = Project.fromConfig(path.resolve(base, row.config), {
+        const projectConfig = path.resolve(base, row.config);
+        project = Project.fromConfig(projectConfig, {
           root,
+          scan: false,
           typescript,
           cacheDir,
           cacheMaxBytes,
         });
+        if (row.provider_scan) {
+          project.scan("primary", { typescript, cacheDir, cacheMaxBytes });
+        } else {
+          project.finalizeProviders();
+        }
         mapDocument = strictDocument(project.mapJson(), `project ${row.name} map`);
         repositoryRoot = project.root;
         available = new Map(project.sources.map((source) => [source.path, source.data]));
@@ -1032,10 +1092,6 @@ function inventoryState(
     files: files.sort(utf8Compare),
     pruned: pruned.sort(utf8Compare),
   };
-}
-
-function inventoryPaths(configJson, root) {
-  return inventoryState(configJson, root).files;
 }
 
 function configBytes(config) {
@@ -1455,6 +1511,14 @@ function verificationPlan(suiteJson, { pretty = false } = {}) {
   return native.verificationPlan(Buffer.from(suiteJson), pretty);
 }
 
+function verificationRecipeCatalog(recipe = "", { pretty = false } = {}) {
+  return native.verificationRecipeCatalog(recipe, pretty);
+}
+
+function compileVerificationRecipe(requestJson, { pretty = false } = {}) {
+  return native.verificationRecipeCompile(Buffer.from(requestJson), pretty);
+}
+
 function verificationAnalyze(suiteJson, inputJson, { pretty = false } = {}) {
   return native.verificationAnalyze(
     Buffer.from(suiteJson),
@@ -1732,6 +1796,7 @@ module.exports = {
   analyzeWorkspace,
   compileChangeProposal,
   compileTestObservations,
+  compileVerificationRecipe,
   createChangeContract,
   defaultProviderCacheDir,
   defaultProviderCacheMaxBytes,
@@ -1746,6 +1811,7 @@ module.exports = {
   verificationAnalyze,
   verificationFreeze,
   verificationPlan,
+  verificationRecipeCatalog,
   verificationReport,
   verifyChangeContract,
   jsonCanonicalize: native.jsonCanonicalize,

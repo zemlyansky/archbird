@@ -23,6 +23,29 @@ static int source_kind(const AbValue *kind) {
          ab_verify_string_is(kind, "c_macro_set");
 }
 
+static int provider_fact_kind(const AbValue *kind) {
+  return ab_verify_string_is(kind, "symbols") ||
+         ab_verify_string_is(kind, "file_edges") ||
+         ab_verify_string_is(kind, "component_edges") ||
+         ab_verify_string_is(kind, "test_routes") ||
+         ab_verify_string_is(kind, "test_selectors") ||
+         ab_verify_string_is(kind, "provider_surface");
+}
+
+static int project_requires_provider_scan(const AbVerifySuiteView *suite,
+                                          const AbString *project) {
+  size_t index;
+  for (index = 0; index < suite->extractors->as.object.count; index++) {
+    const AbValue *row = &suite->extractors->as.object.fields[index].value;
+    const AbValue *kind = ab_value_member(row, "kind");
+    const AbValue *candidate = ab_value_member(row, "project");
+    if (provider_fact_kind(kind) && candidate &&
+        ab_string_equal(&candidate->as.text, project))
+      return 1;
+  }
+  return 0;
+}
+
 static int source_extractor_covers(const AbVerifySuiteView *suite,
                                    const AbString *project,
                                    const AbString *path) {
@@ -80,6 +103,13 @@ static ArchbirdStatus render_projects(AbBuffer *buffer,
     if (status == ARCHBIRD_OK)
       status =
           ab_buffer_json_string(buffer, field->name.data, field->name.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"provider_scan\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(
+          buffer, project_requires_provider_scan(suite, &field->name)
+                      ? "true"
+                      : "false");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"root\":");
     if (status == ARCHBIRD_OK)

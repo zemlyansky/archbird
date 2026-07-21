@@ -437,10 +437,11 @@ static int supported_extractor(const AbValue *kind) {
       "python_enum",      "python_set",
       "c_enum",           "c_designated_initializer",
       "c_macro_set",      "symbols",
-      "file_edges",       "component_edges",
-      "test_routes",      "test_selectors",
-      "provider_surface", "literal_set",
-      "literal_values",   "literal_relation",
+      "file_edges",       "file_metrics",
+      "component_edges",  "test_routes",
+      "test_selectors",   "provider_surface",
+      "literal_set",      "literal_values",
+      "literal_relation",
   };
   size_t index;
   for (index = 0; index < sizeof(names) / sizeof(names[0]); index++)
@@ -466,6 +467,7 @@ static int extractor_field_allowed(const AbValue *kind, const AbString *name) {
   static const char *const symbols[] = {"kinds", "layer", "paths",
                                         "public_only"};
   static const char *const file_edges[] = {"from_paths", "kinds", "to_paths"};
+  static const char *const file_metrics[] = {"metric"};
   static const char *const component_edges[] = {"kinds"};
   static const char *const test_routes[] = {"configured_only", "group",
                                             "selectors"};
@@ -491,6 +493,9 @@ static int extractor_field_allowed(const AbValue *kind, const AbString *name) {
   if (ab_verify_string_is(kind, "file_edges"))
     return name_in(name, file_edges,
                    sizeof(file_edges) / sizeof(file_edges[0]));
+  if (ab_verify_string_is(kind, "file_metrics"))
+    return name_in(name, file_metrics,
+                   sizeof(file_metrics) / sizeof(file_metrics[0]));
   if (ab_verify_string_is(kind, "component_edges"))
     return name_in(name, component_edges,
                    sizeof(component_edges) / sizeof(component_edges[0]));
@@ -604,7 +609,9 @@ static ArchbirdStatus validate_extractors(VerifyConfigContext *context) {
          !ab_verify_nonblank(ab_value_member(row, "name"))) ||
         (ab_verify_string_is(kind, "c_macro_set") &&
          (!ab_verify_nonblank(ab_value_member(row, "call")) ||
-          !ab_verify_nonblank(ab_value_member(row, "selector")))))
+          !ab_verify_nonblank(ab_value_member(row, "selector")))) ||
+        (ab_verify_string_is(kind, "file_metrics") &&
+         !ab_verify_string_is(ab_value_member(row, "metric"), "bytes")))
       return invalid(context, where, "required extractor field is missing");
     if (ab_value_member(row, "auto_start") &&
         !uint_value(ab_value_member(row, "auto_start"), &selector_argument))
@@ -735,13 +742,21 @@ static ArchbirdStatus validate_attestations(VerifyConfigContext *context) {
 
 static int supported_assertion(const AbValue *value) {
   static const char *const names[] = {
-      "set_equal",       "mapped_set_equal",
-      "values_equal",    "mapped_values_equal",
-      "subset",          "required_subset",
-      "required_values", "cardinality",
-      "required_edges",  "forbidden_edges",
-      "allowed_edges",   "acyclic",
-      "min_test_routes", "attestation_equal",
+      "set_equal",
+      "mapped_set_equal",
+      "values_equal",
+      "mapped_values_equal",
+      "subset",
+      "required_subset",
+      "required_values",
+      "cardinality",
+      "numeric_bounds",
+      "required_edges",
+      "forbidden_edges",
+      "allowed_edges",
+      "acyclic",
+      "min_test_routes",
+      "attestation_equal",
   };
   size_t index;
   for (index = 0; index < sizeof(names) / sizeof(names[0]); index++)
@@ -771,6 +786,8 @@ static int check_field_allowed(const AbValue *assertion, const AbString *name) {
   static const char *const operands[] = {"actual", "expected"};
   static const char *const mapped[] = {"actual", "expected", "mapping"};
   static const char *const cardinality[] = {"actual", "exact", "max", "min"};
+  static const char *const numeric_bounds[] = {"actual", "allow_empty", "exact",
+                                               "max", "min"};
   static const char *const actual_only[] = {"actual"};
   static const char *const routes[] = {"actual", "min", "required_routes"};
   static const char *const attestation[] = {
@@ -796,6 +813,9 @@ static int check_field_allowed(const AbValue *assertion, const AbString *name) {
   if (ab_verify_string_is(assertion, "cardinality"))
     return name_in(name, cardinality,
                    sizeof(cardinality) / sizeof(cardinality[0]));
+  if (ab_verify_string_is(assertion, "numeric_bounds"))
+    return name_in(name, numeric_bounds,
+                   sizeof(numeric_bounds) / sizeof(numeric_bounds[0]));
   if (ab_verify_string_is(assertion, "acyclic"))
     return name_in(name, actual_only,
                    sizeof(actual_only) / sizeof(actual_only[0]));
@@ -920,6 +940,19 @@ static ArchbirdStatus validate_checks(VerifyConfigContext *context) {
                        "exact cannot be combined with min/max");
       if (has_min && has_max && minimum > maximum)
         return invalid(context, "checks", "min must be <= max");
+    }
+    if (ab_verify_string_is(assertion, "numeric_bounds")) {
+      const AbValue *allow_empty = ab_value_member(row, "allow_empty");
+      if (!has_min && !has_max && !has_exact)
+        return invalid(context, "checks",
+                       "numeric_bounds requires exact, min, or max");
+      if (has_exact && (has_min || has_max))
+        return invalid(context, "checks",
+                       "exact cannot be combined with min/max");
+      if (has_min && has_max && minimum > maximum)
+        return invalid(context, "checks", "min must be <= max");
+      if (allow_empty && allow_empty->kind != AB_VALUE_BOOL)
+        return invalid(context, "checks.allow_empty", "expected boolean");
     }
     if (ab_verify_string_is(assertion, "min_test_routes") && !has_min)
       return invalid(context, "checks.min", "field is required");

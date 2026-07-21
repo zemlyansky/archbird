@@ -63,6 +63,8 @@ assert.deepEqual(support.providers.precision, {
   typescript: "typescript-compiler+tree-sitter+lexical",
   vue: "lexical",
 });
+const recipeCatalog = JSON.parse(run(["verify", "recipe", "list"]));
+assert.deepEqual(recipeCatalog.recipes.map((row) => row.name), ["max-file-bytes"]);
 
 const fixture = path.join(repository, "test/fixtures/map_base");
 const mergeLedgerPath = path.join(work, `${engine}.merge-conflicts.json`);
@@ -88,6 +90,14 @@ assert.equal(zeroMap.packages[0].identity, "@archbird/zero-fixture");
 assert.equal(zeroMap.tests.length, 1);
 assert.equal(zeroMap.tests[0].inventory_state, "candidate");
 assert.equal(zeroMap.tests[0].cases[0].selector, "test_main");
+const recipeVerification = JSON.parse(run([
+  "verify", "recipe", "run", "max-file-bytes", zeroFixture,
+  "--no-config", "--max", "1MiB", "--format", "json", "--check",
+  "--progress", "never",
+]));
+assert.equal(recipeVerification.artifact, "verification");
+assert.equal(recipeVerification.checks[0].status, "pass");
+assert.equal(recipeVerification.projects[0].capabilities.length, 0);
 const configuredMap = JSON.parse(run([
   "map", zeroFixture, "--project", "cli-fixture", "--format", "json",
 ]));
@@ -222,4 +232,4 @@ const result = JSON.parse(run([
 ]));
 assert.equal(result.artifact, "change-result");
 assert.equal(result.status, "missing");
-console.log(`packaged Node CLI Map/Verify/Act passed through ${engine}`);
+console.log(`packaged Node CLI Map/Verify/Act/recipe passed through ${engine}`);
