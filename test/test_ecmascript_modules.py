@@ -606,7 +606,7 @@ test('constructs PPO', () => { new PPO(); });
     assert (
         "2 candidate routes collapsed "
         "[provenance=derived; scope=case; target-role=requested-symbol; "
-        "seed-distance=0; target=method/response.js:set; "
+        "seed-distance=0; symbol-distance=0; target=method/response.js:set; "
         "top=tests/set.test.js:2:ctx.set should retain values]"
         in candidate_report
     ), candidate_report

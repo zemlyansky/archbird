@@ -955,11 +955,18 @@ def main() -> int:
         raise AssertionError(observed_match)
     if {
         field: observed_match[field]
-        for field in ("provenance", "confidence", "seed_distance", "target_role")
+        for field in (
+            "provenance",
+            "confidence",
+            "seed_distance",
+            "symbol_distance",
+            "target_role",
+        )
     } != {
         "provenance": "observed",
         "confidence": "exact",
         "seed_distance": 0,
+        "symbol_distance": 0,
         "target_role": "requested-symbol",
     } or observed_match["target"] != {
         "path": "csrc/callbacks.c",
@@ -1173,6 +1180,7 @@ def main() -> int:
         or cross_file_match["provenance"] != "derived"
         or cross_file_match["confidence"] != "candidate"
         or cross_file_match["seed_distance"] != 0
+        or cross_file_match["symbol_distance"] != 0
         or cross_file_match["target_role"] != "requested-symbol"
         or cross_file_match["target"]
         != {
@@ -1350,6 +1358,125 @@ def main() -> int:
         "route_evidence"
     ][0]["relation"] != "call-candidate":
         raise AssertionError(candidate_case)
+
+    path_candidate_query = json.loads(
+        extension.map_query(
+            canonical(mapped),
+            canonical(
+                {
+                    "paths": ["csrc/cross_file_target.c"],
+                    "direction": "both",
+                    "depth": 0,
+                    "test_depth": 1,
+                }
+            ),
+        )
+    )
+    path_candidate_match = next(
+        match
+        for match in path_candidate_query["test_matches"]
+        if match["selector"] == "cross.candidate"
+    )
+    if {
+        field: path_candidate_match[field]
+        for field in (
+            "classification",
+            "provenance",
+            "confidence",
+            "seed_distance",
+            "symbol_distance",
+            "target_role",
+            "target",
+        )
+    } != {
+        "classification": "candidate",
+        "provenance": "derived",
+        "confidence": "candidate",
+        "seed_distance": 0,
+        "symbol_distance": None,
+        "target_role": "requested-seed",
+        "target": {
+            "path": "csrc/cross_file_target.c",
+            "symbol": "cross_file_only",
+        },
+    }:
+        raise AssertionError(path_candidate_match)
+
+    neighbor_candidate_map = copy.deepcopy(mapped)
+    neighbor_candidate_map["edges"].append(
+        {
+            "kind": "import",
+            "names": ["neighbor_fixture"],
+            "source": "csrc/cross_file_target.c",
+            "target": "unrelated/cross_file_target.h",
+        }
+    )
+    neighbor_candidate_map["edges"].sort(
+        key=lambda row: (row["source"], row["target"], row["kind"])
+    )
+    neighbor_candidate_query = json.loads(
+        extension.map_query(
+            canonical(neighbor_candidate_map),
+            canonical(
+                {
+                    "paths": ["unrelated/cross_file_target.h"],
+                    "direction": "both",
+                    "depth": 1,
+                    "test_depth": 1,
+                }
+            ),
+        )
+    )
+    neighbor_candidate_match = next(
+        match
+        for match in neighbor_candidate_query["test_matches"]
+        if match["selector"] == "cross.candidate"
+    )
+    if (
+        neighbor_candidate_match["classification"] != "conservative"
+        or neighbor_candidate_match["target_role"] != "file-neighborhood"
+        or neighbor_candidate_match["target"]
+        != {"path": "csrc/cross_file_target.c"}
+    ):
+        raise AssertionError(neighbor_candidate_match)
+
+    unrelated_symbol_map = copy.deepcopy(mapped)
+    cross_target_file = next(
+        row
+        for row in unrelated_symbol_map["files"]
+        if row["path"] == "csrc/cross_file_target.c"
+    )
+    unrelated_symbol = copy.deepcopy(cross_target_file["symbols"][0])
+    unrelated_symbol["name"] = "unrelated_target"
+    cross_target_file["symbols"].append(unrelated_symbol)
+    cross_target_file["symbols"].sort(key=lambda row: row["name"])
+    unrelated_symbol_query = json.loads(
+        extension.map_query(
+            canonical(unrelated_symbol_map),
+            canonical(
+                {
+                    "symbols": [
+                        "csrc/cross_file_target.c:unrelated_target"
+                    ],
+                    "direction": "both",
+                    "depth": 0,
+                    "test_depth": 1,
+                }
+            ),
+        )
+    )
+    unrelated_symbol_match = next(
+        match
+        for match in unrelated_symbol_query["test_matches"]
+        if match["selector"] == "cross.candidate"
+    )
+    if (
+        unrelated_symbol_match["classification"] != "conservative"
+        or unrelated_symbol_match["target_role"] != "requested-symbol"
+        or unrelated_symbol_match["target"]
+        != {"path": "csrc/cross_file_target.c"}
+    ):
+        raise AssertionError(unrelated_symbol_match)
 
     tests = {test["path"]: test for test in mapped["tests"]}
     generated = tests["test/generated.c"]
@@ -1596,6 +1723,7 @@ def main() -> int:
         or direct["confidence"] != "exact"
         or direct["evidence_scope"] != "case"
         or direct["seed_distance"] != 0
+        or direct["symbol_distance"] != 0
         or direct["target_role"] != "requested-symbol"
         or direct["target"] != {"path": "py/helper.py", "symbol": "helper"}
         or {row["relation"] for row in direct["route_evidence"]}
@@ -1609,6 +1737,7 @@ def main() -> int:
         or asserted["confidence"] != "exact"
         or asserted["evidence_scope"] != "case"
         or asserted["seed_distance"] != 0
+        or asserted["symbol_distance"] != 0
         or asserted["target_role"] != "requested-symbol"
         or asserted["target"] != {"path": "py/helper.py", "symbol": "helper"}
         or {row["provenance"] for row in asserted["route_evidence"]}
@@ -1620,8 +1749,9 @@ def main() -> int:
         conservative["classification"] != "conservative"
         or conservative["provenance"] != "derived"
         or conservative["confidence"] != "conservative"
-        or conservative["evidence_scope"] != "file"
+        or conservative["evidence_scope"] != "case"
         or conservative["seed_distance"] != 0
+        or conservative["symbol_distance"] is not None
         or conservative["target_role"] != "requested-symbol"
         or conservative["target"] != {"path": "py/helper.py"}
         or conservative["evidence"] != "static"
@@ -1874,6 +2004,7 @@ def main() -> int:
             "provenance",
             "confidence",
             "seed_distance",
+            "symbol_distance",
             "target_role",
             "target",
         )
@@ -1882,6 +2013,7 @@ def main() -> int:
         "provenance": "derived",
         "confidence": "exact",
         "seed_distance": 1,
+        "symbol_distance": 1,
         "target_role": "symbol-neighborhood",
         "target": {"path": "py/imported.py", "symbol": "imported_call"},
     }:
@@ -2236,6 +2368,13 @@ def main() -> int:
         "suite": "configured-route-provenance",
         "projects": {"subject": {"map": "subject.map.json"}},
         "extractors": {
+            "cases": {
+                "kind": "test_selectors",
+                "project": "subject",
+                "group": "c",
+                "paths": ["test/test_cases.c"],
+                "selectors": ["sched.*"],
+            },
             "routes": {
                 "kind": "test_routes",
                 "project": "subject",
@@ -2284,7 +2423,65 @@ def main() -> int:
     verified = json.loads(
         extension.verification_analyze(canonical(suite), canonical(verify_input))
     )
-    route = verified["facts"][0]["items"][0]
+    facts = {row["name"]: row for row in verified["facts"]}
+    case_items = facts["cases"]["items"]
+    if [row["key"] for row in case_items] != [
+        "test/test_cases.c::sched.2d_e2e"
+    ]:
+        raise AssertionError(case_items)
+    case_evidence = case_items[0]["evidence"]
+    if (
+        len(case_evidence) != 1
+        or case_evidence[0]["path"] != "test/test_cases.c"
+        or case_evidence[0]["line"] != 1
+    ):
+        raise AssertionError(case_evidence)
+    duplicate_map = copy.deepcopy(mapped)
+    duplicate_test = next(
+        row for row in duplicate_map["tests"] if row["path"] == "test/test_cases.c"
+    )
+    duplicate_occurrence = copy.deepcopy(duplicate_test["cases"][0])
+    duplicate_occurrence["line"] += 1
+    duplicate_test["cases"].append(duplicate_occurrence)
+    duplicate_suite = {
+        "schema_version": 1,
+        "suite": "duplicate-test-selector",
+        "projects": {"subject": {"map": "subject.map.json"}},
+        "extractors": {
+            "cases": {
+                "kind": "test_selectors",
+                "project": "subject",
+                "paths": ["test/test_cases.c"],
+            }
+        },
+        "checks": [
+            {
+                "id": "ONE-TEST-IDENTITY",
+                "assert": "cardinality",
+                "actual": "cases",
+                "exact": 1,
+                "owner": "test",
+                "rationale": "Repeated occurrences cite one exact test identity.",
+            }
+        ],
+    }
+    duplicate_input = copy.deepcopy(verify_input)
+    duplicate_input["suite_path"] = "duplicate-test-selector.verify.json"
+    duplicate_input["projects"][0]["map"] = duplicate_map
+    duplicate_result = json.loads(
+        extension.verification_analyze(
+            canonical(duplicate_suite), canonical(duplicate_input)
+        )
+    )
+    duplicate_fact = duplicate_result["facts"][0]
+    if (
+        duplicate_fact["state"] != "current"
+        or len(duplicate_fact["items"]) != 1
+        or len(duplicate_fact["items"][0]["evidence"]) != 2
+        or duplicate_result["checks"][0]["status"] != "pass"
+    ):
+        raise AssertionError(duplicate_result)
+    route = facts["routes"]["items"][0]
     if route["attributes"]["kind"] != "configured":
         raise AssertionError(route)
     if {row["provenance"] for row in route["evidence"]} != {

@@ -163,6 +163,7 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         "metrics": {
             "context": ["distractor_ratio", "returned_count"],
             "introduced_tests_role": "act_only",
+            "line_budgets": [20, 100],
             "performance": "observational_single_sample",
             "retrieval": ["mrr", "recall_all", "recall_at_20"],
             "split_aggregation": "separate",

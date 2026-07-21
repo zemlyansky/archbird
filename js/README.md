@@ -85,7 +85,12 @@ Pass `{ search: ["provider registration"], searchLimit: 8 }` when the path or
 symbol is not yet known. Archbird returns advisory candidate seeds with the
 exact matched Map fields and scores, then expands them through normal typed
 Query routes. This deterministic lexical ranking does not claim semantic
-equivalence.
+equivalence, and its transitive symbol neighbors do not strengthen static test
+routes.
+
+Test matches report file distance and symbol-hop distance independently. A
+case-local call to a traversed wrapper can therefore rank above same-file
+fallback without being presented as runtime coverage.
 
 ### Import observed test routes
 
@@ -351,8 +356,8 @@ reintroduced, and resolved findings while coverage only grows.
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
 and behavioral-attestation equality. Facts can come from symbols, values,
-component/file edges, provider surfaces, test routes, Python/C structured
-entries, and supplied attestations.
+component/file edges, provider surfaces, exact test selectors, test routes,
+Python/C structured entries, and supplied attestations.
 
 Derived source facts, asserted requirements/mappings/waivers, and observed
 runner evidence stay separate. Comparison, freshness, applicability,

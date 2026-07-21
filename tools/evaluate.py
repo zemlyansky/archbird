@@ -400,7 +400,7 @@ def validate_protocol(
             "split_aggregation",
             "introduced_tests_role",
         },
-        set(),
+        {"line_budgets"},
         f"{where}.metrics",
     )
     sorted_unique_strings(metrics["retrieval"], f"{where}.metrics.retrieval")
@@ -411,6 +411,21 @@ def validate_protocol(
         raise EvaluationError(f"{where}.metrics.split_aggregation is unsupported")
     if metrics["introduced_tests_role"] != "act_only":
         raise EvaluationError(f"{where}.metrics.introduced_tests_role is unsupported")
+    line_budgets = metrics.get("line_budgets", [200, 500, 1000, 2000])
+    if (
+        not isinstance(line_budgets, list)
+        or not line_budgets
+        or any(
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+            for value in line_budgets
+        )
+        or line_budgets != sorted(set(line_budgets))
+    ):
+        raise EvaluationError(
+            f"{where}.metrics.line_budgets must be sorted unique positive integers"
+        )
 
     split_policy = value["split_policy"]
     if not isinstance(split_policy, dict):
@@ -1166,6 +1181,75 @@ def extract_retrieval_rankings(
     return deduplicate(files), deduplicate(symbols)
 
 
+def extract_test_tiers(query: Mapping[str, Any]) -> Mapping[str, list[str]]:
+    order = {
+        "observed": 0,
+        "asserted": 1,
+        "direct": 2,
+        "candidate": 3,
+        "conservative": 4,
+        "unresolved": 5,
+    }
+    limits = {
+        "observed_asserted": 1,
+        "direct": 2,
+        "candidate": 3,
+        "all": 5,
+    }
+    result: dict[str, list[str]] = {name: [] for name in limits}
+    for row in query.get("test_matches", []):
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("path"), str)
+            or not isinstance(row.get("selector"), str)
+        ):
+            continue
+        strength = order.get(row.get("classification"), 5)
+        identity = f"{row['path']}::{row['selector']}"
+        for name, limit in limits.items():
+            if strength <= limit:
+                result[name].append(identity)
+    return {name: deduplicate(values) for name, values in result.items()}
+
+
+def source_line_count(path: Path) -> int:
+    data = path.read_bytes()
+    return data.count(b"\n") + int(bool(data) and not data.endswith(b"\n"))
+
+
+def line_budget_metrics(
+    prefix: str,
+    ranked: Sequence[str],
+    relevant: Sequence[str],
+    checkout_root: Path,
+    budgets: Sequence[int],
+) -> Mapping[str, Any]:
+    unique_ranked = deduplicate(ranked)
+    truth = set(relevant)
+    result: dict[str, Any] = {}
+    line_counts = {
+        path: source_line_count(checkout_root / path)
+        for path in unique_ranked
+        if (checkout_root / path).is_file()
+    }
+    for budget in budgets:
+        selected: list[str] = []
+        used = 0
+        for path in unique_ranked:
+            lines = line_counts.get(path)
+            if lines is None or used + lines > budget:
+                continue
+            selected.append(path)
+            used += lines
+        hits = truth.intersection(selected)
+        result[f"{prefix}_files_at_{budget}_lines"] = len(selected)
+        result[f"{prefix}_lines_used_at_{budget}"] = used
+        result[f"{prefix}_recall_at_{budget}_lines"] = (
+            None if not truth else len(hits) / len(truth)
+        )
+    return result
+
+
 def checkout(repository: Path, destination: Path, revision: str) -> None:
     git(repository, "worktree", "prune", capture=False)
     if destination.exists():
@@ -1183,6 +1267,371 @@ def remove_checkout(repository: Path, destination: Path) -> None:
     if destination.exists():
         shutil.rmtree(destination)
     git(repository, "worktree", "prune", capture=False)
+
+
+def introduced_test_identities(value: object) -> tuple[list[str], str | None]:
+    if not isinstance(value, list) or not value:
+        return [], "no reviewed tests were introduced by this change"
+    identities: list[str] = []
+    for raw in value:
+        if not isinstance(raw, str) or "::" not in raw:
+            return [], "an introduced test lacks an exact path::selector identity"
+        path, selector = raw.split("::", 1)
+        try:
+            normalized = safe_relative(path, "introduced test path")
+        except EvaluationError:
+            return [], "an introduced test has an invalid repository path"
+        if not selector:
+            return [], "an introduced test has an empty selector"
+        identities.append(f"{normalized}::{selector}")
+    if identities != sorted(set(identities), key=str.encode):
+        return [], "introduced test identities are not sorted and unique"
+    return identities, None
+
+
+def verification_test_suite(
+    case_id: str, identities: Sequence[str]
+) -> Mapping[str, Any]:
+    paths = sorted(
+        {identity.split("::", 1)[0] for identity in identities}, key=str.encode
+    )
+    return {
+        "schema_version": 1,
+        "suite": f"historical-{case_id}-introduced-tests",
+        "projects": {"subject": {"map": "map.json"}},
+        "extractors": {
+            "expected.tests": {
+                "kind": "literal_set",
+                "values": list(identities),
+            },
+            "subject.tests": {
+                "kind": "test_selectors",
+                "project": "subject",
+                "paths": paths,
+            },
+        },
+        "checks": [
+            {
+                "id": "HISTORICAL-INTRODUCED-TESTS",
+                "assert": "required_subset",
+                "expected": "expected.tests",
+                "actual": "subject.tests",
+                "owner": "historical-evaluation",
+                "rationale": (
+                    "Reviewed after-only test identities must be absent before "
+                    "and present after the historical change; this does not "
+                    "claim that the tests execute or cover the behavior."
+                ),
+            }
+        ],
+    }
+
+
+def finding_by_key(
+    document: Mapping[str, Any], key: str
+) -> Mapping[str, Any] | None:
+    for check in document.get("checks", []):
+        if not isinstance(check, dict):
+            continue
+        for finding in check.get("findings", []):
+            if (
+                isinstance(finding, dict)
+                and finding.get("key") == key
+                and finding.get("comparison") == "missing"
+            ):
+                return finding
+    return None
+
+
+def run_historical_verification(
+    case_id: str,
+    introduced: object,
+    archbird: Path,
+    case_output: Path,
+    before_map: Path,
+    after_map: Path,
+) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
+    identities, reason = introduced_test_identities(introduced)
+    if reason is not None:
+        return (
+            {
+                "act": {"applicability": "not_applicable", "reason": reason},
+                "applicability": "not_applicable",
+                "reason": reason,
+            },
+            {},
+            {},
+        )
+    suite = verification_test_suite(case_id, identities)
+    verification_root = case_output / "verification"
+    documents: dict[str, Mapping[str, Any]] = {}
+    observations: dict[str, Mapping[str, Any]] = {}
+    artifact_rows: dict[str, Any] = {}
+    for state, source_map in (("before", before_map), ("after", after_map)):
+        directory = verification_root / state
+        directory.mkdir(parents=True, exist_ok=True)
+        map_path = directory / "map.json"
+        suite_path = directory / "suite.json"
+        result_path = directory / "result.json"
+        shutil.copyfile(source_map, map_path)
+        write_json(suite_path, suite)
+        observation = run_process(
+            [
+                str(archbird),
+                "verify",
+                "--config",
+                str(suite_path),
+                "--format",
+                "json",
+                "--output",
+                str(result_path),
+            ],
+            directory,
+            directory / "verify.stdout",
+            directory / "verify.stderr",
+        )
+        observations[state] = observation
+        if observation["returncode"] != 0 or not result_path.is_file():
+            return (
+                {
+                    "act": {
+                        "applicability": "unknown",
+                        "reason": f"{state} verification failed",
+                    },
+                    "applicability": "applicable",
+                    "error": f"{state} verification failed",
+                },
+                {},
+                {"verification": observations},
+            )
+        document = read_json(result_path, f"{state} historical verification")
+        documents[state] = document
+        artifact_rows[state] = {
+            "bytes": result_path.stat().st_size,
+            "sha256": sha256_file(result_path),
+        }
+    before_findings = {
+        str(finding.get("key"))
+        for check in documents["before"].get("checks", [])
+        if isinstance(check, dict)
+        for finding in check.get("findings", [])
+        if isinstance(finding, dict)
+        and finding.get("comparison") == "missing"
+        and finding.get("evidence_state") == "current"
+    }
+    after_findings = {
+        str(finding.get("key"))
+        for check in documents["after"].get("checks", [])
+        if isinstance(check, dict)
+        for finding in check.get("findings", [])
+        if isinstance(finding, dict)
+        and finding.get("comparison") == "missing"
+        and finding.get("evidence_state") == "current"
+    }
+    truth = set(identities)
+    before_check_states = {
+        str(check.get("status"))
+        for check in documents["before"].get("checks", [])
+        if isinstance(check, dict)
+    }
+    after_check_states = {
+        str(check.get("status"))
+        for check in documents["after"].get("checks", [])
+        if isinstance(check, dict)
+    }
+    evidence_current = (
+        before_check_states <= {"fail"} and after_check_states <= {"pass"}
+    )
+    metrics: dict[str, Any] = {
+        "verification_after_presence_recall": (
+            len(truth - after_findings) / len(truth)
+            if after_check_states <= {"pass"}
+            else None
+        ),
+        "verification_before_missing_recall": (
+            len(truth.intersection(before_findings)) / len(truth)
+            if before_check_states <= {"fail"}
+            else None
+        ),
+        "verification_transition_accuracy": (
+            float(
+                truth.issubset(before_findings)
+                and not truth.intersection(after_findings)
+            )
+            if evidence_current
+            else None
+        ),
+    }
+
+    proposals: list[Mapping[str, Any]] = []
+    proposal_paths: list[str] = []
+    act_root = case_output / "act"
+    act_root.mkdir(parents=True, exist_ok=True)
+    for index, identity in enumerate(identities):
+        finding = finding_by_key(documents["before"], identity)
+        if finding is None or not isinstance(finding.get("fingerprint"), str):
+            continue
+        proposal_path = act_root / f"proposal-{index}.json"
+        observation = run_process(
+            [
+                str(archbird),
+                "plan",
+                "--verification",
+                str(verification_root / "before/result.json"),
+                "--finding",
+                str(finding["fingerprint"]),
+                "--format",
+                "json",
+                "--output",
+                str(proposal_path),
+            ],
+            act_root,
+            act_root / f"proposal-{index}.stdout",
+            act_root / f"proposal-{index}.stderr",
+        )
+        if observation["returncode"] != 0 or not proposal_path.is_file():
+            continue
+        proposal = read_json(proposal_path, "historical change proposal")
+        proposals.append(
+            {
+                "artifact": {
+                    "bytes": proposal_path.stat().st_size,
+                    "sha256": sha256_file(proposal_path),
+                },
+                "document": proposal,
+                "identity": identity,
+                "observation": observation,
+                "path": proposal_path,
+            }
+        )
+        proposal_paths.extend(
+            str(candidate["path"])
+            for candidate in proposal.get("candidates", [])
+            if isinstance(candidate, dict)
+            and isinstance(candidate.get("path"), str)
+        )
+    expected_paths = [identity.split("::", 1)[0] for identity in identities]
+    metrics.update(
+        rank_metrics("act_candidate_path", proposal_paths, expected_paths)
+    )
+    act: dict[str, Any] = {
+        "applicability": "applicable",
+        "origins_expected": len(identities),
+        "proposals_produced": len(proposals),
+        "transition": {
+            "applicability": "not_applicable",
+            "reason": (
+                "multiple findings require reviewed plan composition"
+                if len(identities) > 1
+                else "no current origin finding produced a proposal"
+            ),
+        },
+    }
+    if len(identities) == 1 and len(proposals) == 1:
+        proposal_row = proposals[0]
+        proposal = proposal_row["document"]
+        proposal_path = proposal_row["path"]
+        contract_path = act_root / "contract.json"
+        result_path = act_root / "result.json"
+        contract_command = [
+            str(archbird),
+            "contract",
+            "--proposal",
+            str(proposal_path),
+            "--objective",
+            f"Introduce reviewed regression test {identities[0]}",
+            "--owner",
+            "historical-evaluation",
+            "--rationale",
+            "The reviewed historical change introduced this exact test identity.",
+            "--preserve-all",
+            "--format",
+            "json",
+            "--output",
+            str(contract_path),
+        ]
+        expected_path = expected_paths[0]
+        for candidate in proposal.get("candidates", []):
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("path") == expected_path
+                and isinstance(candidate.get("id"), str)
+            ):
+                contract_command.extend(
+                    ("--select-candidate", str(candidate["id"]))
+                )
+        contract_observation = run_process(
+            contract_command,
+            act_root,
+            act_root / "contract.stdout",
+            act_root / "contract.stderr",
+        )
+        if contract_observation["returncode"] == 0 and contract_path.is_file():
+            result_observation = run_process(
+                [
+                    str(archbird),
+                    "verify-plan",
+                    "--proposal",
+                    str(proposal_path),
+                    "--contract",
+                    str(contract_path),
+                    "--before-verification",
+                    str(verification_root / "before/result.json"),
+                    "--after-verification",
+                    str(verification_root / "after/result.json"),
+                    "--format",
+                    "json",
+                    "--output",
+                    str(result_path),
+                ],
+                act_root,
+                act_root / "result.stdout",
+                act_root / "result.stderr",
+            )
+            if result_observation["returncode"] == 0 and result_path.is_file():
+                result = read_json(result_path, "historical change result")
+                metrics["act_transition_satisfied"] = float(
+                    result.get("status") == "satisfied"
+                )
+                act["transition"] = {
+                    "applicability": "applicable",
+                    "artifact": {
+                        "bytes": result_path.stat().st_size,
+                        "sha256": sha256_file(result_path),
+                    },
+                    "observation": result_observation,
+                    "status": result.get("status"),
+                }
+            else:
+                act["transition"] = {
+                    "applicability": "unknown",
+                    "reason": "change-result judgment failed",
+                }
+        else:
+            act["transition"] = {
+                "applicability": "unknown",
+                "reason": "reviewed contract construction failed",
+            }
+    track = {
+        "act": act,
+        "applicability": "applicable",
+        "expected_test_identities": identities,
+        "verification": {
+            "after_missing": sorted(
+                truth.intersection(after_findings), key=str.encode
+            ),
+            "after_status": sorted(after_check_states, key=str.encode),
+            "before_missing": sorted(
+                truth.intersection(before_findings), key=str.encode
+            ),
+            "before_status": sorted(before_check_states, key=str.encode),
+        },
+    }
+    artifacts = {
+        "act_proposals": [row["artifact"] for row in proposals],
+        "verification": artifact_rows,
+    }
+    return track, metrics, {"artifacts": artifacts, "observations": observations}
 
 
 def run_case(
@@ -1333,7 +1782,11 @@ def run_case(
         issue_retrieval_files, issue_retrieval_symbols = (
             extract_retrieval_rankings(issue_query_document)
         )
+        test_tiers = extract_test_tiers(query_document)
         truth = case["ground_truth"]
+        line_budgets = protocol["metrics"].get(
+            "line_budgets", [200, 500, 1000, 2000]
+        )
         metrics: dict[str, Any] = {}
         metrics.update(rank_metrics("relevant_file", ranked_files, truth["relevant_files"]))
         metrics.update(
@@ -1359,6 +1812,30 @@ def run_case(
             )
         )
         metrics.update(rank_metrics("relevant_test", ranked_tests, truth["relevant_tests"]))
+        for tier, values in test_tiers.items():
+            metrics.update(
+                rank_metrics(
+                    f"relevant_test_{tier}", values, truth["relevant_tests"]
+                )
+            )
+        metrics.update(
+            line_budget_metrics(
+                "relevant_file_context",
+                ranked_context_files,
+                truth["relevant_files"],
+                worktree,
+                line_budgets,
+            )
+        )
+        metrics.update(
+            line_budget_metrics(
+                "diff_file_context",
+                ranked_context_files,
+                entry["diff_files"],
+                worktree,
+                line_budgets,
+            )
+        )
         metrics.update(
             rank_metrics(
                 "issue_retrieval_file",
@@ -1395,25 +1872,79 @@ def run_case(
                 "query_max_rss_kib": query_observation["max_rss_kib"],
             }
         )
+        remove_checkout(repository, worktree)
+        checkout(repository, worktree, str(repository_info["after_revision"]))
+        after_map_path = case_output / "after-map.json"
+        after_map_command = [str(archbird), "map", str(worktree)]
+        if config is None:
+            after_map_command.append("--no-config")
+        else:
+            after_map_command.extend(("--config", str(config_path)))
+        after_map_command.extend(
+            ("--format", "json", "--output", str(after_map_path))
+        )
+        after_map_observation = run_process(
+            after_map_command,
+            worktree,
+            case_output / "after-map.stdout",
+            case_output / "after-map.stderr",
+        )
+        if (
+            after_map_observation["returncode"] != 0
+            or not after_map_path.is_file()
+        ):
+            return {
+                "case_sha256": entry["case_sha256"],
+                "error": "after Map command failed",
+                "id": case_id,
+                "map": map_observation,
+                "map_after": after_map_observation,
+                "query": query_observation,
+                "review_status": entry["review_status"],
+                "split": entry["split"],
+                "status": "error",
+            }
+        verification_track, verification_metrics, verification_runtime = (
+            run_historical_verification(
+                case_id,
+                truth.get("introduced_tests", []),
+                archbird,
+                case_output,
+                map_path,
+                after_map_path,
+            )
+        )
+        metrics.update(verification_metrics)
+        extra_artifacts = verification_runtime.get("artifacts", {})
         return {
             "artifacts": {
+                "after_map": {
+                    "bytes": after_map_path.stat().st_size,
+                    "sha256": sha256_file(after_map_path),
+                },
                 "issue_query": {
                     "bytes": issue_query_path.stat().st_size,
                     "sha256": sha256_file(issue_query_path),
                 },
                 "map": {"bytes": map_path.stat().st_size, "sha256": sha256_file(map_path)},
                 "query": {"bytes": query_path.stat().st_size, "sha256": sha256_file(query_path)},
+                **extra_artifacts,
             },
             "case_sha256": entry["case_sha256"],
             "id": case_id,
             "issue_query": issue_query_observation,
             "map": map_observation,
+            "map_after": after_map_observation,
             "map_tool": map_document.get("source_tool", map_document.get("tool")),
             "metrics": metrics,
             "query": query_observation,
             "review_status": entry["review_status"],
             "split": entry["split"],
             "status": "ok",
+            "transition_track": verification_track,
+            "transition_observations": verification_runtime.get(
+                "observations", {}
+            ),
         }
     finally:
         remove_checkout(repository, worktree)
@@ -1447,6 +1978,7 @@ def aggregate_cases(
             metrics[name] = statistics.fmean(values)
     pooled = {}
     for prefix in (
+        "act_candidate_path",
         "diff_context_file",
         "diff_file",
         "issue_context_file",
@@ -1460,6 +1992,10 @@ def aggregate_cases(
         "relevant_file",
         "relevant_symbol",
         "relevant_test",
+        "relevant_test_all",
+        "relevant_test_candidate",
+        "relevant_test_direct",
+        "relevant_test_observed_asserted",
         "seed_file",
     ):
         truth = sum(
@@ -1601,7 +2137,10 @@ def run_evaluation(root: Path, archbird: Path, label: str, corpus_sha256: str | 
 
 
 def metric_direction(name: str) -> str | None:
-    if any(token in name for token in ("recall", "mrr", "precision")):
+    if any(
+        token in name
+        for token in ("recall", "mrr", "precision", "accuracy", "satisfied")
+    ):
         return "higher"
     if any(token in name for token in ("distractor", "duration", "rss")):
         return "lower"
@@ -1613,7 +2152,10 @@ def metric_family(name: str) -> str:
         return "performance"
     if "distractor" in name:
         return "context"
-    if any(token in name for token in ("recall", "mrr", "precision")):
+    if any(
+        token in name
+        for token in ("recall", "mrr", "precision", "accuracy", "satisfied")
+    ):
         return "quality"
     return "scale"
 

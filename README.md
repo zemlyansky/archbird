@@ -84,7 +84,15 @@ artifacts from names, paths, signatures, component descriptions, and package
 metadata, shows the exact field and match behind every score, then expands the
 selected candidates through the same typed graph. Prefix, substring, and
 bounded typo matches are advisory seeds; they never become semantic edges or
-make a Verify check pass.
+make a Verify check pass. Symbol neighbors reached only from those advisory
+seeds do not strengthen a static test route.
+
+Focused test routes keep file distance and symbol-hop distance separate. A
+case that calls a wrapper reached from the requested symbol is labeled with
+that wrapper and its hop distance; another case in the same file is not
+promoted merely because the file is nearby. Static routes remain candidates
+until reviewed configuration or imported per-test observations provide
+stronger evidence.
 
 `query --view changes` uses the same complete Query artifact and ranking policy,
 but presents it as a coding packet: change seeds, affected code, strongest
@@ -358,8 +366,9 @@ known, reintroduced, and resolved findings, while coverage can only grow.
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
 and behavioral-attestation equality. Extractors cover literal facts, symbols,
-values, component/file edges, test routes, provider surfaces, Python enums and
-sets, C enums/designated initializers/macros, and supplied attestations.
+values, component/file edges, exact test selectors, test routes, provider
+surfaces, Python enums and sets, C enums/designated initializers/macros, and
+supplied attestations.
 
 Facts have three non-interchangeable provenances:
 

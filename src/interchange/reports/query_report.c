@@ -52,6 +52,7 @@ typedef struct QueryReportTest {
   size_t line;
   size_t route_count;
   size_t seed_distance;
+  size_t symbol_distance;
   size_t ranking_affinity;
 } QueryReportTest;
 
@@ -66,6 +67,7 @@ typedef struct QueryCollapsedTestGroup {
   const AbString *sample_selector;
   size_t sample_line;
   size_t seed_distance;
+  size_t symbol_distance;
   size_t count;
 } QueryCollapsedTestGroup;
 
@@ -457,7 +459,8 @@ collapsed_test_group_add(ArchbirdEngine *engine,
         nullable_string_equal(group->target_role, candidate->target_role) &&
         nullable_string_equal(group->target_path, target_path) &&
         nullable_string_equal(group->target_symbol, target_symbol) &&
-        group->seed_distance == candidate->seed_distance) {
+        group->seed_distance == candidate->seed_distance &&
+        group->symbol_distance == candidate->symbol_distance) {
       group->count++;
       return ARCHBIRD_OK;
     }
@@ -473,6 +476,7 @@ collapsed_test_group_add(ArchbirdEngine *engine,
       .sample_selector = candidate->selector,
       .sample_line = candidate->line,
       .seed_distance = candidate->seed_distance,
+      .symbol_distance = candidate->symbol_distance,
       .count = 1,
   };
   (*group_count)++;
@@ -497,6 +501,12 @@ collapsed_test_group_render(AbReportStringList *rows,
     status = ab_buffer_literal(&text, "unresolved");
   else if (status == ARCHBIRD_OK)
     status = ab_report_appendf(&text, "%zu", group->seed_distance);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&text, "; symbol-distance=");
+  if (status == ARCHBIRD_OK && group->symbol_distance == SIZE_MAX)
+    status = ab_buffer_literal(&text, "unresolved");
+  else if (status == ARCHBIRD_OK)
+    status = ab_report_appendf(&text, "%zu", group->symbol_distance);
   if (status == ARCHBIRD_OK && group->target_path) {
     status = ab_report_appendf(&text, "; target=%.*s",
                                (int)group->target_path->length,
@@ -2225,6 +2235,8 @@ static ArchbirdStatus render_query_view(
           candidate.line = ab_report_size(row, "line", 0);
           candidate.seed_distance =
               ab_report_size(row, "seed_distance", SIZE_MAX);
+          candidate.symbol_distance =
+              ab_report_size(row, "symbol_distance", SIZE_MAX);
           candidate.route_count = optional_array(row, "route")->as.array.count;
           candidate.ranking_affinity =
               ab_report_size(row, "ranking_affinity", 0);
@@ -2360,6 +2372,13 @@ static ArchbirdStatus render_query_view(
             status = ab_buffer_literal(&text, "unresolved");
           else if (status == ARCHBIRD_OK && match->provenance)
             status = ab_report_appendf(&text, "%zu", match->seed_distance);
+          if (status == ARCHBIRD_OK && match->provenance)
+            status = ab_buffer_literal(&text, "; symbol-distance=");
+          if (status == ARCHBIRD_OK && match->provenance &&
+              match->symbol_distance == SIZE_MAX)
+            status = ab_buffer_literal(&text, "unresolved");
+          else if (status == ARCHBIRD_OK && match->provenance)
+            status = ab_report_appendf(&text, "%zu", match->symbol_distance);
           if (status == ARCHBIRD_OK && match->provenance)
             status = ab_report_appendf(&text, "; target-role=%.*s",
                                        (int)match->target_role->length,

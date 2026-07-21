@@ -67,6 +67,7 @@ typedef struct QuerySymbol {
   size_t line;
   size_t retrieval_rank;
   uint64_t retrieval_score;
+  int explicit_seed;
 } QuerySymbol;
 
 typedef struct QueryRelatedSymbol {
@@ -76,6 +77,7 @@ typedef struct QueryRelatedSymbol {
   size_t distance;
   size_t retrieval_rank;
   uint64_t retrieval_score;
+  int explicit_seed;
 } QueryRelatedSymbol;
 
 typedef struct QueryTestRow {
@@ -105,6 +107,7 @@ typedef struct QueryTestMatch {
   const char *evidence_scope;
   const char *target_role;
   size_t seed_distance;
+  size_t symbol_distance;
   size_t evidence_target;
   size_t seed_retrieval_rank;
   uint64_t seed_retrieval_score;
@@ -166,11 +169,13 @@ static int valid_sha256(const AbString *value) {
 
 static const AbString *match_target_symbol(const QueryContext *context,
                                            const QueryTestMatch *match);
+static size_t match_symbol_distance(const QueryContext *context,
+                                    const QueryTestMatch *match);
 static ArchbirdStatus
 append_related_symbol_row(QueryContext *context, size_t file_index,
                           const AbValue *row, const AbString *name,
                           uint64_t retrieval_score, size_t retrieval_rank,
-                          size_t distance);
+                          size_t distance, int explicit_seed);
 
 static int symbol_scoped_file(const QueryContext *context, size_t file_index) {
   return file_index < context->file_count &&
@@ -839,7 +844,7 @@ static int symbol_compare(const void *left_raw, const void *right_raw) {
 static ArchbirdStatus append_symbol(QueryContext *context, size_t file_index,
                                     const AbValue *row, const AbString *name,
                                     const AbString *kind, const AbString *scope,
-                                    size_t line) {
+                                    size_t line, int explicit_seed) {
   QuerySymbol *resized;
   QuerySymbol *symbol;
   if (context->symbol_count == context->symbol_capacity) {
@@ -869,6 +874,7 @@ static ArchbirdStatus append_symbol(QueryContext *context, size_t file_index,
   symbol->line = line;
   symbol->retrieval_rank = SIZE_MAX;
   symbol->retrieval_score = 0;
+  symbol->explicit_seed = explicit_seed;
   return ARCHBIRD_OK;
 }
 
@@ -911,7 +917,7 @@ static ArchbirdStatus match_symbols(QueryContext *context,
       context->files[file_index].symbol_seed = 1;
       context->files[file_index].matched_symbol_seed = 1;
       if (append_symbol(context, file_index, row, name, kind, scope,
-                        (size_t)line) != ARCHBIRD_OK)
+                        (size_t)line, 1) != ARCHBIRD_OK)
         return ARCHBIRD_OUT_OF_MEMORY;
     }
   }
@@ -1258,7 +1264,7 @@ static ArchbirdStatus select_retrieval(QueryContext *context) {
       context->files[file_index].symbol_seed = 1;
       context->files[file_index].matched_symbol_seed = 1;
       status = append_symbol(context, file_index, hit->row, hit->name,
-                             hit->symbol_kind, scope, hit->line);
+                             hit->symbol_kind, scope, hit->line, 0);
       if (status != ARCHBIRD_OK)
         return status;
       context->symbols[context->symbol_count - 1].retrieval_rank = index;
@@ -1328,6 +1334,8 @@ static ArchbirdStatus select_initial(QueryContext *context) {
     for (read = 0; read < context->symbol_count; read++) {
       if (write && symbol_compare(&context->symbols[write - 1],
                                   &context->symbols[read]) == 0) {
+        context->symbols[write - 1].explicit_seed |=
+            context->symbols[read].explicit_seed;
         if (context->symbols[read].retrieval_score >
                 context->symbols[write - 1].retrieval_score ||
             (context->symbols[read].retrieval_score ==
@@ -1384,7 +1392,8 @@ static ArchbirdStatus select_contained_symbols(QueryContext *context) {
       if (qualified_member_of(&name->as.text, selected->name)) {
         ArchbirdStatus status = append_related_symbol_row(
             context, selected->file_index, row, &name->as.text,
-            selected->retrieval_score, selected->retrieval_rank, 0);
+            selected->retrieval_score, selected->retrieval_rank, 0,
+            selected->explicit_seed);
         if (status != ARCHBIRD_OK)
           return status;
       }
@@ -1534,16 +1543,19 @@ static int qualified_name_extends(const AbString *longer,
          memcmp(longer->data + offset, shorter->data, shorter->length) == 0;
 }
 
-static int target_symbol_is_selected(const QueryContext *context,
-                                     size_t target_index,
-                                     const AbString *target_symbol,
-                                     int *requires_symbol) {
+static int target_symbol_selection(const QueryContext *context,
+                                   size_t target_index,
+                                   const AbString *target_symbol,
+                                   int *requires_symbol,
+                                   size_t *symbol_distance) {
   const AbString *unique_leaf_name = NULL;
   const AbValue *file_symbols = context->files[target_index].symbols;
   size_t index;
   int leaf_selected = 0;
   int leaf_ambiguous = 0;
   *requires_symbol = 0;
+  if (symbol_distance)
+    *symbol_distance = SIZE_MAX;
   for (index = 0; index < context->symbol_count; index++) {
     const QuerySymbol *symbol = &context->symbols[index];
     if (symbol->file_index != target_index)
@@ -1553,12 +1565,43 @@ static int target_symbol_is_selected(const QueryContext *context,
       size_t split = symbol->name->length;
       while (split && symbol->name->data[split - 1] != '.')
         split--;
-      if (ab_string_equal(symbol->name, target_symbol))
+      if (ab_string_equal(symbol->name, target_symbol)) {
+        if (symbol_distance)
+          *symbol_distance = 0;
         return 1;
+      }
       if (symbol->name->length - split == target_symbol->length &&
           memcmp(symbol->name->data + split, target_symbol->data,
-                 target_symbol->length) == 0)
+                 target_symbol->length) == 0) {
         leaf_selected = 1;
+        if (symbol_distance)
+          *symbol_distance = 0;
+      }
+    }
+  }
+  for (index = 0; index < context->related_symbol_count; index++) {
+    const QueryRelatedSymbol *symbol = &context->related_symbols[index];
+    if (symbol->file_index != target_index)
+      continue;
+    *requires_symbol = 1;
+    if (!symbol->explicit_seed)
+      continue;
+    if (target_symbol && target_symbol->length) {
+      size_t split = symbol->name->length;
+      while (split && symbol->name->data[split - 1] != '.')
+        split--;
+      if (ab_string_equal(symbol->name, target_symbol)) {
+        if (symbol_distance && symbol->distance < *symbol_distance)
+          *symbol_distance = symbol->distance;
+        return 1;
+      }
+      if (symbol->name->length - split == target_symbol->length &&
+          memcmp(symbol->name->data + split, target_symbol->data,
+                 target_symbol->length) == 0) {
+        leaf_selected = 1;
+        if (symbol_distance && symbol->distance < *symbol_distance)
+          *symbol_distance = symbol->distance;
+      }
     }
   }
   if (!leaf_selected || !file_symbols || file_symbols->kind != AB_VALUE_ARRAY)
@@ -1587,6 +1630,14 @@ static int target_symbol_is_selected(const QueryContext *context,
     }
   }
   return unique_leaf_name && !leaf_ambiguous;
+}
+
+static int target_symbol_is_selected(const QueryContext *context,
+                                     size_t target_index,
+                                     const AbString *target_symbol,
+                                     int *requires_symbol) {
+  return target_symbol_selection(context, target_index, target_symbol,
+                                 requires_symbol, NULL);
 }
 
 static int candidate_relation(const AbString *relation) {
@@ -1682,7 +1733,8 @@ static int candidate_route_evidence(const QueryContext *context,
                                     size_t target_index) {
   size_t index;
   if (!context->files[target_index].requested_seed &&
-      !context->files[target_index].matched_symbol_seed)
+      !context->files[target_index].matched_symbol_seed &&
+      !context->files[target_index].related_symbol)
     return 0;
   for (index = 0; index < row->route_evidence->as.array.count; index++) {
     const AbValue *evidence = &row->route_evidence->as.array.items[index];
@@ -1715,7 +1767,8 @@ static int candidate_route_evidence(const QueryContext *context,
     selected_symbol = target_symbol_is_selected(
         context, target_index, target_symbol ? &target_symbol->as.text : NULL,
         &requires_symbol);
-    if (requires_symbol && selected_symbol)
+    if ((requires_symbol && selected_symbol) ||
+        (!requires_symbol && context->files[target_index].requested_seed))
       return 1;
   }
   return 0;
@@ -1726,7 +1779,8 @@ static int asserted_route_evidence(const QueryContext *context,
                                    size_t target_index) {
   size_t index;
   if (!context->files[target_index].requested_seed &&
-      !context->files[target_index].matched_symbol_seed)
+      !context->files[target_index].matched_symbol_seed &&
+      !context->files[target_index].related_symbol)
     return 0;
   for (index = 0; index < row->route_evidence->as.array.count; index++) {
     const AbValue *evidence = &row->route_evidence->as.array.items[index];
@@ -1835,6 +1889,7 @@ append_test_match(QueryContext *context, const QueryTestRow *row, size_t target,
     match->target_role = "transitive-context";
   }
   match->seed_distance = seed_distance;
+  match->symbol_distance = SIZE_MAX;
   match->evidence_target = target;
   if (target != SIZE_MAX) {
     while (current != SIZE_MAX) {
@@ -2113,26 +2168,16 @@ static const char *test_match_evidence_scope(const QueryContext *context,
     const AbValue *evidence =
         &match->row->route_evidence->as.array.items[index];
     const AbValue *target;
-    const AbValue *target_symbol;
     const AbValue *scope;
-    int requires_symbol;
-    int selected_symbol;
     if (evidence->kind != AB_VALUE_OBJECT)
       continue;
     target = ab_value_member(evidence, "target");
-    target_symbol = ab_value_member(evidence, "target_symbol");
     scope = ab_value_member(evidence, "scope");
     if (!target || target->kind != AB_VALUE_STRING || !scope ||
-        scope->kind != AB_VALUE_STRING ||
-        (target_symbol && target_symbol->kind != AB_VALUE_STRING))
+        scope->kind != AB_VALUE_STRING)
       continue;
     if (!ab_string_equal(&target->as.text,
                          context->files[match->evidence_target].path))
-      continue;
-    selected_symbol = target_symbol_is_selected(
-        context, match->evidence_target,
-        target_symbol ? &target_symbol->as.text : NULL, &requires_symbol);
-    if (requires_symbol && !selected_symbol)
       continue;
     if (string_literal(&scope->as.text, "case"))
       return "case";
@@ -2211,6 +2256,8 @@ static int test_match_compare(const void *left_raw, const void *right_raw) {
              test_target_role_priority(right->target_role);
   if (compared)
     return compared;
+  if (left->symbol_distance != right->symbol_distance)
+    return left->symbol_distance > right->symbol_distance ? 1 : -1;
   if (left->seed_distance != right->seed_distance)
     return left->seed_distance > right->seed_distance ? 1 : -1;
   if (!(left->retrieval_query || right->retrieval_query) &&
@@ -2422,6 +2469,9 @@ static ArchbirdStatus find_test_matches(QueryContext *context) {
     for (index = 0; index < context->test_match_count; index++) {
       QueryTestMatch *match = &context->test_matches[index];
       match->evidence_scope = test_match_evidence_scope(context, match);
+      match->symbol_distance = match_symbol_distance(context, match);
+      if (match->symbol_distance > 0 && match->symbol_distance != SIZE_MAX)
+        match->target_role = "symbol-neighborhood";
       test_match_seed_retrieval(context, match);
       match->ranking_affinity = test_match_affinity(context, match);
     }
@@ -2440,7 +2490,7 @@ static ArchbirdStatus
 append_related_symbol_row(QueryContext *context, size_t file_index,
                           const AbValue *row, const AbString *name,
                           uint64_t retrieval_score, size_t retrieval_rank,
-                          size_t distance) {
+                          size_t distance, int explicit_seed) {
   QueryRelatedSymbol *resized;
   QueryRelatedSymbol *symbol;
   size_t index;
@@ -2460,6 +2510,7 @@ append_related_symbol_row(QueryContext *context, size_t file_index,
     }
     if (distance < symbol->distance)
       symbol->distance = distance;
+    symbol->explicit_seed |= explicit_seed;
     return ARCHBIRD_OK;
   }
   if (context->related_symbol_count == context->related_symbol_capacity) {
@@ -2488,19 +2539,21 @@ append_related_symbol_row(QueryContext *context, size_t file_index,
   symbol->distance = distance;
   symbol->retrieval_rank = retrieval_rank;
   symbol->retrieval_score = retrieval_score;
+  symbol->explicit_seed = explicit_seed;
   return ARCHBIRD_OK;
 }
 
 static int selected_symbol_state(const QueryContext *context,
                                  const AbString *path, const AbString *name,
                                  uint64_t *score, size_t *rank,
-                                 size_t *distance) {
+                                 size_t *distance, int *explicit_seed) {
   size_t file_index = find_file(context, path);
   size_t index;
   int found = 0;
   *score = 0;
   *rank = SIZE_MAX;
   *distance = SIZE_MAX;
+  *explicit_seed = 0;
   for (index = 0; index < context->symbol_count; index++) {
     const QuerySymbol *symbol = &context->symbols[index];
     if (!ab_string_equal(symbol->path, path) ||
@@ -2508,6 +2561,7 @@ static int selected_symbol_state(const QueryContext *context,
       continue;
     found = 1;
     *distance = 0;
+    *explicit_seed |= symbol->explicit_seed;
     if (symbol->retrieval_score > *score ||
         (symbol->retrieval_score == *score && symbol->retrieval_rank < *rank)) {
       *score = symbol->retrieval_score;
@@ -2520,6 +2574,7 @@ static int selected_symbol_state(const QueryContext *context,
         !ab_string_equal(symbol->name, name))
       continue;
     found = 1;
+    *explicit_seed |= symbol->explicit_seed;
     if (symbol->distance < *distance)
       *distance = symbol->distance;
     if (symbol->retrieval_score > *score ||
@@ -2541,8 +2596,8 @@ static int selected_symbol_state(const QueryContext *context,
 static ArchbirdStatus
 select_related_symbol(QueryContext *context, const AbString *path,
                       const AbString *name, uint64_t retrieval_score,
-                      size_t retrieval_rank, size_t distance, size_t *queue,
-                      size_t *tail) {
+                      size_t retrieval_rank, size_t distance, int explicit_seed,
+                      size_t *queue, size_t *tail) {
   size_t file_index = find_file(context, path);
   const AbValue *symbols;
   size_t index;
@@ -2569,7 +2624,7 @@ select_related_symbol(QueryContext *context, const AbString *path,
     matched++;
     status = append_related_symbol_row(
         context, file_index, row, &candidate_name->as.text, retrieval_score,
-        retrieval_rank, distance);
+        retrieval_rank, distance, explicit_seed);
   }
   if (status != ARCHBIRD_OK || !matched)
     return status;
@@ -2633,6 +2688,7 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
     const AbValue *resolution;
     size_t candidate;
     int source_selected = 0;
+    int source_explicit = 0;
     uint64_t source_retrieval_score = 0;
     size_t source_retrieval_rank = SIZE_MAX;
     size_t source_distance = SIZE_MAX;
@@ -2657,12 +2713,14 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
     if (source_symbol)
       source_selected = selected_symbol_state(
           context, &source_path->as.text, &source_symbol->as.text,
-          &source_retrieval_score, &source_retrieval_rank, &source_distance);
+          &source_retrieval_score, &source_retrieval_rank, &source_distance,
+          &source_explicit);
     for (candidate = 0; candidate < candidates->as.array.count; candidate++) {
       const AbValue *target = &candidates->as.array.items[candidate];
       const AbValue *target_path;
       const AbValue *target_symbol;
       int target_selected;
+      int target_explicit = 0;
       uint64_t retrieval_score = 0;
       size_t retrieval_rank = SIZE_MAX;
       size_t target_distance = SIZE_MAX;
@@ -2677,13 +2735,14 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
         return query_error(context, "map symbol relation candidate is invalid");
       target_selected = selected_symbol_state(
           context, &target_path->as.text, &target_symbol->as.text,
-          &retrieval_score, &retrieval_rank, &target_distance);
+          &retrieval_score, &retrieval_rank, &target_distance,
+          &target_explicit);
       if (upstream && target_selected && target_distance == hop - 1) {
         status = source_symbol
                      ? select_related_symbol(context, &source_path->as.text,
                                              &source_symbol->as.text,
                                              retrieval_score, retrieval_rank,
-                                             hop, queue, tail)
+                                             hop, target_explicit, queue, tail)
                      : select_related_file(context, &source_path->as.text,
                                            retrieval_score, retrieval_rank, hop,
                                            queue, tail);
@@ -2693,7 +2752,8 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
       if (downstream && source_selected && source_distance == hop - 1) {
         status = select_related_symbol(
             context, &target_path->as.text, &target_symbol->as.text,
-            source_retrieval_score, source_retrieval_rank, hop, queue, tail);
+            source_retrieval_score, source_retrieval_rank, hop, source_explicit,
+            queue, tail);
         if (status != ARCHBIRD_OK)
           return status;
       }
@@ -3732,9 +3792,10 @@ static ArchbirdStatus render_match_route_evidence(AbBuffer *buffer,
   ArchbirdStatus status = ab_buffer_literal(buffer, "[");
   if (match->evidence_target == SIZE_MAX)
     return status == ARCHBIRD_OK ? ab_buffer_literal(buffer, "]") : status;
-  if (context->symbol_count &&
+  if ((context->symbol_count || context->related_symbol_count) &&
       !context->files[match->evidence_target].requested_seed &&
-      !context->files[match->evidence_target].matched_symbol_seed)
+      !context->files[match->evidence_target].matched_symbol_seed &&
+      !context->files[match->evidence_target].related_symbol)
     return status == ARCHBIRD_OK ? ab_buffer_literal(buffer, "]") : status;
   for (index = 0; status == ARCHBIRD_OK &&
                   index < match->row->route_evidence->as.array.count;
@@ -3795,6 +3856,41 @@ static int match_evidence_kind(const QueryTestMatch *match,
       return !candidate_relation(&relation->as.text);
   }
   return !strcmp(match->provenance, "asserted");
+}
+
+static size_t match_symbol_distance(const QueryContext *context,
+                                    const QueryTestMatch *match) {
+  size_t selected_distance = SIZE_MAX;
+  size_t index;
+  if (match->evidence_target == SIZE_MAX ||
+      !strcmp(match->confidence, "conservative") ||
+      !strcmp(match->confidence, "unresolved"))
+    return SIZE_MAX;
+  for (index = 0; index < match->row->route_evidence->as.array.count; index++) {
+    const AbValue *evidence =
+        &match->row->route_evidence->as.array.items[index];
+    const AbValue *target;
+    const AbValue *target_symbol;
+    size_t distance = SIZE_MAX;
+    int requires_symbol = 0;
+    if (evidence->kind != AB_VALUE_OBJECT ||
+        !match_evidence_kind(match, evidence))
+      continue;
+    target = ab_value_member(evidence, "target");
+    target_symbol = ab_value_member(evidence, "target_symbol");
+    if (!target || target->kind != AB_VALUE_STRING || !target_symbol ||
+        target_symbol->kind != AB_VALUE_STRING ||
+        !target_symbol->as.text.length ||
+        !ab_string_equal(&target->as.text,
+                         context->files[match->evidence_target].path))
+      continue;
+    if (target_symbol_selection(context, match->evidence_target,
+                                &target_symbol->as.text, &requires_symbol,
+                                &distance) &&
+        distance < selected_distance)
+      selected_distance = distance;
+  }
+  return selected_distance;
 }
 
 static const AbString *match_target_symbol(const QueryContext *context,
@@ -3958,6 +4054,14 @@ static ArchbirdStatus render_test_matches(AbBuffer *buffer,
         status = ab_buffer_literal(buffer, "null");
       else
         status = ab_buffer_u64(buffer, match->seed_distance);
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"symbol_distance\":");
+    if (status == ARCHBIRD_OK) {
+      if (match->symbol_distance == SIZE_MAX)
+        status = ab_buffer_literal(buffer, "null");
+      else
+        status = ab_buffer_u64(buffer, match->symbol_distance);
     }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"selector\":");

@@ -438,9 +438,9 @@ static int supported_extractor(const AbValue *kind) {
       "c_enum",           "c_designated_initializer",
       "c_macro_set",      "symbols",
       "file_edges",       "component_edges",
-      "test_routes",      "provider_surface",
-      "literal_set",      "literal_values",
-      "literal_relation",
+      "test_routes",      "test_selectors",
+      "provider_surface", "literal_set",
+      "literal_values",   "literal_relation",
   };
   size_t index;
   for (index = 0; index < sizeof(names) / sizeof(names[0]); index++)
@@ -469,6 +469,7 @@ static int extractor_field_allowed(const AbValue *kind, const AbString *name) {
   static const char *const component_edges[] = {"kinds"};
   static const char *const test_routes[] = {"configured_only", "group",
                                             "selectors"};
+  static const char *const test_selectors[] = {"group", "paths", "selectors"};
   static const char *const literal_values[] = {"values"};
   static const char *const literal_relation[] = {"rows"};
   if (name_in(name, common, sizeof(common) / sizeof(common[0])))
@@ -496,6 +497,9 @@ static int extractor_field_allowed(const AbValue *kind, const AbString *name) {
   if (ab_verify_string_is(kind, "test_routes"))
     return name_in(name, test_routes,
                    sizeof(test_routes) / sizeof(test_routes[0]));
+  if (ab_verify_string_is(kind, "test_selectors"))
+    return name_in(name, test_selectors,
+                   sizeof(test_selectors) / sizeof(test_selectors[0]));
   if (ab_verify_string_is(kind, "literal_set") ||
       ab_verify_string_is(kind, "literal_values"))
     return name_in(name, literal_values,

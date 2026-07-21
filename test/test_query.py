@@ -67,6 +67,7 @@ def oracle_query_projection(document: dict) -> dict:
             "evidence_scope",
             "provenance",
             "seed_distance",
+            "symbol_distance",
             "target",
             "target_role",
         ):

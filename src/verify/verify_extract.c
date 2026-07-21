@@ -1494,6 +1494,120 @@ static ArchbirdStatus extract_test_routes(AbVerificationContext *context,
   return status;
 }
 
+static ArchbirdStatus extract_test_selectors(AbVerificationContext *context,
+                                             const AbObjectField *extractor,
+                                             AbVerifyFactSet *fact) {
+  const AbValue *spec = &extractor->value;
+  const AbValue *project_name = ab_value_member(spec, "project");
+  const AbValue *map = project_map(context, spec);
+  const AbValue *tests = map ? ab_value_member(map, "tests") : NULL;
+  const AbValue *wanted_group = ab_value_member(spec, "group");
+  const AbValue *paths = ab_value_member(spec, "paths");
+  const AbValue *selectors = ab_value_member(spec, "selectors");
+  size_t test_index;
+  ArchbirdStatus status =
+      ab_verify_fact_init(context->engine, fact, &extractor->name, "set",
+                          "derived", &project_name->as.text);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (!tests || tests->kind != AB_VALUE_ARRAY) {
+    ab_verify_fact_free(context->engine, fact);
+    return ab_verify_fact_unknown(context->engine, fact, &extractor->name,
+                                  &project_name->as.text, "set",
+                                  "project map has no test inventory");
+  }
+  for (test_index = 0;
+       status == ARCHBIRD_OK && test_index < tests->as.array.count;
+       test_index++) {
+    const AbValue *test = &tests->as.array.items[test_index];
+    const AbValue *group = ab_value_member(test, "group");
+    const AbValue *path = ab_value_member(test, "path");
+    const AbValue *cases = ab_value_member(test, "cases");
+    const char *sha;
+    size_t case_index;
+    if (!group || group->kind != AB_VALUE_STRING || !path ||
+        path->kind != AB_VALUE_STRING || !cases ||
+        cases->kind != AB_VALUE_ARRAY)
+      continue;
+    if (wanted_group && wanted_group->as.text.length &&
+        !ab_string_equal(&wanted_group->as.text, &group->as.text))
+      continue;
+    if (!path_matches(&path->as.text, paths))
+      continue;
+    sha = file_sha(map, &path->as.text);
+    for (case_index = 0;
+         status == ARCHBIRD_OK && case_index < cases->as.array.count;
+         case_index++) {
+      const AbValue *test_case = &cases->as.array.items[case_index];
+      const AbValue *selector = ab_value_member(test_case, "selector");
+      const AbValue *line = ab_value_member(test_case, "line");
+      uint64_t line_number = 0;
+      AbBuffer identity;
+      AbBuffer detail;
+      AbString normalized = {0};
+      AbVerifyFactItem item = {0};
+      AbVerifyEvidence evidence = {0};
+      int selected = 0;
+      if (!selector || selector->kind != AB_VALUE_STRING ||
+          (line && !ab_value_u64(line, &line_number)) ||
+          !selector_matches(&selector->as.text, selectors))
+        continue;
+      ab_buffer_init(&identity, context->engine);
+      ab_buffer_init(&detail, context->engine);
+      status =
+          ab_buffer_append(&identity, path->as.text.data, path->as.text.length);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&identity, "::");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_append(&identity, selector->as.text.data,
+                                  selector->as.text.length);
+      if (status == ARCHBIRD_OK)
+        status = ab_verify_normalized_name(
+            context->engine, spec,
+            &(AbString){(char *)identity.data, identity.length}, &normalized,
+            &selected);
+      if (status == ARCHBIRD_OK && selected)
+        status = ab_buffer_literal(&detail, "test case ");
+      if (status == ARCHBIRD_OK && selected)
+        status = ab_buffer_append(&detail, selector->as.text.data,
+                                  selector->as.text.length);
+      if (status == ARCHBIRD_OK && selected)
+        status = derived_evidence(context->engine, &project_name->as.text,
+                                  &path->as.text, line_number, sha, &detail,
+                                  &evidence);
+      if (status == ARCHBIRD_OK && selected) {
+        size_t previous;
+        for (previous = 0; previous < fact->item_count; previous++)
+          if (ab_string_equal(&fact->items[previous].key, &normalized))
+            break;
+        if (previous < fact->item_count) {
+          status = ab_verify_item_add_evidence(
+              context->engine, &fact->items[previous], &evidence);
+        } else {
+          status = ab_verify_item_init(context->engine, &item, &normalized,
+                                       &normalized, NULL);
+          if (status == ARCHBIRD_OK)
+            status =
+                ab_verify_item_add_evidence(context->engine, &item, &evidence);
+          if (status == ARCHBIRD_OK)
+            status = ab_verify_fact_add_item(context->engine, fact, &item);
+        }
+      }
+      ab_verify_evidence_free(context->engine, &evidence);
+      ab_string_free(context->engine, &normalized);
+      ab_buffer_free(&detail);
+      ab_buffer_free(&identity);
+      if (status != ARCHBIRD_OK && selected)
+        ab_verify_fact_item_free(context->engine, &item);
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_verify_fact_finish(context->engine, fact);
+  if (status != ARCHBIRD_OK)
+    ab_verify_fact_free(context->engine, fact);
+  return status;
+}
+
 typedef struct SurfaceEvidencePath {
   const AbString *path;
   const char *role;
@@ -1883,6 +1997,8 @@ static ArchbirdStatus extract_map_fact(AbVerificationContext *context,
     return extract_component_edges(context, extractor, fact);
   if (ab_verify_string_is(kind, "test_routes"))
     return extract_test_routes(context, extractor, fact);
+  if (ab_verify_string_is(kind, "test_selectors"))
+    return extract_test_selectors(context, extractor, fact);
   if (ab_verify_string_is(kind, "provider_surface"))
     return extract_provider_surface(context, extractor, fact);
   return ARCHBIRD_CONFLICT;
@@ -1967,6 +2083,7 @@ ArchbirdStatus ab_verify_extract_all(AbVerificationContext *context) {
              ab_verify_string_is(kind, "file_edges") ||
              ab_verify_string_is(kind, "component_edges") ||
              ab_verify_string_is(kind, "test_routes") ||
+             ab_verify_string_is(kind, "test_selectors") ||
              ab_verify_string_is(kind, "provider_surface"))
       status = extract_map_fact(context, extractor, &context->facts[index]);
     else if (ab_verify_string_is(kind, "c_enum") ||

@@ -121,6 +121,7 @@
             "file_edges",
             "component_edges",
             "test_routes",
+            "test_selectors",
             "provider_surface",
             "literal_set",
             "literal_values",
@@ -186,7 +187,7 @@
           "then": {"required": ["call", "selector"]}
         },
         {
-          "if": {"properties": {"kind": {"enum": ["symbols", "file_edges", "component_edges", "test_routes"]}}},
+          "if": {"properties": {"kind": {"enum": ["symbols", "file_edges", "component_edges", "test_routes", "test_selectors"]}}},
           "then": {"required": ["project"]}
         },
         {

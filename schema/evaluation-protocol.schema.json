@@ -81,7 +81,13 @@
         "context": {"$ref": "#/$defs/strings"},
         "performance": {"const": "observational_single_sample"},
         "split_aggregation": {"const": "separate"},
-        "introduced_tests_role": {"const": "act_only"}
+        "introduced_tests_role": {"const": "act_only"},
+        "line_budgets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1}
+        }
       }
     },
     "split_policy": {

@@ -978,7 +978,78 @@ def main() -> int:
             f"test ranking discarded retrieval-seed relevance: {ranked_matches!r}"
         )
     symbol_hop_map = copy.deepcopy(route_ranking_map)
-    symbol_hop_map["tests"] = []
+    symbol_hop_map["tests"] = [
+        {
+            "cases": [
+                {
+                    "configured_routes": [],
+                    "line": 30,
+                    "route_evidence": [
+                        route_evidence(
+                            fact_id="related-selected-symbol",
+                            relation="call",
+                            target="src/memory.c",
+                            target_symbol="free",
+                        )
+                    ],
+                    "routes": {"src/memory.c": 1},
+                    "selector": "replay symbolic input view",
+                },
+                {
+                    "configured_routes": [],
+                    "line": 35,
+                    "route_evidence": [
+                        route_evidence(
+                            fact_id="related-selected-symbol-generic",
+                            relation="call",
+                            target="src/memory.c",
+                            target_symbol="free",
+                        )
+                    ],
+                    "routes": {"src/memory.c": 1},
+                    "selector": "prepare operation",
+                },
+                {
+                    "configured_routes": [],
+                    "line": 40,
+                    "route_evidence": [
+                        route_evidence(
+                            fact_id="related-unselected-symbol",
+                            relation="call",
+                            target="src/memory.c",
+                            target_symbol="allocate",
+                        )
+                    ],
+                    "routes": {"src/memory.c": 1},
+                    "selector": "unrelated allocator path",
+                },
+            ],
+            "count": 3,
+            "framework": "fixture",
+            "group": "fixture",
+            "path": "test/symbol_routes.c",
+            "routes": {"src/memory.c": 3},
+        }
+    ]
+    symbol_hop_primary = next(
+        row for row in symbol_hop_map["files"] if row["path"] == "src/session.c"
+    )
+    symbol_hop_primary["symbols"][0]["name"] = "prepare_input_view"
+    symbol_hop_primary["symbols"][0]["signature"] = (
+        "void prepare_input_view(void)"
+    )
+    symbol_hop_noise = next(
+        row for row in symbol_hop_map["files"] if row["path"] == "src/memory.c"
+    )
+    symbol_hop_noise["symbols"].append(
+        {
+            "kind": "function",
+            "line": 9,
+            "name": "allocate",
+            "scope": "global",
+            "signature": "void *allocate(void)",
+        }
+    )
     final_file = copy.deepcopy(primary)
     final_file["path"] = "src/final.c"
     final_file["symbols"] = [
@@ -1008,7 +1079,7 @@ def main() -> int:
         }
 
     symbol_hop_map["symbol_calls"] = [
-        symbol_call("src/session.c", "WebSocketSession", "src/memory.c", "free"),
+        symbol_call("src/session.c", "prepare_input_view", "src/memory.c", "free"),
         symbol_call("src/memory.c", "free", "src/final.c", "finalize_session"),
     ]
     symbol_hop_map["symbol_references"] = []
@@ -1023,7 +1094,7 @@ def main() -> int:
                 for row in json.loads(
                     query_map_json(
                         symbol_hop_bytes,
-                        symbols=["src/session.c:WebSocketSession"],
+                        symbols=["src/session.c:prepare_input_view"],
                         depth=depth,
                         test_depth=0,
                     )
@@ -1037,6 +1108,75 @@ def main() -> int:
     ]:
         raise AssertionError(
             f"symbol relation traversal ignored the requested depth: {symbol_hop_files!r}"
+        )
+    symbol_route_query = json.loads(
+        query_map_json(
+            symbol_hop_bytes,
+            symbols=["src/session.c:prepare_input_view"],
+            depth=1,
+            test_depth=1,
+        )
+    )
+    symbol_routes = {
+        row["selector"]: row for row in symbol_route_query["test_matches"]
+    }
+    selected_route = symbol_routes["replay symbolic input view"]
+    unrelated_route = symbol_routes["unrelated allocator path"]
+    if {
+        key: selected_route[key]
+        for key in (
+            "classification",
+            "confidence",
+            "evidence_scope",
+            "seed_distance",
+            "symbol_distance",
+            "target_role",
+            "target",
+        )
+    } != {
+        "classification": "direct",
+        "confidence": "exact",
+        "evidence_scope": "case",
+        "seed_distance": 1,
+        "symbol_distance": 1,
+        "target_role": "symbol-neighborhood",
+        "target": {"path": "src/memory.c", "symbol": "free"},
+    }:
+        raise AssertionError(
+            f"related symbol route lost exact membership: {selected_route!r}"
+        )
+    if (
+        unrelated_route["classification"] != "conservative"
+        or unrelated_route["confidence"] != "conservative"
+        or unrelated_route["evidence_scope"] != "case"
+        or unrelated_route["symbol_distance"] is not None
+        or unrelated_route["target"] != {"path": "src/memory.c"}
+    ):
+        raise AssertionError(
+            "an unselected same-file symbol became a selected route: "
+            f"{unrelated_route!r}"
+        )
+    advisory_symbol_query = json.loads(
+        query_map_json(
+            symbol_hop_bytes,
+            search=["prepare input view"],
+            search_limit=1,
+            depth=1,
+            test_depth=1,
+        )
+    )
+    advisory_routes = {
+        row["selector"]: row for row in advisory_symbol_query["test_matches"]
+    }
+    advisory_route = advisory_routes["replay symbolic input view"]
+    if (
+        advisory_route["classification"] != "conservative"
+        or advisory_route["confidence"] != "conservative"
+        or advisory_route["symbol_distance"] is not None
+    ):
+        raise AssertionError(
+            "an advisory retrieval seed strengthened a transitive test route: "
+            f"{advisory_route!r}"
         )
     supported_legacy_map = json.loads(report_map_json)
     for package in supported_legacy_map["packages"]:
