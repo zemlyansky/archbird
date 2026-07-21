@@ -294,7 +294,7 @@ source distribution.
 
 ## Verify architecture
 
-`architecture.verify.json` says which symbols, connections, surfaces, and test
+`archbird.verify.json` says which symbols, connections, surfaces, and test
 routes must be present or absent. Archbird compares those rules with the
 current map. Save this beside `archbird.json`:
 
@@ -338,11 +338,11 @@ current map. Save this beside `archbird.json`:
 npx archbird verify --init archbird.json \
   --output architecture.candidate.verify.json
 
-npx archbird verify --config architecture.verify.json --check
-npx archbird verify --config architecture.verify.json \
+npx archbird verify . --check
+npx archbird verify . \
   --format sarif --output .archbird/architecture.sarif --check
 
-npx archbird verify --config architecture.verify.json \
+npx archbird verify . \
   --freeze .archbird/architecture.baseline.json \
   --freeze-owner architecture \
   --freeze-rationale "Reviewed starting point"
@@ -352,6 +352,11 @@ npx archbird verify --config architecture.verify.json \
 `candidate=true`; review it before Archbird will run it. `--freeze` records the
 current violations and covered facts so later runs distinguish new, known,
 reintroduced, and resolved findings while coverage only grows.
+
+Without `--config`, `verify [ROOT]` discovers exactly one of
+`archbird.verify.json`, `.archbird.verify.json`, or the legacy
+`architecture.verify.json`. Missing or ambiguous suites are errors because
+implementation discovery does not establish reviewed architecture intent.
 
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
@@ -380,7 +385,7 @@ before and after repository state to see whether the required changes happened.
 
 ```bash
 # Before-state containing the finding.
-npx archbird verify --config architecture.verify.json --format json \
+npx archbird verify . --format json \
   --output .archbird/before.verify.json
 
 # Derived proposal: postconditions, candidates, coverage, and unknown frontier.
@@ -398,7 +403,7 @@ npx archbird contract --proposal .archbird/change.proposal.json \
   --preserve-all --output .archbird/change.contract.json
 
 # An external person, agent, IDE, or codemod edits and tests the repository.
-npx archbird verify --config architecture.verify.json --format json \
+npx archbird verify . --format json \
   --output .archbird/after.verify.json
 
 # Derived transition judgment.

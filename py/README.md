@@ -272,7 +272,7 @@ source repository also contains a complete package/build/test example in
 
 ## Verify architecture
 
-`architecture.verify.json` says which symbols, connections, surfaces, and test
+`archbird.verify.json` says which symbols, connections, surfaces, and test
 routes must be present or absent. Archbird compares those rules with the
 current map. Save this beside `archbird.json`:
 
@@ -316,11 +316,11 @@ current map. Save this beside `archbird.json`:
 archbird verify --init archbird.json \
   --output architecture.candidate.verify.json
 
-archbird verify --config architecture.verify.json --check
-archbird verify --config architecture.verify.json \
+archbird verify . --check
+archbird verify . \
   --format sarif --output .archbird/architecture.sarif --check
 
-archbird verify --config architecture.verify.json \
+archbird verify . \
   --freeze .archbird/architecture.baseline.json \
   --freeze-owner architecture \
   --freeze-rationale "Reviewed starting point"
@@ -330,6 +330,11 @@ archbird verify --config architecture.verify.json \
 `candidate=true`; review it before Archbird will run it. `--freeze` records the
 current violations and covered facts so later runs distinguish new, known,
 reintroduced, and resolved findings while coverage only grows.
+
+Without `--config`, `verify [ROOT]` discovers exactly one of
+`archbird.verify.json`, `.archbird.verify.json`, or the legacy
+`architecture.verify.json`. Missing or ambiguous suites are errors because
+implementation discovery does not establish reviewed architecture intent.
 
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
@@ -358,7 +363,7 @@ proposed change checklist, records the checklist after review, and compares the
 before and after repository state to see whether the required changes happened.
 
 ```bash
-archbird verify --config architecture.verify.json --format json \
+archbird verify . --format json \
   --output .archbird/before.verify.json
 
 archbird plan --verification .archbird/before.verify.json \
@@ -374,7 +379,7 @@ archbird contract --proposal .archbird/change.proposal.json \
   --preserve-all --output .archbird/change.contract.json
 
 # An external person, agent, IDE, or codemod edits and tests the repository.
-archbird verify --config architecture.verify.json --format json \
+archbird verify . --format json \
   --output .archbird/after.verify.json
 
 archbird verify-plan \

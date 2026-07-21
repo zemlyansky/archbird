@@ -607,9 +607,18 @@ def workspace_parser() -> argparse.ArgumentParser:
 def verification_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird verify",
-        description="Evaluate a reviewed architecture suite.",
+        description=(
+            "Evaluate a reviewed architecture suite, discovering a conventional "
+            "suite from ROOT when --config is omitted."
+        ),
     )
-    source = result.add_mutually_exclusive_group(required=True)
+    result.add_argument(
+        "root_path",
+        nargs="?",
+        metavar="ROOT",
+        help="repository containing a conventional verification suite (default: .)",
+    )
+    source = result.add_mutually_exclusive_group()
     source.add_argument("-c", "--config", help="verification suite JSON")
     source.add_argument(
         "--init",
@@ -920,6 +929,39 @@ def _project_roots(values: Sequence[str]) -> dict[str, Path]:
             raise ConfigError(f"--project-root: duplicate project {name!r}")
         result[name] = Path(raw_path).resolve()
     return result
+
+
+_VERIFICATION_SUITE_NAMES = (
+    "archbird.verify.json",
+    ".archbird.verify.json",
+    "architecture.verify.json",
+)
+
+
+def _discover_verification_suite(root_path: Optional[str]) -> Path:
+    root = Path(root_path or ".").resolve()
+    if not root.is_dir():
+        raise ConfigError(f"verification root is not a directory: {root}")
+    candidates: list[Path] = []
+    for name in _VERIFICATION_SUITE_NAMES:
+        candidate = root / name
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(metadata.st_mode):
+            candidates.append(candidate)
+    if len(candidates) > 1:
+        names = ", ".join(path.name for path in candidates)
+        raise ConfigError(f"verification root contains multiple suites: {names}")
+    if not candidates:
+        expected = ", ".join(_VERIFICATION_SUITE_NAMES)
+        raise ConfigError(
+            f"no verification suite found in {root}; expected one of: {expected}. "
+            "Map can discover implementation evidence, but Verify requires "
+            "reviewed architecture intent"
+        )
+    return candidates[0]
 
 
 def _has_error_diagnostics(document: object) -> bool:
@@ -1517,6 +1559,12 @@ def _workspace_main(argv: Sequence[str]) -> int:
 def _verify_main(argv: Sequence[str]) -> int:
     args = verification_parser().parse_args(argv)
     try:
+        if args.root_path is not None and (
+            args.config is not None or args.init is not None
+        ):
+            raise ValueError(
+                "positional ROOT applies only when --config and --init are omitted"
+            )
         if args.init is not None:
             if args.output == "-":
                 raise ValueError(
@@ -1575,11 +1623,16 @@ def _verify_main(argv: Sequence[str]) -> int:
             args.freeze_owner is not None or args.freeze_rationale is not None
         ):
             raise ValueError("--freeze-owner/--freeze-rationale require --freeze")
+        suite_path = (
+            Path(args.config)
+            if args.config is not None
+            else _discover_verification_suite(args.root_path)
+        )
         baseline = args.baseline
         if baseline is None and args.freeze is not None and Path(args.freeze).is_file():
             baseline = args.freeze
         verification = Verification.from_config(
-            args.config,
+            suite_path,
             project_roots=_project_roots(args.project_root),
             baseline=baseline,
             jobs=args.jobs,

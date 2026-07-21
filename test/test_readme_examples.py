@@ -145,7 +145,7 @@ def main() -> None:
         root = Path(raw)
         (root / ".archbird").mkdir()
         shutil.copyfile(project_template, root / "archbird.json")
-        shutil.copyfile(verify_template, root / "architecture.verify.json")
+        shutil.copyfile(verify_template, root / "archbird.verify.json")
         write(
             root / "include" / "demo.h",
             "#ifndef DEMO_H\n#define DEMO_H\n"
@@ -212,8 +212,7 @@ def main() -> None:
         )
         run(
             "verify",
-            "--config",
-            "architecture.verify.json",
+            ".",
             "--format",
             "json",
             "--output",

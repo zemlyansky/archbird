@@ -65,7 +65,7 @@ function usage(command = "map") {
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
-    verify: "archbird verify (--config SUITE.verify.json | --init PROJECT.json) [--baseline FILE | --freeze FILE] [--check]",
+    verify: "archbird verify [ROOT | --config SUITE.verify.json | --init PROJECT.json] [--baseline FILE | --freeze FILE] [--check]",
     plan: "archbird plan --verification RESULT.json --finding FINGERPRINT",
     contract: "archbird contract --proposal PROPOSAL.json --objective TEXT --owner NAME --rationale TEXT",
     "verify-plan": "archbird verify-plan --proposal P.json --contract C.json --before-verification B.json --after-verification A.json [--check]",
@@ -896,6 +896,49 @@ function projectRoots(values) {
   return result;
 }
 
+const VERIFICATION_SUITE_NAMES = [
+  "archbird.verify.json",
+  ".archbird.verify.json",
+  "architecture.verify.json",
+];
+
+function discoverVerificationSuite(rootName) {
+  const root = path.resolve(rootName || ".");
+  let rootMetadata;
+  try {
+    rootMetadata = fs.statSync(root);
+  } catch (error) {
+    if (!error || error.code !== "ENOENT") throw error;
+  }
+  if (!rootMetadata || !rootMetadata.isDirectory()) {
+    throw new Error(`verification root is not a directory: ${root}`);
+  }
+  const candidates = VERIFICATION_SUITE_NAMES
+    .map((name) => path.join(root, name))
+    .filter((candidate) => {
+      try {
+        const metadata = fs.lstatSync(candidate);
+        return metadata.isFile() && !metadata.isSymbolicLink();
+      } catch (error) {
+        if (error && error.code === "ENOENT") return false;
+        throw error;
+      }
+    });
+  if (candidates.length > 1) {
+    throw new Error(
+      `verification root contains multiple suites: ${candidates.map((value) => path.basename(value)).join(", ")}`,
+    );
+  }
+  if (!candidates.length) {
+    throw new Error(
+      `no verification suite found in ${root}; expected one of: ` +
+      `${VERIFICATION_SUITE_NAMES.join(", ")}. Map can discover implementation ` +
+      "evidence, but Verify requires reviewed architecture intent",
+    );
+  }
+  return candidates[0];
+}
+
 function verifyMain(argv) {
   const options = parse(argv, {
     ...COMMON,
@@ -909,10 +952,13 @@ function verifyMain(argv) {
     freezeRationale: { flag: "freeze-rationale", type: "string" },
     full: { type: "boolean" },
     maxFindings: { flag: "max-findings", default: 200, type: "number" },
-  });
+  }, { positionals: 1 });
   if (options.help) { process.stdout.write(usage("verify")); return 0; }
-  if (Boolean(options.config) === Boolean(options.init)) {
-    throw new Error("exactly one of --config or --init is required");
+  if (options._.length && (options.config || options.init)) {
+    throw new Error("positional ROOT applies only when --config and --init are omitted");
+  }
+  if (options.config && options.init) {
+    throw new Error("--config and --init are mutually exclusive");
   }
   if (options.init) {
     if (options.output === "-") {
@@ -957,9 +1003,10 @@ function verifyMain(argv) {
   if (!options.freeze && (options.freezeOwner || options.freezeRationale)) {
     throw new Error("--freeze-owner/--freeze-rationale require --freeze");
   }
+  const suitePath = options.config || discoverVerificationSuite(options._[0]);
   const baseline = options.baseline ||
     (options.freeze && fs.existsSync(path.resolve(options.freeze)) ? options.freeze : null);
-  const verification = archbird.Verification.fromConfig(options.config, {
+  const verification = archbird.Verification.fromConfig(suitePath, {
     baseline,
     cacheDir: options.noCache
       ? null

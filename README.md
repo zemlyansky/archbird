@@ -299,7 +299,7 @@ strict schema is [`schema/archbird.schema.json`](schema/archbird.schema.json).
 
 ## Verify architecture
 
-`architecture.verify.json` says which symbols, connections, surfaces, and test
+`archbird.verify.json` says which symbols, connections, surfaces, and test
 routes must be present or absent. Archbird compares those rules with the
 current map. Save this beside `archbird.json`:
 
@@ -344,15 +344,15 @@ current map. Save this beside `archbird.json`:
 archbird verify --init archbird.json \
   --output architecture.candidate.verify.json
 
-# After review, remove candidate=true and run the suite.
-archbird verify --config architecture.verify.json --check
-archbird verify --config architecture.verify.json \
+# After review, remove candidate=true, save as archbird.verify.json, and run it.
+archbird verify . --check
+archbird verify . \
   --format sarif --output .archbird/architecture.sarif --check
-archbird verify --config architecture.verify.json \
+archbird verify . \
   --format junit --output .archbird/architecture.junit.xml --check
 
 # Freeze an existing codebase's reviewed starting point.
-archbird verify --config architecture.verify.json \
+archbird verify . \
   --freeze .archbird/architecture.baseline.json \
   --freeze-owner architecture \
   --freeze-rationale "Reviewed starting point"
@@ -362,6 +362,13 @@ archbird verify --config architecture.verify.json \
 to run it until a reviewer removes `candidate=true`. `--freeze` records current
 blocking findings and the facts each check covered. Later runs classify new,
 known, reintroduced, and resolved findings, while coverage can only grow.
+
+Without `--config`, `verify [ROOT]` discovers exactly one of
+`archbird.verify.json`, `.archbird.verify.json`, or the legacy
+`architecture.verify.json`. Missing and ambiguous suites are errors: Map can
+reconstruct implementation evidence without configuration, but conformance
+requires reviewed architecture intent. Use explicit `--config` for a
+nonstandard filename or when invoking the suite from outside its repository.
 
 Verify supports set/value equality, mapped names/values, directional subsets,
 cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
@@ -418,7 +425,7 @@ new derived/observed evidence → derived transition result
 ```
 
 ```bash
-archbird verify --config architecture.verify.json --format json \
+archbird verify . --format json \
   --output .archbird/before.verify.json
 
 archbird plan --verification .archbird/before.verify.json \
@@ -434,7 +441,7 @@ archbird contract --proposal .archbird/change.proposal.json \
   --preserve-all --output .archbird/change.contract.json
 
 # An external executor edits, builds, and tests; then regenerate Verify.
-archbird verify --config architecture.verify.json --format json \
+archbird verify . --format json \
   --output .archbird/after.verify.json
 
 archbird verify-plan \
@@ -583,7 +590,7 @@ Cache eviction or write failure never changes canonical analysis output.
 
 ```bash
 archbird map . --format json --output .archbird/map.json --check
-archbird verify --config architecture.verify.json \
+archbird verify . \
   --format sarif --output .archbird/architecture.sarif --check
 ```
 

@@ -2024,6 +2024,81 @@ def main() -> int:
         candidate_document = json.loads(candidate_output.read_bytes())
         if status or not candidate_document["candidate"]:
             raise AssertionError("native Python verify --init failed")
+        discovered_suite = Path(directory) / "archbird.verify.json"
+        discovered_suite.write_text(
+            json.dumps(
+                {
+                    "checks": [
+                        {
+                            "actual": "actual",
+                            "assert": "set_equal",
+                            "expected": "expected",
+                            "id": "DISCOVERED-SUITE",
+                            "owner": "architecture",
+                            "rationale": "Exercise reviewed suite discovery.",
+                            "severity": "error",
+                        }
+                    ],
+                    "extractors": {
+                        "actual": {"kind": "literal_set", "values": ["ok"]},
+                        "expected": {"kind": "literal_set", "values": ["ok"]},
+                    },
+                    "projects": {"subject": {"map": "map.json"}},
+                    "schema_version": 1,
+                    "suite": "discovered-suite",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        discovered_output = Path(directory) / "discovered-verification.json"
+        status = cli_main(
+            [
+                "verify",
+                str(directory),
+                "--check",
+                "--output",
+                str(discovered_output),
+            ]
+        )
+        if (
+            status
+            or json.loads(discovered_output.read_bytes())["summary"]["checks"][
+                "pass"
+            ]
+            != 1
+        ):
+            raise AssertionError("native Python verification discovery failed")
+        ambiguous_suite = Path(directory) / "architecture.verify.json"
+        ambiguous_suite.write_bytes(discovered_suite.read_bytes())
+        ambiguous_output = Path(directory) / "ambiguous-verification.json"
+        with mock.patch("sys.stderr", io.StringIO()):
+            status = cli_main(
+                [
+                    "verify",
+                    str(directory),
+                    "--output",
+                    str(ambiguous_output),
+                ]
+            )
+        if status != 2 or ambiguous_output.exists():
+            raise AssertionError("ambiguous verification suites were not rejected")
+        ambiguous_suite.unlink()
+        missing_suite_root = Path(directory) / "no-verification-suite"
+        missing_suite_root.mkdir()
+        missing_output = Path(directory) / "missing-verification.json"
+        with mock.patch("sys.stderr", io.StringIO()):
+            status = cli_main(
+                [
+                    "verify",
+                    str(missing_suite_root),
+                    "--output",
+                    str(missing_output),
+                ]
+            )
+        if status != 2 or missing_output.exists():
+            raise AssertionError("missing verification suite was not rejected")
         baseline_output = Path(directory) / "provider.baseline.json"
         provider_report = Path(directory) / "provider.freeze-result.json"
         status = cli_main(

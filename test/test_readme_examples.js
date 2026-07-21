@@ -24,8 +24,8 @@ function write(relative, contents) {
   fs.writeFileSync(target, contents);
 }
 
-function run(arguments_) {
-  const result = spawnSync(process.execPath, [cli, ...arguments_], {
+function execute(arguments_) {
+  return spawnSync(process.execPath, [cli, ...arguments_], {
     cwd: root,
     encoding: "utf8",
     env: {
@@ -34,6 +34,10 @@ function run(arguments_) {
       ARCHBIRD_NATIVE_ADDON: addon,
     },
   });
+}
+
+function run(arguments_) {
+  const result = execute(arguments_);
   if (result.status !== 0) {
     throw new Error(
       `archbird ${arguments_.join(" ")} exited ${result.status}\n` +
@@ -50,7 +54,7 @@ try {
   );
   fs.copyFileSync(
     path.join(repository, "examples", "minimal.verify.json"),
-    path.join(root, "architecture.verify.json"),
+    path.join(root, "archbird.verify.json"),
   );
   write(
     "include/demo.h",
@@ -94,7 +98,7 @@ try {
     "--depth", "1", "--max-chars", "12000",
   ]);
   run([
-    "verify", "--config", "architecture.verify.json", "--format", "json",
+    "verify", ".", "--format", "json",
     "--output", "verification.json", "--check",
   ]);
   const verification = JSON.parse(fs.readFileSync(path.join(root, "verification.json")));
@@ -105,6 +109,27 @@ try {
     unknown: 0,
     waived: 0,
   });
+  fs.copyFileSync(
+    path.join(root, "archbird.verify.json"),
+    path.join(root, "architecture.verify.json"),
+  );
+  let rejected = execute(["verify", ".", "--output", "ambiguous.json"]);
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /multiple suites/);
+  assert.equal(fs.existsSync(path.join(root, "ambiguous.json")), false);
+  fs.unlinkSync(path.join(root, "architecture.verify.json"));
+  fs.renameSync(
+    path.join(root, "archbird.verify.json"),
+    path.join(root, "saved.verify.json"),
+  );
+  rejected = execute(["verify", ".", "--output", "missing.json"]);
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /no verification suite found/);
+  assert.equal(fs.existsSync(path.join(root, "missing.json")), false);
+  fs.renameSync(
+    path.join(root, "saved.verify.json"),
+    path.join(root, "archbird.verify.json"),
+  );
 
   process.env.ARCHBIRD_ENGINE = "native";
   process.env.ARCHBIRD_NATIVE_ADDON = addon;
