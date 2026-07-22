@@ -441,6 +441,23 @@ def main() -> int:
         raise AssertionError("generated candidate evidence is missing")
     if roles["vendor/lib.c"] != ["source", "third-party-candidate"]:
         raise AssertionError("third-party candidate evidence is missing")
+    materialized_config = json.dumps(
+        zero_resolution["effective_config"],
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    materialized_resolution = json.loads(
+        resolve_discovery(zero_fixture, config=materialized_config)
+    )
+    zero_resolution_evidence = copy.deepcopy(zero_resolution)
+    materialized_resolution_evidence = copy.deepcopy(materialized_resolution)
+    for document in (zero_resolution_evidence, materialized_resolution_evidence):
+        document.pop("origins")
+        document.pop("sha256")
+    if zero_resolution_evidence != materialized_resolution_evidence:
+        raise AssertionError(
+            "materialized configuration changed derived resolution evidence"
+        )
     if [row["path"] for row in zero_resolution["ignore_files"]] != [
         ".gitignore",
         ".ignore",
@@ -497,8 +514,25 @@ def main() -> int:
         for row in custom_only["origins"]
     ):
         raise AssertionError("custom-only ignore origin evidence is incomplete")
-    zero_project = Project.from_repository(zero_fixture)
+    zero_project = Project.from_repository(zero_fixture, map_cache=False)
     zero_map = json.loads(zero_project.map_json())
+    materialized_project = Project.from_repository(
+        zero_fixture, config=materialized_config, map_cache=False
+    )
+    materialized_map = json.loads(materialized_project.map_json())
+    if (
+        zero_project.config_sha256 != materialized_project.config_sha256
+        or zero_project.map_input_sha256 != materialized_project.map_input_sha256
+    ):
+        raise AssertionError("materialized configuration changed Map identity")
+    zero_map_evidence = copy.deepcopy(zero_map)
+    materialized_map_evidence = copy.deepcopy(materialized_map)
+    zero_map_evidence.pop("discovery")
+    materialized_map_evidence.pop("discovery")
+    if zero_map_evidence != materialized_map_evidence:
+        raise AssertionError(
+            "equal Map identities describe different materialized evidence"
+        )
     if zero_map["project"] != "zero-fixture":
         raise AssertionError("config-free Project failed to build a Map")
     packages = {row["name"]: row for row in zero_map["packages"]}
@@ -1751,7 +1785,11 @@ def main() -> int:
             ]
         )
         initialized_document = json.loads(initialized.read_bytes())
-        if status or initialized_document["project"] != "zero-fixture":
+        if (
+            status
+            or initialized_document["project"] != "zero-fixture"
+            or initialized_document != zero_resolution["effective_config"]
+        ):
             raise AssertionError("native Python config init failed")
         if (
             cli_main(

@@ -1566,6 +1566,17 @@ static ArchbirdStatus add_role(ResolutionState *state, AbValue *row,
   return status;
 }
 
+static int plan_row_has_role(const AbValue *row, const char *role) {
+  const AbValue *roles = ab_value_member(row, "roles");
+  size_t index;
+  if (!roles || roles->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < roles->as.array.count; index++)
+    if (ab_value_string_is(&roles->as.array.items[index], role))
+      return 1;
+  return 0;
+}
+
 static ArchbirdStatus candidate_roles(ResolutionState *state, AbValue *row,
                                       const AbString *path) {
   const char *leaf = path->data;
@@ -1579,17 +1590,18 @@ static ArchbirdStatus candidate_roles(ResolutionState *state, AbValue *row,
       break;
     }
   }
-  if (path_segment(path, "test") || path_segment(path, "tests") ||
-      path_segment(path, "__tests__") || path_segment(path, "spec") ||
-      path_segment(path, "specs") || leaf_stem_is(leaf, leaf_length, "test") ||
-      leaf_stem_is(leaf, leaf_length, "spec") ||
-      (leaf_length >= 5 && !memcmp(leaf, "test_", 5)) ||
-      (leaf_length >= 5 && !memcmp(leaf, "test-", 5)) ||
-      bytes_contains(leaf, leaf_length, ".test.") ||
-      bytes_contains(leaf, leaf_length, ".spec.") ||
-      bytes_contains(leaf, leaf_length, "_test.") ||
-      bytes_contains(leaf, leaf_length, "-test.") ||
-      (leaf_length >= 5 && !memcmp(leaf + leaf_length - 5, "_test", 5)))
+  if (!plan_row_has_role(row, "test") &&
+      (path_segment(path, "test") || path_segment(path, "tests") ||
+       path_segment(path, "__tests__") || path_segment(path, "spec") ||
+       path_segment(path, "specs") || leaf_stem_is(leaf, leaf_length, "test") ||
+       leaf_stem_is(leaf, leaf_length, "spec") ||
+       (leaf_length >= 5 && !memcmp(leaf, "test_", 5)) ||
+       (leaf_length >= 5 && !memcmp(leaf, "test-", 5)) ||
+       bytes_contains(leaf, leaf_length, ".test.") ||
+       bytes_contains(leaf, leaf_length, ".spec.") ||
+       bytes_contains(leaf, leaf_length, "_test.") ||
+       bytes_contains(leaf, leaf_length, "-test.") ||
+       (leaf_length >= 5 && !memcmp(leaf + leaf_length - 5, "_test", 5))))
     status = add_role(state, row, "test-candidate");
   if (status == ARCHBIRD_OK &&
       (path_segment(path, "vendor") || path_segment(path, "vendored") ||
@@ -1653,17 +1665,6 @@ static ArchbirdStatus append_diagnostic(ResolutionState *state,
   return ARCHBIRD_OK;
 }
 
-static int plan_row_has_role(const AbValue *row, const char *role) {
-  const AbValue *roles = ab_value_member(row, "roles");
-  size_t index;
-  if (!roles || roles->kind != AB_VALUE_ARRAY)
-    return 0;
-  for (index = 0; index < roles->as.array.count; index++)
-    if (ab_value_string_is(&roles->as.array.items[index], role))
-      return 1;
-  return 0;
-}
-
 static ArchbirdStatus filter_plan(ResolutionState *state, size_t max_file_bytes,
                                   size_t max_index_bytes) {
   AbObjectField *field = mutable_member(&state->plan, "files");
@@ -1722,7 +1723,7 @@ static ArchbirdStatus filter_plan(ResolutionState *state, size_t max_file_bytes,
                                  "warning", path, inventory->bytes, byte_limit);
       keep = 0;
     }
-    if (keep && !state->configured)
+    if (keep)
       status = candidate_roles(state, row, path);
     if (keep) {
       if (write_index != read_index) {

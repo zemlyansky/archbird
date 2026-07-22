@@ -176,6 +176,18 @@ int main(void) {
       "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
       "\"files\":[{\"bytes\":12,\"path\":\"deps/library.c\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
+  static const char candidate_config[] =
+      "{\"layers\":[{\"globs\":[\"**/*.py\"],\"language\":\"python\","
+      "\"name\":\"python\"}],\"project\":\"candidate-roles\","
+      "\"schema_version\":2,\"tests\":[{\"globs\":[\"tests/**\"],"
+      "\"language\":\"python\",\"name\":\"python\",\"route_to\":["
+      "\"python\"]}]}";
+  static const char candidate_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
+      "\"files\":[{\"bytes\":12,\"path\":\"generated/model.py\"},"
+      "{\"bytes\":12,\"path\":\"tests/test_api.py\"},"
+      "{\"bytes\":12,\"path\":\"vendor/lib.py\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
   ArchbirdEngine *engine = NULL;
   Output first = {{0}, 0};
   Output second = {{0}, 0};
@@ -191,6 +203,7 @@ int main(void) {
   Output compiler_scoped = {{0}, 0};
   Output index = {{0}, 0};
   Output vendor = {{0}, 0};
+  Output candidate = {{0}, 0};
   ArchbirdDiscovery *discovery = NULL;
   int descend_temp = 1;
   int descend_src = 0;
@@ -363,6 +376,21 @@ int main(void) {
       !contains(&vendor, "\"path\":\"deps/library.c\",\"roles\":[\"source\","
                          "\"vendor\"]")) {
     fprintf(stderr, "asserted vendor analysis role is not preserved\n");
+    failed = 1;
+  }
+  if (!resolve(engine, candidate_config, request, candidate_inventory,
+               &candidate) ||
+      !contains(&candidate, "\"path\":\"generated/model.py\",\"roles\":["
+                            "\"generated-candidate\",\"source\"]") ||
+      !contains(&candidate,
+                "\"path\":\"tests/test_api.py\",\"roles\":[\"source\","
+                "\"test\"]") ||
+      !contains(&candidate, "\"path\":\"vendor/lib.py\",\"roles\":[\"source\","
+                            "\"third-party-candidate\"]") ||
+      contains(&candidate,
+               "\"path\":\"tests/test_api.py\",\"roles\":[\"source\","
+               "\"test\",\"test-candidate\"]")) {
+    fprintf(stderr, "configured discovery lost or weakened derived roles\n");
     failed = 1;
   }
   archbird_engine_destroy(engine);

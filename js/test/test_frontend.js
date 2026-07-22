@@ -870,6 +870,19 @@ assert.deepEqual(
   zeroResolution.ignore_files.map((row) => row.path),
   [".gitignore", ".ignore", ".archbirdignore", "nested/.gitignore"],
 );
+const materializedConfig = Buffer.from(
+  JSON.stringify(zeroResolution.effective_config),
+);
+const materializedResolution = JSON.parse(
+  resolveDiscovery(zeroFixture, { config: materializedConfig }),
+);
+const zeroResolutionEvidence = structuredClone(zeroResolution);
+const materializedResolutionEvidence = structuredClone(materializedResolution);
+delete zeroResolutionEvidence.origins;
+delete zeroResolutionEvidence.sha256;
+delete materializedResolutionEvidence.origins;
+delete materializedResolutionEvidence.sha256;
+assert.deepEqual(materializedResolutionEvidence, zeroResolutionEvidence);
 const boundedResolution = JSON.parse(
   resolveDiscovery(zeroFixture, {
     project: "cli",
@@ -918,8 +931,25 @@ assert.equal(
   ),
   true,
 );
-let zeroProject = Project.fromRepository(zeroFixture, { typescript: false });
+let zeroProject = Project.fromRepository(zeroFixture, {
+  mapCache: false,
+  typescript: false,
+});
 const zeroMap = zeroProject.map();
+const materializedProject = Project.fromRepository(zeroFixture, {
+  config: materializedConfig,
+  mapCache: false,
+  typescript: false,
+});
+const materializedMap = materializedProject.map();
+assert.equal(materializedProject.configSha256, zeroProject.configSha256);
+assert.equal(materializedProject.mapInputSha256, zeroProject.mapInputSha256);
+const zeroMapEvidence = structuredClone(zeroMap);
+const materializedMapEvidence = structuredClone(materializedMap);
+delete zeroMapEvidence.discovery;
+delete materializedMapEvidence.discovery;
+assert.deepEqual(materializedMapEvidence, zeroMapEvidence);
+materializedProject.dispose();
 assert.equal(zeroMap.project, "zero-fixture");
 const zeroPackages = new Map(zeroMap.packages.map((row) => [row.name, row]));
 assert.equal(zeroPackages.get("npm-root").identity, "@archbird/zero-fixture");
