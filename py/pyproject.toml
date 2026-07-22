@@ -40,4 +40,9 @@ include = ["archbird", "archbird.*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-archbird = ["app/*", "app/assets/*"]
+archbird = [
+  "app/*",
+  "app/assets/*",
+  "schemas/*.json",
+  "schemas/.archbird-manifest.json"
+]

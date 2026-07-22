@@ -1,0 +1,436 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/change-proposal.schema.json",
+  "title": "Archbird derived architecture change proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "tool",
+    "source",
+    "origin",
+    "mutable_sources",
+    "evidence_slice",
+    "facts",
+    "projections",
+    "postconditions",
+    "preserved_invariants",
+    "candidates",
+    "unknowns",
+    "evidence",
+    "sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "artifact": {"const": "change-proposal"},
+    "provenance": {"const": "derived"},
+    "tool": {"$ref": "#/$defs/tool"},
+    "source": {"$ref": "#/$defs/source"},
+    "origin": {"$ref": "#/$defs/origin"},
+    "mutable_sources": {"$ref": "#/$defs/strings"},
+    "evidence_slice": {"$ref": "#/$defs/evidenceSlice"},
+    "facts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/fact"}
+    },
+    "projections": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/projection"}
+    },
+    "postconditions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/postcondition"}
+    },
+    "preserved_invariants": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/preservedConstraint"}
+    },
+    "candidates": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/candidate"}
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/unknown"}
+    },
+    "evidence": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidence"}
+    },
+    "sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "strings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verification_sha256",
+        "verification_tool_implementation_sha256",
+        "evaluation",
+        "policy"
+      ],
+      "properties": {
+        "verification_sha256": {"$ref": "#/$defs/sha256"},
+        "verification_tool_implementation_sha256": {"$ref": "#/$defs/sha256"},
+        "evaluation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "project", "map_config_sha256", "map_input_sha256", "map_producer_implementation_sha256", "resolution_sha256"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "project": {"type": "string", "minLength": 1},
+            "map_config_sha256": {"$ref": "#/$defs/sha256"},
+            "map_input_sha256": {"$ref": "#/$defs/sha256"},
+            "map_producer_implementation_sha256": {"$ref": "#/$defs/sha256"},
+            "resolution_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["project", "sha256"],
+          "properties": {
+            "project": {"type": "string", "minLength": 1},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "project",
+        "path",
+        "line",
+        "sha256",
+        "detail"
+      ],
+      "properties": {
+        "provenance": {"enum": ["derived", "asserted", "observed"]},
+        "project": {"type": "string"},
+        "path": {"type": "string"},
+        "line": {"type": "integer", "minimum": 0},
+        "sha256": {
+          "oneOf": [
+            {"const": ""},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        },
+        "detail": {"type": "string"}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fingerprint",
+        "comparison",
+        "evidence_state",
+        "applicability",
+        "disposition",
+        "key",
+        "message",
+        "waiver",
+        "waiver_note",
+        "baseline_state",
+        "evidence"
+      ],
+      "properties": {
+        "fingerprint": {"$ref": "#/$defs/sha256"},
+        "comparison": {"enum": ["equal", "missing", "extra", "different"]},
+        "evidence_state": {"enum": ["current", "unknown", "stale"]},
+        "applicability": {"enum": ["applicable", "not_applicable"]},
+        "disposition": {"enum": ["open", "waived"]},
+        "key": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1},
+        "waiver": {"type": "string"},
+        "waiver_note": {"type": "string"},
+        "baseline_state": {"type": "string"},
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "constraint",
+        "constraint_sha256",
+        "finding_sha256",
+        "assert",
+        "actual",
+        "finding"
+      ],
+      "properties": {
+        "constraint": {"$ref": "#/$defs/id"},
+        "constraint_sha256": {"$ref": "#/$defs/sha256"},
+        "finding_sha256": {"$ref": "#/$defs/sha256"},
+        "assert": {"type": "string", "minLength": 1},
+        "actual": {"type": "string"},
+        "finding": {"$ref": "#/$defs/finding"}
+      }
+    },
+    "sliceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "sha256"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/id"},
+        "name": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "evidenceSlice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "entries"],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "entries": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sliceEntry"}
+        }
+      }
+    },
+    "factItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "label",
+        "value",
+        "attributes",
+        "state",
+        "message",
+        "evidence"
+      ],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "value": {},
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "state": {"enum": ["current", "unknown", "stale"]},
+        "message": {"type": "string"},
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "shape",
+        "provenance",
+        "project",
+        "state",
+        "message",
+        "sha256",
+        "items"
+      ],
+      "properties": {
+        "name": {"$ref": "#/$defs/id"},
+        "shape": {"type": "string", "minLength": 1},
+        "provenance": {"enum": ["derived", "asserted", "observed"]},
+        "project": {"type": "string"},
+        "state": {"enum": ["current", "unknown", "stale"]},
+        "message": {"type": "string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "items": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/factItem"}
+        }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source", "selection", "keys", "aliases"],
+      "properties": {
+        "name": {"$ref": "#/$defs/id"},
+        "source": {"$ref": "#/$defs/id"},
+        "selection": {"enum": ["all", "include", "exclude"]},
+        "keys": {"$ref": "#/$defs/strings"},
+        "aliases": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "domain", "providers", "unknowns"],
+      "properties": {
+        "classification": {"enum": ["complete", "bounded", "partial"]},
+        "domain": {"type": "string", "minLength": 1},
+        "providers": {"$ref": "#/$defs/strings"},
+        "unknowns": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "assert",
+        "severity",
+        "owner",
+        "rationale",
+        "requirements",
+        "tags",
+        "expected",
+        "actual",
+        "mapping",
+        "min",
+        "max",
+        "exact",
+        "required_routes",
+        "reference_route"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "assert": {
+          "enum": [
+            "set_equal",
+            "mapped_set_equal",
+            "values_equal",
+            "mapped_values_equal",
+            "subset",
+            "cardinality",
+            "required_edges",
+            "forbidden_edges",
+            "allowed_edges",
+            "acyclic",
+            "min_test_routes",
+            "observations_equal"
+          ]
+        },
+        "severity": {"enum": ["error", "warning", "note"]},
+        "owner": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 1},
+        "requirements": {"$ref": "#/$defs/strings"},
+        "tags": {"$ref": "#/$defs/strings"},
+        "expected": {"type": "string"},
+        "actual": {"type": "string"},
+        "mapping": {"type": "string"},
+        "min": {"type": ["integer", "null"], "minimum": 0},
+        "max": {"type": ["integer", "null"], "minimum": 0},
+        "exact": {"type": ["integer", "null"], "minimum": 0},
+        "required_routes": {"$ref": "#/$defs/strings"},
+        "reference_route": {"type": "string"}
+      }
+    },
+    "postcondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "derivation_strength",
+        "constraint",
+        "coverage",
+        "evidence"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "derivation_strength": {
+          "enum": ["exact_fact", "constrained_choice", "oracle_only"]
+        },
+        "constraint": {"$ref": "#/$defs/constraint"},
+        "coverage": {"$ref": "#/$defs/coverage"},
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "preservedConstraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "sha256"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "status": {
+          "enum": ["pass", "fail", "unknown", "waived", "not_applicable"]
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "project",
+        "path",
+        "reason",
+        "coverage",
+        "evidence"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "kind": {"$ref": "#/$defs/id"},
+        "project": {"$ref": "#/$defs/id"},
+        "path": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "coverage": {"$ref": "#/$defs/coverage"},
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "unknown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "code", "scope", "message", "evidence"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "code": {"$ref": "#/$defs/id"},
+        "scope": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1},
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    }
+  }
+}

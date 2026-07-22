@@ -1,6 +1,7 @@
 #include "project_configuration.h"
 
 #include "../projection/projection_internal.h"
+#include "../query/query_context.h"
 #include "date.h"
 #include "json_value.h"
 #include "sha256.h"
@@ -199,10 +200,10 @@ static ArchbirdStatus validate_row_id(ArchbirdEngine *engine,
   if (expected) {
     if (!stable_id(expected))
       return invalid(engine, "named collection key is not a stable identifier");
-    if (id && (id->kind != AB_VALUE_STRING ||
-               !ab_string_equal(expected, &id->as.text)))
-      return invalid(engine,
-                     "named collection entry id does not match its key");
+    if (id)
+      return invalid(
+          engine,
+          "keyed collection entries derive identity from the key, not id");
     *out = expected;
     return ARCHBIRD_OK;
   }
@@ -322,6 +323,23 @@ static int object_fields_allowed(const AbValue *object,
   for (index = 0; index < object->as.object.count; index++)
     if (!name_in(&object->as.object.fields[index].name, allowed, count))
       return 0;
+  return 1;
+}
+
+static int object_fields_allowed_with_common(const AbValue *object,
+                                             const char *const *common,
+                                             size_t common_count,
+                                             const char *const *specific,
+                                             size_t specific_count) {
+  size_t index;
+  if (!object || object->kind != AB_VALUE_OBJECT)
+    return 0;
+  for (index = 0; index < object->as.object.count; index++) {
+    const AbString *name = &object->as.object.fields[index].name;
+    if (!name_in(name, common, common_count) &&
+        !name_in(name, specific, specific_count))
+      return 0;
+  }
   return 1;
 }
 
@@ -447,9 +465,11 @@ static ArchbirdStatus validate_query_definitions(ArchbirdEngine *engine,
                 : "contains an invalid nonnegative integer");
     }
     value = ab_value_member(&query->value, "context");
-    if (value && value->kind != AB_VALUE_OBJECT)
-      return collection_error(engine, "queries", &query->name,
-                              "context must be an object");
+    if (value) {
+      ArchbirdStatus status = ab_query_context_validate(engine, value);
+      if (status != ARCHBIRD_OK)
+        return status;
+    }
     value = ab_value_member(&query->value, "description");
     if (value && value->kind != AB_VALUE_STRING)
       return collection_error(engine, "queries", &query->name,
@@ -588,58 +608,130 @@ static ArchbirdStatus validate_constraint_waivers(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+static int constraint_fields_allowed(const AbValue *definition,
+                                     const AbValue *discriminator, int typed) {
+  static const char *const common[] = {"assert",    "kind",        "owner",
+                                       "rationale", "requirement", "severity",
+                                       "tags",      "waivers"};
+  static const char *const normalized_bounds[] = {
+      "allow_empty", "exact", "exclude",      "include",
+      "max",         "min",   "strip_prefix", "strip_suffix"};
+  static const char *const max_file_bytes[] = {"allow_empty",  "exclude",
+                                               "include",      "max",
+                                               "strip_prefix", "strip_suffix"};
+  static const char *const path_fields[] = {"exclude", "include", "paths",
+                                            "strip_prefix", "strip_suffix"};
+  static const char *const symbol_fields[] = {
+      "exclude",     "include",      "kinds",        "layer",  "paths",
+      "public_only", "strip_prefix", "strip_suffix", "symbols"};
+  static const char *const symbol_bounds[] = {
+      "exact", "exclude", "include",     "kinds",        "layer",       "max",
+      "min",   "paths",   "public_only", "strip_prefix", "strip_suffix"};
+  static const char *const test_routes[] = {
+      "configured_only", "group",     "min",
+      "required_routes", "selectors", "target_paths"};
+  static const char *const required_file_edge[] = {"edge_kind", "name",
+                                                   "source", "target"};
+  static const char *const required_package[] = {"package", "route", "target"};
+  static const char *const required_test[] = {"configured_only", "group",
+                                              "selectors", "target"};
+  static const char *const provider_surface[] = {"declared",
+                                                 "exclude",
+                                                 "forbid_ambiguous",
+                                                 "forbid_unregistered",
+                                                 "forbid_unresolved",
+                                                 "include",
+                                                 "strip_prefix",
+                                                 "strip_suffix",
+                                                 "surface"};
+  static const char *const component_edges[] = {"edges", "kinds"};
+  static const char *const file_edges[] = {"edges",         "from_paths",
+                                           "kind_patterns", "kinds",
+                                           "name_patterns", "to_paths"};
+  static const char *const actual[] = {"actual"};
+  static const char *const actual_expected[] = {"actual", "expected"};
+  static const char *const cardinality[] = {"actual", "exact", "max", "min"};
+  static const char *const mapped[] = {"actual", "expected", "mapping"};
+  static const char *const minimum_routes[] = {"actual", "min",
+                                               "required_routes"};
+  static const char *const numeric[] = {"actual", "allow_empty", "exact", "max",
+                                        "min"};
+  static const char *const observations[] = {
+      "actual", "expected", "reference_route", "required_routes"};
+  const char *const *specific = NULL;
+  size_t specific_count = 0;
+#define USE_FIELDS(fields)                                                     \
+  do {                                                                         \
+    specific = (fields);                                                       \
+    specific_count = sizeof(fields) / sizeof((fields)[0]);                     \
+  } while (0)
+  if (typed) {
+    if (value_string_is(discriminator, "component_membership"))
+      USE_FIELDS(normalized_bounds);
+    else if (value_string_is(discriminator, "component_cycles")) {
+      static const char *const fields[] = {"kinds"};
+      USE_FIELDS(fields);
+    } else if (value_string_is(discriminator, "max_file_bytes"))
+      USE_FIELDS(max_file_bytes);
+    else if (value_string_is(discriminator, "required_paths") ||
+             value_string_is(discriminator, "forbidden_paths"))
+      USE_FIELDS(path_fields);
+    else if (value_string_is(discriminator, "required_symbols") ||
+             value_string_is(discriminator, "forbidden_symbols"))
+      USE_FIELDS(symbol_fields);
+    else if (value_string_is(discriminator, "symbol_cardinality"))
+      USE_FIELDS(symbol_bounds);
+    else if (value_string_is(discriminator, "test_routes"))
+      USE_FIELDS(test_routes);
+    else if (value_string_is(discriminator, "required_file_edge"))
+      USE_FIELDS(required_file_edge);
+    else if (value_string_is(discriminator, "required_bridge")) {
+      static const char *const fields[] = {"bridge"};
+      USE_FIELDS(fields);
+    } else if (value_string_is(discriminator, "required_package_entrypoint"))
+      USE_FIELDS(required_package);
+    else if (value_string_is(discriminator, "required_test_route"))
+      USE_FIELDS(required_test);
+    else if (value_string_is(discriminator, "provider_surface"))
+      USE_FIELDS(provider_surface);
+    else if (value_string_is(discriminator, "allowed_component_edges") ||
+             value_string_is(discriminator, "forbidden_component_edges") ||
+             value_string_is(discriminator, "required_component_edges"))
+      USE_FIELDS(component_edges);
+    else if (value_string_is(discriminator, "allowed_file_edges") ||
+             value_string_is(discriminator, "forbidden_file_edges") ||
+             value_string_is(discriminator, "required_file_edges"))
+      USE_FIELDS(file_edges);
+  } else if (value_string_is(discriminator, "acyclic"))
+    USE_FIELDS(actual);
+  else if (value_string_is(discriminator, "cardinality"))
+    USE_FIELDS(cardinality);
+  else if (value_string_is(discriminator, "mapped_set_equal") ||
+           value_string_is(discriminator, "mapped_values_equal") ||
+           value_string_is(discriminator, "required_subset") ||
+           value_string_is(discriminator, "required_values") ||
+           value_string_is(discriminator, "set_equal") ||
+           value_string_is(discriminator, "subset") ||
+           value_string_is(discriminator, "values_equal"))
+    USE_FIELDS(mapped);
+  else if (value_string_is(discriminator, "min_test_routes"))
+    USE_FIELDS(minimum_routes);
+  else if (value_string_is(discriminator, "numeric_bounds"))
+    USE_FIELDS(numeric);
+  else if (value_string_is(discriminator, "observations_equal"))
+    USE_FIELDS(observations);
+  else
+    USE_FIELDS(actual_expected);
+#undef USE_FIELDS
+  return specific && object_fields_allowed_with_common(
+                         definition, common, sizeof(common) / sizeof(common[0]),
+                         specific, specific_count);
+}
+
 static ArchbirdStatus
 validate_constraint_definitions(ArchbirdEngine *engine,
                                 const AbValue *constraints,
                                 const AbValue *projections) {
-  static const char *const allowed[] = {"actual",
-                                        "allow_empty",
-                                        "assert",
-                                        "bridge",
-                                        "configured_only",
-                                        "declared",
-                                        "edge_kind",
-                                        "edges",
-                                        "exclude",
-                                        "expected",
-                                        "exact",
-                                        "forbid_ambiguous",
-                                        "forbid_unregistered",
-                                        "forbid_unresolved",
-                                        "from_paths",
-                                        "group",
-                                        "include",
-                                        "kind",
-                                        "kind_patterns",
-                                        "kinds",
-                                        "layer",
-                                        "mapping",
-                                        "max",
-                                        "min",
-                                        "name",
-                                        "name_patterns",
-                                        "owner",
-                                        "package",
-                                        "paths",
-                                        "public_only",
-                                        "rationale",
-                                        "reference_route",
-                                        "required_routes",
-                                        "requirement",
-                                        "route",
-                                        "selectors",
-                                        "severity",
-                                        "source",
-                                        "strip_prefix",
-                                        "strip_suffix",
-                                        "surface",
-                                        "symbols",
-                                        "tags",
-                                        "target",
-                                        "target_paths",
-                                        "to_paths",
-                                        "values",
-                                        "waivers"};
   static const char *const typed[] = {"allowed_component_edges",
                                       "allowed_file_edges",
                                       "component_cycles",
@@ -694,10 +786,6 @@ validate_constraint_definitions(ArchbirdEngine *engine,
     int has_min;
     int has_max;
     int has_exact;
-    if (!object_fields_allowed(&constraint->value, allowed,
-                               sizeof(allowed) / sizeof(allowed[0])))
-      return collection_error(engine, "constraints", &constraint->name,
-                              "contains an unknown field");
     if (!nonblank(ab_value_member(&constraint->value, "owner")) ||
         !nonblank(ab_value_member(&constraint->value, "rationale")))
       return collection_error(engine, "constraints", &constraint->name,
@@ -746,6 +834,10 @@ validate_constraint_definitions(ArchbirdEngine *engine,
                          sizeof(assertions) / sizeof(assertions[0])))
       return collection_error(engine, "constraints", &constraint->name,
                               "has an unsupported assertion");
+    if (!constraint_fields_allowed(&constraint->value, kind ? kind : assertion,
+                                   kind != NULL))
+      return collection_error(engine, "constraints", &constraint->name,
+                              "contains a field not owned by its kind");
     value = ab_value_member(&constraint->value, "severity");
     if (value &&
         !string_value_in(value,
@@ -825,6 +917,10 @@ validate_constraint_definitions(ArchbirdEngine *engine,
     if (kind && value_string_is(kind, "max_file_bytes") && !has_max)
       return collection_error(engine, "constraints", &constraint->name,
                               "requires max");
+    if (kind && value_string_is(kind, "symbol_cardinality") && !has_min &&
+        !has_max && !has_exact)
+      return collection_error(engine, "constraints", &constraint->name,
+                              "requires min, max, or exact");
     if (kind && value_string_is(kind, "required_file_edge") &&
         (!nonblank(ab_value_member(&constraint->value, "edge_kind")) ||
          !nonblank(ab_value_member(&constraint->value, "source")) ||

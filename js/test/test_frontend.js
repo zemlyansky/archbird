@@ -54,6 +54,22 @@ assert.deepEqual(
   Buffer.from('{"a":1,"b":2}'),
 );
 
+const conformanceCorpus = JSON.parse(fs.readFileSync(path.resolve(
+  process.argv[3],
+  "test/fixtures/project_configuration_conformance.json",
+)));
+assert.equal(conformanceCorpus.schema_version, 1);
+for (const entry of conformanceCorpus.cases) {
+  const compileCase = () => compileProjectConfiguration(
+    Buffer.from(JSON.stringify(entry.configuration)),
+  );
+  if (entry.valid) {
+    assert.doesNotThrow(compileCase, entry.id);
+  } else {
+    assert.throws(compileCase, undefined, entry.id);
+  }
+}
+
 const freshnessMap = {
   artifact: "map",
   discovery: { sha256: "3".repeat(64) },

@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/provider-facts.schema.json",
+  "title": "Archbird provider facts",
+  "description": "Typed source evidence emitted by one deterministic provider.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "subject",
+    "producer",
+    "inputs",
+    "capabilities",
+    "facts",
+    "resolutions",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-provider-facts"},
+    "provenance": {"const": "derived"},
+    "subject": {"$ref": "#/$defs/subject"},
+    "producer": {"$ref": "#/$defs/producer"},
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/input"}
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/capability"}
+    },
+    "facts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/fact"}
+    },
+    "resolutions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/resolution"}
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/diagnostic"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "vocabulary": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+$"
+    },
+    "strings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/id"}
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "implementation_sha256",
+        "configuration_sha256"
+      ],
+      "properties": {
+        "name": {"$ref": "#/$defs/id"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"},
+        "configuration_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime": {"type": "string", "minLength": 1}
+      }
+    },
+    "subject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "project", "path"],
+          "properties": {
+            "scope": {"const": "file"},
+            "project": {"$ref": "#/$defs/id"},
+            "path": {"$ref": "#/$defs/repositoryPath"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "project", "name"],
+          "properties": {
+            "scope": {"const": "package"},
+            "project": {"$ref": "#/$defs/id"},
+            "name": {"$ref": "#/$defs/id"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "project"],
+          "properties": {
+            "scope": {"const": "project"},
+            "project": {"$ref": "#/$defs/id"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "name"],
+          "properties": {
+            "scope": {"const": "workspace"},
+            "name": {"$ref": "#/$defs/id"}
+          }
+        }
+      ]
+    },
+    "input": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["project", "source_manifest_sha256"],
+          "properties": {
+            "project": {"$ref": "#/$defs/id"},
+            "source_manifest_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["project", "path", "source_sha256"],
+          "properties": {
+            "project": {"$ref": "#/$defs/id"},
+            "path": {"$ref": "#/$defs/repositoryPath"},
+            "source_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "coverage", "claims"],
+      "properties": {
+        "domain": {"$ref": "#/$defs/vocabulary"},
+        "coverage": {"enum": ["complete", "bounded", "partial", "none"]},
+        "claims": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/vocabulary"}
+        },
+        "boundary": {"type": "string", "minLength": 1}
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0}
+      }
+    },
+    "scalar": {
+      "type": ["null", "boolean", "integer", "string"]
+    },
+    "factValue": {
+      "oneOf": [
+        {"$ref": "#/$defs/scalar"},
+        {
+          "type": "array",
+          "items": {"$ref": "#/$defs/scalar"}
+        },
+        {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/scalar"}
+        }
+      ]
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "domain",
+        "kind",
+        "claim",
+        "project",
+        "path",
+        "span",
+        "key"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "domain": {"$ref": "#/$defs/vocabulary"},
+        "kind": {"$ref": "#/$defs/vocabulary"},
+        "claim": {"$ref": "#/$defs/vocabulary"},
+        "project": {"$ref": "#/$defs/id"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "span": {"$ref": "#/$defs/span"},
+        "key": {"type": "string", "minLength": 1},
+        "correlation": {
+          "enum": ["span", "key"],
+          "description": "Whether compatible providers correlate this fact by its exact source span or retain the provider key. Omitted means key."
+        },
+        "name": {"type": "string"},
+        "attributes": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/vocabulary"},
+          "additionalProperties": {"$ref": "#/$defs/factValue"}
+        }
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fact_id", "state", "targets"],
+      "properties": {
+        "fact_id": {"$ref": "#/$defs/id"},
+        "state": {
+          "enum": [
+            "unique",
+            "ambiguous",
+            "unresolved",
+            "external",
+            "builtin",
+            "conflict",
+            "unknown",
+            "not-applicable"
+          ]
+        },
+        "targets": {"$ref": "#/$defs/strings"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "message"],
+      "properties": {
+        "severity": {"enum": ["error", "warning", "note"]},
+        "code": {"$ref": "#/$defs/vocabulary"},
+        "message": {"type": "string", "minLength": 1},
+        "project": {"$ref": "#/$defs/id"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "span": {"$ref": "#/$defs/span"}
+      }
+    }
+  }
+}

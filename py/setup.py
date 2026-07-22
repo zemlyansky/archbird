@@ -14,6 +14,52 @@ from setuptools.command.build_ext import build_ext
 
 
 ROOT = Path(__file__).resolve().parent
+SCHEMAS = ROOT / "archbird/schemas"
+
+
+def _validate_schema_snapshot() -> None:
+    manifest_path = SCHEMAS / ".archbird-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError("the content-hashed JSON schema snapshot is missing") from error
+    if (
+        manifest.get("artifact") != "archbird-python-schemas"
+        or manifest.get("schema_version") != 1
+        or not isinstance(manifest.get("files"), list)
+    ):
+        raise RuntimeError("invalid JSON schema snapshot manifest")
+    paths: list[str] = []
+    for row in manifest["files"]:
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+            raise RuntimeError("invalid JSON schema snapshot entry")
+        relative = PurePosixPath(row["path"])
+        candidate = SCHEMAS.joinpath(*relative.parts)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or not candidate.is_file()
+            or candidate.is_symlink()
+            or candidate.stat().st_size != row.get("bytes")
+            or hashlib.sha256(candidate.read_bytes()).hexdigest()
+            != row.get("sha256")
+        ):
+            raise RuntimeError(
+                f"JSON schema snapshot does not match manifest: {relative}"
+            )
+        paths.append(relative.as_posix())
+    if paths != sorted(set(paths)) or "archbird.schema.json" not in paths:
+        raise RuntimeError("JSON schema snapshot paths must be sorted and unique")
+    actual = {
+        path.name
+        for path in SCHEMAS.glob("*.json")
+        if path.is_file() and path.name != ".archbird-manifest.json"
+    }
+    if actual != set(paths):
+        raise RuntimeError("JSON schema snapshot inventory differs from manifest")
+
+
+_validate_schema_snapshot()
 
 # Editable source development deliberately uses the generic root shared C ABI
 # through ``archbird/_native.py``.  Building a CPython extension in editable

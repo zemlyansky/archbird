@@ -7,6 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .schema import read_schema, schema_names
+
 
 __version__ = "0.0.1"
 
@@ -75,4 +77,10 @@ def __getattr__(name: str) -> Any:
     return getattr(native, name)
 
 
-__all__ = ["__version__", "implementation_digest", *_NATIVE_EXPORTS]
+__all__ = [
+    "__version__",
+    "implementation_digest",
+    "read_schema",
+    "schema_names",
+    *_NATIVE_EXPORTS,
+]

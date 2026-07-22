@@ -326,10 +326,15 @@ The block above is mirrored by
 [`examples/minimal.archbird.json`](examples/minimal.archbird.json). A complete
 native/Python/TypeScript/package/build/test example is
 [`examples/quickstart.archbird.json`](examples/quickstart.archbird.json). The
-strict schema is [`schema/archbird.schema.json`](schema/archbird.schema.json).
-Its `schema_version` applies only to `archbird.json`. Map, ProjectionResult,
-Query, Verification, and change artifacts each carry an independent schema
-version and migration schedule; Archbird has no global schema version.
+Draft 2020-12 project-configuration schema is
+[`schema/archbird.schema.json`](schema/archbird.schema.json). The native
+configuration compiler is authoritative and additionally enforces relational
+invariants that standard JSON Schema cannot express, such as `min <= max`.
+A shared accepted/rejected corpus keeps the schema and native C, Python, Node,
+and Wasm compilers aligned for their common contract. Its `schema_version`
+applies only to `archbird.json`. Map, ProjectionResult, Query, Verification,
+and change artifacts each carry an independent schema version and migration
+schedule; Archbird has no global schema version.
 
 ## Verify architecture
 

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/evaluation-reservation.schema.json",
+  "title": "Archbird evaluation repository reservation",
+  "description": "A derived content-addressed snapshot binding an asserted split to remote default branches and HEAD revisions before code inspection.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact", "provenance", "authoring_sha256", "evaluator", "selection_rule", "repositories"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-evaluation-reservation"},
+    "provenance": {"const": "derived"},
+    "authoring_sha256": {"$ref": "#/$defs/sha256"},
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_sha256"],
+      "properties": {"implementation_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "selection_rule": {"type": "string", "minLength": 1},
+    "repositories": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/repository"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "url", "primary_language", "split", "inspection_policy", "rationale", "default_branch", "head_revision"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+        "url": {"type": "string", "minLength": 1},
+        "primary_language": {"type": "string", "minLength": 1},
+        "split": {"enum": ["validation", "held_out"]},
+        "inspection_policy": {"enum": ["open_after_reservation", "sealed_until_scoring"]},
+        "rationale": {"type": "string", "minLength": 1},
+        "default_branch": {"type": "string", "minLength": 1},
+        "head_revision": {"$ref": "#/$defs/revision"}
+      }
+    }
+  }
+}

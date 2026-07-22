@@ -1,0 +1,383 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/provider-merge.schema.json",
+  "title": "Archbird provider merge ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "project",
+    "source_manifest_sha256",
+    "providers",
+    "selections",
+    "occurrences",
+    "conflicts",
+    "summary",
+    "variations"
+  ],
+  "properties": {
+    "schema_version": {"const": 5},
+    "artifact": {"const": "archbird-provider-merge"},
+    "project": {"$ref": "#/$defs/id"},
+    "source_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "providers": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/provider"}
+    },
+    "selections": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/selection"}
+    },
+    "occurrences": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/occurrence"}
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/conflict"}
+    },
+    "variations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/variation"}
+    },
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "vocabulary": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sha256OrNull": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    },
+    "sha256s": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/sha256"}
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "implementation_sha256",
+        "configuration_sha256"
+      ],
+      "properties": {
+        "name": {"$ref": "#/$defs/id"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"},
+        "configuration_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime": {"type": "string", "minLength": 1}
+      }
+    },
+    "subject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "project", "path"],
+          "properties": {
+            "scope": {"const": "file"},
+            "project": {"$ref": "#/$defs/id"},
+            "path": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "project", "name"],
+          "properties": {
+            "scope": {"const": "package"},
+            "project": {"$ref": "#/$defs/id"},
+            "name": {"$ref": "#/$defs/id"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "project"],
+          "properties": {
+            "scope": {"const": "project"},
+            "project": {"$ref": "#/$defs/id"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "name"],
+          "properties": {
+            "scope": {"const": "workspace"},
+            "name": {"$ref": "#/$defs/id"}
+          }
+        }
+      ]
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "mode", "producer", "domains", "facts", "subject"],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "mode": {"enum": ["primary", "augment", "audit"]},
+        "producer": {"$ref": "#/$defs/producer"},
+        "domains": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/vocabulary"}
+        },
+        "facts": {"type": "integer", "minimum": 0},
+        "subject": {"$ref": "#/$defs/subject"}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "primary", "primary_count", "augments", "audits", "subject"],
+      "properties": {
+        "domain": {"$ref": "#/$defs/vocabulary"},
+        "primary": {"$ref": "#/$defs/sha256OrNull"},
+        "primary_count": {"type": "integer", "minimum": 0},
+        "augments": {"$ref": "#/$defs/sha256s"},
+        "audits": {"$ref": "#/$defs/sha256s"},
+        "subject": {"$ref": "#/$defs/subject"}
+      }
+    },
+    "contributor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "fact_id", "provider"],
+      "properties": {
+        "claim": {"$ref": "#/$defs/vocabulary"},
+        "fact_id": {"$ref": "#/$defs/id"},
+        "provider": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "canonicalFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "fact_id", "provider"],
+      "properties": {
+        "claim": {"$ref": "#/$defs/vocabulary"},
+        "fact_id": {"$ref": "#/$defs/id"},
+        "provider": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "occurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonical",
+        "contributors",
+        "domain",
+        "path",
+        "kind",
+        "key",
+        "start",
+        "end"
+      ],
+      "properties": {
+        "canonical": {"$ref": "#/$defs/canonicalFact"},
+        "contributors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/contributor"}
+        },
+        "domain": {"$ref": "#/$defs/vocabulary"},
+        "path": {"type": "string", "minLength": 1},
+        "kind": {"$ref": "#/$defs/vocabulary"},
+        "key": {"type": "string", "minLength": 1},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0}
+      }
+    },
+    "witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "key", "start", "end"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "kind": {"$ref": "#/$defs/vocabulary"},
+        "key": {"type": "string", "minLength": 1},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0}
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "reason",
+        "left_fact",
+        "left_provider",
+        "right_fact",
+        "right_provider",
+        "subject",
+        "witness"
+      ],
+      "properties": {
+        "domain": {"$ref": "#/$defs/vocabulary"},
+        "reason": {
+          "enum": [
+            "primary-cardinality",
+            "duplicate-primary-occurrence",
+            "augment-mismatch"
+          ]
+        },
+        "left_provider": {"$ref": "#/$defs/sha256OrNull"},
+        "left_fact": {
+          "oneOf": [{"$ref": "#/$defs/conflictFact"}, {"type": "null"}]
+        },
+        "right_provider": {"$ref": "#/$defs/sha256OrNull"},
+        "right_fact": {
+          "oneOf": [{"$ref": "#/$defs/conflictFact"}, {"type": "null"}]
+        },
+        "subject": {"$ref": "#/$defs/subject"},
+        "witness": {
+          "oneOf": [{"$ref": "#/$defs/witness"}, {"type": "null"}]
+        }
+      }
+    },
+    "conflictFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim",
+        "correlation",
+        "id",
+        "key",
+        "kind",
+        "path",
+        "span"
+      ],
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/vocabulary"},
+          "additionalProperties": {"$ref": "#/$defs/factValue"}
+        },
+        "claim": {"$ref": "#/$defs/vocabulary"},
+        "correlation": {"enum": ["span", "key"]},
+        "id": {"$ref": "#/$defs/id"},
+        "key": {"type": "string", "minLength": 1},
+        "kind": {"$ref": "#/$defs/vocabulary"},
+        "name": {"type": "string"},
+        "path": {"type": "string", "minLength": 1},
+        "resolution": {"$ref": "#/$defs/resolution"},
+        "span": {"$ref": "#/$defs/span"}
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "targets"],
+      "properties": {
+        "reason": {"type": "string", "minLength": 1},
+        "state": {
+          "enum": [
+            "unique",
+            "ambiguous",
+            "unresolved",
+            "external",
+            "builtin",
+            "conflict",
+            "unknown",
+            "not-applicable"
+          ]
+        },
+        "targets": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0}
+      }
+    },
+    "variation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alternate_provider",
+        "alternate_value",
+        "attribute",
+        "canonical_provider",
+        "canonical_value",
+        "domain",
+        "subject",
+        "witness"
+      ],
+      "properties": {
+        "alternate_provider": {"$ref": "#/$defs/sha256"},
+        "alternate_value": {"$ref": "#/$defs/factValue"},
+        "attribute": {"$ref": "#/$defs/vocabulary"},
+        "canonical_provider": {"$ref": "#/$defs/sha256"},
+        "canonical_value": {"$ref": "#/$defs/factValue"},
+        "domain": {"$ref": "#/$defs/vocabulary"},
+        "subject": {"$ref": "#/$defs/subject"},
+        "witness": {"$ref": "#/$defs/witness"}
+      }
+    },
+    "factValue": {
+      "oneOf": [
+        {"type": ["null", "boolean", "integer", "number", "string"]},
+        {
+          "type": "array",
+          "items": {"type": ["null", "boolean", "integer", "number", "string"]}
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["null", "boolean", "integer", "number", "string"]
+          }
+        }
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providers",
+        "selections",
+        "selected_facts",
+        "contributed",
+        "deduplicated",
+        "enriched",
+        "variations",
+        "conflicts",
+        "audit_matches",
+        "audit_differences"
+      ],
+      "properties": {
+        "providers": {"type": "integer", "minimum": 0},
+        "selections": {"type": "integer", "minimum": 0},
+        "selected_facts": {"type": "integer", "minimum": 0},
+        "contributed": {"type": "integer", "minimum": 0},
+        "deduplicated": {"type": "integer", "minimum": 0},
+        "enriched": {"type": "integer", "minimum": 0},
+        "variations": {"type": "integer", "minimum": 0},
+        "conflicts": {"type": "integer", "minimum": 0},
+        "audit_matches": {"type": "integer", "minimum": 0},
+        "audit_differences": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

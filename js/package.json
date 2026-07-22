@@ -15,6 +15,7 @@
       "default": "./src/index.js"
     },
     "./browser": "./src/browser.js",
+    "./schema/*": "./schema/*",
     "./serve": "./src/serve.js",
     "./wasm": "./src/wasm.js",
     "./wasm-sync": "./src/wasm-sync.js",
@@ -35,6 +36,7 @@
     "binding.gyp",
     "app",
     "csrc",
+    "schema",
     "src",
     "native",
     "wasm",

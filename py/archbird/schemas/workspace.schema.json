@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/workspace.schema.json",
+  "title": "Archbird workspace configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workspace", "projects"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "workspace": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "projects": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["config"],
+        "properties": {
+          "config": {"type": "string", "minLength": 1},
+          "root": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

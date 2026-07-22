@@ -1,8 +1,8 @@
 #include <archbird/archbird.h>
 
-#include "../configuration/project_configuration.h"
 #include "../projection/projection_internal.h"
 #include "archbird_internal.h"
+#include "constraints_internal.h"
 #include "date.h"
 #include "json_value.h"
 #include "render_internal.h"
@@ -32,7 +32,7 @@ typedef struct ConstraintProjectionBinding {
 
 typedef struct ConstraintExecution {
   ArchbirdEngine *engine;
-  AbProjectConfiguration configuration;
+  const AbConstraintPolicyInput *policy_input;
   AbValue map;
   AbValue resolution;
   AbValue request;
@@ -692,7 +692,7 @@ static const AbValue *projection_definition(ConstraintExecution *execution,
     return reference;
   if (reference->kind == AB_VALUE_STRING) {
     const AbObjectField *field =
-        named_field(&execution->configuration.projections, &reference->as.text);
+        named_field(execution->policy_input->projections, &reference->as.text);
     return field ? &field->value : NULL;
   }
   return NULL;
@@ -1179,7 +1179,7 @@ static ArchbirdStatus validate_request(ConstraintExecution *execution,
                                         "observations", "policy_date"};
   const AbValue *ids;
   size_t index;
-  *selected = execution->configuration.constraints.as.object.count;
+  *selected = execution->policy_input->constraints->as.object.count;
   if (execution->request.kind == AB_VALUE_NULL)
     return ARCHBIRD_OK;
   if (execution->request.kind != AB_VALUE_OBJECT)
@@ -1217,7 +1217,7 @@ static ArchbirdStatus validate_request(ConstraintExecution *execution,
   for (index = 0; index < ids->as.array.count; index++) {
     const AbValue *id = &ids->as.array.items[index];
     size_t previous;
-    if (!nonblank(id) || !ab_value_member(&execution->configuration.constraints,
+    if (!nonblank(id) || !ab_value_member(execution->policy_input->constraints,
                                           id->as.text.data))
       return invalid(execution->engine, "request names an unknown constraint");
     for (previous = 0; previous < index; previous++)
@@ -1280,14 +1280,14 @@ static ArchbirdStatus compile_constraints(ConstraintExecution *execution,
                                           size_t selected) {
   AbValue identities = {0};
   AbValue requested_ids = {0};
-  size_t configured = execution->configuration.constraints.as.object.count;
+  size_t configured = execution->policy_input->constraints->as.object.count;
   size_t index;
   ArchbirdStatus status = array_init(execution->engine, &identities, selected);
   if (status == ARCHBIRD_OK)
     status = array_init(execution->engine, &requested_ids, selected);
   for (index = 0; status == ARCHBIRD_OK && index < configured; index++) {
     const AbObjectField *constraint =
-        &execution->configuration.constraints.as.object.fields[index];
+        &execution->policy_input->constraints->as.object.fields[index];
     AbValue check = {0};
     AbValue identity = {0};
     AbValue requested_id = {0};
@@ -1366,7 +1366,7 @@ static ArchbirdStatus compile_constraints(ConstraintExecution *execution,
   if (status == ARCHBIRD_OK)
     status = object_add_string(
         execution->engine, &execution->policy, "constraint_policy_sha256",
-        execution->configuration.constraint_policy_sha256, 64);
+        execution->policy_input->constraint_policy_sha256, 64);
   if (status == ARCHBIRD_OK)
     status = object_add_copy(execution->engine, &execution->policy,
                              "constraints", &identities);
@@ -1387,13 +1387,12 @@ static ArchbirdStatus compile_constraints(ConstraintExecution *execution,
         object_add_copy(execution->engine, &execution->policy, "policy_date",
                         ab_value_member(&execution->request, "policy_date"));
   if (status == ARCHBIRD_OK)
-    status = object_add_copy(
-        execution->engine, &execution->policy, "project",
-        ab_value_member(&execution->configuration.normalized, "project"));
+    status = object_add_copy(execution->engine, &execution->policy, "project",
+                             execution->policy_input->project);
   if (status == ARCHBIRD_OK)
-    status = object_add_string(execution->engine, &execution->policy,
-                               "project_configuration_sha256",
-                               execution->configuration.sha256, 64);
+    status = object_add_string(
+        execution->engine, &execution->policy, "project_configuration_sha256",
+        execution->policy_input->project_configuration_sha256, 64);
   if (status == ARCHBIRD_OK)
     status = object_add_copy(execution->engine, &execution->policy,
                              "requested_ids", &requested_ids);
@@ -1515,17 +1514,20 @@ validate_observation_operands(ConstraintExecution *execution) {
 }
 
 static ArchbirdStatus
-execution_prepare(ConstraintExecution *execution, const uint8_t *config_json,
-                  size_t config_length, const uint8_t *map_json,
-                  size_t map_length, const uint8_t *resolution_json,
-                  size_t resolution_length, const uint8_t *request_json,
-                  size_t request_length) {
-  const AbValue *project;
+execution_prepare(ConstraintExecution *execution,
+                  const AbConstraintPolicyInput *policy,
+                  const uint8_t *map_json, size_t map_length,
+                  const uint8_t *resolution_json, size_t resolution_length,
+                  const uint8_t *request_json, size_t request_length) {
   size_t selected = 0;
   ArchbirdStatus status;
-  status = ab_project_configuration_decode(
-      execution->engine, config_json, config_length, &execution->configuration);
-  if (status == ARCHBIRD_OK && request_length)
+  if (!policy || !policy->project || !policy->projections ||
+      !policy->constraints || !policy->constraint_policy_sha256 ||
+      !policy->map_config_sha256 || !policy->project_configuration_sha256)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  execution->policy_input = policy;
+  status = ARCHBIRD_OK;
+  if (request_length)
     status = ab_json_value_decode(execution->engine, request_json,
                                   request_length, &execution->request);
   if (status != ARCHBIRD_OK)
@@ -1573,7 +1575,7 @@ execution_prepare(ConstraintExecution *execution, const uint8_t *config_json,
         map_evidence ? ab_value_member(map_evidence, "config_sha256") : NULL;
     if (!map_config || map_config->as.text.length != 64 ||
         memcmp(map_config->as.text.data,
-               execution->configuration.map_config_sha256, 64) != 0)
+               execution->policy_input->map_config_sha256, 64) != 0)
       status = invalid(
           execution->engine,
           "project configuration Map definition does not match current Map");
@@ -1592,12 +1594,9 @@ execution_prepare(ConstraintExecution *execution, const uint8_t *config_json,
     status = evaluate_operands(execution);
   if (status != ARCHBIRD_OK)
     return status;
-  project = ab_value_member(&execution->configuration.normalized, "project");
-  execution->context.project_configuration =
-      &execution->configuration.normalized;
-  execution->context.project = project;
-  execution->context.description =
-      ab_value_member(&execution->configuration.normalized, "description");
+  execution->context.constraints = execution->policy_input->constraints;
+  execution->context.project = execution->policy_input->project;
+  execution->context.description = execution->policy_input->description;
   execution->context.operand_definitions = &execution->operand_definitions;
   execution->context.mappings = &execution->mappings;
   execution->context.constraint_plans = &execution->constraint_plans;
@@ -1609,7 +1608,7 @@ execution_prepare(ConstraintExecution *execution, const uint8_t *config_json,
   execution->context.additional_maps =
       ab_value_member(&execution->request, "maps");
   memcpy(execution->context.constraint_policy_sha256,
-         execution->configuration.constraint_policy_sha256, 65);
+         execution->policy_input->constraint_policy_sha256, 65);
   status = ab_constraints_observations_load(
       &execution->context,
       ab_value_member(&execution->request, "observations"));
@@ -1796,8 +1795,7 @@ static ArchbirdStatus waiver_diagnostic(AbVerificationContext *context,
 }
 
 static ArchbirdStatus apply_constraint_waivers(AbVerificationContext *context) {
-  const AbValue *constraints =
-      ab_value_member(context->project_configuration, "constraints");
+  const AbValue *constraints = context->constraints;
   size_t check_index;
   ArchbirdStatus status = ARCHBIRD_OK;
   for (check_index = 0;
@@ -2065,11 +2063,10 @@ static void execution_free(ConstraintExecution *execution) {
   ab_value_free(execution->engine, &execution->request);
   ab_value_free(execution->engine, &execution->resolution);
   ab_value_free(execution->engine, &execution->map);
-  ab_project_configuration_free(execution->engine, &execution->configuration);
 }
 
-ArchbirdStatus archbird_constraints_evaluate(
-    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+ArchbirdStatus ab_constraints_evaluate(
+    ArchbirdEngine *engine, const AbConstraintPolicyInput *policy,
     const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
     size_t resolution_length, const uint8_t *request_json,
     size_t request_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
@@ -2077,16 +2074,16 @@ ArchbirdStatus archbird_constraints_evaluate(
   ConstraintExecution execution = {0};
   AbBuffer result;
   ArchbirdStatus status;
-  if (!engine || !config_json || !config_length || !map_json || !map_length ||
+  if (!engine || !policy || !map_json || !map_length ||
       (!resolution_json && resolution_length) ||
       (!request_json && request_length) || !write_fn ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
   execution.engine = engine;
   ab_buffer_init(&result, engine);
-  status = execution_prepare(&execution, config_json, config_length, map_json,
-                             map_length, resolution_json, resolution_length,
-                             request_json, request_length);
+  status = execution_prepare(&execution, policy, map_json, map_length,
+                             resolution_json, resolution_length, request_json,
+                             request_length);
   if (status == ARCHBIRD_OK)
     status = ab_verify_collect_project_diagnostics(&execution.context);
   if (status == ARCHBIRD_OK)
@@ -2109,8 +2106,8 @@ ArchbirdStatus archbird_constraints_evaluate(
   return status;
 }
 
-ArchbirdStatus archbird_constraints_report(
-    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+ArchbirdStatus ab_constraints_report(
+    ArchbirdEngine *engine, const AbConstraintPolicyInput *policy,
     const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
     size_t resolution_length, const uint8_t *request_json,
     size_t request_length, ArchbirdVerificationFormat format,
@@ -2119,7 +2116,7 @@ ArchbirdStatus archbird_constraints_report(
   ConstraintExecution execution = {0};
   AbBuffer result;
   ArchbirdStatus status;
-  if (!engine || !config_json || !config_length || !map_json || !map_length ||
+  if (!engine || !policy || !map_json || !map_length ||
       (!resolution_json && resolution_length) ||
       (!request_json && request_length) || !write_fn ||
       format < ARCHBIRD_VERIFICATION_MARKDOWN ||
@@ -2128,9 +2125,9 @@ ArchbirdStatus archbird_constraints_report(
     return ARCHBIRD_INVALID_ARGUMENT;
   execution.engine = engine;
   ab_buffer_init(&result, engine);
-  status = execution_prepare(&execution, config_json, config_length, map_json,
-                             map_length, resolution_json, resolution_length,
-                             request_json, request_length);
+  status = execution_prepare(&execution, policy, map_json, map_length,
+                             resolution_json, resolution_length, request_json,
+                             request_length);
   if (status == ARCHBIRD_OK)
     status = ab_verify_collect_project_diagnostics(&execution.context);
   if (status == ARCHBIRD_OK)
@@ -2163,8 +2160,8 @@ ArchbirdStatus archbird_constraints_report(
   return status;
 }
 
-ArchbirdStatus archbird_constraints_freeze(
-    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+ArchbirdStatus ab_constraints_freeze(
+    ArchbirdEngine *engine, const AbConstraintPolicyInput *policy,
     const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
     size_t resolution_length, const uint8_t *request_json,
     size_t request_length, const char *owner, size_t owner_length,
@@ -2173,7 +2170,7 @@ ArchbirdStatus archbird_constraints_freeze(
   ConstraintExecution execution = {0};
   AbBuffer result;
   ArchbirdStatus status;
-  if (!engine || !config_json || !config_length || !map_json || !map_length ||
+  if (!engine || !policy || !map_json || !map_length ||
       (!resolution_json && resolution_length) ||
       (!request_json && request_length) || !owner || !owner_length ||
       !rationale || !rationale_length || !write_fn ||
@@ -2181,9 +2178,9 @@ ArchbirdStatus archbird_constraints_freeze(
     return ARCHBIRD_INVALID_ARGUMENT;
   execution.engine = engine;
   ab_buffer_init(&result, engine);
-  status = execution_prepare(&execution, config_json, config_length, map_json,
-                             map_length, resolution_json, resolution_length,
-                             request_json, request_length);
+  status = execution_prepare(&execution, policy, map_json, map_length,
+                             resolution_json, resolution_length, request_json,
+                             request_length);
   if (status == ARCHBIRD_OK && ab_value_member(&execution.request, "ids"))
     status =
         invalid(engine, "freezing requires the complete constraint policy");

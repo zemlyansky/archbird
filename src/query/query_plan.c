@@ -1,6 +1,5 @@
 #include <archbird/archbird.h>
 
-#include "../configuration/project_configuration.h"
 #include "../projection/projection_internal.h"
 #include "json_value.h"
 #include "query_internal.h"
@@ -528,7 +527,7 @@ static ArchbirdStatus inline_projection_id(ArchbirdEngine *engine,
 
 static ArchbirdStatus
 prepare_projection_plans(ArchbirdEngine *engine,
-                         const AbProjectConfiguration *configuration,
+                         const AbValue *configured_projections,
                          const AbValue *definition, const AbValue *selection,
                          const AbValue *operations, const AbString *query_id,
                          AbProjectionPlan **out_nodes, size_t *out_count) {
@@ -568,7 +567,7 @@ prepare_projection_plans(ArchbirdEngine *engine,
     const AbString *declared_id = NULL;
     const AbObjectField *named = NULL;
     if (reference->kind == AB_VALUE_STRING) {
-      named = named_field(&configuration->projections, &reference->as.text);
+      named = named_field(configured_projections, &reference->as.text);
       if (!named) {
         status =
             invalid(engine, "named query references an unknown projection");
@@ -793,85 +792,26 @@ static ArchbirdStatus ad_hoc_definition(ArchbirdEngine *engine,
 ArchbirdStatus ab_query_plan_compile_ad_hoc(ArchbirdEngine *engine,
                                             const AbValue *request,
                                             AbValue *out_plan) {
-  const AbProjectConfiguration configuration = {0};
   const AbValue empty = {.kind = AB_VALUE_OBJECT};
   AbString id = {(char *)"ad-hoc", 6};
   AbValue definition = {0};
-  AbValue options = {0};
-  AbValue plan_selection = {0};
-  AbValue plan_operations = {0};
-  AbValue plan = {0};
-  AbProjectionPlan *projections = NULL;
-  size_t projection_count = 0;
-  size_t projection_index;
-  char query_definition_sha256[65] = {0};
-  char query_plan_sha256[65] = {0};
-  AbBuffer plan_base;
   ArchbirdStatus status;
   if (!engine || !request || !out_plan)
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(out_plan, 0, sizeof(*out_plan));
-  ab_buffer_init(&plan_base, engine);
   status = ad_hoc_definition(engine, request, &definition);
   if (status == ARCHBIRD_OK)
-    status = build_options(engine, &definition, &empty, &options);
-  if (status == ARCHBIRD_OK)
-    status = build_plan_sections(engine, &options, &plan_selection,
-                                 &plan_operations);
-  if (status == ARCHBIRD_OK)
-    status = digest_value(engine, &definition, query_definition_sha256);
-  if (status == ARCHBIRD_OK)
-    status = prepare_projection_plans(engine, &configuration, &definition,
-                                      &plan_selection, &plan_operations, &id,
-                                      &projections, &projection_count);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&plan_base, "{\"operations\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_value_render(&plan_base, &plan_operations);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&plan_base, ",\"projections\":[");
-  for (projection_index = 0;
-       status == ARCHBIRD_OK && projection_index < projection_count;
-       projection_index++) {
-    if (projection_index)
-      status = ab_buffer_literal(&plan_base, ",");
-    if (status == ARCHBIRD_OK)
-      status =
-          render_projection_plan(&plan_base, &projections[projection_index]);
-  }
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&plan_base, "],\"selection\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_value_render(&plan_base, &plan_selection);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&plan_base, "}");
-  if (status == ARCHBIRD_OK)
-    status = digest_buffer(&plan_base, query_plan_sha256);
-  if (status == ARCHBIRD_OK)
-    status = query_plan_value(
-        engine, &id, NULL, NULL, &plan_operations, &plan_selection, projections,
-        projection_count, query_definition_sha256, query_plan_sha256, &plan);
-  if (status == ARCHBIRD_OK)
-    *out_plan = plan;
-  if (status == ARCHBIRD_OK)
-    memset(&plan, 0, sizeof(plan));
-  ab_buffer_free(&plan_base);
-  projection_plans_free(engine, projections, projection_count);
-  ab_value_free(engine, &plan);
-  ab_value_free(engine, &plan_operations);
-  ab_value_free(engine, &plan_selection);
-  ab_value_free(engine, &options);
+    status = ab_query_plan_compile_definition(engine, &id, &definition, &empty,
+                                              &empty, NULL, NULL, out_plan);
   ab_value_free(engine, &definition);
   return status;
 }
 
-ArchbirdStatus archbird_query_plan_compile(
-    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
-    const char *query_id, size_t query_id_length, const uint8_t *overrides_json,
-    size_t overrides_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
-    void *user_data) {
-  AbProjectConfiguration configuration = {0};
-  AbValue overrides = {.kind = AB_VALUE_OBJECT};
+ArchbirdStatus ab_query_plan_compile_definition(
+    ArchbirdEngine *engine, const AbString *id, const AbValue *definition,
+    const AbValue *overrides, const AbValue *configured_projections,
+    const char *map_config_sha256, const char *project_configuration_sha256,
+    AbValue *out_plan) {
   AbValue options = {0};
   AbValue plan_selection = {0};
   AbValue plan_operations = {0};
@@ -879,55 +819,27 @@ ArchbirdStatus archbird_query_plan_compile(
   AbProjectionPlan *projections = NULL;
   size_t projection_count = 0;
   size_t projection_index;
-  const AbObjectField *query;
-  const AbValue *definition = NULL;
-  const AbValue empty = {.kind = AB_VALUE_OBJECT};
-  AbString id;
-  int named;
   char query_definition_sha256[65] = {0};
   char query_plan_sha256[65] = {0};
   AbBuffer plan_base;
-  AbBuffer rendered;
   ArchbirdStatus status;
-  if (!engine || (!config_json && config_length) ||
-      (!query_id && query_id_length) || (!overrides_json && overrides_length) ||
-      !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+  if (!engine || !id || !stable_id(id) || !definition ||
+      definition->kind != AB_VALUE_OBJECT || !overrides ||
+      overrides->kind != AB_VALUE_OBJECT || !configured_projections ||
+      configured_projections->kind != AB_VALUE_OBJECT || !out_plan)
     return ARCHBIRD_INVALID_ARGUMENT;
-  named = query_id_length != 0;
-  id.data = (char *)(named ? query_id : "ad-hoc");
-  id.length = named ? query_id_length : 6;
-  if (!stable_id(&id) || (named && !config_length))
-    return invalid(engine, "query id is not a stable identifier");
+  memset(out_plan, 0, sizeof(*out_plan));
   ab_buffer_init(&plan_base, engine);
-  ab_buffer_init(&rendered, engine);
-  status = named ? ab_project_configuration_decode(
-                       engine, config_json, config_length, &configuration)
-                 : ARCHBIRD_OK;
-  if (status == ARCHBIRD_OK && overrides_length)
-    status = ab_json_value_decode(engine, overrides_json, overrides_length,
-                                  &overrides);
-  if (status == ARCHBIRD_OK && overrides.kind != AB_VALUE_OBJECT)
-    status = invalid(engine, "runtime overrides must be an object");
-  query = status == ARCHBIRD_OK && named
-              ? named_field(&configuration.queries, &id)
-              : NULL;
-  if (status == ARCHBIRD_OK && named && !query)
-    status = invalid(engine, "unknown named query");
-  if (status == ARCHBIRD_OK)
-    definition = named ? &query->value : &overrides;
-  if (status == ARCHBIRD_OK)
-    status = build_options(engine, definition, named ? &overrides : &empty,
-                           &options);
+  status = build_options(engine, definition, overrides, &options);
   if (status == ARCHBIRD_OK)
     status = build_plan_sections(engine, &options, &plan_selection,
                                  &plan_operations);
   if (status == ARCHBIRD_OK)
     status = digest_value(engine, definition, query_definition_sha256);
   if (status == ARCHBIRD_OK)
-    status = prepare_projection_plans(engine, &configuration, definition,
-                                      &plan_selection, &plan_operations, &id,
-                                      &projections, &projection_count);
+    status = prepare_projection_plans(
+        engine, configured_projections, definition, &plan_selection,
+        &plan_operations, id, &projections, &projection_count);
   if (status == ARCHBIRD_OK) {
     status = ab_buffer_literal(&plan_base, "{\"operations\":");
     if (status == ARCHBIRD_OK)
@@ -954,29 +866,18 @@ ArchbirdStatus archbird_query_plan_compile(
   }
   if (status == ARCHBIRD_OK)
     status = query_plan_value(
-        engine, &id, named ? configuration.map_config_sha256 : NULL,
-        named ? configuration.sha256 : NULL, &plan_operations, &plan_selection,
-        projections, projection_count, query_definition_sha256,
-        query_plan_sha256, &plan);
-  if (status == ARCHBIRD_OK)
-    status =
-        ab_buffer_literal(&rendered, "{\"artifact\":\"query-plan\",\"plan\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_value_render(&rendered, &plan);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, ",\"schema_version\":2}");
-  if (status == ARCHBIRD_OK)
-    status = archbird_json_canonicalize(engine, rendered.data, rendered.length,
-                                        json_flags, write_fn, user_data);
+        engine, id, map_config_sha256, project_configuration_sha256,
+        &plan_operations, &plan_selection, projections, projection_count,
+        query_definition_sha256, query_plan_sha256, &plan);
+  if (status == ARCHBIRD_OK) {
+    *out_plan = plan;
+    memset(&plan, 0, sizeof(plan));
+  }
   ab_buffer_free(&plan_base);
-  ab_buffer_free(&rendered);
   projection_plans_free(engine, projections, projection_count);
   ab_value_free(engine, &plan);
   ab_value_free(engine, &options);
   ab_value_free(engine, &plan_operations);
   ab_value_free(engine, &plan_selection);
-  if (overrides_length)
-    ab_value_free(engine, &overrides);
-  ab_project_configuration_free(engine, &configuration);
   return status;
 }

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archbird.dev/schema/okf-output-bundle.schema.json",
+  "title": "Archbird deterministic OKF output bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact",
+    "schema_version",
+    "tool",
+    "project",
+    "sources",
+    "files",
+    "content_sha256",
+    "sha256"
+  ],
+  "properties": {
+    "artifact": {"const": "okf-output-bundle"},
+    "schema_version": {"const": 1},
+    "tool": {"$ref": "#/$defs/tool"},
+    "project": {"type": "string", "minLength": 1},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/source"}
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/file"}
+    },
+    "content_sha256": {"$ref": "#/$defs/sha256"},
+    "sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "schema_version",
+        "producer",
+        "evidence_sha256",
+        "file_sha256"
+      ],
+      "properties": {
+        "artifact": {
+          "enum": [
+            "map",
+            "verification",
+            "change-proposal",
+            "change-contract",
+            "change-result"
+          ]
+        },
+        "schema_version": {"type": "integer", "minimum": 1},
+        "producer": {"$ref": "#/$defs/tool"},
+        "evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "file_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "text"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 3,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.md$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "text": {"type": "string"}
+      }
+    }
+  }
+}

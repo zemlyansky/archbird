@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/evaluation-corpus.schema.json",
+  "title": "Archbird frozen historical-change corpus",
+  "description": "A derived content-addressed index over asserted case documents and pinned Git diffs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact", "provenance", "evaluator", "protocol_sha256", "cases"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-evaluation-corpus"},
+    "provenance": {"const": "derived"},
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_sha256"],
+      "properties": {
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "protocol_sha256": {"$ref": "#/$defs/sha256"},
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "case_sha256",
+          "repository",
+          "split",
+          "review_status",
+          "diff_files"
+        ],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "case_sha256": {"$ref": "#/$defs/sha256"},
+          "repository": {"$ref": "#/$defs/id"},
+          "split": {"enum": ["development", "validation", "held_out"]},
+          "review_status": {"enum": ["candidate", "reviewed"]},
+          "diff_files": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/graph-view.schema.json",
+  "title": "Archbird deterministic interactive graph projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact",
+    "diagnostics",
+    "edges",
+    "nodes",
+    "omissions",
+    "project",
+    "request",
+    "schema_version",
+    "source",
+    "summary",
+    "tool"
+  ],
+  "properties": {
+    "artifact": {"const": "archbird-graph-view"},
+    "diagnostics": {"type": "array", "items": {"type": "object"}},
+    "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
+    "nodes": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+    "omissions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/omission"}
+    },
+    "project": {"type": "string", "minLength": 1},
+    "request": {"$ref": "#/$defs/request"},
+    "schema_version": {"const": 1},
+    "source": {"$ref": "#/$defs/source"},
+    "summary": {"$ref": "#/$defs/summary"},
+    "tool": {"$ref": "#/$defs/tool"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nodeId": {"type": "string", "pattern": "^n_[0-9a-f]{64}$"},
+    "edgeId": {"type": "string", "pattern": "^e_[0-9a-f]{64}$"},
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_sha256", "name", "version"],
+      "properties": {
+        "implementation_sha256": {"$ref": "#/$defs/sha256"},
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "input_sha256",
+        "schema_version",
+        "tool_sha256"
+      ],
+      "properties": {
+        "artifact": {"enum": ["map", "query"]},
+        "input_sha256": {"$ref": "#/$defs/sha256"},
+        "schema_version": {"type": "integer", "minimum": 6},
+        "tool_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_edge_names", "max_nodes", "view"],
+      "properties": {
+        "max_edge_names": {"type": "integer", "minimum": 0},
+        "max_nodes": {"type": "integer", "minimum": 0},
+        "query": {"type": "object"},
+        "view": {"enum": ["components", "files", "symbols"]}
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attributes",
+        "evidence",
+        "id",
+        "identity",
+        "kind",
+        "label",
+        "parent"
+      ],
+      "properties": {
+        "attributes": {"type": "object"},
+        "evidence": {"type": "array", "items": {"type": "object"}},
+        "id": {"$ref": "#/$defs/nodeId"},
+        "identity": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "parent": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/nodeId"}]
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "evidence",
+        "id",
+        "kind",
+        "names",
+        "omitted_names",
+        "source",
+        "target"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "direct",
+            "unique",
+            "builtin",
+            "asserted",
+            "observed",
+            "candidate",
+            "conservative",
+            "ambiguous",
+            "unresolved"
+          ]
+        },
+        "evidence": {"type": "array", "items": {"type": "object"}},
+        "id": {"$ref": "#/$defs/edgeId"},
+        "kind": {"type": "string", "minLength": 1},
+        "names": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "omitted_names": {"type": "integer", "minimum": 0},
+        "source": {"$ref": "#/$defs/nodeId"},
+        "target": {"$ref": "#/$defs/nodeId"}
+      }
+    },
+    "omission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "kind", "reason"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "kind": {"enum": ["edge-names", "test-matches"]},
+        "reason": {"enum": ["max_edge_names", "not-symbol-edges"]}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edges", "nodes"],
+      "properties": {
+        "edges": {"type": "integer", "minimum": 0},
+        "nodes": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

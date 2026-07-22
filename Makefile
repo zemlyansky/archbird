@@ -48,12 +48,15 @@ NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Isrc/api -Isrc/base -Isrc/evidence -Isrc
 	-Isrc/evidence/syntax/tree_sitter \
 	-Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter/lib/src \
 	-Ivendor/tree-sitter-c/src
-.PHONY: test verify evaluation-test build-c build-py editable-install test-py build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
+.PHONY: test verify evaluation-test schema-snapshots build-c build-py editable-install test-py build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
 	native-warnings native-wasm-smoke native-fuzz-smoke native-json-corpus native-sha256-vectors native-analyze \
 	native-boundaries release-py release-js release clean \
 	release-check
 
-test: evaluation-test native-test test-py test-js app-test app-live-test app-py-live-test
+test: evaluation-test schema-snapshots native-test test-py test-js app-test app-live-test app-py-live-test
+
+schema-snapshots:
+	$(PYTHON) tools/sync_schemas.py --check python node
 
 evaluation-test:
 	$(PYTHON) test/test_evaluation.py
@@ -149,6 +152,7 @@ test-py: build-py
 build-js: export TMPDIR := $(BUILD_TMP)
 build-js:
 	command mkdir -p $(BUILD_TMP)
+	$(PYTHON) tools/sync_schemas.py --check node
 	$(PYTHON) tools/sync_csrc.py node
 	cd js && $(NPM) run build:native
 	$(PYTHON) tools/check_source_frontend.py node --node $(NODE) \
@@ -243,6 +247,7 @@ native-fuzz-smoke:
 native-analyze: native-configure
 	command $(CLANG_FORMAT) --dry-run --Werror $(NATIVE_C_FILES)
 	$(PYTHON) test/test_allocator_boundary.py
+	$(PYTHON) test/test_planning_boundaries.py
 	command $(CPPCHECK) -j $(CPPCHECK_JOBS) --std=c11 \
 		--enable=warning,performance,portability --error-exitcode=1 \
 		--suppress=missingIncludeSystem --suppress='*:*vendor/yyjson/*' \
@@ -253,10 +258,12 @@ native-analyze: native-configure
 
 native-boundaries:
 	$(PYTHON) test/test_json_boundary.py
+	$(PYTHON) test/test_planning_boundaries.py
 
 release-py: export SOURCE_DATE_EPOCH := $(RELEASE_SOURCE_DATE_EPOCH)
 release-py: export TMPDIR := $(RELEASE_TMP)
 release-py: app-test
+	$(PYTHON) tools/sync_schemas.py python
 	$(PYTHON) tools/sync_csrc.py python
 	$(PYTHON) tools/stage_app.py python
 	command rm -rf py/build
@@ -282,6 +289,7 @@ release-js: export SOURCE_DATE_EPOCH := $(RELEASE_SOURCE_DATE_EPOCH)
 release-js: export TMPDIR := $(RELEASE_TMP)
 release-js: app-test
 	command mkdir -p $(RELEASE_TMP)
+	$(PYTHON) tools/sync_schemas.py node
 	$(PYTHON) tools/sync_csrc.py node
 	command $(CMAKE) -S . -B $(NATIVE_RELEASE_BUILD) -DBUILD_TESTING=OFF \
 		-DCMAKE_BUILD_TYPE=Release -DARCHBIRD_BUILD_PYTHON=OFF \
@@ -360,7 +368,7 @@ release-check: release-py release-js
 
 release: release-check
 
-verify: evaluation-test native-test test-py test-js app-test native-analyze native-warnings
+verify: evaluation-test schema-snapshots native-test test-py test-js app-test native-analyze native-warnings
 	$(PYTHON) -m compileall -q \
 		-x '(^|/)test/(fixtures|fuzz/corpus)(/|$$)' \
 		py/archbird py/tests test

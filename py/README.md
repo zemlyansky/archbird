@@ -93,6 +93,11 @@ Workspace, Verification, ChangeProposal, ChangeContract, change-result,
 graph-view, freshness, diff, OKF, and report functions use the same canonical
 schemas as the CLI and C core.
 
+`schema_names()` lists the versioned JSON schemas bundled in the wheel and
+source distribution; `read_schema()` returns the exact bytes for offline
+editors, agents, and external validators. The native configuration compiler
+remains authoritative for relational invariants outside standard JSON Schema.
+
 The top-level package also exposes the schema-2 planning primitives:
 `compile_project_configuration()`, `evaluate_projection_json()`,
 `compile_query_plan_json()`, `evaluate_constraints_json()`, and
@@ -507,9 +512,10 @@ requested `--check` blocks, and 2 for invalid input/configuration.
   layout, and arbitrary generated code need stronger evidence or remain unknown.
 - Schemas and ABI are pre-1 and can evolve under semantic versioning.
 
-The current wheel targets CPython 3.10 manylinux x86-64. Other supported
-Python/platform combinations build the included content-hashed C snapshot and
-need a C toolchain. The package has no required Python dependencies.
+Release wheels use the selected release interpreter and manylinux x86-64 tag.
+Other supported Python/platform combinations build the included
+content-hashed C snapshot and need a C toolchain. The package has no required
+Python dependencies.
 
 For editable source development, use:
 
@@ -519,5 +525,5 @@ make build-c   # after C edits
 ```
 
 Archbird is Apache-2.0 licensed. This README is the complete PyPI/Python usage
-contract; the strict JSON schemas and native C source ship in the source
-repository and source distribution.
+contract; content-hashed JSON schemas and native C source ship in wheels and
+source distributions.

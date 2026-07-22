@@ -72,21 +72,102 @@ static int select_supported(const AbValue *select) {
   return 0;
 }
 
+static int select_is(const AbValue *select, const char *literal) {
+  return select && select->kind == AB_VALUE_STRING &&
+         string_is(&select->as.text, literal);
+}
+
+static int projection_field_allowed(const AbValue *select,
+                                    const AbString *name) {
+  static const char *const normalized[] = {"exclude", "include", "strip_prefix",
+                                           "strip_suffix"};
+  static const char *const normalized_operators[] = {
+      "component_membership", "constant_memberships", "constant_values",
+      "file_metrics",         "inventory_paths",      "macro_members",
+      "mapped_paths",         "provider_surface",     "symbols",
+      "test_selectors",
+  };
+  size_t index;
+  if (string_is(name, "id") || string_is(name, "select"))
+    return 1;
+  for (index = 0;
+       index < sizeof(normalized_operators) / sizeof(normalized_operators[0]);
+       index++)
+    if (select_is(select, normalized_operators[index]) &&
+        name_allowed(name, normalized,
+                     sizeof(normalized) / sizeof(normalized[0])))
+      return 1;
+  if (select_is(select, "artifact_routes")) {
+    static const char *const fields[] = {"artifacts"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "component_edges")) {
+    static const char *const fields[] = {"kinds"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "component_membership")) {
+    static const char *const fields[] = {"components"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "constant_memberships")) {
+    static const char *const fields[] = {"container", "paths"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "constant_values")) {
+    static const char *const fields[] = {"container", "kinds", "paths"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "file_edges")) {
+    static const char *const fields[] = {"from_paths", "kind_patterns", "kinds",
+                                         "name_patterns", "to_paths"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "file_metrics")) {
+    static const char *const fields[] = {"metric"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "macro_members")) {
+    static const char *const fields[] = {"call", "paths", "selector",
+                                         "selector_argument",
+                                         "values_from_argument"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "mapped_paths")) {
+    static const char *const fields[] = {"paths"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "package_entrypoints")) {
+    static const char *const fields[] = {"packages", "routes", "target_paths"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "package_exports")) {
+    static const char *const fields[] = {"name_patterns", "packages"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "provider_surface")) {
+    static const char *const fields[] = {"name"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "symbols")) {
+    static const char *const fields[] = {"kinds", "layer", "name_patterns",
+                                         "names", "paths", "public_only"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "test_routes")) {
+    static const char *const fields[] = {"configured_only", "group", "paths",
+                                         "selectors", "target_paths"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "test_selectors")) {
+    static const char *const fields[] = {"group", "paths", "selectors"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  return 0;
+}
+
 static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
                                           const AbValue *definition,
                                           const AbString *id) {
-  static const char *const allowed[] = {
-      "artifacts",     "call",          "configured_only",
-      "components",    "container",     "exclude",
-      "from_paths",    "group",         "id",
-      "include",       "kind_patterns", "kinds",
-      "layer",         "metric",        "name",
-      "name_patterns", "names",         "packages",
-      "paths",         "public_only",   "routes",
-      "select",        "selector",      "selector_argument",
-      "selectors",     "strip_prefix",  "strip_suffix",
-      "target_paths",  "to_paths",      "values_from_argument",
-  };
   static const char *const arrays[] = {
       "artifacts", "components",    "exclude",  "from_paths",
       "include",   "kind_patterns", "kinds",    "name_patterns",
@@ -103,10 +184,6 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
   size_t index;
   if (!definition || definition->kind != AB_VALUE_OBJECT || !stable_id(id))
     return ARCHBIRD_INVALID_ARGUMENT;
-  for (index = 0; index < definition->as.object.count; index++)
-    if (!name_allowed(&definition->as.object.fields[index].name, allowed,
-                      sizeof(allowed) / sizeof(allowed[0])))
-      return invalid(engine, "definition contains an unknown field");
   declared_id = ab_value_member(definition, "id");
   if (declared_id && (declared_id->kind != AB_VALUE_STRING ||
                       !ab_string_equal(&declared_id->as.text, id)))
@@ -114,6 +191,12 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
   select = ab_value_member(definition, "select");
   if (!select_supported(select))
     return invalid(engine, "definition has an unsupported select operator");
+  for (index = 0; index < definition->as.object.count; index++)
+    if (!projection_field_allowed(select,
+                                  &definition->as.object.fields[index].name))
+      return invalid(engine,
+                     "definition contains a field unsupported by its select "
+                     "operator");
   for (index = 0; index < sizeof(arrays) / sizeof(arrays[0]); index++) {
     const AbValue *value = ab_value_member(definition, arrays[index]);
     if (value && !string_array(value))

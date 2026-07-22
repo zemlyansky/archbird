@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/okf-query-input.schema.json",
+  "title": "Archbird OKF query selectors",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact", "concepts", "types", "tags", "text", "requirements"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "okf-query-input"},
+    "concepts": {"$ref": "#/$defs/strings"},
+    "types": {"$ref": "#/$defs/folded"},
+    "tags": {"$ref": "#/$defs/folded"},
+    "text": {"$ref": "#/$defs/folded"},
+    "requirements": {"$ref": "#/$defs/strings"}
+  },
+  "$defs": {
+    "strings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "folded": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["value", "casefold"],
+        "properties": {
+          "value": {"type": "string", "minLength": 1},
+          "casefold": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

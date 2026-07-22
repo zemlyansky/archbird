@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/okf-source-bundle.schema.json",
+  "title": "Archbird host-decoded OKF source bundle",
+  "description": "Filesystem, YAML, CommonMark, and Unicode case-fold evidence supplied to the language-neutral OKF policy kernel.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact", "producer", "known_paths", "documents", "diagnostics"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "okf-source-bundle"},
+    "producer": {"$ref": "#/$defs/producer"},
+    "known_paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 100000,
+      "items": {"$ref": "#/$defs/path"}
+    },
+    "documents": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {"$ref": "#/$defs/document"}
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/diagnostic"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "path": {
+      "type": "string",
+      "minLength": 4,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+\\.[Mm][Dd]$"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256", "runtime"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime": {"type": "string", "minLength": 1}
+      }
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "href", "repr", "external", "fragment_only", "path"],
+      "properties": {
+        "label": {"type": "string"},
+        "href": {"type": "string"},
+        "repr": {"type": "string", "minLength": 2},
+        "external": {"type": "boolean"},
+        "fragment_only": {"type": "boolean"},
+        "path": {"type": "string"}
+      }
+    },
+    "casefold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "tags", "text"],
+      "properties": {
+        "type": {"type": "string"},
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "text": {"type": "string"}
+      }
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "byte_length", "state", "frontmatter", "body", "links", "casefold"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_length": {"type": "integer", "minimum": 0, "maximum": 4194304},
+        "state": {"enum": ["current", "invalid"]},
+        "frontmatter": {"type": ["object", "null"]},
+        "body": {"type": ["string", "null"]},
+        "links": {"type": "array", "items": {"$ref": "#/$defs/link"}},
+        "casefold": {"anyOf": [{"$ref": "#/$defs/casefold"}, {"type": "null"}]}
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "message", "path"],
+      "properties": {
+        "severity": {"enum": ["error", "warning"]},
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string"},
+        "path": {"type": "string"}
+      }
+    }
+  }
+}

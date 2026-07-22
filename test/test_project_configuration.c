@@ -165,6 +165,15 @@ int main(void) {
   }
   if (!rejects(engine,
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
+               "\"name\":\"c\"}],\"project\":\"demo\",\"queries\":{"
+               "\"bad\":{\"paths\":[\"src/**\"],\"context\":{"
+               "\"typo_policy\":\"expand\"}}},\"schema_version\":2}",
+               "query.context contains an unknown field")) {
+    fprintf(stderr, "unknown saved-query context field was not rejected\n");
+    goto failed;
+  }
+  if (!rejects(engine,
+               "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\","
                "\"queries\":[{\"id\":\"same\"},"
                "{\"id\":\"same\"}],\"schema_version\":2}",
@@ -177,8 +186,8 @@ int main(void) {
                "\"name\":\"c\"}],\"project\":\"demo\","
                "\"queries\":{\"left\":{"
                "\"id\":\"right\"}},\"schema_version\":2}",
-               "does not match its key")) {
-    fprintf(stderr, "key/id mismatch was not rejected\n");
+               "derive identity from the key")) {
+    fprintf(stderr, "redundant keyed id was not rejected\n");
     goto failed;
   }
   if (!rejects(engine,
@@ -187,6 +196,15 @@ int main(void) {
                "\"bad\":{\"select\":\"ranked_symbols\"}},\"schema_version\":2}",
                "unsupported select operator")) {
     fprintf(stderr, "unknown projection operator was not rejected\n");
+    goto failed;
+  }
+  if (!rejects(engine,
+               "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
+               "\"name\":\"c\"}],\"project\":\"demo\",\"projections\":{"
+               "\"bad\":{\"metric\":\"bytes\",\"select\":\"symbols\"}},"
+               "\"schema_version\":2}",
+               "field unsupported by its select operator")) {
+    fprintf(stderr, "operator-irrelevant projection field was not rejected\n");
     goto failed;
   }
   if (!rejects(engine,
@@ -205,6 +223,47 @@ int main(void) {
                "\"project\":\"demo\",\"schema_version\":2}",
                "assertion requires expected")) {
     fprintf(stderr, "incomplete primitive constraint was not rejected\n");
+    goto failed;
+  }
+  if (!rejects(engine,
+               "{\"constraints\":{\"bad\":{\"actual\":{\"literal\":1},"
+               "\"assert\":\"values_equal\",\"expected\":{\"literal\":1},"
+               "\"owner\":\"architecture\",\"rationale\":\"A reviewed "
+               "invariant.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
+               "\"language\":\"c\",\"name\":\"c\"}],\"project\":\"demo\","
+               "\"schema_version\":2}",
+               "invalid operand value")) {
+    fprintf(stderr, "scalar constraint literal was not rejected\n");
+    goto failed;
+  }
+  if (!rejects(engine,
+               "{\"constraints\":{\"bad\":{\"kind\":\"required_symbols\","
+               "\"owner\":\"architecture\",\"rationale\":\"A reviewed "
+               "invariant.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
+               "\"language\":\"c\",\"name\":\"c\"}],\"project\":\"demo\","
+               "\"schema_version\":2}",
+               "requires non-empty symbols")) {
+    fprintf(stderr, "required_symbols without symbols was not rejected\n");
+    goto failed;
+  }
+  if (!rejects(engine,
+               "{\"constraints\":{\"bad\":{\"bridge\":\"unused\","
+               "\"kind\":\"component_cycles\",\"owner\":\"architecture\","
+               "\"rationale\":\"A reviewed invariant.\"}},\"layers\":[{"
+               "\"globs\":[\"**/*.c\"],\"language\":\"c\",\"name\":\"c\"}],"
+               "\"project\":\"demo\",\"schema_version\":2}",
+               "field not owned by its kind")) {
+    fprintf(stderr, "typed constraint accepted an unrelated field\n");
+    goto failed;
+  }
+  if (!rejects(engine,
+               "{\"constraints\":{\"bad\":{\"actual\":{\"literal\":[]},"
+               "\"assert\":\"acyclic\",\"max\":1,\"owner\":\"architecture\","
+               "\"rationale\":\"A reviewed invariant.\"}},\"layers\":[{"
+               "\"globs\":[\"**/*.c\"],\"language\":\"c\",\"name\":\"c\"}],"
+               "\"project\":\"demo\",\"schema_version\":2}",
+               "field not owned by its kind")) {
+    fprintf(stderr, "primitive constraint accepted an unrelated field\n");
     goto failed;
   }
   if (!rejects(

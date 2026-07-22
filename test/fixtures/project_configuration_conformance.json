@@ -1,0 +1,281 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "minimal",
+      "valid": true,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ]
+      }
+    },
+    {
+      "id": "all-projection-operators",
+      "valid": true,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "projections": {
+          "artifact-routes": {"select": "artifact_routes", "artifacts": ["library"]},
+          "component-edges": {"select": "component_edges", "kinds": ["call"]},
+          "component-membership": {"select": "component_membership", "components": ["core"], "include": ["src/**"]},
+          "constant-memberships": {"select": "constant_memberships", "container": "Flags", "paths": ["src/**"], "strip_prefix": "FLAG_"},
+          "constant-values": {"select": "constant_values", "container": "Opcode", "paths": ["src/**"], "kinds": ["enum-member"], "exclude": ["RESERVED"]},
+          "file-edges": {"select": "file_edges", "from_paths": ["src/**"], "to_paths": ["include/**"], "kinds": ["import"], "kind_patterns": ["imp*"], "name_patterns": ["api*"]},
+          "file-metrics": {"select": "file_metrics", "metric": "bytes", "include": ["src/**"]},
+          "inventory-paths": {"select": "inventory_paths", "exclude": ["vendor/**"]},
+          "macro-members": {"select": "macro_members", "call": "REGISTER", "selector": "public", "paths": ["src/**"], "selector_argument": 0, "values_from_argument": 1, "strip_prefix": "OP_"},
+          "mapped-paths": {"select": "mapped_paths", "paths": ["src/**"], "strip_prefix": "src/"},
+          "package-entrypoints": {"select": "package_entrypoints", "packages": ["core"], "routes": ["main"], "target_paths": ["src/**"]},
+          "package-exports": {"select": "package_exports", "packages": ["core"], "name_patterns": ["open*"]},
+          "provider-surface": {"select": "provider_surface", "name": "public", "include": ["open*"]},
+          "search-domain": {"select": "search_domain"},
+          "symbols": {"select": "symbols", "paths": ["include/**"], "kinds": ["function"], "names": ["open"], "name_patterns": ["op*"], "layer": "c", "public_only": true, "strip_prefix": "api_"},
+          "test-routes": {"select": "test_routes", "group": "native", "paths": ["test/**"], "selectors": ["test_*"], "target_paths": ["src/**"], "configured_only": true},
+          "test-selectors": {"select": "test_selectors", "group": "native", "paths": ["test/**"], "selectors": ["test_*"], "strip_suffix": "_case"}
+        },
+        "queries": {
+          "full-context": {
+            "projection": "search-domain",
+            "context": {
+              "profile": "architecture",
+              "provenance": ["derived", "asserted", "observed"],
+              "confidence": ["exact", "candidate", "conservative", "unresolved"],
+              "max_seed_distance": 3,
+              "candidate": "expand",
+              "conservative": "collapse",
+              "quotas": {"files": 5, "symbol_calls": 6, "symbol_references": 7, "test_matches": 8},
+              "offsets": {"files": 1, "symbol_calls": 2, "symbol_references": 3, "test_matches": 4}
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "literal-operands",
+      "valid": true,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "constraints": {
+          "SET": {
+            "assert": "set_equal",
+            "actual": {"literal": ["open", "close"]},
+            "expected": {"literal": ["open", "close"]},
+            "owner": "architecture",
+            "rationale": "The reviewed set remains stable."
+          },
+          "VALUES": {
+            "assert": "values_equal",
+            "actual": {"literal": {"open": 1}},
+            "expected": {"literal": {"open": 1}},
+            "owner": "architecture",
+            "rationale": "The reviewed values remain stable."
+          }
+        }
+      }
+    },
+    {
+      "id": "all-constraint-forms",
+      "valid": true,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "constraints": {
+          "ALLOWED-COMPONENT-EDGES": {"kind": "allowed_component_edges", "edges": [], "kinds": ["import"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "ALLOWED-FILE-EDGES": {"kind": "allowed_file_edges", "edges": [], "from_paths": ["src/**"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "COMPONENT-CYCLES": {"kind": "component_cycles", "kinds": ["import"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "COMPONENT-MEMBERSHIP": {"kind": "component_membership", "min": 1, "include": ["src/**"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "FORBIDDEN-COMPONENT-EDGES": {"kind": "forbidden_component_edges", "edges": [], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "FORBIDDEN-FILE-EDGES": {"kind": "forbidden_file_edges", "edges": [], "to_paths": ["vendor/**"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "FORBIDDEN-PATHS": {"kind": "forbidden_paths", "paths": ["build/**"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "FORBIDDEN-SYMBOLS": {"kind": "forbidden_symbols", "symbols": ["unsafe"], "paths": ["src/**"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "MAX-FILE-BYTES": {"kind": "max_file_bytes", "max": 1048576, "allow_empty": false, "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "PROVIDER-SURFACE": {"kind": "provider_surface", "surface": "public", "declared": ["open"], "forbid_unresolved": true, "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "REQUIRED-BRIDGE": {"kind": "required_bridge", "bridge": "python-native", "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "REQUIRED-COMPONENT-EDGES": {"kind": "required_component_edges", "edges": [], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "REQUIRED-FILE-EDGE": {"kind": "required_file_edge", "edge_kind": "import", "source": "src/a.c", "target": "src/b.c", "name": "open", "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "REQUIRED-FILE-EDGES": {"kind": "required_file_edges", "edges": [], "kind_patterns": ["imp*"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "REQUIRED-PACKAGE-ENTRYPOINT": {"kind": "required_package_entrypoint", "package": "core", "route": "main", "target": "src/main.c", "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "REQUIRED-PATHS": {"kind": "required_paths", "paths": ["src/main.c"], "strip_prefix": "src/", "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "REQUIRED-SYMBOLS": {"kind": "required_symbols", "symbols": ["open"], "public_only": true, "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "REQUIRED-TEST-ROUTE": {"kind": "required_test_route", "group": "native", "target": "src/main.c", "selectors": ["test_open"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "SYMBOL-CARDINALITY": {"kind": "symbol_cardinality", "min": 1, "kinds": ["function"], "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "TEST-ROUTES": {"kind": "test_routes", "min": 1, "required_routes": ["src/main.c"], "configured_only": true, "owner": "architecture", "rationale": "Exercise the typed contract."},
+
+          "ACYCLIC": {"assert": "acyclic", "actual": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "ALLOWED-EDGES": {"assert": "allowed_edges", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "CARDINALITY": {"assert": "cardinality", "actual": {"literal": []}, "exact": 0, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "DISJOINT": {"assert": "disjoint", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "FORBIDDEN-EDGES": {"assert": "forbidden_edges", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "MAPPED-SET-EQUAL": {"assert": "mapped_set_equal", "actual": {"literal": []}, "expected": {"literal": []}, "mapping": {}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "MAPPED-VALUES-EQUAL": {"assert": "mapped_values_equal", "actual": {"literal": {}}, "expected": {"literal": {}}, "mapping": {}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "MIN-TEST-ROUTES": {"assert": "min_test_routes", "actual": {"literal": []}, "min": 1, "required_routes": ["src/main.c"], "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "NUMERIC-BOUNDS": {"assert": "numeric_bounds", "actual": {"literal": {}}, "exact": 0, "allow_empty": true, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "OBSERVATIONS-EQUAL": {"assert": "observations_equal", "actual": {"observation": "current"}, "expected": {"observation": "reference"}, "reference_route": "native", "required_routes": ["native"], "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "REQUIRED-EDGES": {"assert": "required_edges", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "REQUIRED-SUBSET": {"assert": "required_subset", "actual": {"literal": []}, "expected": {"literal": []}, "mapping": {}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "REQUIRED-VALUES": {"assert": "required_values", "actual": {"literal": {}}, "expected": {"literal": {}}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "SET-EQUAL": {"assert": "set_equal", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "SUBSET": {"assert": "subset", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "VALUES-EQUAL": {"assert": "values_equal", "actual": {"literal": {}}, "expected": {"literal": {}}, "owner": "architecture", "rationale": "Exercise the primitive contract."}
+        }
+      }
+    },
+    {
+      "id": "scalar-literal",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "constraints": {
+          "SCALAR": {
+            "assert": "values_equal",
+            "actual": {"literal": 1},
+            "expected": {"literal": 1},
+            "owner": "architecture",
+            "rationale": "Scalar literals are not typed projection operands."
+          }
+        }
+      }
+    },
+    {
+      "id": "selectorless-query",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "queries": {"empty": {"direction": "both", "depth": 1}}
+      }
+    },
+    {
+      "id": "redundant-keyed-id",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "queries": {"impact": {"id": "impact", "paths": ["src/**"]}}
+      }
+    },
+    {
+      "id": "unknown-query-context-field",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "queries": {
+          "typo": {"paths": ["src/**"], "context": {"typo_policy": "expand"}}
+        }
+      }
+    },
+    {
+      "id": "invalid-query-context-value",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "queries": {
+          "bad-profile": {"paths": ["src/**"], "context": {"profile": "fast"}}
+        }
+      }
+    },
+    {
+      "id": "projection-field-from-other-operator",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "projections": {
+          "symbols": {"select": "symbols", "metric": "bytes"}
+        }
+      }
+    },
+    {
+      "id": "constraint-field-from-other-kind",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "constraints": {
+          "CYCLES": {
+            "kind": "component_cycles",
+            "bridge": "unused",
+            "owner": "architecture",
+            "rationale": "Constraint fields belong to exactly one contract."
+          }
+        }
+      }
+    },
+    {
+      "id": "assertion-field-from-other-contract",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "constraints": {
+          "ACYCLIC": {
+            "assert": "acyclic",
+            "actual": {"literal": []},
+            "max": 1,
+            "owner": "architecture",
+            "rationale": "Primitive options belong to their predicate."
+          }
+        }
+      }
+    },
+    {
+      "id": "required-symbols-without-symbols",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2,
+        "project": "conformance",
+        "layers": [
+          {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "constraints": {
+          "REQUIRED": {
+            "kind": "required_symbols",
+            "owner": "architecture",
+            "rationale": "Required symbols must be explicit."
+          }
+        }
+      }
+    }
+  ]
+}

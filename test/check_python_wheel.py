@@ -23,6 +23,11 @@ def main() -> int:
         for path in (source / "app").rglob("*")
         if path.is_file()
     }
+    expected_schemas = {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in (source / "schemas").glob("*")
+        if path.is_file()
+    }
     expected_vendor_licenses = {
         "pcre2",
         "tree-sitter",
@@ -51,6 +56,11 @@ def main() -> int:
             for name in archive.namelist()
             if name.startswith("archbird/app/") and not name.endswith("/")
         }
+        schema_members = {
+            PurePosixPath(name).relative_to("archbird").as_posix(): archive.read(name)
+            for name in archive.namelist()
+            if name.startswith("archbird/schemas/") and not name.endswith("/")
+        }
         vendor_licenses = {
             PurePosixPath(name).parts[-2]
             for name in archive.namelist()
@@ -70,6 +80,12 @@ def main() -> int:
             f"missing={sorted(expected_app - app_members)!r} "
             f"extra={sorted(app_members - expected_app)!r}"
         )
+    if not expected_schemas or schema_members != expected_schemas:
+        raise AssertionError(
+            "wheel JSON schema inventory differs: "
+            f"missing={sorted(expected_schemas.keys() - schema_members.keys())!r} "
+            f"extra={sorted(schema_members.keys() - expected_schemas.keys())!r}"
+        )
     if vendor_licenses != expected_vendor_licenses:
         raise AssertionError(
             "wheel third-party license inventory differs: "
@@ -78,7 +94,8 @@ def main() -> int:
         )
     print(
         f"Python wheel source inventory exact: {len(expected)} modules, "
-        f"app={len(app_members)} files, licenses={len(vendor_licenses)}, "
+        f"app={len(app_members)} files, schemas={len(schema_members) - 1}, "
+        f"licenses={len(vendor_licenses)}, "
         f"extension={extensions[0]}"
     )
     return 0

@@ -94,7 +94,7 @@ typedef struct AbVerifyObservationState {
 
 typedef struct AbVerificationContext {
   ArchbirdEngine *engine;
-  const AbValue *project_configuration;
+  const AbValue *constraints;
   const AbValue *project;
   const AbValue *description;
   const AbValue *operand_definitions;

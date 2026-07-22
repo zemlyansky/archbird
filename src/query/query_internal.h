@@ -16,6 +16,12 @@ typedef struct AbQueryProjectionSet {
   size_t count;
 } AbQueryProjectionSet;
 
+ArchbirdStatus ab_query_plan_compile_definition(
+    ArchbirdEngine *engine, const AbString *id, const AbValue *definition,
+    const AbValue *overrides, const AbValue *configured_projections,
+    const char *map_config_sha256, const char *project_configuration_sha256,
+    AbValue *out_plan);
+
 ArchbirdStatus ab_query_plan_compile_ad_hoc(ArchbirdEngine *engine,
                                             const AbValue *request,
                                             AbValue *out_plan);

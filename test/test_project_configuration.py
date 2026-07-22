@@ -26,6 +26,85 @@ from archbird.project_configuration import compile_ad_hoc_query, compile_named_q
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _assert_project_configuration_conformance() -> None:
+    corpus = json.loads(
+        (ROOT / "test/fixtures/project_configuration_conformance.json").read_text()
+    )
+    assert corpus["schema_version"] == 1
+    for entry in corpus["cases"]:
+        configuration = json.dumps(
+            entry["configuration"], sort_keys=True, separators=(",", ":")
+        ).encode()
+        try:
+            compile_project_configuration(configuration)
+        except RuntimeError as error:
+            if entry["valid"]:
+                raise AssertionError(
+                    f"native compiler rejected conformance case {entry['id']}: {error}"
+                ) from error
+        else:
+            assert entry["valid"], (
+                f"native compiler accepted invalid conformance case {entry['id']}"
+            )
+    matrix = next(
+        entry
+        for entry in corpus["cases"]
+        if entry["id"] == "all-projection-operators"
+    )
+    for projection_id, projection in matrix["configuration"][
+        "projections"
+    ].items():
+        foreign = (
+            {"artifacts": ["library"]}
+            if projection["select"] == "file_metrics"
+            else {"metric": "bytes"}
+        )
+        mutated = {
+            "schema_version": 2,
+            "project": "conformance",
+            "layers": [
+                {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+            ],
+            "projections": {projection_id: {**projection, **foreign}},
+        }
+        try:
+            compile_project_configuration(json.dumps(mutated).encode())
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(
+                f"projection {projection_id} accepted an option owned by another operator"
+            )
+    constraints = next(
+        entry for entry in corpus["cases"] if entry["id"] == "all-constraint-forms"
+    )
+    for constraint_id, constraint in constraints["configuration"][
+        "constraints"
+    ].items():
+        foreign = (
+            {"actual": {"literal": []}}
+            if "kind" in constraint
+            else {"bridge": "unused"}
+        )
+        mutated = {
+            "schema_version": 2,
+            "project": "conformance",
+            "layers": [
+                {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+            ],
+            "constraints": {constraint_id: {**constraint, **foreign}},
+        }
+        try:
+            compile_project_configuration(json.dumps(mutated).encode())
+        except RuntimeError:
+            pass
+        else:
+            discriminator = constraint.get("kind", constraint.get("assert"))
+            raise AssertionError(
+                f"constraint {discriminator} accepted an option owned by another contract"
+            )
+
+
 def _map(config: dict[str, object]) -> bytes:
     project = Project.from_repository(
         ROOT,
@@ -58,6 +137,7 @@ def _assert_invalid_projection(
 
 
 def main() -> None:
+    _assert_project_configuration_conformance()
     project_model = json.loads((ROOT / "archbird.json").read_text())
     project_model.pop("projections", None)
     project_model.pop("queries", None)
@@ -737,7 +817,7 @@ def main() -> None:
             {"id": "invalid", "select": "provider_surface", "surface": "ffi"},
         )
     except RuntimeError as error:
-        assert "definition contains an unknown field" in str(error)
+        assert "field unsupported by its select operator" in str(error)
     else:
         raise AssertionError("incomplete provider-surface projection was accepted")
     provider_config = (provider_root / "subject/archbird.json").read_bytes()

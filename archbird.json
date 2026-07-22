@@ -428,6 +428,11 @@
           {
             "source": "api",
             "kind": "*",
+            "target": "constraints"
+          },
+          {
+            "source": "api",
+            "kind": "*",
             "target": "evidence"
           },
           {
@@ -526,6 +531,11 @@
             "target": "projection"
           },
           {
+            "source": "configuration",
+            "kind": "*",
+            "target": "query"
+          },
+          {
             "source": "constraints",
             "kind": "*",
             "target": "abi"
@@ -534,11 +544,6 @@
             "source": "constraints",
             "kind": "*",
             "target": "base"
-          },
-          {
-            "source": "constraints",
-            "kind": "*",
-            "target": "configuration"
           },
           {
             "source": "constraints",
@@ -804,11 +809,6 @@
             "source": "query",
             "kind": "*",
             "target": "base"
-          },
-          {
-            "source": "query",
-            "kind": "*",
-            "target": "configuration"
           },
           {
             "source": "query",

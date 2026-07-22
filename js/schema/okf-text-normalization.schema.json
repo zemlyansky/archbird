@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archbird.dev/schema/okf-text-normalization.schema.json",
+  "title": "Archbird host Unicode normalization evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact", "schema_version", "rows"],
+  "properties": {
+    "artifact": {"const": "okf-text-normalization"},
+    "schema_version": {"const": 1},
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "slug_ascii", "casefold"],
+        "properties": {
+          "text": {"type": "string", "minLength": 1},
+          "slug_ascii": {"type": "string", "pattern": "^[\\u0000-\\u007f]*$"},
+          "casefold": {"type": "string"}
+        }
+      }
+    }
+  }
+}

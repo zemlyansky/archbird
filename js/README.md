@@ -323,6 +323,13 @@ The embedded config is mirrored by `examples/minimal.archbird.json`; the
 complete multi-language form is `examples/quickstart.archbird.json` in the
 source distribution.
 
+The npm package exports the versioned JSON schemas for offline editors and
+agents. For example,
+`require.resolve("archbird/schema/archbird.schema.json")` locates the exact
+project-configuration schema shipped with the installed engine. The native
+configuration compiler remains authoritative for relational invariants that
+standard JSON Schema cannot express.
+
 ## Verify architecture
 
 Reviewed architecture policy belongs in the `constraints` collection of the
@@ -521,6 +528,6 @@ requested `--check` blocks, and 2 for invalid input or configuration.
 - Archbird is pre-1 software; schemas and ABI can evolve under semantic
   versioning without a 1.x compatibility promise.
 
-Requires Node 18+. Archbird is Apache-2.0 licensed. Full strict schemas and the
-C/Python hosts are included in the source repository; this README is the
-complete npm/Node/browser usage contract.
+Requires Node 18+. Archbird is Apache-2.0 licensed. Content-hashed JSON schemas
+ship in the npm package; the C/Python hosts are included in the source
+repository. This README is the complete npm/Node/browser usage contract.

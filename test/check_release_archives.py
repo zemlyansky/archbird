@@ -70,6 +70,9 @@ def check_archive(
     c_source_manifests = 0
     c_source_manifest: bytes | None = None
     c_source_files: dict[str, bytes] = {}
+    schema_manifests = 0
+    schema_manifest: bytes | None = None
+    schema_files: dict[str, bytes] = {}
     for name, data in _members(path):
         count += 1
         member_path = PurePosixPath(name)
@@ -95,6 +98,26 @@ def check_archive(
                 and relative[2] == "LICENSE"
             ):
                 c_source_licenses.add(relative[1])
+        schema_marker = next(
+            (marker for marker in ("schemas", "schema") if marker in parts),
+            None,
+        )
+        if schema_marker is not None:
+            schema_index = parts.index(schema_marker)
+            relative = parts[schema_index + 1 :]
+            if relative and (
+                relative == (".archbird-manifest.json",)
+                or PurePosixPath(*relative).name.endswith(".schema.json")
+            ):
+                relative_name = PurePosixPath(*relative).as_posix()
+                if relative_name in schema_files:
+                    raise ValueError(
+                        f"{path}: duplicate schema snapshot member: {relative_name}"
+                    )
+                schema_files[relative_name] = data
+                if relative == (".archbird-manifest.json",):
+                    schema_manifests += 1
+                    schema_manifest = data
         if _development_path(name):
             raise ValueError(f"{path}: development or unsafe member: {name}")
         for marker in (*forbidden_prefixes, *forbidden_text):
@@ -151,6 +174,57 @@ def check_archive(
                 f"missing={sorted(EXPECTED_C_SOURCE_LICENSES - c_source_licenses)!r} "
                 f"extra={sorted(c_source_licenses - EXPECTED_C_SOURCE_LICENSES)!r}"
             )
+    if schema_files:
+        if schema_manifests != 1:
+            raise ValueError(
+                f"{path}: expected one content-hashed schema snapshot manifest, "
+                f"found {schema_manifests}"
+            )
+        try:
+            snapshot = json.loads((schema_manifest or b"").decode("utf-8"))
+            artifact = snapshot["artifact"]
+            rows = snapshot["files"]
+        except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"{path}: invalid schema snapshot manifest") from error
+        if artifact not in {"archbird-python-schemas", "archbird-node-schemas"}:
+            raise ValueError(f"{path}: unknown schema snapshot artifact: {artifact!r}")
+        if not isinstance(rows, list):
+            raise ValueError(f"{path}: invalid schema snapshot file inventory")
+        expected: dict[str, tuple[int, str]] = {}
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or not isinstance(row.get("path"), str)
+                or not isinstance(row.get("bytes"), int)
+                or not isinstance(row.get("sha256"), str)
+            ):
+                raise ValueError(f"{path}: invalid schema snapshot file row")
+            relative = PurePosixPath(row["path"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"{path}: unsafe schema snapshot path: {relative}")
+            relative_name = relative.as_posix()
+            if relative_name in expected:
+                raise ValueError(
+                    f"{path}: duplicate schema snapshot path: {relative_name}"
+                )
+            expected[relative_name] = (row["bytes"], row["sha256"])
+        actual_names = set(schema_files) - {".archbird-manifest.json"}
+        expected_names = set(expected)
+        if actual_names != expected_names:
+            raise ValueError(
+                f"{path}: schema snapshot inventory differs: "
+                f"missing={sorted(expected_names - actual_names)!r} "
+                f"extra={sorted(actual_names - expected_names)!r}"
+            )
+        for relative_name, (expected_size, expected_sha256) in expected.items():
+            data = schema_files[relative_name]
+            if (
+                len(data) != expected_size
+                or hashlib.sha256(data).hexdigest() != expected_sha256
+            ):
+                raise ValueError(
+                    f"{path}: schema snapshot content differs: {relative_name}"
+                )
     return count
 
 

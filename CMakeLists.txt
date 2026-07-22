@@ -976,6 +976,11 @@ if(BUILD_TESTING)
               ${CMAKE_CURRENT_SOURCE_DIR}/test/test_allocator_boundary.py
     )
     add_test(
+      NAME archbird_native_planning_boundary
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_planning_boundaries.py
+    )
+    add_test(
       NAME archbird_native_file_facts
       COMMAND ${Python3_EXECUTABLE}
               ${CMAKE_CURRENT_SOURCE_DIR}/test/test_file_facts.py

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/source-manifest.schema.json",
+  "title": "Archbird source manifest",
+  "description": "A deterministic host-supplied snapshot of raw repository inputs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact", "project", "producer", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "archbird-source-manifest"},
+    "project": {"$ref": "#/$defs/id"},
+    "producer": {"$ref": "#/$defs/producer"},
+    "configuration_sha256": {"$ref": "#/$defs/sha256"},
+    "resolution": {"$ref": "#/$defs/resolution"},
+    "files": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/file"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+$"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"$ref": "#/$defs/id"},
+        "version": {"type": "string", "minLength": 1},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "resolutionProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "implementation_sha256"],
+      "properties": {
+        "name": {"$ref": "#/$defs/id"},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "discoveryCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assets",
+        "ignored",
+        "inventory_files",
+        "oversized",
+        "pruned_directories",
+        "selected",
+        "unsupported_known"
+      ],
+      "properties": {
+        "assets": {"type": "integer", "minimum": 0},
+        "ignored": {"type": "integer", "minimum": 0},
+        "inventory_files": {"type": "integer", "minimum": 0},
+        "oversized": {"type": "integer", "minimum": 0},
+        "pruned_directories": {"type": "integer", "minimum": 0},
+        "selected": {"type": "integer", "minimum": 0},
+        "unsupported_known": {"type": "integer", "minimum": 0}
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coverage", "profile", "sha256"],
+      "properties": {
+        "coverage": {"$ref": "#/$defs/discoveryCoverage"},
+        "profile": {"$ref": "#/$defs/resolutionProfile"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/id"}
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes", "roles"],
+      "properties": {
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 0},
+        "language": {"$ref": "#/$defs/id"},
+        "layer": {"$ref": "#/$defs/id"},
+        "roles": {"$ref": "#/$defs/roles"}
+      }
+    }
+  }
+}

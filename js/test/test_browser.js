@@ -19,6 +19,21 @@ const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js
   });
   assert.equal(archbird.ENGINE.kind, "wasm");
   assert.equal(archbird.VERSION, "0.0.1");
+  const conformanceCorpus = JSON.parse(fs.readFileSync(path.join(
+    repository,
+    "test/fixtures/project_configuration_conformance.json",
+  )));
+  assert.equal(conformanceCorpus.schema_version, 1);
+  for (const entry of conformanceCorpus.cases) {
+    const compileCase = () => archbird.core.projectConfigurationCompile(
+      Buffer.from(JSON.stringify(entry.configuration)),
+    );
+    if (entry.valid) {
+      assert.doesNotThrow(compileCase, entry.id);
+    } else {
+      assert.throws(compileCase, undefined, entry.id);
+    }
+  }
   const fixture = path.join(repository, "test/fixtures/map_base");
   const config = fs.readFileSync(path.join(fixture, "archbird.json"));
   const sources = ["js/index.js", "py/pkg/__init__.py", "py/pkg/api.py"].map(
