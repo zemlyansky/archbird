@@ -3,9 +3,9 @@
 #include "archbird_internal.h"
 #include "json_value.h"
 #include "projection_internal.h"
+#include "projection_model.h"
 #include "render_internal.h"
 #include "sha256.h"
-#include "verify_runtime.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -16,18 +16,6 @@
     if (status__ != ARCHBIRD_OK)                                               \
       return status__;                                                         \
   } while (0)
-
-static int string_is(const AbString *value, const char *literal) {
-  size_t length = strlen(literal);
-  return value && value->length == length &&
-         (!length || memcmp(value->data, literal, length) == 0);
-}
-
-static int object_field_compare(const void *left_raw, const void *right_raw) {
-  const AbObjectField *left = (const AbObjectField *)left_raw;
-  const AbObjectField *right = (const AbObjectField *)right_raw;
-  return ab_string_compare(&left->name, &right->name);
-}
 
 static int stable_id(const AbString *value) {
   size_t index;
@@ -49,86 +37,6 @@ static ArchbirdStatus invalid(ArchbirdEngine *engine, const char *message) {
                             "projection: %s", message);
 }
 
-ArchbirdStatus ab_projection_spec_prepare(ArchbirdEngine *engine,
-                                          const AbValue *definition,
-                                          const AbValue *map,
-                                          const AbString *name,
-                                          AbObjectField *out) {
-  const AbValue *select = ab_value_member(definition, "select");
-  const AbValue *project = ab_value_member(map, "project");
-  const AbValue *id = ab_value_member(definition, "id");
-  size_t index;
-  size_t output = 0;
-  size_t count;
-  ArchbirdStatus status;
-  if (!select || select->kind != AB_VALUE_STRING || !select->as.text.length)
-    return invalid(engine, "select must be a non-empty string");
-  if (string_is(&select->as.text, "provider_surface")) {
-    const AbValue *surface = ab_value_member(definition, "name");
-    if (!surface || surface->kind != AB_VALUE_STRING ||
-        !surface->as.text.length)
-      return invalid(engine, "provider_surface requires a non-empty name");
-  }
-  if (ab_value_member(definition, "project"))
-    return invalid(engine, "project is implicit for Map projection evaluation");
-  if (!project || project->kind != AB_VALUE_STRING || !project->as.text.length)
-    return invalid(engine, "Map project identity is missing");
-  count = definition->as.object.count - 1; /* select */
-  if (id)
-    count--;
-  count += 2; /* kind and project */
-  memset(out, 0, sizeof(*out));
-  status = ab_string_copy(engine, &out->name, name->data, name->length);
-  if (status != ARCHBIRD_OK)
-    return status;
-  out->value.kind = AB_VALUE_OBJECT;
-  out->value.as.object.count = count;
-  out->value.as.object.fields = (AbObjectField *)ab_calloc(
-      engine, count, sizeof(*out->value.as.object.fields));
-  if (!out->value.as.object.fields) {
-    ab_string_free(engine, &out->name);
-    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                              ARCHBIRD_NO_OFFSET,
-                              "out of memory preparing projection plan");
-  }
-  for (index = 0; index < definition->as.object.count; index++) {
-    const AbObjectField *field = &definition->as.object.fields[index];
-    if (string_is(&field->name, "id") || string_is(&field->name, "select"))
-      continue;
-    status = ab_string_copy(engine, &out->value.as.object.fields[output].name,
-                            field->name.data, field->name.length);
-    if (status == ARCHBIRD_OK)
-      status = ab_value_copy(engine, &out->value.as.object.fields[output].value,
-                             &field->value);
-    if (status != ARCHBIRD_OK)
-      goto failed;
-    output++;
-  }
-  status = ab_string_copy(engine, &out->value.as.object.fields[output].name,
-                          "kind", 4);
-  if (status == ARCHBIRD_OK)
-    status = ab_value_copy(engine, &out->value.as.object.fields[output].value,
-                           select);
-  if (status != ARCHBIRD_OK)
-    goto failed;
-  output++;
-  status = ab_string_copy(engine, &out->value.as.object.fields[output].name,
-                          "project", 7);
-  if (status == ARCHBIRD_OK)
-    status = ab_value_copy(engine, &out->value.as.object.fields[output].value,
-                           project);
-  if (status != ARCHBIRD_OK)
-    goto failed;
-  if (out->value.as.object.count > 1)
-    qsort(out->value.as.object.fields, out->value.as.object.count,
-          sizeof(*out->value.as.object.fields), object_field_compare);
-  return ARCHBIRD_OK;
-failed:
-  ab_string_free(engine, &out->name);
-  ab_value_free(engine, &out->value);
-  return status;
-}
-
 static ArchbirdStatus render_nullable(AbBuffer *buffer, uint64_t value,
                                       int present) {
   return present ? ab_buffer_u64(buffer, value)
@@ -136,9 +44,9 @@ static ArchbirdStatus render_nullable(AbBuffer *buffer, uint64_t value,
 }
 
 static ArchbirdStatus render_completeness(AbBuffer *buffer,
-                                          const AbVerifyFactSet *fact) {
-  const AbVerifySelection *selection = &fact->selection;
-  const char *classification = ab_verify_fact_selection_classification(fact);
+                                          const AbProjectionData *fact) {
+  const AbProjectionCompleteness *selection = &fact->selection;
+  const char *classification = ab_projection_data_classification(fact);
   TRY(ab_buffer_literal(buffer, "{\"classification\":"));
   TRY(ab_buffer_json_string(buffer, classification, strlen(classification)));
   TRY(ab_buffer_literal(buffer, ",\"counts\":{\"evaluated\":"));
@@ -176,21 +84,36 @@ static const AbValue *member_path(const AbValue *root, const char *first,
              : NULL;
 }
 
+static int lowercase_sha256(const AbValue *value) {
+  size_t index;
+  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
+    return 0;
+  for (index = 0; index < value->as.text.length; index++) {
+    unsigned char byte = (unsigned char)value->as.text.data[index];
+    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
+      return 0;
+  }
+  return 1;
+}
+
 static ArchbirdStatus render_evaluation(AbBuffer *buffer, const AbValue *map,
                                         const AbValue *resolution) {
   const AbValue *config = member_path(map, "evidence", "config_sha256");
   const AbValue *input = member_path(map, "evidence", "input_sha256");
   const AbValue *implementation =
       member_path(map, "tool", "implementation_sha256");
-  if (!config || !input || !implementation)
+  if (!config || !input)
     return invalid(buffer->engine,
-                   "Map is missing canonical evidence/tool identities");
+                   "Map is missing canonical evidence identity");
   TRY(ab_buffer_literal(buffer, "{\"map_config_sha256\":"));
   TRY(ab_value_render(buffer, config));
   TRY(ab_buffer_literal(buffer, ",\"map_input_sha256\":"));
   TRY(ab_value_render(buffer, input));
   TRY(ab_buffer_literal(buffer, ",\"map_producer_implementation_sha256\":"));
-  TRY(ab_value_render(buffer, implementation));
+  if (lowercase_sha256(implementation))
+    TRY(ab_value_render(buffer, implementation));
+  else
+    TRY(ab_buffer_literal(buffer, "null"));
   TRY(ab_buffer_literal(buffer, ",\"resolution_sha256\":"));
   if (resolution) {
     const AbValue *sha = ab_value_member(resolution, "sha256");
@@ -212,24 +135,6 @@ static ArchbirdStatus digest_buffer(const AbBuffer *buffer, char output[65]) {
   return status;
 }
 
-static ArchbirdStatus render_definition_identity(AbBuffer *buffer,
-                                                 const AbValue *definition) {
-  size_t index;
-  size_t emitted = 0;
-  TRY(ab_buffer_literal(buffer, "{"));
-  for (index = 0; index < definition->as.object.count; index++) {
-    const AbObjectField *field = &definition->as.object.fields[index];
-    if (string_is(&field->name, "id"))
-      continue;
-    if (emitted++)
-      TRY(ab_buffer_literal(buffer, ","));
-    TRY(ab_buffer_json_string(buffer, field->name.data, field->name.length));
-    TRY(ab_buffer_literal(buffer, ":"));
-    TRY(ab_value_render(buffer, &field->value));
-  }
-  return ab_buffer_literal(buffer, "}");
-}
-
 ArchbirdStatus ab_projection_definition_sha256(ArchbirdEngine *engine,
                                                const AbValue *definition,
                                                char out[65]) {
@@ -238,18 +143,17 @@ ArchbirdStatus ab_projection_definition_sha256(ArchbirdEngine *engine,
   if (!engine || !definition || definition->kind != AB_VALUE_OBJECT || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&canonical, engine);
-  status = render_definition_identity(&canonical, definition);
+  status = ab_value_render(&canonical, definition);
   if (status == ARCHBIRD_OK)
     status = digest_buffer(&canonical, out);
   ab_buffer_free(&canonical);
   return status;
 }
 
-static ArchbirdStatus
-render_projection_base(AbBuffer *buffer, const AbString *id,
-                       const AbValue *definition,
-                       const char definition_sha256[65], const AbValue *map,
-                       const AbValue *resolution, const AbVerifyFactSet *fact) {
+static ArchbirdStatus render_projection_base(
+    AbBuffer *buffer, const AbString *id, const AbValue *definition,
+    const char definition_sha256[65], const AbValue *map,
+    const AbValue *resolution, const AbProjectionData *fact) {
   TRY(ab_buffer_literal(
       buffer, "{\"artifact\":\"projection-result\",\"completeness\":"));
   TRY(render_completeness(buffer, fact));
@@ -260,7 +164,7 @@ render_projection_base(AbBuffer *buffer, const AbString *id,
   TRY(ab_buffer_literal(buffer, ",\"evaluation\":"));
   TRY(render_evaluation(buffer, map, resolution));
   TRY(ab_buffer_literal(buffer, ",\"fact\":"));
-  TRY(ab_verify_fact_render(buffer, fact, 1));
+  TRY(ab_projection_data_render(buffer, fact, 1));
   TRY(ab_buffer_literal(buffer, ",\"id\":"));
   TRY(ab_buffer_json_string(buffer, id->data, id->length));
   return ab_buffer_literal(buffer, ",\"schema_version\":1}");
@@ -268,65 +172,53 @@ render_projection_base(AbBuffer *buffer, const AbString *id,
 
 static ArchbirdStatus render_projection_result_identity(
     AbBuffer *buffer, const char definition_sha256[65], const AbValue *map,
-    const AbValue *resolution, const AbVerifyFactSet *fact) {
+    const AbValue *resolution, const AbProjectionData *fact) {
   TRY(ab_buffer_literal(buffer, "{\"completeness\":"));
   TRY(render_completeness(buffer, fact));
   TRY(ab_buffer_literal(buffer, ",\"evaluation\":"));
   TRY(render_evaluation(buffer, map, resolution));
   TRY(ab_buffer_literal(buffer, ",\"fact\":"));
-  TRY(ab_verify_fact_render_content(buffer, fact));
+  TRY(ab_projection_data_render_content(buffer, fact));
   TRY(ab_buffer_literal(buffer, ",\"projection_definition_sha256\":"));
   TRY(ab_buffer_json_string(buffer, definition_sha256, 64));
   return ab_buffer_literal(buffer, "}");
 }
 
-ArchbirdStatus
-ab_projection_evaluate_fact(ArchbirdEngine *engine, const AbValue *definition,
-                            const AbValue *map, const AbValue *resolution,
-                            const AbString *name, AbProjectionEvaluation *out) {
-  const AbValue *declared_id;
+ArchbirdStatus ab_projection_plan_evaluate(ArchbirdEngine *engine,
+                                           const AbProjectionPlan *plan,
+                                           const AbValue *map,
+                                           const AbValue *resolution,
+                                           AbProjectionResult *out) {
   AbBuffer base;
   ArchbirdStatus status;
-  if (!engine || !definition || definition->kind != AB_VALUE_OBJECT || !map ||
-      map->kind != AB_VALUE_OBJECT || !name || !stable_id(name) || !out)
+  if (!engine || !plan || !plan->id.length ||
+      plan->definition.kind != AB_VALUE_OBJECT || !map ||
+      map->kind != AB_VALUE_OBJECT || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(out, 0, sizeof(*out));
   status = ab_projection_resolution_validate(engine, resolution, map,
                                              "projection input");
   if (status != ARCHBIRD_OK)
     return status;
-  declared_id = ab_value_member(definition, "id");
-  if (declared_id && (declared_id->kind != AB_VALUE_STRING ||
-                      !ab_string_equal(&declared_id->as.text, name)))
-    return invalid(engine, "id does not match the requested projection");
   ab_buffer_init(&base, engine);
-  status = ab_projection_definition_sha256(engine, definition,
-                                           out->definition_sha256);
+  status = ab_projection_extract_map(engine, map, resolution, plan, &out->data);
   if (status == ARCHBIRD_OK)
-    status = ab_projection_spec_prepare(engine, definition, map, name,
-                                        &out->prepared);
-  if (status == ARCHBIRD_OK)
-    status = ab_projection_extract_map(engine, map, resolution, &out->prepared,
-                                       &out->fact);
-  if (status == ARCHBIRD_OK)
-    status = render_projection_result_identity(&base, out->definition_sha256,
-                                               map, resolution, &out->fact);
+    status = render_projection_result_identity(&base, plan->definition_sha256,
+                                               map, resolution, &out->data);
   if (status == ARCHBIRD_OK)
     status = digest_buffer(&base, out->result_sha256);
   ab_buffer_free(&base);
   if (status != ARCHBIRD_OK)
-    ab_projection_evaluation_free(engine, out);
+    ab_projection_result_free(engine, out);
   return status;
 }
 
-void ab_projection_evaluation_free(ArchbirdEngine *engine,
-                                   AbProjectionEvaluation *evaluation) {
-  if (!evaluation)
+void ab_projection_result_free(ArchbirdEngine *engine,
+                               AbProjectionResult *result) {
+  if (!result)
     return;
-  ab_verify_fact_free(engine, &evaluation->fact);
-  ab_string_free(engine, &evaluation->prepared.name);
-  ab_value_free(engine, &evaluation->prepared.value);
-  memset(evaluation, 0, sizeof(*evaluation));
+  ab_projection_data_free(engine, &result->data);
+  memset(result, 0, sizeof(*result));
 }
 
 ArchbirdStatus archbird_projection_evaluate(
@@ -337,7 +229,8 @@ ArchbirdStatus archbird_projection_evaluate(
   AbValue map = {0};
   AbValue resolution = {0};
   AbValue definition = {0};
-  AbProjectionEvaluation evaluation = {0};
+  AbProjectionPlan plan = {0};
+  AbProjectionResult result = {0};
   AbBuffer base;
   AbBuffer full;
   const AbValue *id_value;
@@ -365,13 +258,14 @@ ArchbirdStatus archbird_projection_evaluate(
   if (status == ARCHBIRD_OK && (!id || !stable_id(id)))
     status = invalid(engine, "id must be a stable non-empty identifier");
   if (status == ARCHBIRD_OK)
-    status = ab_projection_evaluate_fact(engine, &definition, &map,
-                                         resolution_length ? &resolution : NULL,
-                                         id, &evaluation);
+    status = ab_projection_plan_compile(engine, &definition, id, &plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_plan_evaluate(
+        engine, &plan, &map, resolution_length ? &resolution : NULL, &result);
   if (status == ARCHBIRD_OK)
     status = render_projection_base(
-        &base, id, &definition, evaluation.definition_sha256, &map,
-        resolution_length ? &resolution : NULL, &evaluation.fact);
+        &base, &plan.id, &plan.definition, plan.definition_sha256, &map,
+        resolution_length ? &resolution : NULL, &result.data);
   if (status == ARCHBIRD_OK) {
     if (!base.length || base.data[base.length - 1] != '}')
       status = ARCHBIRD_CONFLICT;
@@ -380,7 +274,7 @@ ArchbirdStatus archbird_projection_evaluate(
       if (status == ARCHBIRD_OK)
         status = ab_buffer_literal(&full, ",\"projection_result_sha256\":");
       if (status == ARCHBIRD_OK)
-        status = ab_buffer_json_string(&full, evaluation.result_sha256, 64);
+        status = ab_buffer_json_string(&full, result.result_sha256, 64);
       if (status == ARCHBIRD_OK)
         status = ab_buffer_literal(&full, "}");
     }
@@ -388,7 +282,8 @@ ArchbirdStatus archbird_projection_evaluate(
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, full.data, full.length,
                                         json_flags, write_fn, user_data);
-  ab_projection_evaluation_free(engine, &evaluation);
+  ab_projection_result_free(engine, &result);
+  ab_projection_plan_free(engine, &plan);
   ab_value_free(engine, &definition);
   ab_value_free(engine, &resolution);
   ab_value_free(engine, &map);

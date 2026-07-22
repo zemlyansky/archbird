@@ -1,6 +1,6 @@
 #include "component_membership.h"
 
-#include "verify_internal.h"
+#include "projection_model.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -18,25 +18,26 @@ static int lowercase_sha256(const AbValue *value) {
 }
 
 static int file_compare(const void *left_raw, const void *right_raw) {
-  const AbVerifyMembershipFile *left = (const AbVerifyMembershipFile *)left_raw;
-  const AbVerifyMembershipFile *right =
-      (const AbVerifyMembershipFile *)right_raw;
+  const AbProjectionMembershipFile *left =
+      (const AbProjectionMembershipFile *)left_raw;
+  const AbProjectionMembershipFile *right =
+      (const AbProjectionMembershipFile *)right_raw;
   return ab_string_compare(left->path, right->path);
 }
 
 static int component_compare(const void *left_raw, const void *right_raw) {
-  const AbVerifyMembershipComponent *left =
-      (const AbVerifyMembershipComponent *)left_raw;
-  const AbVerifyMembershipComponent *right =
-      (const AbVerifyMembershipComponent *)right_raw;
+  const AbProjectionMembershipComponent *left =
+      (const AbProjectionMembershipComponent *)left_raw;
+  const AbProjectionMembershipComponent *right =
+      (const AbProjectionMembershipComponent *)right_raw;
   return ab_string_compare(left->name, right->name);
 }
 
 static int assignment_compare(const void *left_raw, const void *right_raw) {
-  const AbVerifyMembershipAssignment *left =
-      (const AbVerifyMembershipAssignment *)left_raw;
-  const AbVerifyMembershipAssignment *right =
-      (const AbVerifyMembershipAssignment *)right_raw;
+  const AbProjectionMembershipAssignment *left =
+      (const AbProjectionMembershipAssignment *)left_raw;
+  const AbProjectionMembershipAssignment *right =
+      (const AbProjectionMembershipAssignment *)right_raw;
   int compared = ab_string_compare(left->path, right->path);
   if (compared)
     return compared;
@@ -45,8 +46,8 @@ static int assignment_compare(const void *left_raw, const void *right_raw) {
              : left->component_index > right->component_index;
 }
 
-void ab_verify_membership_index_free(ArchbirdEngine *engine,
-                                     AbVerifyMembershipIndex *index) {
+void ab_projection_membership_index_free(ArchbirdEngine *engine,
+                                         AbProjectionMembershipIndex *index) {
   if (!index)
     return;
   ab_free(engine, index->files);
@@ -56,9 +57,9 @@ void ab_verify_membership_index_free(ArchbirdEngine *engine,
 }
 
 static void membership_unknown(ArchbirdEngine *engine,
-                               AbVerifyMembershipIndex *index,
+                               AbProjectionMembershipIndex *index,
                                const char *message) {
-  ab_verify_membership_index_free(engine, index);
+  ab_projection_membership_index_free(engine, index);
   index->message = message;
 }
 
@@ -67,7 +68,7 @@ static int valid_file(const AbValue *row, const AbValue **out_path) {
   const AbValue *layer = ab_value_member(row, "layer");
   const AbValue *language = ab_value_member(row, "language");
   if (!row || row->kind != AB_VALUE_OBJECT ||
-      !ab_verify_path_is_repository(path) || !layer ||
+      !ab_projection_path_is_repository(path) || !layer ||
       layer->kind != AB_VALUE_STRING || !language ||
       language->kind != AB_VALUE_STRING ||
       !lowercase_sha256(ab_value_member(row, "sha256")))
@@ -80,7 +81,7 @@ static int valid_component(const AbValue *row, const AbValue **out_name,
                            const AbValue **out_files) {
   const AbValue *name = ab_value_member(row, "name");
   const AbValue *files = ab_value_member(row, "files");
-  if (!row || row->kind != AB_VALUE_OBJECT || !ab_verify_nonblank(name) ||
+  if (!row || row->kind != AB_VALUE_OBJECT || !ab_projection_nonblank(name) ||
       !files || files->kind != AB_VALUE_ARRAY)
     return 0;
   *out_name = name;
@@ -88,9 +89,9 @@ static int valid_component(const AbValue *row, const AbValue **out_name,
   return 1;
 }
 
-const AbVerifyMembershipComponent *
-ab_verify_membership_component(const AbVerifyMembershipIndex *index,
-                               const AbString *name, size_t *out_index) {
+const AbProjectionMembershipComponent *
+ab_projection_membership_component(const AbProjectionMembershipIndex *index,
+                                   const AbString *name, size_t *out_index) {
   size_t low = 0;
   size_t high = index ? index->component_count : 0;
   while (low < high) {
@@ -109,9 +110,9 @@ ab_verify_membership_component(const AbVerifyMembershipIndex *index,
   return NULL;
 }
 
-const AbVerifyMembershipFile *
-ab_verify_membership_file(const AbVerifyMembershipIndex *index,
-                          const AbString *path) {
+const AbProjectionMembershipFile *
+ab_projection_membership_file(const AbProjectionMembershipIndex *index,
+                              const AbString *path) {
   size_t low = 0;
   size_t high = index ? index->file_count : 0;
   while (low < high) {
@@ -127,9 +128,9 @@ ab_verify_membership_file(const AbVerifyMembershipIndex *index,
   return NULL;
 }
 
-ArchbirdStatus ab_verify_membership_index_build(ArchbirdEngine *engine,
-                                                const AbValue *map,
-                                                AbVerifyMembershipIndex *out) {
+ArchbirdStatus
+ab_projection_membership_index_build(ArchbirdEngine *engine, const AbValue *map,
+                                     AbProjectionMembershipIndex *out) {
   const AbValue *files = map ? ab_value_member(map, "files") : NULL;
   const AbValue *components = map ? ab_value_member(map, "components") : NULL;
   size_t assignment_capacity = 0;
@@ -152,18 +153,18 @@ ArchbirdStatus ab_verify_membership_index_build(ArchbirdEngine *engine,
   out->file_count = files->as.array.count;
   out->component_count = components->as.array.count;
   if (out->file_count) {
-    out->files = (AbVerifyMembershipFile *)ab_calloc(engine, out->file_count,
-                                                     sizeof(*out->files));
+    out->files = (AbProjectionMembershipFile *)ab_calloc(
+        engine, out->file_count, sizeof(*out->files));
     if (!out->files)
       return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
                                 "out of memory indexing membership files");
   }
   if (out->component_count) {
-    out->components = (AbVerifyMembershipComponent *)ab_calloc(
+    out->components = (AbProjectionMembershipComponent *)ab_calloc(
         engine, out->component_count, sizeof(*out->components));
     if (!out->components) {
-      ab_verify_membership_index_free(engine, out);
+      ab_projection_membership_index_free(engine, out);
       return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
                                 "out of memory indexing components");
@@ -201,7 +202,7 @@ ArchbirdStatus ab_verify_membership_index_build(ArchbirdEngine *engine,
       return ARCHBIRD_OK;
     }
     if (members->as.array.count > SIZE_MAX - assignment_capacity) {
-      ab_verify_membership_index_free(engine, out);
+      ab_projection_membership_index_free(engine, out);
       return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
                                 ARCHBIRD_NO_OFFSET,
                                 "component membership inventory is too large");
@@ -223,16 +224,16 @@ ArchbirdStatus ab_verify_membership_index_build(ArchbirdEngine *engine,
     }
   }
   if (assignment_capacity > SIZE_MAX / sizeof(*out->assignments)) {
-    ab_verify_membership_index_free(engine, out);
+    ab_projection_membership_index_free(engine, out);
     return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
                               ARCHBIRD_NO_OFFSET,
                               "component membership inventory is too large");
   }
   if (assignment_capacity) {
-    out->assignments = (AbVerifyMembershipAssignment *)ab_calloc(
+    out->assignments = (AbProjectionMembershipAssignment *)ab_calloc(
         engine, assignment_capacity, sizeof(*out->assignments));
     if (!out->assignments) {
-      ab_verify_membership_index_free(engine, out);
+      ab_projection_membership_index_free(engine, out);
       return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
                                 "out of memory indexing component assignments");
@@ -246,7 +247,7 @@ ArchbirdStatus ab_verify_membership_index_build(ArchbirdEngine *engine,
     for (member_index = 0; member_index < members->as.array.count;
          member_index++) {
       const AbValue *path = &members->as.array.items[member_index];
-      if (!ab_verify_path_is_repository(path)) {
+      if (!ab_projection_path_is_repository(path)) {
         membership_unknown(engine, out,
                            "project map has an invalid component file path");
         return ARCHBIRD_OK;
@@ -262,9 +263,9 @@ ArchbirdStatus ab_verify_membership_index_build(ArchbirdEngine *engine,
           assignment_compare);
   for (assignment_index = 1; assignment_index < out->assignment_count;
        assignment_index++) {
-    const AbVerifyMembershipAssignment *previous =
+    const AbProjectionMembershipAssignment *previous =
         &out->assignments[assignment_index - 1];
-    const AbVerifyMembershipAssignment *current =
+    const AbProjectionMembershipAssignment *current =
         &out->assignments[assignment_index];
     if (previous->component_index == current->component_index &&
         ab_string_equal(previous->path, current->path)) {
@@ -275,7 +276,7 @@ ArchbirdStatus ab_verify_membership_index_build(ArchbirdEngine *engine,
   }
   assignment_index = 0;
   for (file_index = 0; file_index < out->file_count; file_index++) {
-    AbVerifyMembershipFile *file = &out->files[file_index];
+    AbProjectionMembershipFile *file = &out->files[file_index];
     size_t start;
     if (assignment_index < out->assignment_count &&
         ab_string_compare(out->assignments[assignment_index].path, file->path) <
@@ -299,7 +300,7 @@ ArchbirdStatus ab_verify_membership_index_build(ArchbirdEngine *engine,
     if (file->assignment_count > 1)
       out->overlap_count++;
     while (start < assignment_index) {
-      AbVerifyMembershipComponent *component =
+      AbProjectionMembershipComponent *component =
           &out->components[out->assignments[start].component_index];
       component->file_count++;
       if (file->assignment_count == 1)

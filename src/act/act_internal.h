@@ -19,13 +19,13 @@ typedef struct AbActVerification {
   const AbValue *operand_definitions;
   const AbValue *operands;
   const AbValue *constraints;
-  AbVerifyFactSet *decoded_facts;
+  AbProjectionData *decoded_facts;
   size_t fact_count;
 } AbActVerification;
 
 typedef struct AbActEvidenceList {
   ArchbirdEngine *engine;
-  AbVerifyEvidence *items;
+  AbProjectionEvidence *items;
   size_t count;
   size_t capacity;
 } AbActEvidenceList;
@@ -101,7 +101,7 @@ typedef struct AbActProposalData {
   AbActSliceEntry *slice;
   size_t slice_count;
   char slice_sha256[65];
-  AbVerifyFactSet literal_fact;
+  AbProjectionData literal_fact;
   int has_literal_fact;
   AbActProjection projection;
   int has_projection;
@@ -194,9 +194,10 @@ const AbValue *ab_act_verification_constraint(const AbActVerification *artifact,
 const AbValue *ab_act_verification_finding(const AbActVerification *artifact,
                                            const AbString *fingerprint,
                                            const AbValue **out_check);
-const AbValue *ab_act_verification_fact_value(const AbActVerification *artifact,
-                                              const AbString *name,
-                                              const AbVerifyFactSet **out_fact);
+const AbValue *
+ab_act_verification_fact_value(const AbActVerification *artifact,
+                               const AbString *name,
+                               const AbProjectionData **out_fact);
 const AbValue *
 ab_act_verification_operand_definition(const AbActVerification *artifact,
                                        const AbString *name);
@@ -208,7 +209,7 @@ ab_act_verification_observation(const AbActVerification *artifact,
 
 ArchbirdStatus ab_act_evidence_list_add(ArchbirdEngine *engine,
                                         AbActEvidenceList *list,
-                                        const AbVerifyEvidence *evidence);
+                                        const AbProjectionEvidence *evidence);
 ArchbirdStatus ab_act_evidence_list_add_array(ArchbirdEngine *engine,
                                               AbActEvidenceList *list,
                                               const AbValue *rows);
@@ -226,10 +227,10 @@ void ab_act_proposal_data_free(AbActProposalData *proposal);
 ArchbirdStatus ab_act_proposal_render_json(AbBuffer *buffer,
                                            const AbActProposalData *proposal);
 ArchbirdStatus ab_act_project_fact(ArchbirdEngine *engine,
-                                   const AbVerifyFactSet *source,
+                                   const AbProjectionData *source,
                                    const AbString *name, const AbValue *aliases,
                                    const char *selection, const AbValue *keys,
-                                   AbVerifyFactSet *out);
+                                   AbProjectionData *out);
 ArchbirdStatus ab_act_proposal_load(ArchbirdEngine *engine, const uint8_t *json,
                                     size_t json_length, AbActProposalView *out);
 void ab_act_proposal_view_free(AbActProposalView *proposal);

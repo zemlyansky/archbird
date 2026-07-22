@@ -74,7 +74,7 @@ static size_t coverage_total(const AbVerificationContext *context) {
 static int finding_blocks(const AbVerifyFinding *finding,
                           const AbValue *check) {
   const AbValue *severity = ab_value_member(check, "severity");
-  return (!severity || ab_verify_string_is(severity, "error")) &&
+  return (!severity || ab_projection_value_is(severity, "error")) &&
          string_equals(&finding->applicability, "applicable") &&
          string_equals(&finding->disposition, "open") &&
          (!string_equals(&finding->comparison, "equal") ||

@@ -699,57 +699,70 @@ AB_WASM_EXPORT int ab_wasm_map_markdown_view(const uint8_t *map,
 }
 
 AB_WASM_EXPORT int ab_wasm_map_query(const uint8_t *map, size_t map_length,
+                                     const uint8_t *resolution,
+                                     size_t resolution_length,
                                      const uint8_t *query, size_t query_length,
                                      uint32_t flags) {
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(map_length, query_length), &engine);
+      larger_input(larger_input(map_length, resolution_length), query_length),
+      &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_map_query(engine, map, map_length, query, query_length,
-                                flags, output_write, &wasm_output);
-  return stateless_end(engine, status);
-}
-
-AB_WASM_EXPORT int ab_wasm_map_query_markdown(const uint8_t *map,
-                                              size_t map_length,
-                                              const uint8_t *query,
-                                              size_t query_length,
-                                              size_t max_chars) {
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(map_length, query_length), &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_map_query_markdown(engine, map, map_length, query,
-                                         query_length, max_chars, output_write,
-                                         &wasm_output);
+    status = archbird_map_query(engine, map, map_length,
+                                resolution_length ? resolution : NULL,
+                                resolution_length, query, query_length, flags,
+                                output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 
 AB_WASM_EXPORT int
-ab_wasm_map_query_markdown_view(const uint8_t *map, size_t map_length,
-                                const uint8_t *query, size_t query_length,
-                                int view, int detail, size_t max_chars) {
+ab_wasm_map_query_markdown(const uint8_t *map, size_t map_length,
+                           const uint8_t *resolution, size_t resolution_length,
+                           const uint8_t *query, size_t query_length,
+                           size_t max_chars) {
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(map_length, query_length), &engine);
+      larger_input(larger_input(map_length, resolution_length), query_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_query_markdown(engine, map, map_length,
+                                         resolution_length ? resolution : NULL,
+                                         resolution_length, query, query_length,
+                                         max_chars, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_map_query_markdown_view(
+    const uint8_t *map, size_t map_length, const uint8_t *resolution,
+    size_t resolution_length, const uint8_t *query, size_t query_length,
+    int view, int detail, size_t max_chars) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(larger_input(map_length, resolution_length), query_length),
+      &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown_view(
-        engine, map, map_length, query, query_length, (ArchbirdQueryView)view,
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, query, query_length, (ArchbirdQueryView)view,
         (ArchbirdReportDetail)detail, max_chars, output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 
 AB_WASM_EXPORT int ab_wasm_map_query_markdown_view_with_verification(
-    const uint8_t *map, size_t map_length, const uint8_t *query,
-    size_t query_length, const uint8_t *verification,
-    size_t verification_length, int view, int detail, size_t max_chars) {
+    const uint8_t *map, size_t map_length, const uint8_t *resolution,
+    size_t resolution_length, const uint8_t *query, size_t query_length,
+    const uint8_t *verification, size_t verification_length, int view,
+    int detail, size_t max_chars) {
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(larger_input(map_length, query_length), verification_length),
+      larger_input(larger_input(larger_input(map_length, resolution_length),
+                                query_length),
+                   verification_length),
       &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown_view_with_verification(
-        engine, map, map_length, query, query_length, verification,
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, query, query_length, verification,
         verification_length, (ArchbirdQueryView)view,
         (ArchbirdReportDetail)detail, max_chars, output_write, &wasm_output);
   return stateless_end(engine, status);
@@ -903,22 +916,19 @@ ab_wasm_projection_evaluate(const uint8_t *map, size_t map_length,
   return stateless_end(engine, status);
 }
 
-AB_WASM_EXPORT int ab_wasm_query_plan_compile(
-    const uint8_t *config, size_t config_length, const uint8_t *map,
-    size_t map_length, const uint8_t *resolution, size_t resolution_length,
-    const char *query_id, size_t query_id_length, const uint8_t *overrides,
-    size_t overrides_length, uint32_t flags) {
+AB_WASM_EXPORT int
+ab_wasm_query_plan_compile(const uint8_t *config, size_t config_length,
+                           const char *query_id, size_t query_id_length,
+                           const uint8_t *overrides, size_t overrides_length,
+                           uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(larger_input(config_length, map_length),
-                   larger_input(resolution_length, overrides_length)),
-      &engine);
+  ArchbirdStatus status = stateless_begin_input(
+      larger_input(config_length, overrides_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_query_plan_compile(
-        engine, config, config_length, map, map_length,
-        resolution_length ? resolution : NULL, resolution_length, query_id,
-        query_id_length, overrides_length ? overrides : NULL, overrides_length,
-        flags, output_write, &wasm_output);
+        engine, config, config_length, query_id, query_id_length,
+        overrides_length ? overrides : NULL, overrides_length, flags,
+        output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 

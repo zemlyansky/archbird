@@ -1,5 +1,6 @@
 #include "project_configuration.h"
 
+#include "../projection/projection_internal.h"
 #include "date.h"
 #include "json_value.h"
 #include "sha256.h"
@@ -338,127 +339,16 @@ static ArchbirdStatus validate_projection_definition(ArchbirdEngine *engine,
                                                      const AbString *id,
                                                      const AbValue *definition,
                                                      const char *collection) {
-  static const char *const allowed[] = {"artifacts",
-                                        "call",
-                                        "configured_only",
-                                        "components",
-                                        "container",
-                                        "exclude",
-                                        "from_paths",
-                                        "group",
-                                        "include",
-                                        "kind_patterns",
-                                        "kinds",
-                                        "layer",
-                                        "metric",
-                                        "name",
-                                        "name_patterns",
-                                        "names",
-                                        "packages",
-                                        "paths",
-                                        "public_only",
-                                        "routes",
-                                        "select",
-                                        "selector",
-                                        "selector_argument",
-                                        "selectors",
-                                        "strip_prefix",
-                                        "strip_suffix",
-                                        "target_paths",
-                                        "to_paths",
-                                        "values_from_argument"};
-  static const char *const selects[] = {"artifact_routes",
-                                        "component_edges",
-                                        "component_membership",
-                                        "file_edges",
-                                        "file_metrics",
-                                        "inventory_paths",
-                                        "mapped_paths",
-                                        "package_entrypoints",
-                                        "package_exports",
-                                        "provider_surface",
-                                        "symbols",
-                                        "test_routes",
-                                        "test_selectors",
-                                        "constant_values",
-                                        "constant_memberships",
-                                        "macro_members"};
-  static const char *const arrays[] = {
-      "artifacts", "components",    "exclude", "from_paths",
-      "include",   "kind_patterns", "kinds",   "name_patterns",
-      "names",     "packages",      "paths",   "routes",
-      "selectors", "target_paths",  "to_paths"};
-  const AbValue *select;
-  uint64_t argument_index;
-  size_t index;
-  if (!object_fields_allowed(definition, allowed,
-                             sizeof(allowed) / sizeof(allowed[0])))
-    return collection_error(engine, collection, id,
-                            "contains an unknown field");
-  select = ab_value_member(definition, "select");
-  if (!string_value_in(select, selects, sizeof(selects) / sizeof(selects[0])))
-    return collection_error(engine, collection, id,
-                            "has an unsupported select operator");
-  for (index = 0; index < sizeof(arrays) / sizeof(arrays[0]); index++)
-    if (ab_value_member(definition, arrays[index]) &&
-        !strings_value(ab_value_member(definition, arrays[index]), 0))
-      return collection_error(engine, collection, id,
-                              "contains an invalid string-pattern array");
-  if ((ab_value_member(definition, "configured_only") &&
-       ab_value_member(definition, "configured_only")->kind != AB_VALUE_BOOL) ||
-      (ab_value_member(definition, "public_only") &&
-       ab_value_member(definition, "public_only")->kind != AB_VALUE_BOOL))
-    return collection_error(engine, collection, id,
-                            "contains a non-boolean option");
-  if ((ab_value_member(definition, "layer") &&
-       !nonblank(ab_value_member(definition, "layer"))) ||
-      (ab_value_member(definition, "group") &&
-       !nonblank(ab_value_member(definition, "group"))) ||
-      (ab_value_member(definition, "call") &&
-       !nonblank(ab_value_member(definition, "call"))) ||
-      (ab_value_member(definition, "container") &&
-       !nonblank(ab_value_member(definition, "container"))) ||
-      (ab_value_member(definition, "name") &&
-       !nonblank(ab_value_member(definition, "name"))) ||
-      (ab_value_member(definition, "selector") &&
-       !nonblank(ab_value_member(definition, "selector"))) ||
-      (ab_value_member(definition, "strip_prefix") &&
-       ab_value_member(definition, "strip_prefix")->kind != AB_VALUE_STRING) ||
-      (ab_value_member(definition, "strip_suffix") &&
-       ab_value_member(definition, "strip_suffix")->kind != AB_VALUE_STRING))
-    return collection_error(engine, collection, id,
-                            "contains an invalid string option");
-  if (value_string_is(select, "file_metrics") &&
-      !value_string_is(ab_value_member(definition, "metric"), "bytes"))
-    return collection_error(engine, collection, id,
-                            "file_metrics requires metric 'bytes'");
-  if (value_string_is(select, "provider_surface") &&
-      !nonblank(ab_value_member(definition, "name")))
-    return collection_error(engine, collection, id,
-                            "provider_surface requires name");
-  if ((value_string_is(select, "constant_values") ||
-       value_string_is(select, "constant_memberships")) &&
-      !nonblank(ab_value_member(definition, "container")))
-    return collection_error(engine, collection, id,
-                            "constant projection requires container");
-  if (value_string_is(select, "macro_members") &&
-      (!nonblank(ab_value_member(definition, "call")) ||
-       !nonblank(ab_value_member(definition, "selector"))))
-    return collection_error(engine, collection, id,
-                            "macro_members requires call and selector");
-  if (ab_value_member(definition, "selector_argument") &&
-      (!ab_value_u64(ab_value_member(definition, "selector_argument"),
-                     &argument_index) ||
-       argument_index > 31))
-    return collection_error(engine, collection, id,
-                            "selector_argument must be from 0 to 31");
-  if (ab_value_member(definition, "values_from_argument") &&
-      (!ab_value_u64(ab_value_member(definition, "values_from_argument"),
-                     &argument_index) ||
-       argument_index > 31))
-    return collection_error(engine, collection, id,
-                            "values_from_argument must be from 0 to 31");
-  return ARCHBIRD_OK;
+  const AbValue *declared_id = ab_value_member(definition, "id");
+  const AbString *plan_id = declared_id && declared_id->kind == AB_VALUE_STRING
+                                ? &declared_id->as.text
+                                : id;
+  AbProjectionPlan plan = {0};
+  ArchbirdStatus status;
+  (void)collection;
+  status = ab_projection_plan_compile(engine, definition, plan_id, &plan);
+  ab_projection_plan_free(engine, &plan);
+  return status;
 }
 
 static ArchbirdStatus validate_projection_reference(ArchbirdEngine *engine,

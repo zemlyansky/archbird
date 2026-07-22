@@ -679,7 +679,10 @@ class Project {
   }
 
   queryJson(options = {}) {
-    return queryMap(this.mapJson(), options);
+    return queryMap(this.mapJson(), {
+      ...options,
+      resolutionJson: options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+    });
   }
 
   query(options = {}) {
@@ -687,7 +690,10 @@ class Project {
   }
 
   queryMarkdown(options = {}) {
-    return queryMapMarkdown(this.mapJson(), options);
+    return queryMapMarkdown(this.mapJson(), {
+      ...options,
+      resolutionJson: options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+    });
   }
 
   graphViewJson({
@@ -1118,13 +1124,27 @@ function queryRequest(
     changeSet = null,
     context = null,
     plan = null,
-    projectionResults = [],
     direction = "both",
     producerPolicy = "compatible",
     depth = 1,
     testDepth = 8,
   } = {},
 ) {
+  if (plan !== null) {
+    if (
+      focus.length || paths.length || symbols.length || components.length ||
+      packages.length || artifacts.length || search.length || context !== null ||
+      searchLimit !== 8 || direction !== "both" || depth !== 1 || testDepth !== 8
+    ) {
+      throw new TypeError(
+        "QueryPlan execution accepts only changeSet and producerPolicy; " +
+        "compile query operations into the plan",
+      );
+    }
+    const request = { plan, producer_policy: producerPolicy };
+    if (changeSet !== null) request.change_set = changeSet;
+    return canonicalForDigest(request);
+  }
   const request = {
     artifacts,
     components,
@@ -1141,50 +1161,17 @@ function queryRequest(
   };
   if (changeSet !== null) request.change_set = changeSet;
   if (context !== null) request.context = context;
-  if (plan !== null) request.plan = plan;
-  if (projectionResults.length) request.projection_results = projectionResults;
   return canonicalForDigest(request);
 }
 
 function queryMap(mapJson, options = {}) {
-  const effective = queryOptionsWithPlan(mapJson, options);
-  const request = queryRequest(effective);
+  const request = queryRequest(options);
   return native.mapQuery(
     Buffer.from(mapJson),
+    Buffer.from(options.resolutionJson ?? Buffer.alloc(0)),
     Buffer.from(JSON.stringify(request)),
     options.pretty ?? false,
   );
-}
-
-function queryOptionsWithPlan(mapJson, options) {
-  if (options.plan !== undefined && options.plan !== null) return options;
-  const definition = { ...queryRequest(options) };
-  delete definition.change_set;
-  delete definition.producer_policy;
-  const artifact = JSON.parse(compileQueryPlan(
-    Buffer.alloc(0),
-    mapJson,
-    "",
-    { overridesJson: Buffer.from(JSON.stringify(definition)) },
-  ).toString("utf8"));
-  const request = artifact.request;
-  return {
-    ...options,
-    artifacts: request.artifacts,
-    components: request.components,
-    context: request.context,
-    depth: request.depth,
-    direction: request.direction,
-    focus: request.focus,
-    packages: request.packages,
-    paths: request.paths,
-    plan: artifact.plan,
-    projectionResults: artifact.projection_results,
-    search: request.search,
-    searchLimit: request.search_limit,
-    symbols: request.symbols,
-    testDepth: request.test_depth,
-  };
 }
 
 function renderMapMarkdown(
@@ -1219,8 +1206,7 @@ function renderMapMarkdown(
 }
 
 function queryMapMarkdown(mapJson, options = {}) {
-  const effective = queryOptionsWithPlan(mapJson, options);
-  const request = queryRequest(effective);
+  const request = queryRequest(options);
   const views = { focused: 0, changes: 1 };
   const details = { compact: 0, standard: 1, full: 2 };
   const view = options.view ?? "focused";
@@ -1244,6 +1230,7 @@ function queryMapMarkdown(mapJson, options = {}) {
   }
   return native.mapQueryMarkdownView(
     Buffer.from(mapJson),
+    Buffer.from(options.resolutionJson ?? Buffer.alloc(0)),
     Buffer.from(JSON.stringify(request)),
     views[view],
     details[selectedDetail],
@@ -1301,18 +1288,14 @@ function evaluateProjection(
 
 function compileQueryPlan(
   configJson,
-  mapJson,
   queryId,
   {
-    resolutionJson = Buffer.alloc(0),
     overridesJson = Buffer.alloc(0),
     pretty = false,
   } = {},
 ) {
   return native.queryPlanCompile(
     Buffer.from(configJson),
-    Buffer.from(mapJson),
-    Buffer.from(resolutionJson),
     queryId,
     Buffer.from(overridesJson),
     pretty,

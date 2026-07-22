@@ -78,10 +78,10 @@ static ArchbirdStatus validate_evidence_rows(ArchbirdEngine *engine,
   if (!rows || rows->kind != AB_VALUE_ARRAY)
     return artifact_invalid(engine, "invalid Act evidence array");
   for (index = 0; index < rows->as.array.count; index++) {
-    AbVerifyEvidence evidence = {0};
-    ArchbirdStatus status = ab_verify_evidence_decode_artifact(
+    AbProjectionEvidence evidence = {0};
+    ArchbirdStatus status = ab_projection_evidence_decode_artifact(
         engine, &rows->as.array.items[index], &evidence);
-    ab_verify_evidence_free(engine, &evidence);
+    ab_projection_evidence_free(engine, &evidence);
     if (status != ARCHBIRD_OK)
       return status;
   }
@@ -111,10 +111,10 @@ static ArchbirdStatus validate_proposal_facts(ArchbirdEngine *engine,
   if (!facts || facts->kind != AB_VALUE_ARRAY)
     return artifact_invalid(engine, "invalid Act proposal fact inventory");
   for (index = 0; index < facts->as.array.count; index++) {
-    AbVerifyFactSet fact = {0};
-    ArchbirdStatus status = ab_verify_fact_decode_artifact(
+    AbProjectionData fact = {0};
+    ArchbirdStatus status = ab_projection_data_decode_artifact(
         engine, &facts->as.array.items[index], &fact);
-    ab_verify_fact_free(engine, &fact);
+    ab_projection_data_free(engine, &fact);
     if (status != ARCHBIRD_OK)
       return status;
   }

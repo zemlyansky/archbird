@@ -71,7 +71,7 @@ static int lowercase_sha256(const AbValue *value) {
 }
 
 static int value_nonblank_string(const AbValue *value) {
-  return ab_verify_nonblank(value);
+  return ab_projection_nonblank(value);
 }
 
 static int string_array_valid(const AbValue *value) {
@@ -117,7 +117,7 @@ static ArchbirdStatus normalized_path(ArchbirdEngine *engine,
   size_t index;
   size_t segment = 0;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!ab_verify_path_is_repository(value))
+  if (!ab_projection_path_is_repository(value))
     return ARCHBIRD_INVALID_SCHEMA;
   ab_buffer_init(&buffer, engine);
   for (index = 0; status == ARCHBIRD_OK && index <= value->as.text.length;
@@ -728,8 +728,8 @@ parse_observation_document(ObservationParser *parser, const AbValue *root,
 
 static int verify_evidence_compare(const void *left_raw,
                                    const void *right_raw) {
-  const AbVerifyEvidence *left = (const AbVerifyEvidence *)left_raw;
-  const AbVerifyEvidence *right = (const AbVerifyEvidence *)right_raw;
+  const AbProjectionEvidence *left = (const AbProjectionEvidence *)left_raw;
+  const AbProjectionEvidence *right = (const AbProjectionEvidence *)right_raw;
   int compared = ab_string_compare(&left->provenance, &right->provenance);
   if (!compared)
     compared = ab_string_compare(&left->project, &right->project);
@@ -749,7 +749,7 @@ static ArchbirdStatus state_add_witness(AbVerificationContext *context,
                                         const AbString *path,
                                         const char *sha256, const char *detail,
                                         size_t detail_length) {
-  AbVerifyEvidence *resized;
+  AbProjectionEvidence *resized;
   ArchbirdStatus status;
   if (state->witness_count == state->witness_capacity) {
     size_t next = state->witness_capacity ? state->witness_capacity * 2 : 4;
@@ -758,8 +758,8 @@ static ArchbirdStatus state_add_witness(AbVerificationContext *context,
       return archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                                 ARCHBIRD_NO_OFFSET,
                                 "too much observation evidence");
-    resized = (AbVerifyEvidence *)ab_realloc(context->engine, state->witnesses,
-                                             next * sizeof(*state->witnesses));
+    resized = (AbProjectionEvidence *)ab_realloc(
+        context->engine, state->witnesses, next * sizeof(*state->witnesses));
     if (!resized)
       return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
@@ -768,7 +768,7 @@ static ArchbirdStatus state_add_witness(AbVerificationContext *context,
     state->witness_capacity = next;
   }
   memset(&state->witnesses[state->witness_count], 0, sizeof(*state->witnesses));
-  status = ab_verify_evidence_init(
+  status = ab_projection_evidence_init(
       context->engine, &state->witnesses[state->witness_count], "observed",
       &state->project, path, 0, sha256, detail, detail_length);
   if (status == ARCHBIRD_OK)
@@ -787,7 +787,7 @@ static void observation_state_free(ArchbirdEngine *engine,
   ab_string_free(engine, &state->message);
   observation_data_free(engine, &state->data);
   for (index = 0; state->witnesses && index < state->witness_count; index++)
-    ab_verify_evidence_free(engine, &state->witnesses[index]);
+    ab_projection_evidence_free(engine, &state->witnesses[index]);
   ab_free(engine, state->witnesses);
   memset(state, 0, sizeof(*state));
 }
@@ -1170,7 +1170,7 @@ static ArchbirdStatus render_real(AbBuffer *buffer, double value) {
 }
 
 static ArchbirdStatus render_evidence(AbBuffer *buffer,
-                                      const AbVerifyEvidence *row) {
+                                      const AbProjectionEvidence *row) {
   AT_RENDER_TRY(ab_buffer_literal(buffer, "{\"detail\":"));
   AT_RENDER_TRY(
       ab_buffer_json_string(buffer, row->detail.data, row->detail.length));

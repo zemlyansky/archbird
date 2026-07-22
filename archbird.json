@@ -14,14 +14,14 @@
       "language": "c",
       "globs": ["include/**/*.h", "src/**/*.c", "src/**/*.h"],
       "public_headers": ["include/archbird/archbird.h"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/evidence", "src/map", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "vendor/yyjson/src", "vendor/pcre2/src", "vendor/tree-sitter/lib/include", "vendor/tree-sitter/lib/src"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "vendor/yyjson/src", "vendor/pcre2/src", "vendor/tree-sitter/lib/include", "vendor/tree-sitter/lib/src"]
     },
     {
       "name": "bindings",
       "role": "frontend",
       "language": "c",
       "globs": ["bindings/*.c"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/evidence", "src/map", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
     },
     {
       "name": "python-host",
@@ -132,7 +132,7 @@
       "role": "test",
       "language": "c",
       "globs": ["test/*.c", "test/fuzz/*.c", "test/fuzz/*.h", "test/cmake_consumer/*.c"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/evidence", "src/map", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
     },
     {
       "name": "oracle-tests",
@@ -269,8 +269,8 @@
     {"name": "constraints", "paths": ["src/constraints/**"], "description": "Constraint planning, inferred exhaustive operands, and direct evaluation"},
     {"name": "map", "paths": ["src/map/**"], "description": "Architecture Map construction, diff, and workspace analysis"},
     {"name": "projection", "paths": ["src/projection/**"], "description": "Shared exhaustive typed derivations over canonical Map evidence"},
-    {"name": "query", "paths": ["src/query/**"], "description": "Named Query plan compilation over canonical Map projections"},
-    {"name": "verify", "paths": ["src/verify/**"], "description": "Typed facts, predicates, attestations, baselines, and canonical results"},
+    {"name": "query", "paths": ["src/query/**"], "description": "Query plan compilation, typed projection selection, traversal, ranking, and result construction"},
+    {"name": "verify", "paths": ["src/verify/**"], "description": "Constraint predicates, observations, baselines, findings, and canonical verification results"},
     {"name": "act", "paths": ["src/act/**"], "description": "Derived proposals, asserted contracts, transition judgment, and canonical results"},
     {"name": "interchange", "paths": ["src/interchange/**"], "description": "Host-neutral report and graph projections"},
     {"name": "bindings", "paths": ["bindings/**"], "description": "CPython and Node-API ABI adapters"},
@@ -423,6 +423,11 @@
           {
             "source": "api",
             "kind": "*",
+            "target": "configuration"
+          },
+          {
+            "source": "api",
+            "kind": "*",
             "target": "evidence"
           },
           {
@@ -439,6 +444,11 @@
             "source": "api",
             "kind": "*",
             "target": "provider-registry"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "query"
           },
           {
             "source": "api",
@@ -509,6 +519,11 @@
             "source": "configuration",
             "kind": "*",
             "target": "base"
+          },
+          {
+            "source": "configuration",
+            "kind": "*",
+            "target": "projection"
           },
           {
             "source": "constraints",
@@ -619,6 +634,11 @@
             "source": "evidence",
             "kind": "*",
             "target": "base"
+          },
+          {
+            "source": "evidence",
+            "kind": "*",
+            "target": "configuration"
           },
           {
             "source": "evidence",
@@ -776,16 +796,6 @@
             "target": "base"
           },
           {
-            "source": "projection",
-            "kind": "*",
-            "target": "map"
-          },
-          {
-            "source": "projection",
-            "kind": "*",
-            "target": "verify"
-          },
-          {
             "source": "query",
             "kind": "*",
             "target": "abi"
@@ -928,7 +938,7 @@
           {
             "source": "verify",
             "kind": "*",
-            "target": "map"
+            "target": "projection"
           }
         ]
       },

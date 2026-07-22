@@ -23,7 +23,7 @@ static ArchbirdStatus append_string_prefix(AbBuffer *buffer, const char *value,
 }
 
 static ArchbirdStatus render_evidence_label(AbBuffer *buffer,
-                                            const AbVerifyEvidence *row) {
+                                            const AbProjectionEvidence *row) {
   if (row->project.length && row->path.length) {
     REPORT_TRY(
         ab_buffer_append(buffer, row->project.data, row->project.length));
@@ -58,12 +58,12 @@ static ArchbirdStatus render_evidence_label(AbBuffer *buffer,
 
 static ArchbirdStatus render_evidence_value_label(AbBuffer *buffer,
                                                   const AbValue *value) {
-  AbVerifyEvidence evidence = {0};
+  AbProjectionEvidence evidence = {0};
   ArchbirdStatus status =
-      ab_verify_evidence_decode_artifact(buffer->engine, value, &evidence);
+      ab_projection_evidence_decode_artifact(buffer->engine, value, &evidence);
   if (status == ARCHBIRD_OK)
     status = render_evidence_label(buffer, &evidence);
-  ab_verify_evidence_free(buffer->engine, &evidence);
+  ab_projection_evidence_free(buffer->engine, &evidence);
   return status;
 }
 
@@ -427,7 +427,7 @@ static const char *sarif_level(const char *status) {
 static ArchbirdStatus render_sarif_locations(AbBuffer *buffer,
                                              const AbActOutcome *row) {
   size_t index;
-  const AbVerifyEvidence *found = NULL;
+  const AbProjectionEvidence *found = NULL;
   for (index = 0; index < row->evidence.count; index++)
     if (row->evidence.items[index].path.length) {
       found = &row->evidence.items[index];

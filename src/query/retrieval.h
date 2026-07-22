@@ -2,6 +2,7 @@
 #define ARCHBIRD_RETRIEVAL_H
 
 #include "json_value.h"
+#include "projection_model.h"
 
 #define AB_RETRIEVAL_MAX_TERMS 16
 
@@ -46,15 +47,16 @@ typedef struct AbRetrievalResult {
   size_t limit;
 } AbRetrievalResult;
 
-ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
-                               const AbValue *queries, size_t limit,
-                               AbRetrievalResult *out);
-void ab_map_retrieval_free(ArchbirdEngine *engine, AbRetrievalResult *result);
-const char *ab_map_retrieval_kind_name(AbRetrievalKind kind);
-uint64_t ab_map_retrieval_text_score(const AbRetrievalResult *result,
-                                     const AbString *primary,
-                                     unsigned primary_weight,
-                                     const AbString *secondary,
-                                     unsigned secondary_weight);
+ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
+                                 const AbProjectionData *domain,
+                                 const AbValue *queries, size_t limit,
+                                 AbRetrievalResult *out);
+void ab_query_retrieval_free(ArchbirdEngine *engine, AbRetrievalResult *result);
+const char *ab_query_retrieval_kind_name(AbRetrievalKind kind);
+uint64_t ab_query_retrieval_text_score(const AbRetrievalResult *result,
+                                       const AbString *primary,
+                                       unsigned primary_weight,
+                                       const AbString *secondary,
+                                       unsigned secondary_weight);
 
 #endif

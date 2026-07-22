@@ -253,7 +253,7 @@ static int slice_value(ArchbirdEngine *engine,
     return row && ab_act_value_digest(engine, row, output) == ARCHBIRD_OK;
   }
   if (kind->length == 4 && memcmp(kind->data, "fact", 4) == 0) {
-    const AbVerifyFactSet *fact = NULL;
+    const AbProjectionData *fact = NULL;
     row = ab_act_verification_fact_value(artifact, name, &fact);
     if (!row || !fact)
       return 0;
@@ -656,8 +656,8 @@ result_evidence_from_check(ArchbirdEngine *engine,
 }
 
 static int fact_shallow_compare(const void *left_raw, const void *right_raw) {
-  const AbVerifyFactSet *left = (const AbVerifyFactSet *)left_raw;
-  const AbVerifyFactSet *right = (const AbVerifyFactSet *)right_raw;
+  const AbProjectionData *left = (const AbProjectionData *)left_raw;
+  const AbProjectionData *right = (const AbProjectionData *)right_raw;
   return ab_string_compare(&left->name, &right->name);
 }
 
@@ -668,21 +668,21 @@ static ArchbirdStatus postcondition_outcomes(ArchbirdEngine *engine,
   size_t literal_count = proposal->facts->as.array.count;
   size_t projection_count = proposal->projections->as.array.count;
   size_t combined_count = after->fact_count + literal_count + projection_count;
-  AbVerifyFactSet *literal = NULL;
-  AbVerifyFactSet *projected = NULL;
-  AbVerifyFactSet *combined = NULL;
+  AbProjectionData *literal = NULL;
+  AbProjectionData *projected = NULL;
+  AbProjectionData *combined = NULL;
   AbVerificationContext context = {0};
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   if (literal_count)
     literal =
-        (AbVerifyFactSet *)ab_calloc(engine, literal_count, sizeof(*literal));
+        (AbProjectionData *)ab_calloc(engine, literal_count, sizeof(*literal));
   if (projection_count)
-    projected = (AbVerifyFactSet *)ab_calloc(engine, projection_count,
-                                             sizeof(*projected));
+    projected = (AbProjectionData *)ab_calloc(engine, projection_count,
+                                              sizeof(*projected));
   if (combined_count)
-    combined =
-        (AbVerifyFactSet *)ab_calloc(engine, combined_count, sizeof(*combined));
+    combined = (AbProjectionData *)ab_calloc(engine, combined_count,
+                                             sizeof(*combined));
   if ((literal_count && !literal) || (projection_count && !projected) ||
       (combined_count && !combined)) {
     status =
@@ -691,7 +691,7 @@ static ArchbirdStatus postcondition_outcomes(ArchbirdEngine *engine,
     goto cleanup;
   }
   for (index = 0; status == ARCHBIRD_OK && index < literal_count; index++)
-    status = ab_verify_fact_decode_artifact(
+    status = ab_projection_data_decode_artifact(
         engine, &proposal->facts->as.array.items[index], &literal[index]);
   for (index = 0; status == ARCHBIRD_OK && index < projection_count; index++) {
     const AbValue *spec = &proposal->projections->as.array.items[index];
@@ -700,13 +700,13 @@ static ArchbirdStatus postcondition_outcomes(ArchbirdEngine *engine,
     const AbValue *selection = ab_value_member(spec, "selection");
     const AbValue *keys = ab_value_member(spec, "keys");
     const AbValue *aliases = ab_value_member(spec, "aliases");
-    const AbVerifyFactSet *source = NULL;
+    const AbProjectionData *source = NULL;
     ab_act_verification_fact_value(after, &source_name->as.text, &source);
     if (!source) {
       AbString empty = {0};
-      status =
-          ab_verify_fact_unknown(engine, &projected[index], &name->as.text,
-                                 &empty, "unknown", "source fact is absent");
+      status = ab_projection_data_unknown(engine, &projected[index],
+                                          &name->as.text, &empty, "unknown",
+                                          "source fact is absent");
     } else {
       status =
           ab_act_project_fact(engine, source, &name->as.text, aliases,
@@ -790,9 +790,9 @@ static ArchbirdStatus postcondition_outcomes(ArchbirdEngine *engine,
 
 cleanup:
   for (index = 0; index < literal_count; index++)
-    ab_verify_fact_free(engine, &literal[index]);
+    ab_projection_data_free(engine, &literal[index]);
   for (index = 0; index < projection_count; index++)
-    ab_verify_fact_free(engine, &projected[index]);
+    ab_projection_data_free(engine, &projected[index]);
   ab_free(engine, literal);
   ab_free(engine, projected);
   ab_free(engine, combined);

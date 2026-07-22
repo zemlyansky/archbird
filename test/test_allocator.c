@@ -328,8 +328,8 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
                                           &output);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown(
-        engine, map_output.bytes, map_output.length, (const uint8_t *)query,
-        sizeof(query) - 1, 0, count_write, &output);
+        engine, map_output.bytes, map_output.length, NULL, 0,
+        (const uint8_t *)query, sizeof(query) - 1, 0, count_write, &output);
   if (status == ARCHBIRD_OK)
     status = archbird_map_freshness(engine, map_output.bytes, map_output.length,
                                     map_output.bytes, map_output.length, 0,
@@ -463,30 +463,31 @@ static ArchbirdStatus exercise_report(TestAllocator *allocator,
     break;
   case REPORT_EXERCISE_QUERY:
     status = archbird_map_query_markdown(
-        engine, report_map, report_map_length, (const uint8_t *)query,
+        engine, report_map, report_map_length, NULL, 0, (const uint8_t *)query,
         sizeof(query) - 1, 0, count_write, &output);
     break;
   case REPORT_EXERCISE_QUERY_RETRIEVAL:
     status = archbird_map_query_markdown(
-        engine, report_map, report_map_length, (const uint8_t *)retrieval_query,
-        sizeof(retrieval_query) - 1, 0, count_write, &output);
+        engine, report_map, report_map_length, NULL, 0,
+        (const uint8_t *)retrieval_query, sizeof(retrieval_query) - 1, 0,
+        count_write, &output);
     break;
   case REPORT_EXERCISE_QUERY_CHANGES:
     status = archbird_map_query_markdown_view(
-        engine, report_map, report_map_length, (const uint8_t *)query,
+        engine, report_map, report_map_length, NULL, 0, (const uint8_t *)query,
         sizeof(query) - 1, ARCHBIRD_QUERY_VIEW_CHANGES,
         ARCHBIRD_REPORT_DETAIL_STANDARD, 0, count_write, &output);
     break;
   case REPORT_EXERCISE_QUERY_VERIFICATION:
     status = archbird_map_query_markdown_view_with_verification(
-        engine, report_map, report_map_length, (const uint8_t *)query,
+        engine, report_map, report_map_length, NULL, 0, (const uint8_t *)query,
         sizeof(query) - 1, report_verification, report_verification_length,
         ARCHBIRD_QUERY_VIEW_CHANGES, ARCHBIRD_REPORT_DETAIL_STANDARD, 0,
         count_write, &output);
     break;
   case REPORT_EXERCISE_QUERY_BUDGET:
     status = archbird_map_query_markdown(
-        engine, report_map, report_map_length, (const uint8_t *)query,
+        engine, report_map, report_map_length, NULL, 0, (const uint8_t *)query,
         sizeof(query) - 1, 1200, count_write, &output);
     break;
   default:
@@ -772,6 +773,42 @@ static void test_invalid_options(void) {
          "allocator user data without callbacks was accepted");
 }
 
+static void test_invalid_okf_layer_cleanup(void) {
+  static const char map[] =
+      "{\"artifact\":\"map\",\"artifacts\":[],\"components\":[],"
+      "\"diagnostics\":[],\"edges\":[],\"evidence\":{\"config_sha256\":"
+      "\"0000000000000000000000000000000000000000000000000000000000000000\","
+      "\"input_sha256\":"
+      "\"1111111111111111111111111111111111111111111111111111111111111111\"},"
+      "\"files\":[{\"bytes\":1,\"language\":\"c\",\"layer\":\"core\","
+      "\"path\":\"src/a.c\",\"symbols\":[]}],\"layers\":[{\"files\":1,"
+      "\"language\":\"c\",\"name\":\"core\",\"role\":\"core\","
+      "\"symbols\":0}],\"packages\":[],\"parity\":[],"
+      "\"project\":\"invalid-okf\",\"schema_version\":7,\"surfaces\":[],"
+      "\"tests\":[],\"tool\":{\"implementation_sha256\":"
+      "\"2222222222222222222222222222222222222222222222222222222222222222\","
+      "\"name\":\"archbird\",\"version\":\"fixture\"}}";
+  TestAllocator allocator = {0};
+  ArchbirdStatus status;
+  ArchbirdEngine *engine = create_engine(&allocator, &status);
+  CountingOutput output = {0};
+  if (!engine) {
+    fail("invalid-okf-layer-cleanup", "cannot create allocator engine");
+    return;
+  }
+  status = archbird_okf_publish(engine, (const uint8_t *)map, sizeof(map) - 1,
+                                NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, 0,
+                                count_write, &output);
+  if (status != ARCHBIRD_INVALID_SCHEMA ||
+      !strstr(archbird_engine_error(engine), "invalid Map layer file row"))
+    fail("invalid-okf-layer-cleanup",
+         "malformed layer file did not return its schema error");
+  archbird_engine_destroy(engine);
+  if (allocator.corrupted || allocator.outstanding || allocator.bytes)
+    fail("invalid-okf-layer-cleanup",
+         "malformed layer file left allocator-owned memory outstanding");
+}
+
 static int load_fixture(const char *path, uint8_t **bytes, size_t *size) {
   FILE *file = fopen(path, "rb");
   long length;
@@ -865,6 +902,7 @@ int main(void) {
     return 1;
   }
   test_invalid_options();
+  test_invalid_okf_layer_cleanup();
   run_failure_sweep("json-every-n", exercise_json);
   run_failure_sweep("pattern-every-n", exercise_pattern);
   run_failure_sweep("config-resolution-every-n", exercise_config_resolution);

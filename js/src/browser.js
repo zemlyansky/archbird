@@ -366,6 +366,7 @@ async function createBrowserArchbird(moduleOptions = {}) {
     queryJson(options = {}) {
       return core.mapQuery(
         this.mapJson(),
+        this.resolutionJson ?? Buffer.alloc(0),
         Buffer.from(JSON.stringify(queryRequest(options))),
         options.pretty ?? false,
       );
@@ -379,6 +380,7 @@ async function createBrowserArchbird(moduleOptions = {}) {
       }
       return core.mapQueryMarkdownView(
         this.mapJson(),
+        this.resolutionJson ?? Buffer.alloc(0),
         Buffer.from(JSON.stringify(queryRequest(options))),
         projection.view,
         projection.detail,

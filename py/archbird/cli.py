@@ -45,7 +45,6 @@ from .native import (
 )
 from .adapters.okf.parser import okf_query_input, parse_okf_bundle
 from .project_configuration import (
-    compile_ad_hoc_query,
     compile_named_query,
 )
 
@@ -1419,32 +1418,25 @@ def _query_main(
                     overrides[name] = value
             if context:
                 overrides["context"] = context
-            query_options, plan, projection_results = compile_named_query(
+            plan = compile_named_query(
                 config_json,
                 args.query_id,
-                map_json,
                 overrides=overrides,
-                resolution_json=resolution_json,
             )
-            query_options["change_set"] = change_set
-            query_options["producer_policy"] = ad_hoc_options["producer_policy"]
-            query_options["plan"] = plan
-            query_options["projection_results"] = projection_results
-        else:
-            planned_options = {
-                name: value
-                for name, value in ad_hoc_options.items()
-                if name not in {"change_set", "producer_policy"}
+            query_options = {
+                "change_set": change_set,
+                "producer_policy": ad_hoc_options["producer_policy"],
+                "plan": plan,
             }
-            query_options, plan, projection_results = compile_ad_hoc_query(
-                map_json, planned_options, resolution_json=resolution_json
-            )
-            query_options["change_set"] = change_set
-            query_options["producer_policy"] = ad_hoc_options["producer_policy"]
-            query_options["plan"] = plan
-            query_options["projection_results"] = projection_results
+        else:
+            query_options = ad_hoc_options
         encoded = (
-            query_map_json(map_json, pretty=args.pretty, **query_options)
+            query_map_json(
+                map_json,
+                resolution_json=resolution_json,
+                pretty=args.pretty,
+                **query_options,
+            )
             if args.format == "json"
             else query_map_markdown(
                 map_json,
@@ -1458,6 +1450,7 @@ def _query_main(
                     if args.verification_result
                     else b""
                 ),
+                resolution_json=resolution_json,
                 **query_options,
             )
         )

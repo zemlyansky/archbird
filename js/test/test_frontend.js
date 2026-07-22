@@ -17,6 +17,7 @@ const {
   auditMapFreshness,
   analyzeOkfSource,
   compileProjectConfiguration,
+  compileQueryPlan,
   evaluateConstraints,
   exportGraph,
   freezeConstraints,
@@ -112,6 +113,12 @@ const constraintConfiguration = {
     { name: "primary", paths: ["src/small.js"] },
     { name: "shared", paths: ["src/small.js"] },
   ],
+  projections: {
+    "large-source": { paths: ["src/large.js"], select: "mapped_paths" },
+  },
+  queries: {
+    "large-impact": { depth: 0, projection: "large-source" },
+  },
   constraints: {
     "MAX-FILE-BYTES": {
       kind: "max_file_bytes",
@@ -146,6 +153,25 @@ const metricProject = Project.fromRepository(metricFixture, {
 });
 metricProject.finalizeProviders();
 const metricMap = metricProject.mapJson();
+const metricQueryPlanArtifact = JSON.parse(
+  compileQueryPlan(constraintConfig, "large-impact"),
+);
+assert.equal(metricQueryPlanArtifact.artifact, "query-plan");
+assert.equal(metricQueryPlanArtifact.schema_version, 2);
+assert.equal(metricQueryPlanArtifact.plan.projections.length, 1);
+assert.equal(
+  Object.hasOwn(
+    metricQueryPlanArtifact.plan.projections[0],
+    "projection_result_sha256",
+  ),
+  false,
+);
+const metricQuery = JSON.parse(queryMap(metricMap, {
+  plan: metricQueryPlanArtifact.plan,
+  resolutionJson: metricProject.resolutionJson,
+}));
+assert.deepEqual(metricQuery.files.map((row) => row.path), ["src/large.js"]);
+assert.equal(metricQuery.query.projection_results.length, 1);
 const metricVerification = evaluateConstraints(constraintConfig, metricMap, {
   resolutionJson: metricProject.resolutionJson,
 });

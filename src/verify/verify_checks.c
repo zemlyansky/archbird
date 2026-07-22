@@ -1,6 +1,6 @@
 #include "verify_checks.h"
 
-#include "map_internal.h"
+#include "path_match.h"
 #include "sha256.h"
 
 #include <stdio.h>
@@ -9,7 +9,7 @@
 
 typedef struct MappedItem {
   const AbString *key;
-  const AbVerifyFactItem *item;
+  const AbProjectionItem *item;
   int collision;
 } MappedItem;
 
@@ -39,8 +39,8 @@ static void string_array_free(ArchbirdEngine *engine, AbStringArray *array) {
 }
 
 static int evidence_compare(const void *left_raw, const void *right_raw) {
-  const AbVerifyEvidence *left = (const AbVerifyEvidence *)left_raw;
-  const AbVerifyEvidence *right = (const AbVerifyEvidence *)right_raw;
+  const AbProjectionEvidence *left = (const AbProjectionEvidence *)left_raw;
+  const AbProjectionEvidence *right = (const AbProjectionEvidence *)right_raw;
   int compared = ab_string_compare(&left->provenance, &right->provenance);
   if (!compared)
     compared = ab_string_compare(&left->project, &right->project);
@@ -56,10 +56,10 @@ static int evidence_compare(const void *left_raw, const void *right_raw) {
 }
 
 static ArchbirdStatus evidence_append(ArchbirdEngine *engine,
-                                      AbVerifyEvidence **rows, size_t *count,
-                                      size_t *capacity,
-                                      const AbVerifyEvidence *source) {
-  AbVerifyEvidence *resized;
+                                      AbProjectionEvidence **rows,
+                                      size_t *count, size_t *capacity,
+                                      const AbProjectionEvidence *source) {
+  AbProjectionEvidence *resized;
   ArchbirdStatus status;
   if (*count == *capacity) {
     size_t next = *capacity ? *capacity * 2 : 4;
@@ -67,8 +67,8 @@ static ArchbirdStatus evidence_append(ArchbirdEngine *engine,
       return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
                                 ARCHBIRD_NO_OFFSET,
                                 "too much verification finding evidence");
-    resized =
-        (AbVerifyEvidence *)ab_realloc(engine, *rows, next * sizeof(**rows));
+    resized = (AbProjectionEvidence *)ab_realloc(engine, *rows,
+                                                 next * sizeof(**rows));
     if (!resized)
       return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
@@ -77,7 +77,7 @@ static ArchbirdStatus evidence_append(ArchbirdEngine *engine,
     *capacity = next;
   }
   memset(&(*rows)[*count], 0, sizeof(**rows));
-  status = ab_verify_evidence_init(
+  status = ab_projection_evidence_init(
       engine, &(*rows)[*count], source->provenance.data, &source->project,
       &source->path, source->line, source->sha256.data, source->detail.data,
       source->detail.length);
@@ -86,21 +86,21 @@ static ArchbirdStatus evidence_append(ArchbirdEngine *engine,
   return status;
 }
 
-static void evidence_array_free(ArchbirdEngine *engine, AbVerifyEvidence *rows,
-                                size_t count) {
+static void evidence_array_free(ArchbirdEngine *engine,
+                                AbProjectionEvidence *rows, size_t count) {
   size_t index;
   for (index = 0; rows && index < count; index++)
-    ab_verify_evidence_free(engine, &rows[index]);
+    ab_projection_evidence_free(engine, &rows[index]);
   ab_free(engine, rows);
 }
 
-static int evidence_equal(const AbVerifyEvidence *left,
-                          const AbVerifyEvidence *right) {
+static int evidence_equal(const AbProjectionEvidence *left,
+                          const AbProjectionEvidence *right) {
   return evidence_compare(left, right) == 0;
 }
 
-static void evidence_sort_unique(ArchbirdEngine *engine, AbVerifyEvidence *rows,
-                                 size_t *count) {
+static void evidence_sort_unique(ArchbirdEngine *engine,
+                                 AbProjectionEvidence *rows, size_t *count) {
   size_t read_index;
   size_t write_index;
   if (*count < 2)
@@ -109,7 +109,7 @@ static void evidence_sort_unique(ArchbirdEngine *engine, AbVerifyEvidence *rows,
   write_index = 1;
   for (read_index = 1; read_index < *count; read_index++) {
     if (evidence_equal(&rows[write_index - 1], &rows[read_index])) {
-      ab_verify_evidence_free(engine, &rows[read_index]);
+      ab_projection_evidence_free(engine, &rows[read_index]);
       continue;
     }
     if (write_index != read_index) {
@@ -153,8 +153,8 @@ void ab_verify_check_result_free(ArchbirdEngine *engine,
 }
 
 static ArchbirdStatus fact_summary(ArchbirdEngine *engine,
-                                   const AbVerifyFactSet *fact,
-                                   AbVerifyEvidence *out) {
+                                   const AbProjectionData *fact,
+                                   AbProjectionEvidence *out) {
   AbBuffer detail;
   ArchbirdStatus status;
   ab_buffer_init(&detail, engine);
@@ -175,9 +175,9 @@ static ArchbirdStatus fact_summary(ArchbirdEngine *engine,
     status = ab_buffer_append(&detail, fact->state.data, fact->state.length);
   if (status == ARCHBIRD_OK) {
     AbString empty = {0};
-    status = ab_verify_evidence_init(engine, out, fact->provenance.data,
-                                     &fact->project, &empty, 0, fact->sha256,
-                                     (const char *)detail.data, detail.length);
+    status = ab_projection_evidence_init(
+        engine, out, fact->provenance.data, &fact->project, &empty, 0,
+        fact->sha256, (const char *)detail.data, detail.length);
   }
   ab_buffer_free(&detail);
   return status;
@@ -185,19 +185,19 @@ static ArchbirdStatus fact_summary(ArchbirdEngine *engine,
 
 static ArchbirdStatus result_add_witness(ArchbirdEngine *engine,
                                          AbVerifyCheckResult *result,
-                                         const AbVerifyEvidence *evidence) {
+                                         const AbProjectionEvidence *evidence) {
   return evidence_append(engine, &result->witnesses, &result->witness_count,
                          &result->witness_capacity, evidence);
 }
 
 static ArchbirdStatus result_add_fact_witness(ArchbirdEngine *engine,
                                               AbVerifyCheckResult *result,
-                                              const AbVerifyFactSet *fact) {
-  AbVerifyEvidence evidence = {0};
+                                              const AbProjectionData *fact) {
+  AbProjectionEvidence evidence = {0};
   ArchbirdStatus status = fact_summary(engine, fact, &evidence);
   if (status == ARCHBIRD_OK)
     status = result_add_witness(engine, result, &evidence);
-  ab_verify_evidence_free(engine, &evidence);
+  ab_projection_evidence_free(engine, &evidence);
   return status;
 }
 
@@ -275,21 +275,21 @@ finding_init_literal(ArchbirdEngine *engine, AbVerifyFinding *finding,
                         strlen(message), evidence_state);
 }
 
-static ArchbirdStatus finding_add_evidence(ArchbirdEngine *engine,
-                                           AbVerifyFinding *finding,
-                                           const AbVerifyEvidence *evidence) {
+static ArchbirdStatus
+finding_add_evidence(ArchbirdEngine *engine, AbVerifyFinding *finding,
+                     const AbProjectionEvidence *evidence) {
   return evidence_append(engine, &finding->evidence, &finding->evidence_count,
                          &finding->evidence_capacity, evidence);
 }
 
 static ArchbirdStatus finding_add_fact_summary(ArchbirdEngine *engine,
                                                AbVerifyFinding *finding,
-                                               const AbVerifyFactSet *fact) {
-  AbVerifyEvidence evidence = {0};
+                                               const AbProjectionData *fact) {
+  AbProjectionEvidence evidence = {0};
   ArchbirdStatus status = fact_summary(engine, fact, &evidence);
   if (status == ARCHBIRD_OK)
     status = finding_add_evidence(engine, finding, &evidence);
-  ab_verify_evidence_free(engine, &evidence);
+  ab_projection_evidence_free(engine, &evidence);
   return status;
 }
 
@@ -345,8 +345,8 @@ static ArchbirdStatus coverage_add(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
-static const AbVerifyFactSet *find_fact(const AbVerificationContext *context,
-                                        const AbString *name) {
+static const AbProjectionData *find_fact(const AbVerificationContext *context,
+                                         const AbString *name) {
   size_t low = 0;
   size_t high = context->fact_count;
   while (low < high) {
@@ -362,7 +362,7 @@ static const AbVerifyFactSet *find_fact(const AbVerificationContext *context,
   return NULL;
 }
 
-static const AbString *item_attribute(const AbVerifyFactItem *item,
+static const AbString *item_attribute(const AbProjectionItem *item,
                                       const char *name) {
   size_t index;
   size_t length = strlen(name);
@@ -427,7 +427,7 @@ static int mapped_compare(const void *left_raw, const void *right_raw) {
 
 static ArchbirdStatus unavailable_finding(ArchbirdEngine *engine,
                                           const AbValue *check,
-                                          const AbVerifyFactSet *fact,
+                                          const AbProjectionData *fact,
                                           AbVerifyFinding *out,
                                           int *unavailable) {
   AbBuffer message;
@@ -472,7 +472,7 @@ static ArchbirdStatus unavailable_finding(ArchbirdEngine *engine,
 
 static ArchbirdStatus item_unknown_finding(ArchbirdEngine *engine,
                                            const AbValue *check,
-                                           const AbVerifyFactItem *item,
+                                           const AbProjectionItem *item,
                                            AbVerifyFinding *out) {
   AbBuffer message;
   size_t index;
@@ -526,8 +526,8 @@ static int finding_compare_key(const void *left_raw, const void *right_raw) {
 static ArchbirdStatus result_init(ArchbirdEngine *engine,
                                   AbVerifyCheckResult *result,
                                   const AbValue *check,
-                                  const AbVerifyFactSet *first,
-                                  const AbVerifyFactSet *second) {
+                                  const AbProjectionData *first,
+                                  const AbProjectionData *second) {
   ArchbirdStatus status;
   memset(result, 0, sizeof(*result));
   result->spec = check;
@@ -587,8 +587,8 @@ ArchbirdStatus ab_verify_check_refresh_status(ArchbirdEngine *engine,
 
 static ArchbirdStatus
 finding_add_fact_witnesses(ArchbirdEngine *engine, AbVerifyFinding *finding,
-                           const AbVerifyFactSet *first,
-                           const AbVerifyFactSet *second) {
+                           const AbProjectionData *first,
+                           const AbProjectionData *second) {
   ArchbirdStatus status = finding_add_fact_summary(engine, finding, first);
   if (status == ARCHBIRD_OK && second)
     status = finding_add_fact_summary(engine, finding, second);
@@ -597,8 +597,8 @@ finding_add_fact_witnesses(ArchbirdEngine *engine, AbVerifyFinding *finding,
 
 static ArchbirdStatus
 shape_finding(ArchbirdEngine *engine, const AbValue *check,
-              const char *message_prefix, const AbVerifyFactSet *first,
-              const AbVerifyFactSet *second, AbVerifyFinding *out) {
+              const char *message_prefix, const AbProjectionData *first,
+              const AbProjectionData *second, AbVerifyFinding *out) {
   AbBuffer message;
   AbString key = {(char *)"fact-shape", 10};
   ArchbirdStatus status;
@@ -630,7 +630,7 @@ shape_finding(ArchbirdEngine *engine, const AbValue *check,
 static ArchbirdStatus
 message_finding(ArchbirdEngine *engine, const AbValue *check,
                 const char *comparison, const AbString *key, const char *prefix,
-                const AbString *label, const AbVerifyFactItem *item,
+                const AbString *label, const AbProjectionItem *item,
                 AbVerifyFinding *out) {
   AbBuffer message;
   size_t index;
@@ -650,7 +650,7 @@ message_finding(ArchbirdEngine *engine, const AbValue *check,
   return status;
 }
 
-static const AbVerifyFactItem *fact_item_find(const AbVerifyFactSet *fact,
+static const AbProjectionItem *fact_item_find(const AbProjectionData *fact,
                                               const AbString *key) {
   size_t low = 0;
   size_t high = fact->item_count;
@@ -711,8 +711,8 @@ static ArchbirdStatus mapping_collision_finding(ArchbirdEngine *engine,
 
 static ArchbirdStatus
 value_difference_finding(ArchbirdEngine *engine, const AbValue *check,
-                         const AbString *key, const AbVerifyFactItem *expected,
-                         const AbVerifyFactItem *actual, AbVerifyFinding *out) {
+                         const AbString *key, const AbProjectionItem *expected,
+                         const AbProjectionItem *actual, AbVerifyFinding *out) {
   AbBuffer message;
   size_t index;
   ArchbirdStatus status;
@@ -740,7 +740,7 @@ value_difference_finding(ArchbirdEngine *engine, const AbValue *check,
 
 static ArchbirdStatus
 compare_facts(ArchbirdEngine *engine, const AbValue *check,
-              const AbVerifyFactSet *expected, const AbVerifyFactSet *actual,
+              const AbProjectionData *expected, const AbProjectionData *actual,
               const AbValue *mapping, int values, int allow_missing_expected,
               int allow_extra_actual, AbVerifyCheckResult *result) {
   MappedItem *mapped = NULL;
@@ -769,7 +769,7 @@ compare_facts(ArchbirdEngine *engine, const AbValue *check,
     return status;
   }
   {
-    const AbVerifyFactSet *facts[2] = {expected, actual};
+    const AbProjectionData *facts[2] = {expected, actual};
     for (index = 0; status == ARCHBIRD_OK && index < 2; index++) {
       AbVerifyFinding finding = {0};
       int unavailable = 0;
@@ -816,7 +816,7 @@ compare_facts(ArchbirdEngine *engine, const AbValue *check,
   if (!allow_missing_expected) {
     for (index = 0; status == ARCHBIRD_OK && index < expected->item_count;
          index++) {
-      const AbVerifyFactItem *item = &expected->items[index];
+      const AbProjectionItem *item = &expected->items[index];
       if (!mapped_item_find(mapped, mapped_count, &item->key)) {
         AbVerifyFinding finding = {0};
         status = message_finding(engine, check, "missing", &item->key,
@@ -848,10 +848,10 @@ compare_facts(ArchbirdEngine *engine, const AbValue *check,
   }
   for (index = 0; status == ARCHBIRD_OK && index < expected->item_count;
        index++) {
-    const AbVerifyFactItem *expected_item = &expected->items[index];
+    const AbProjectionItem *expected_item = &expected->items[index];
     const MappedItem *mapped_item =
         mapped_item_find(mapped, mapped_count, &expected_item->key);
-    const AbVerifyFactItem *actual_item;
+    const AbProjectionItem *actual_item;
     if (!mapped_item)
       continue;
     actual_item = mapped_item->item;
@@ -891,8 +891,8 @@ compare_facts(ArchbirdEngine *engine, const AbValue *check,
   return status;
 }
 
-static int relation_matches(const AbVerifyFactItem *pattern,
-                            const AbVerifyFactItem *candidate) {
+static int relation_matches(const AbProjectionItem *pattern,
+                            const AbProjectionItem *candidate) {
   static const char *const fields[] = {"source", "kind", "target"};
   size_t index;
   for (index = 0; index < sizeof(fields) / sizeof(fields[0]); index++) {
@@ -911,8 +911,8 @@ static int relation_matches(const AbVerifyFactItem *pattern,
 
 static ArchbirdStatus
 relation_finding(ArchbirdEngine *engine, const AbValue *check,
-                 const char *comparison, const AbVerifyFactItem *item,
-                 const char *prefix, const AbVerifyFactSet *patterns,
+                 const char *comparison, const AbProjectionItem *item,
+                 const char *prefix, const AbProjectionData *patterns,
                  int include_matching_patterns, AbVerifyFinding *out) {
   AbBuffer message;
   size_t index;
@@ -933,7 +933,7 @@ relation_finding(ArchbirdEngine *engine, const AbValue *check,
     for (pattern_index = 0;
          status == ARCHBIRD_OK && pattern_index < patterns->item_count;
          pattern_index++) {
-      const AbVerifyFactItem *pattern = &patterns->items[pattern_index];
+      const AbProjectionItem *pattern = &patterns->items[pattern_index];
       size_t evidence_index;
       if (!relation_matches(pattern, item))
         continue;
@@ -950,8 +950,8 @@ relation_finding(ArchbirdEngine *engine, const AbValue *check,
 
 static ArchbirdStatus relation_check(ArchbirdEngine *engine,
                                      const AbValue *check,
-                                     const AbVerifyFactSet *expected,
-                                     const AbVerifyFactSet *actual,
+                                     const AbProjectionData *expected,
+                                     const AbProjectionData *actual,
                                      AbVerifyCheckResult *result) {
   const AbValue *assertion = ab_value_member(check, "assert");
   size_t index;
@@ -974,7 +974,7 @@ static ArchbirdStatus relation_check(ArchbirdEngine *engine,
     return status;
   }
   {
-    const AbVerifyFactSet *facts[2] = {expected, actual};
+    const AbProjectionData *facts[2] = {expected, actual};
     for (index = 0; status == ARCHBIRD_OK && index < 2; index++) {
       AbVerifyFinding finding = {0};
       int unavailable = 0;
@@ -993,12 +993,12 @@ static ArchbirdStatus relation_check(ArchbirdEngine *engine,
   if (ab_value_string_is(assertion, "required_edges")) {
     for (index = 0; status == ARCHBIRD_OK && index < expected->item_count;
          index++) {
-      const AbVerifyFactItem *pattern = &expected->items[index];
+      const AbProjectionItem *pattern = &expected->items[index];
       size_t actual_index;
       int matched = 0;
       for (actual_index = 0; actual_index < actual->item_count;
            actual_index++) {
-        const AbVerifyFactItem *candidate = &actual->items[actual_index];
+        const AbProjectionItem *candidate = &actual->items[actual_index];
         if (!relation_matches(pattern, candidate))
           continue;
         matched = 1;
@@ -1019,7 +1019,7 @@ static ArchbirdStatus relation_check(ArchbirdEngine *engine,
   } else if (ab_value_string_is(assertion, "forbidden_edges")) {
     for (index = 0; status == ARCHBIRD_OK && index < actual->item_count;
          index++) {
-      const AbVerifyFactItem *candidate = &actual->items[index];
+      const AbProjectionItem *candidate = &actual->items[index];
       size_t pattern_index;
       int forbidden = 0;
       for (pattern_index = 0; pattern_index < expected->item_count;
@@ -1043,7 +1043,7 @@ static ArchbirdStatus relation_check(ArchbirdEngine *engine,
   } else {
     for (index = 0; status == ARCHBIRD_OK && index < actual->item_count;
          index++) {
-      const AbVerifyFactItem *candidate = &actual->items[index];
+      const AbProjectionItem *candidate = &actual->items[index];
       size_t pattern_index;
       int allowed = 0;
       for (pattern_index = 0; pattern_index < expected->item_count;
@@ -1075,8 +1075,8 @@ static ArchbirdStatus relation_check(ArchbirdEngine *engine,
 
 static ArchbirdStatus disjoint_check(ArchbirdEngine *engine,
                                      const AbValue *check,
-                                     const AbVerifyFactSet *expected,
-                                     const AbVerifyFactSet *actual,
+                                     const AbProjectionData *expected,
+                                     const AbProjectionData *actual,
                                      AbVerifyCheckResult *result) {
   size_t index;
   ArchbirdStatus status = result_init(engine, result, check, expected, actual);
@@ -1100,7 +1100,7 @@ static ArchbirdStatus disjoint_check(ArchbirdEngine *engine,
     return status;
   }
   {
-    const AbVerifyFactSet *facts[2] = {expected, actual};
+    const AbProjectionData *facts[2] = {expected, actual};
     for (index = 0; status == ARCHBIRD_OK && index < 2; index++) {
       AbVerifyFinding finding = {0};
       int unavailable = 0;
@@ -1118,7 +1118,7 @@ static ArchbirdStatus disjoint_check(ArchbirdEngine *engine,
   }
   for (index = 0; status == ARCHBIRD_OK && index < actual->item_count;
        index++) {
-    const AbVerifyFactItem *item = &actual->items[index];
+    const AbProjectionItem *item = &actual->items[index];
     if (fact_item_find(expected, &item->key)) {
       AbVerifyFinding finding = {0};
       status = message_finding(engine, check, "overlap", &item->key,
@@ -1146,7 +1146,7 @@ static int boolean_option(const AbValue *check, const char *name) {
 
 static ArchbirdStatus provider_surface_check(ArchbirdEngine *engine,
                                              const AbValue *check,
-                                             const AbVerifyFactSet *actual,
+                                             const AbProjectionData *actual,
                                              AbVerifyCheckResult *result) {
   static const char declared_text[] = "declared";
   static const char unresolved_text[] = "unresolved";
@@ -1186,7 +1186,7 @@ static ArchbirdStatus provider_surface_check(ArchbirdEngine *engine,
     for (index = 0; status == ARCHBIRD_OK && index < required->as.array.count;
          index++) {
       const AbString *name = &required->as.array.items[index].as.text;
-      const AbVerifyFactItem *item = fact_item_find(actual, name);
+      const AbProjectionItem *item = fact_item_find(actual, name);
       const AbString *declaration =
           item ? item_attribute(item, "declaration") : NULL;
       if (declaration && string_literal(declaration, declared_text)) {
@@ -1211,7 +1211,7 @@ static ArchbirdStatus provider_surface_check(ArchbirdEngine *engine,
     }
   for (index = 0; status == ARCHBIRD_OK && index < actual->item_count;
        index++) {
-    const AbVerifyFactItem *item = &actual->items[index];
+    const AbProjectionItem *item = &actual->items[index];
     const AbString *declaration = item_attribute(item, "declaration");
     const AbString *resolution = item_attribute(item, "resolution");
     const AbString *used = item_attribute(item, "used");
@@ -1316,7 +1316,7 @@ static int rotation_less(const size_t *cycle, size_t length, size_t left,
 
 static ArchbirdStatus
 cycle_finding(ArchbirdEngine *engine, const AbValue *check,
-              const AbVerifyFactSet *actual, const AbString *const *nodes,
+              const AbProjectionData *actual, const AbString *const *nodes,
               const size_t *cycle, size_t cycle_length, AbVerifyFinding *out) {
   size_t best = 0;
   size_t rotation;
@@ -1354,7 +1354,7 @@ cycle_finding(ArchbirdEngine *engine, const AbValue *check,
     for (item_index = 0;
          status == ARCHBIRD_OK && item_index < actual->item_count;
          item_index++) {
-      const AbVerifyFactItem *item = &actual->items[item_index];
+      const AbProjectionItem *item = &actual->items[item_index];
       const AbString *item_source = item_attribute(item, "source");
       const AbString *item_target = item_attribute(item, "target");
       size_t evidence_index;
@@ -1385,7 +1385,7 @@ static int result_has_finding_key(const AbVerifyCheckResult *result,
 
 static ArchbirdStatus acyclic_check(ArchbirdEngine *engine,
                                     const AbValue *check,
-                                    const AbVerifyFactSet *actual,
+                                    const AbProjectionData *actual,
                                     AbVerifyCheckResult *result) {
   const AbString **nodes = NULL;
   size_t node_count = 0;
@@ -1565,7 +1565,7 @@ cleanup:
 
 static ArchbirdStatus cardinality_check(ArchbirdEngine *engine,
                                         const AbValue *check,
-                                        const AbVerifyFactSet *actual,
+                                        const AbProjectionData *actual,
                                         AbVerifyCheckResult *result) {
   const AbValue *exact = ab_value_member(check, "exact");
   const AbValue *minimum = ab_value_member(check, "min");
@@ -1666,7 +1666,7 @@ static ArchbirdStatus cardinality_check(ArchbirdEngine *engine,
 
 static ArchbirdStatus numeric_bounds_check(ArchbirdEngine *engine,
                                            const AbValue *check,
-                                           const AbVerifyFactSet *actual,
+                                           const AbProjectionData *actual,
                                            AbVerifyCheckResult *result) {
   const AbValue *exact = ab_value_member(check, "exact");
   const AbValue *minimum = ab_value_member(check, "min");
@@ -1730,7 +1730,7 @@ static ArchbirdStatus numeric_bounds_check(ArchbirdEngine *engine,
     (void)ab_value_u64(maximum, &maximum_value);
   for (index = 0; status == ARCHBIRD_OK && index < actual->item_count;
        index++) {
-    const AbVerifyFactItem *item = &actual->items[index];
+    const AbProjectionItem *item = &actual->items[index];
     uint64_t value = 0;
     int current = string_literal(&item->state, "current");
     int numeric = current && ab_value_u64(&item->value, &value);
@@ -1809,7 +1809,7 @@ static int string_array_view_contains(const AbString **rows, size_t count,
 
 static ArchbirdStatus route_finding(ArchbirdEngine *engine,
                                     const AbValue *check,
-                                    const AbVerifyFactSet *actual,
+                                    const AbProjectionData *actual,
                                     const AbString *route,
                                     AbVerifyFinding *out) {
   AbBuffer key_buffer;
@@ -1840,7 +1840,7 @@ static ArchbirdStatus route_finding(ArchbirdEngine *engine,
 
 static ArchbirdStatus min_test_routes_check(ArchbirdEngine *engine,
                                             const AbValue *check,
-                                            const AbVerifyFactSet *actual,
+                                            const AbProjectionData *actual,
                                             AbVerifyCheckResult *result) {
   const AbString **routes = NULL;
   size_t route_count = 0;
@@ -2048,7 +2048,7 @@ static int equality_policy_equal(const AbVerifyEqualityPolicy *left,
 
 static ArchbirdStatus finding_add_observation_witnesses(
     ArchbirdEngine *engine, AbVerifyFinding *finding,
-    const AbVerifyEvidence *witnesses, size_t witness_count) {
+    const AbProjectionEvidence *witnesses, size_t witness_count) {
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   for (index = 0; status == ARCHBIRD_OK && index < witness_count; index++)
@@ -2662,9 +2662,9 @@ ArchbirdStatus ab_verify_evaluate_check(AbVerificationContext *context,
     return observation_equal_constraint(context, check, expected_observation,
                                         actual_observation, result);
   }
-  const AbVerifyFactSet *expected =
+  const AbProjectionData *expected =
       expected_name ? find_fact(context, &expected_name->as.text) : NULL;
-  const AbVerifyFactSet *actual = find_fact(context, &actual_name->as.text);
+  const AbProjectionData *actual = find_fact(context, &actual_name->as.text);
   const AbValue *mapping = find_mapping(context, check);
   if (!actual || (expected_name && !expected))
     return archbird_error_set(context->engine, ARCHBIRD_CONFLICT,
@@ -2748,8 +2748,8 @@ static ArchbirdStatus render_check_string(AbBuffer *buffer,
   return ab_buffer_json_string(buffer, value->data, value->length);
 }
 
-static ArchbirdStatus render_check_evidence(AbBuffer *buffer,
-                                            const AbVerifyEvidence *evidence) {
+static ArchbirdStatus
+render_check_evidence(AbBuffer *buffer, const AbProjectionEvidence *evidence) {
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, "{\"detail\":"));
   CHECK_RENDER_TRY(render_check_string(buffer, &evidence->detail));
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"line\":"));
@@ -2765,9 +2765,9 @@ static ArchbirdStatus render_check_evidence(AbBuffer *buffer,
   return ab_buffer_literal(buffer, "}");
 }
 
-static ArchbirdStatus render_check_evidence_array(AbBuffer *buffer,
-                                                  const AbVerifyEvidence *rows,
-                                                  size_t count) {
+static ArchbirdStatus
+render_check_evidence_array(AbBuffer *buffer, const AbProjectionEvidence *rows,
+                            size_t count) {
   size_t index;
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, "["));
   for (index = 0; index < count; index++) {
@@ -2860,7 +2860,8 @@ ArchbirdStatus ab_verify_check_render(AbBuffer *buffer,
   CHECK_RENDER_TRY(render_value_or(buffer, check, "id", "\"\""));
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"operands\":{\"actual\":"));
   CHECK_RENDER_TRY(render_value_or(buffer, check, "actual", "\"\""));
-  if (ab_verify_string_is(ab_value_member(check, "assert"), "numeric_bounds")) {
+  if (ab_projection_value_is(ab_value_member(check, "assert"),
+                             "numeric_bounds")) {
     CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"allow_empty\":"));
     CHECK_RENDER_TRY(render_value_or(buffer, check, "allow_empty", "false"));
   }

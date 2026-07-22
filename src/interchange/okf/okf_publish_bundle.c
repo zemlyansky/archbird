@@ -295,7 +295,7 @@ static ArchbirdStatus collect_directories(AbOkfPublication *pub,
   size_t concept;
   ArchbirdStatus status = directory_add(pub, list, "", 0);
   for (concept = 0; status == ARCHBIRD_OK && concept < pub->concept_count;
-       concept++) {
+       ++concept) {
     const AbString *path = &pub->concepts[concept].path;
     size_t index;
     for (index = 0; index < path->length; index++)
@@ -394,7 +394,7 @@ static ArchbirdStatus render_index(AbOkfPublication *pub,
     status = ab_buffer_literal(&path, "index.md");
   if (status == ARCHBIRD_OK)
     status = ab_okf_pub_buffer_string(pub, &path, path_out);
-  for (concept = 0; concept < pub->concept_count; concept++)
+  for (concept = 0; concept < pub->concept_count; ++concept)
     if (direct_concept(directory, &pub->concepts[concept]))
       direct_count++;
   if (status == ARCHBIRD_OK && direct_count) {
@@ -407,7 +407,7 @@ static ArchbirdStatus render_index(AbOkfPublication *pub,
   }
   direct_count = 0;
   for (concept = 0; status == ARCHBIRD_OK && concept < pub->concept_count;
-       concept++)
+       ++concept)
     if (direct_concept(directory, &pub->concepts[concept]))
       concepts[direct_count++] = &pub->concepts[concept];
   if (direct_count > 1)

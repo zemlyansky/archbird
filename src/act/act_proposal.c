@@ -46,8 +46,8 @@ static const AbValue *operand(const AbValue *check, const char *name) {
 }
 
 static ArchbirdStatus copy_attributes(ArchbirdEngine *engine,
-                                      AbVerifyFactItem *target,
-                                      const AbVerifyFactItem *source) {
+                                      AbProjectionItem *target,
+                                      const AbProjectionItem *source) {
   size_t index;
   target->attribute_count = source->attribute_count;
   if (target->attribute_count > SIZE_MAX / sizeof(*target->attributes))
@@ -75,25 +75,25 @@ static ArchbirdStatus copy_attributes(ArchbirdEngine *engine,
 }
 
 static ArchbirdStatus copy_item(ArchbirdEngine *engine,
-                                AbVerifyFactItem *target,
-                                const AbVerifyFactItem *source,
+                                AbProjectionItem *target,
+                                const AbProjectionItem *source,
                                 const AbString *key) {
   ArchbirdStatus status =
-      ab_verify_item_init(engine, target, key ? key : &source->key,
-                          key ? key : &source->label, &source->value);
+      ab_projection_item_init(engine, target, key ? key : &source->key,
+                              key ? key : &source->label, &source->value);
   size_t index;
   if (status == ARCHBIRD_OK)
     status = copy_attributes(engine, target, source);
   if (status == ARCHBIRD_OK && (source->state.length != 7 ||
                                 memcmp(source->state.data, "current", 7) != 0))
-    status = ab_verify_item_set_state(engine, target, source->state.data,
-                                      source->message.data);
+    status = ab_projection_item_set_state(engine, target, source->state.data,
+                                          source->message.data);
   for (index = 0; status == ARCHBIRD_OK && index < source->evidence_count;
        index++)
-    status =
-        ab_verify_item_add_evidence(engine, target, &source->evidence[index]);
+    status = ab_projection_item_add_evidence(engine, target,
+                                             &source->evidence[index]);
   if (status != ARCHBIRD_OK)
-    ab_verify_fact_item_free(engine, target);
+    ab_projection_item_free(engine, target);
   return status;
 }
 
@@ -124,11 +124,11 @@ static int projection_selected(const char *selection, const AbValue *keys,
 }
 
 ArchbirdStatus ab_act_project_fact(ArchbirdEngine *engine,
-                                   const AbVerifyFactSet *source,
+                                   const AbProjectionData *source,
                                    const AbString *name, const AbValue *aliases,
                                    const char *selection, const AbValue *keys,
-                                   AbVerifyFactSet *out) {
-  ArchbirdStatus status = ab_verify_fact_init(
+                                   AbProjectionData *out) {
+  ArchbirdStatus status = ab_projection_data_init(
       engine, out, name, source->shape.data, "derived", &source->project);
   size_t index;
   if (status == ARCHBIRD_OK &&
@@ -142,24 +142,25 @@ ArchbirdStatus ab_act_project_fact(ArchbirdEngine *engine,
   }
   for (index = 0; status == ARCHBIRD_OK && index < source->item_count;
        index++) {
-    AbVerifyFactItem item = {0};
+    AbProjectionItem item = {0};
     const AbString *key = mapped_key(aliases, &source->items[index].key);
     if (!projection_selected(selection, keys, key))
       continue;
     status = copy_item(engine, &item, &source->items[index], key);
     if (status == ARCHBIRD_OK)
-      status = ab_verify_fact_add_item(engine, out, &item);
+      status = ab_projection_data_add_item(engine, out, &item);
     if (status != ARCHBIRD_OK)
-      ab_verify_fact_item_free(engine, &item);
+      ab_projection_item_free(engine, &item);
   }
   if (status == ARCHBIRD_OK)
-    status = ab_verify_fact_finish(engine, out);
+    status = ab_projection_data_finish(engine, out);
   if (status != ARCHBIRD_OK)
-    ab_verify_fact_free(engine, out);
+    ab_projection_data_free(engine, out);
   return status;
 }
 
-static AbVerifyFactItem *find_item(AbVerifyFactSet *fact, const AbString *key) {
+static AbProjectionItem *find_item(AbProjectionData *fact,
+                                   const AbString *key) {
   size_t index;
   if (!fact || !key)
     return NULL;
@@ -170,12 +171,12 @@ static AbVerifyFactItem *find_item(AbVerifyFactSet *fact, const AbString *key) {
   return NULL;
 }
 
-static const AbVerifyFactItem *find_const_item(const AbVerifyFactSet *fact,
+static const AbProjectionItem *find_const_item(const AbProjectionData *fact,
                                                const AbString *key) {
-  return find_item((AbVerifyFactSet *)fact, key);
+  return find_item((AbProjectionData *)fact, key);
 }
 
-static const AbVerifyFactItem *find_item_by_label(const AbVerifyFactSet *fact,
+static const AbProjectionItem *find_item_by_label(const AbProjectionData *fact,
                                                   const AbString *label) {
   size_t index;
   if (!fact || !label)
@@ -187,13 +188,13 @@ static const AbVerifyFactItem *find_item_by_label(const AbVerifyFactSet *fact,
   return NULL;
 }
 
-static void remove_item(ArchbirdEngine *engine, AbVerifyFactSet *fact,
+static void remove_item(ArchbirdEngine *engine, AbProjectionData *fact,
                         const AbString *key) {
   size_t index;
   for (index = 0; index < fact->item_count; index++) {
     if (!ab_string_equal(&fact->items[index].key, key))
       continue;
-    ab_verify_fact_item_free(engine, &fact->items[index]);
+    ab_projection_item_free(engine, &fact->items[index]);
     if (index + 1 < fact->item_count)
       memmove(&fact->items[index], &fact->items[index + 1],
               (fact->item_count - index - 1) * sizeof(*fact->items));
@@ -204,9 +205,9 @@ static void remove_item(ArchbirdEngine *engine, AbVerifyFactSet *fact,
 }
 
 static ArchbirdStatus copy_fact_named(ArchbirdEngine *engine,
-                                      const AbVerifyFactSet *source,
+                                      const AbProjectionData *source,
                                       const AbString *name,
-                                      AbVerifyFactSet *out) {
+                                      AbProjectionData *out) {
   static const AbValue empty_aliases = {.kind = AB_VALUE_OBJECT};
   return ab_act_project_fact(engine, source, name, &empty_aliases, "all", NULL,
                              out);
@@ -215,7 +216,7 @@ static ArchbirdStatus copy_fact_named(ArchbirdEngine *engine,
 static ArchbirdStatus coverage_init(ArchbirdEngine *engine,
                                     const AbActVerification *verification,
                                     const AbString *fact_name,
-                                    const AbVerifyFactSet *fact,
+                                    const AbProjectionData *fact,
                                     AbActCoverage *coverage) {
   const AbValue *definition =
       fact ? ab_act_verification_operand_definition(verification, fact_name)
@@ -384,8 +385,8 @@ static int unknown_compare(const void *left_raw, const void *right_raw) {
 
 static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                          AbActProposalData *proposal,
-                                         const AbVerifyFactSet *actual,
-                                         const AbVerifyFactItem *target,
+                                         const AbProjectionData *actual,
+                                         const AbProjectionItem *target,
                                          const AbString *finding_key) {
   size_t item_start = 0;
   size_t item_end = actual->item_count;
@@ -395,11 +396,11 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     item_end = item_start + 1;
   }
   for (item_index = item_start; item_index < item_end; item_index++) {
-    const AbVerifyFactItem *item = &actual->items[item_index];
+    const AbProjectionItem *item = &actual->items[item_index];
     size_t evidence_index;
     for (evidence_index = 0; evidence_index < item->evidence_count;
          evidence_index++) {
-      const AbVerifyEvidence *evidence = &item->evidence[evidence_index];
+      const AbProjectionEvidence *evidence = &item->evidence[evidence_index];
       AbActCandidate *candidate = NULL;
       size_t index;
       ArchbirdStatus status;
@@ -690,7 +691,7 @@ static ArchbirdStatus build_slice(ArchbirdEngine *engine,
                        proposal->origin_finding_sha256);
   for (index = 0; status == ARCHBIRD_OK && index < 2; index++) {
     const AbValue *name = names[index];
-    const AbVerifyFactSet *fact = NULL;
+    const AbProjectionData *fact = NULL;
     const AbValue *fact_value;
     const AbValue *observation;
     char digest[65];
@@ -781,7 +782,7 @@ initialize_postcondition(ArchbirdEngine *engine, AbActProposalData *proposal,
 
 static ArchbirdStatus evidence_from_item(ArchbirdEngine *engine,
                                          AbActEvidenceList *list,
-                                         const AbVerifyFactItem *item) {
+                                         const AbProjectionItem *item) {
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   for (index = 0; status == ARCHBIRD_OK && index < item->evidence_count;
@@ -792,7 +793,7 @@ static ArchbirdStatus evidence_from_item(ArchbirdEngine *engine,
 
 static ArchbirdStatus evidence_from_fact(ArchbirdEngine *engine,
                                          AbActEvidenceList *list,
-                                         const AbVerifyFactSet *fact) {
+                                         const AbProjectionData *fact) {
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   for (index = 0; status == ARCHBIRD_OK && index < fact->item_count; index++)
@@ -802,17 +803,17 @@ static ArchbirdStatus evidence_from_fact(ArchbirdEngine *engine,
 
 static ArchbirdStatus evidence_from_fact_context(ArchbirdEngine *engine,
                                                  AbActEvidenceList *list,
-                                                 const AbVerifyFactSet *fact) {
+                                                 const AbProjectionData *fact) {
   size_t item_index;
   ArchbirdStatus status = ARCHBIRD_OK;
   for (item_index = 0; status == ARCHBIRD_OK && item_index < fact->item_count;
        item_index++) {
-    const AbVerifyFactItem *item = &fact->items[item_index];
+    const AbProjectionItem *item = &fact->items[item_index];
     size_t evidence_index;
     for (evidence_index = 0;
          status == ARCHBIRD_OK && evidence_index < item->evidence_count;
          evidence_index++) {
-      const AbVerifyEvidence *evidence = &item->evidence[evidence_index];
+      const AbProjectionEvidence *evidence = &item->evidence[evidence_index];
       if (!evidence->path.length)
         status = ab_act_evidence_list_add(engine, list, evidence);
     }
@@ -833,10 +834,10 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
   const AbValue *actual_value;
   const AbValue *expected_value;
   const AbValue *mapping_value;
-  const AbVerifyFactSet *actual = NULL;
-  const AbVerifyFactSet *expected = NULL;
+  const AbProjectionData *actual = NULL;
+  const AbProjectionData *expected = NULL;
   const AbValue *mapping = NULL;
-  AbVerifyFactSet projected = {0};
+  AbProjectionData projected = {0};
   AbActEvidenceList finding_evidence = {0};
   ArchbirdStatus status;
   int strength = 0; /* 0 oracle-only, 1 exact, 2 constrained */
@@ -954,8 +955,8 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
     const AbValue *aliases =
         mapping ? ab_value_member(mapping, "actual_to_expected") : NULL;
     const AbString *key = &ab_value_member(finding, "key")->as.text;
-    const AbVerifyFactItem *expected_item = find_const_item(expected, key);
-    AbVerifyFactItem *actual_item;
+    const AbProjectionItem *expected_item = find_const_item(expected, key);
+    AbProjectionItem *actual_item;
     AbString projection_name = {0};
     AbString expected_name = {0};
     status =
@@ -976,22 +977,23 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
         (ab_value_string_is(comparison, "missing") ||
          ab_value_string_is(comparison, "different"))) {
       if (!expected_item) {
-        ab_verify_fact_free(engine, &out->literal_fact);
+        ab_projection_data_free(engine, &out->literal_fact);
       } else {
-        AbVerifyFactItem copied = {0};
+        AbProjectionItem copied = {0};
         remove_item(engine, &out->literal_fact, key);
         status = copy_item(engine, &copied, expected_item, key);
         if (status == ARCHBIRD_OK)
-          status = ab_verify_fact_add_item(engine, &out->literal_fact, &copied);
+          status =
+              ab_projection_data_add_item(engine, &out->literal_fact, &copied);
         if (status != ARCHBIRD_OK)
-          ab_verify_fact_item_free(engine, &copied);
+          ab_projection_item_free(engine, &copied);
       }
     } else if (status == ARCHBIRD_OK &&
                ab_value_string_is(comparison, "extra")) {
       remove_item(engine, &out->literal_fact, key);
     }
     if (status == ARCHBIRD_OK && out->literal_fact.name.data) {
-      status = ab_verify_fact_finish(engine, &out->literal_fact);
+      status = ab_projection_data_finish(engine, &out->literal_fact);
       out->has_literal_fact = status == ARCHBIRD_OK;
     }
     if (status == ARCHBIRD_OK && out->has_literal_fact) {
@@ -1036,25 +1038,26 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
               ab_value_string_is(assertion, "allowed_edges")) &&
              expected && actual) {
     const AbString *key = &ab_value_member(finding, "key")->as.text;
-    const AbVerifyFactItem *item = ab_value_string_is(comparison, "missing")
+    const AbProjectionItem *item = ab_value_string_is(comparison, "missing")
                                        ? find_item_by_label(expected, key)
                                        : find_item_by_label(actual, key);
     if (item) {
       AbString name = {0};
-      AbVerifyFactItem copied = {0};
+      AbProjectionItem copied = {0};
       status =
           formatted_string(engine, &name, "proposal.",
                            &(AbString){out->fingerprint.data, 12}, ".relation");
       if (status == ARCHBIRD_OK)
-        status = ab_verify_fact_init(
+        status = ab_projection_data_init(
             engine, &out->literal_fact, &name, "relation", "derived",
             item->evidence_count ? &item->evidence[0].project : NULL);
       if (status == ARCHBIRD_OK)
         status = copy_item(engine, &copied, item, NULL);
       if (status == ARCHBIRD_OK)
-        status = ab_verify_fact_add_item(engine, &out->literal_fact, &copied);
+        status =
+            ab_projection_data_add_item(engine, &out->literal_fact, &copied);
       if (status == ARCHBIRD_OK)
-        status = ab_verify_fact_finish(engine, &out->literal_fact);
+        status = ab_projection_data_finish(engine, &out->literal_fact);
       out->has_literal_fact = status == ARCHBIRD_OK;
       if (status == ARCHBIRD_OK)
         status = initialize_postcondition(
@@ -1194,14 +1197,14 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = build_slice(engine, out);
   ab_act_evidence_list_free(&finding_evidence);
-  ab_verify_fact_free(engine, &projected);
+  ab_projection_data_free(engine, &projected);
   if (status != ARCHBIRD_OK)
     goto fail;
   return ARCHBIRD_OK;
 
 fail:
   ab_act_evidence_list_free(&finding_evidence);
-  ab_verify_fact_free(engine, &projected);
+  ab_projection_data_free(engine, &projected);
   ab_act_proposal_data_free(out);
   return status;
 }
@@ -1218,7 +1221,7 @@ void ab_act_proposal_data_free(AbActProposalData *proposal) {
   for (index = 0; proposal->slice && index < proposal->slice_count; index++)
     ab_string_free(engine, &proposal->slice[index].name);
   ab_free(engine, proposal->slice);
-  ab_verify_fact_free(engine, &proposal->literal_fact);
+  ab_projection_data_free(engine, &proposal->literal_fact);
   ab_string_free(engine, &proposal->projection.name);
   ab_string_free(engine, &proposal->projection.source);
   ab_string_free(engine, &proposal->postcondition.constraint_id);
@@ -1472,7 +1475,7 @@ render_proposal_document(AbBuffer *buffer, const AbActProposalData *proposal,
   ACT_TRY(ab_buffer_json_string(buffer, proposal->slice_sha256, 64));
   ACT_TRY(ab_buffer_literal(buffer, "},\"facts\":["));
   if (proposal->has_literal_fact)
-    ACT_TRY(ab_verify_fact_render(buffer, &proposal->literal_fact, 1));
+    ACT_TRY(ab_projection_data_render(buffer, &proposal->literal_fact, 1));
   ACT_TRY(ab_buffer_literal(buffer, "],\"mutable_sources\":["));
   if (proposal->actual_name.length)
     ACT_TRY(ab_buffer_json_string(buffer, proposal->actual_name.data,

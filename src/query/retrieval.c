@@ -289,11 +289,11 @@ static unsigned field_match(const AbString *field, const AbString *term,
   return best;
 }
 
-uint64_t ab_map_retrieval_text_score(const AbRetrievalResult *result,
-                                     const AbString *primary,
-                                     unsigned primary_weight,
-                                     const AbString *secondary,
-                                     unsigned secondary_weight) {
+uint64_t ab_query_retrieval_text_score(const AbRetrievalResult *result,
+                                       const AbString *primary,
+                                       unsigned primary_weight,
+                                       const AbString *secondary,
+                                       unsigned secondary_weight) {
   uint64_t score = 0;
   size_t matched_terms = 0;
   size_t term_index;
@@ -417,8 +417,34 @@ static const AbValue *optional_array_member(const AbValue *object,
   return value ? value : &empty;
 }
 
+static const AbValue *projection_attribute(const AbProjectionItem *item,
+                                           const char *name) {
+  size_t index;
+  size_t length = strlen(name);
+  for (index = 0; index < item->attribute_count; index++)
+    if (item->attributes[index].name.length == length &&
+        !memcmp(item->attributes[index].name.data, name, length))
+      return &item->attributes[index].value;
+  return NULL;
+}
+
+static ArchbirdStatus projection_index(ArchbirdEngine *engine,
+                                       const AbProjectionItem *item,
+                                       const char *name, size_t limit,
+                                       size_t *out) {
+  uint64_t value;
+  if (!ab_value_u64(projection_attribute(item, name), &value) ||
+      value >= limit || value > SIZE_MAX)
+    return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                              ARCHBIRD_NO_OFFSET,
+                              "search projection contains an invalid index");
+  *out = (size_t)value;
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                          const AbValue *map,
+                                         const AbProjectionData *domain,
                                          const AbRetrievalResult *result,
                                          RetrievalCandidate **out,
                                          size_t *out_count) {
@@ -430,6 +456,13 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
   const AbValue *packages = ab_value_member(map, "packages");
   const AbValue *artifacts = ab_value_member(map, "artifacts");
   const AbValue *calls = ab_value_member(map, "call_resolutions");
+  unsigned char *file_selected = NULL;
+  unsigned char *symbol_selected = NULL;
+  unsigned char *component_selected = NULL;
+  unsigned char *package_selected = NULL;
+  unsigned char *artifact_selected = NULL;
+  size_t *symbol_offsets = NULL;
+  size_t symbol_count = 0;
   size_t call_index = 0;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -455,6 +488,102 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
           engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
           "retrieval input Map calls must be valid and source-sorted");
   }
+  symbol_offsets = (size_t *)ab_calloc(engine, files->as.array.count + 1,
+                                       sizeof(*symbol_offsets));
+  file_selected = (unsigned char *)ab_calloc(
+      engine, files->as.array.count ? files->as.array.count : 1, 1);
+  component_selected = (unsigned char *)ab_calloc(
+      engine, components->as.array.count ? components->as.array.count : 1, 1);
+  package_selected = (unsigned char *)ab_calloc(
+      engine, packages->as.array.count ? packages->as.array.count : 1, 1);
+  artifact_selected = (unsigned char *)ab_calloc(
+      engine, artifacts->as.array.count ? artifacts->as.array.count : 1, 1);
+  if (!symbol_offsets || !file_selected || !component_selected ||
+      !package_selected || !artifact_selected) {
+    status =
+        archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+                           "out of memory indexing search projection");
+    goto cleanup;
+  }
+  for (index = 0; index < files->as.array.count; index++) {
+    const AbValue *symbols =
+        ab_value_member(&files->as.array.items[index], "symbols");
+    if (!symbols || symbols->kind != AB_VALUE_ARRAY ||
+        symbol_count > SIZE_MAX - symbols->as.array.count) {
+      status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "retrieval input Map symbols are invalid");
+      goto cleanup;
+    }
+    symbol_offsets[index] = symbol_count;
+    symbol_count += symbols->as.array.count;
+  }
+  symbol_offsets[files->as.array.count] = symbol_count;
+  symbol_selected =
+      (unsigned char *)ab_calloc(engine, symbol_count ? symbol_count : 1, 1);
+  if (!symbol_selected) {
+    status =
+        archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+                           "out of memory indexing searchable symbols");
+    goto cleanup;
+  }
+  for (index = 0; index < domain->item_count; index++) {
+    const AbProjectionItem *item = &domain->items[index];
+    const AbValue *kind = projection_attribute(item, "entity_kind");
+    size_t source_index = 0;
+    if (!kind || kind->kind != AB_VALUE_STRING) {
+      status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "search projection item has no entity_kind");
+      goto cleanup;
+    }
+    if (ab_projection_value_is(kind, "file")) {
+      status = projection_index(engine, item, "source_index",
+                                files->as.array.count, &source_index);
+      if (status == ARCHBIRD_OK)
+        file_selected[source_index] = 1;
+    } else if (ab_projection_value_is(kind, "symbol")) {
+      size_t nested_index = 0;
+      const AbValue *symbols;
+      status = projection_index(engine, item, "source_index",
+                                files->as.array.count, &source_index);
+      symbols =
+          status == ARCHBIRD_OK
+              ? ab_value_member(&files->as.array.items[source_index], "symbols")
+              : NULL;
+      if (status == ARCHBIRD_OK &&
+          (!symbols || symbols->kind != AB_VALUE_ARRAY))
+        status = archbird_error_set(
+            engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+            "search projection references an invalid symbol collection");
+      if (status == ARCHBIRD_OK)
+        status = projection_index(engine, item, "nested_index",
+                                  symbols->as.array.count, &nested_index);
+      if (status == ARCHBIRD_OK)
+        symbol_selected[symbol_offsets[source_index] + nested_index] = 1;
+    } else if (ab_projection_value_is(kind, "component")) {
+      status = projection_index(engine, item, "source_index",
+                                components->as.array.count, &source_index);
+      if (status == ARCHBIRD_OK)
+        component_selected[source_index] = 1;
+    } else if (ab_projection_value_is(kind, "package")) {
+      status = projection_index(engine, item, "source_index",
+                                packages->as.array.count, &source_index);
+      if (status == ARCHBIRD_OK)
+        package_selected[source_index] = 1;
+    } else if (ab_projection_value_is(kind, "artifact")) {
+      status = projection_index(engine, item, "source_index",
+                                artifacts->as.array.count, &source_index);
+      if (status == ARCHBIRD_OK)
+        artifact_selected[source_index] = 1;
+    } else {
+      status = archbird_error_set(
+          engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+          "search projection contains an unsupported entity kind");
+    }
+    if (status != ARCHBIRD_OK)
+      goto cleanup;
+  }
   for (index = 0; status == ARCHBIRD_OK && index < files->as.array.count;
        index++) {
     const AbValue *file = &files->as.array.items[index];
@@ -474,10 +603,12 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     file_fields[0] = (RetrievalField){"file.path", path, 10};
     file_fields[1] = (RetrievalField){"file.layer", layer, 3};
     file_fields[2] = (RetrievalField){"file.language", language, 2};
-    status = add_candidate(engine, result, &items, &count, &capacity,
-                           AB_RETRIEVAL_FILE, file, path, path, NULL, 0, index,
-                           file_fields, 3);
-    while (status == ARCHBIRD_OK && call_index < calls->as.array.count) {
+    if (file_selected[index])
+      status = add_candidate(engine, result, &items, &count, &capacity,
+                             AB_RETRIEVAL_FILE, file, path, path, NULL, 0,
+                             index, file_fields, 3);
+    while (status == ARCHBIRD_OK && file_selected[index] &&
+           call_index < calls->as.array.count) {
       const AbValue *call = &calls->as.array.items[call_index];
       const AbString *source = text_member(call, "source");
       const AbString *name = text_member(call, "name");
@@ -512,6 +643,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
       uint64_t line;
       RetrievalField fields[7];
       size_t field_count = 0;
+      if (!symbol_selected[symbol_offsets[index] + symbol_index])
+        continue;
       if (!name || !kind || !scope || !line_value ||
           !ab_value_u64(line_value, &line) || line > SIZE_MAX) {
         status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
@@ -540,6 +673,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     const AbString *description = text_member(row, "description");
     RetrievalField fields[2];
     size_t field_count = 0;
+    if (!component_selected[index])
+      continue;
     if (!name) {
       status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                                   ARCHBIRD_NO_OFFSET,
@@ -566,6 +701,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     const AbValue *dependencies;
     const AbValue *exports;
     size_t item_index;
+    if (!package_selected[index])
+      continue;
     if (!name || !identity || !manifest) {
       status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                                   ARCHBIRD_NO_OFFSET,
@@ -639,6 +776,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     const AbString *name = text_member(row, "name");
     const AbString *output = text_member(row, "output");
     RetrievalField fields[2];
+    if (!artifact_selected[index])
+      continue;
     if (!name || !output) {
       status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                                   ARCHBIRD_NO_OFFSET,
@@ -651,6 +790,13 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                            AB_RETRIEVAL_ARTIFACT, row, output, name, NULL, 0,
                            index, fields, 2);
   }
+cleanup:
+  ab_free(engine, artifact_selected);
+  ab_free(engine, package_selected);
+  ab_free(engine, component_selected);
+  ab_free(engine, symbol_selected);
+  ab_free(engine, file_selected);
+  ab_free(engine, symbol_offsets);
   if (status != ARCHBIRD_OK) {
     ab_free(engine, items);
     return status;
@@ -747,9 +893,10 @@ static ArchbirdStatus diversify_hits(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
-ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
-                               const AbValue *queries, size_t limit,
-                               AbRetrievalResult *out) {
+ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
+                                 const AbProjectionData *domain,
+                                 const AbValue *queries, size_t limit,
+                                 AbRetrievalResult *out) {
   RetrievalCandidate *candidates = NULL;
   size_t candidate_count = 0;
   size_t index;
@@ -757,7 +904,9 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
   ArchbirdStatus status = ARCHBIRD_OK;
   memset(out, 0, sizeof(*out));
   out->limit = limit;
-  if (!queries || queries->kind != AB_VALUE_ARRAY || !queries->as.array.count ||
+  if (!domain ||
+      strcmp(ab_projection_data_classification(domain), "complete") ||
+      !queries || queries->kind != AB_VALUE_ARRAY || !queries->as.array.count ||
       !limit)
     return archbird_error_set(
         engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
@@ -782,7 +931,8 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
                            "retrieval query contains no searchable terms");
     goto cleanup;
   }
-  status = collect_candidates(engine, map, out, &candidates, &candidate_count);
+  status = collect_candidates(engine, map, domain, out, &candidates,
+                              &candidate_count);
   if (status != ARCHBIRD_OK)
     goto cleanup;
   out->candidate_count = candidate_count;
@@ -836,11 +986,12 @@ ArchbirdStatus ab_map_retrieve(ArchbirdEngine *engine, const AbValue *map,
 cleanup:
   ab_free(engine, candidates);
   if (status != ARCHBIRD_OK)
-    ab_map_retrieval_free(engine, out);
+    ab_query_retrieval_free(engine, out);
   return status;
 }
 
-void ab_map_retrieval_free(ArchbirdEngine *engine, AbRetrievalResult *result) {
+void ab_query_retrieval_free(ArchbirdEngine *engine,
+                             AbRetrievalResult *result) {
   size_t index;
   for (index = 0; index < result->term_count; index++)
     ab_string_free(engine, &result->terms[index]);
@@ -848,7 +999,7 @@ void ab_map_retrieval_free(ArchbirdEngine *engine, AbRetrievalResult *result) {
   memset(result, 0, sizeof(*result));
 }
 
-const char *ab_map_retrieval_kind_name(AbRetrievalKind kind) {
+const char *ab_query_retrieval_kind_name(AbRetrievalKind kind) {
   switch (kind) {
   case AB_RETRIEVAL_FILE:
     return "file";

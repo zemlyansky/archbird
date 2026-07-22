@@ -2,9 +2,12 @@
 
 #include "archbird_internal.h"
 #include "json_value.h"
-#include "map_internal.h"
+#include "path_match.h"
+#include "projection_internal.h"
+#include "query_internal.h"
 #include "render_internal.h"
 #include "retrieval.h"
+#include "sha256.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -19,8 +22,6 @@ typedef struct QueryRequest {
   const AbValue *search;
   const AbValue *change_set;
   const AbValue *context;
-  const AbValue *plan;
-  const AbValue *projection_results;
   const AbString *direction;
   const AbString *producer_policy;
   size_t depth;
@@ -120,6 +121,9 @@ typedef struct QueryTestMatch {
 typedef struct QueryContext {
   ArchbirdEngine *engine;
   const AbValue *map;
+  AbValue owned_plan;
+  const AbValue *plan;
+  AbQueryProjectionSet projections;
   QueryRequest request;
   QueryFile *files;
   size_t file_count;
@@ -205,17 +209,21 @@ static ArchbirdStatus validate_saved_plan(QueryContext *context,
   static const char *const allowed[] = {
       "id",
       "map_config_sha256",
+      "operations",
       "project_configuration_sha256",
-      "projection_definitions",
+      "projections",
       "query_definition_sha256",
       "query_plan_sha256",
+      "selection",
   };
   static const char *const projection_allowed[] = {
       "id",
+      "operation",
       "projection_definition_sha256",
   };
   const AbValue *rows;
   const AbValue *id;
+  const AbValue *map_configuration;
   const AbValue *project_configuration;
   size_t index;
   if (!plan)
@@ -227,110 +235,90 @@ static ArchbirdStatus validate_saved_plan(QueryContext *context,
                        sizeof(allowed) / sizeof(allowed[0])))
       return query_error(context, "query.plan contains an unknown field");
   id = ab_value_member(plan, "id");
+  map_configuration = ab_value_member(plan, "map_config_sha256");
   project_configuration = ab_value_member(plan, "project_configuration_sha256");
-  if (!stable_id_value(id) || !project_configuration ||
+  if (!stable_id_value(id) || !map_configuration || !project_configuration ||
+      !ab_value_member(plan, "operations") ||
+      ab_value_member(plan, "operations")->kind != AB_VALUE_OBJECT ||
+      !ab_value_member(plan, "selection") ||
+      ab_value_member(plan, "selection")->kind != AB_VALUE_OBJECT ||
+      (map_configuration->kind != AB_VALUE_NULL &&
+       !valid_sha256_value(map_configuration)) ||
       (project_configuration->kind != AB_VALUE_NULL &&
        !valid_sha256_value(project_configuration)) ||
-      !valid_sha256_value(ab_value_member(plan, "map_config_sha256")) ||
       !valid_sha256_value(ab_value_member(plan, "query_definition_sha256")) ||
       !valid_sha256_value(ab_value_member(plan, "query_plan_sha256")))
     return query_error(context, "query.plan identities are invalid");
   if ((string_literal(&id->as.text, "ad-hoc") &&
-       project_configuration->kind != AB_VALUE_NULL) ||
+       (map_configuration->kind != AB_VALUE_NULL ||
+        project_configuration->kind != AB_VALUE_NULL)) ||
       (!string_literal(&id->as.text, "ad-hoc") &&
-       project_configuration->kind == AB_VALUE_NULL))
+       (map_configuration->kind == AB_VALUE_NULL ||
+        project_configuration->kind == AB_VALUE_NULL)))
     return query_error(
         context,
         "query.plan project configuration identity does not match its kind");
-  rows = ab_value_member(plan, "projection_definitions");
+  if (map_configuration->kind == AB_VALUE_STRING) {
+    const AbValue *evidence = ab_value_member(context->map, "evidence");
+    const AbValue *actual =
+        evidence ? ab_value_member(evidence, "config_sha256") : NULL;
+    if (!actual || actual->kind != AB_VALUE_STRING ||
+        !ab_string_equal(&map_configuration->as.text, &actual->as.text))
+      return query_error(
+          context, "query.plan Map configuration does not match query input");
+  }
+  rows = ab_value_member(plan, "projections");
   if (!rows || rows->kind != AB_VALUE_ARRAY)
-    return query_error(context,
-                       "query.plan.projection_definitions must be an array");
+    return query_error(context, "query.plan.projections must be an array");
   for (index = 0; index < rows->as.array.count; index++) {
     const AbValue *row = &rows->as.array.items[index];
     size_t field_index;
     if (!row || row->kind != AB_VALUE_OBJECT)
-      return query_error(
-          context, "query.plan.projection_definitions[] must be an object");
+      return query_error(context, "query.plan.projections[] must be an object");
     for (field_index = 0; field_index < row->as.object.count; field_index++)
       if (!field_allowed(
               &row->as.object.fields[field_index].name, projection_allowed,
               sizeof(projection_allowed) / sizeof(projection_allowed[0])))
         return query_error(
-            context,
-            "query.plan.projection_definitions[] contains an unknown field");
-    if (!stable_id_value(ab_value_member(row, "id")) ||
+            context, "query.plan.projections[] contains an unknown field");
+    if (!ab_value_member(row, "operation") ||
+        ab_value_member(row, "operation")->kind != AB_VALUE_OBJECT ||
+        !stable_id_value(ab_value_member(row, "id")) ||
         !valid_sha256_value(
             ab_value_member(row, "projection_definition_sha256")))
       return query_error(context,
                          "query.plan projection identities are invalid");
   }
-  return ARCHBIRD_OK;
-}
-
-static ArchbirdStatus validate_projection_results(QueryContext *context,
-                                                  const AbValue *rows) {
-  static const char *const allowed[] = {
-      "id",
-      "projection_definition_sha256",
-      "projection_result_sha256",
-  };
-  size_t index;
-  if (!rows)
-    return ARCHBIRD_OK;
-  if (rows->kind != AB_VALUE_ARRAY)
-    return query_error(context, "query.projection_results must be an array");
-  for (index = 0; index < rows->as.array.count; index++) {
-    const AbValue *row = &rows->as.array.items[index];
-    size_t field_index;
-    if (row->kind != AB_VALUE_OBJECT)
-      return query_error(context,
-                         "query.projection_results[] must be an object");
-    for (field_index = 0; field_index < row->as.object.count; field_index++)
-      if (!field_allowed(&row->as.object.fields[field_index].name, allowed,
-                         sizeof(allowed) / sizeof(allowed[0])))
-        return query_error(
-            context, "query.projection_results[] contains an unknown field");
-    if (!stable_id_value(ab_value_member(row, "id")) ||
-        !valid_sha256_value(
-            ab_value_member(row, "projection_definition_sha256")) ||
-        !valid_sha256_value(ab_value_member(row, "projection_result_sha256")))
-      return query_error(context,
-                         "query projection result identities are invalid");
-  }
-  return ARCHBIRD_OK;
-}
-
-static int string_values_equal(const AbValue *left, const AbValue *right) {
-  return left && right && left->kind == AB_VALUE_STRING &&
-         right->kind == AB_VALUE_STRING &&
-         ab_string_equal(&left->as.text, &right->as.text);
-}
-
-static ArchbirdStatus validate_plan_evaluation(QueryContext *context) {
-  const AbValue *definitions;
-  const AbValue *results = context->request.projection_results;
-  size_t index;
-  if (!results)
-    return ARCHBIRD_OK;
-  if (!context->request.plan)
-    return query_error(
-        context, "query projection results require a matching saved plan");
-  definitions =
-      ab_value_member(context->request.plan, "projection_definitions");
-  if (definitions->as.array.count != results->as.array.count)
-    return query_error(context,
-                       "query projection results do not match the saved plan");
-  for (index = 0; index < definitions->as.array.count; index++) {
-    const AbValue *definition = &definitions->as.array.items[index];
-    const AbValue *result = &results->as.array.items[index];
-    if (!string_values_equal(ab_value_member(definition, "id"),
-                             ab_value_member(result, "id")) ||
-        !string_values_equal(
-            ab_value_member(definition, "projection_definition_sha256"),
-            ab_value_member(result, "projection_definition_sha256")))
-      return query_error(
-          context, "query projection results do not match the saved plan");
+  {
+    AbBuffer base;
+    uint8_t digest[32];
+    char sha256[65];
+    const AbValue *expected = ab_value_member(plan, "query_plan_sha256");
+    ArchbirdStatus status;
+    ab_buffer_init(&base, context->engine);
+    status = ab_buffer_literal(&base, "{\"operations\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&base, ab_value_member(plan, "operations"));
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&base, ",\"projections\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&base, rows);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&base, ",\"selection\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&base, ab_value_member(plan, "selection"));
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&base, "}");
+    if (status == ARCHBIRD_OK)
+      status = archbird_sha256(base.data, base.length, digest);
+    if (status == ARCHBIRD_OK) {
+      archbird_sha256_hex(digest, sha256);
+      if (memcmp(expected->as.text.data, sha256, 64))
+        status = query_error(context, "query.plan digest is stale");
+    }
+    ab_buffer_free(&base);
+    if (status != ARCHBIRD_OK)
+      return status;
   }
   return ARCHBIRD_OK;
 }
@@ -665,8 +653,11 @@ static ArchbirdStatus validate_context_request(QueryContext *context,
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus decode_request(QueryContext *context,
-                                     const AbValue *request) {
+static ArchbirdStatus decode_request(QueryContext *context, const AbValue *plan,
+                                     const AbValue *request, int saved_plan) {
+  const AbValue *selection = ab_value_member(plan, "selection");
+  const AbValue *operations = ab_value_member(plan, "operations");
+  const AbValue *projections = ab_value_member(plan, "projections");
   const AbValue *direction;
   const AbValue *depth;
   const AbValue *test_depth;
@@ -675,29 +666,31 @@ static ArchbirdStatus decode_request(QueryContext *context,
   static const AbString compatible = {(char *)"compatible", 10};
   const AbValue *producer_policy;
   static const char *const allowed[] = {
-      "artifacts", "change_set",   "components",      "context",
-      "depth",     "direction",    "focus",           "packages",
-      "paths",     "plan",         "producer_policy", "projection_results",
-      "search",    "search_limit", "symbols",         "test_depth",
+      "artifacts", "change_set",      "components", "context",
+      "depth",     "direction",       "focus",      "packages",
+      "paths",     "producer_policy", "search",     "search_limit",
+      "symbols",   "test_depth",
   };
+  static const char *const saved_allowed[] = {"change_set", "plan",
+                                              "producer_policy"};
   size_t field_index;
   if (!request || request->kind != AB_VALUE_OBJECT)
     return query_error(context, "query request must be an object");
   for (field_index = 0; field_index < request->as.object.count; field_index++)
-    if (!field_allowed(&request->as.object.fields[field_index].name, allowed,
-                       sizeof(allowed) / sizeof(allowed[0])))
+    if (!field_allowed(&request->as.object.fields[field_index].name,
+                       saved_plan ? saved_allowed : allowed,
+                       saved_plan
+                           ? sizeof(saved_allowed) / sizeof(saved_allowed[0])
+                           : sizeof(allowed) / sizeof(allowed[0])))
       return query_error(context, "query request contains an unknown field");
-  context->request.focus = optional_array(request, "focus");
-  context->request.paths = optional_array(request, "paths");
-  context->request.symbols = optional_array(request, "symbols");
-  context->request.components = optional_array(request, "components");
-  context->request.packages = optional_array(request, "packages");
-  context->request.artifacts = optional_array(request, "artifacts");
-  context->request.search = optional_array(request, "search");
+  context->request.focus = optional_array(selection, "focus");
+  context->request.paths = optional_array(selection, "paths");
+  context->request.symbols = optional_array(selection, "symbols");
+  context->request.components = optional_array(selection, "components");
+  context->request.packages = optional_array(selection, "packages");
+  context->request.artifacts = optional_array(selection, "artifacts");
+  context->request.search = optional_array(operations, "search");
   context->request.change_set = ab_value_member(request, "change_set");
-  context->request.plan = ab_value_member(request, "plan");
-  context->request.projection_results =
-      ab_value_member(request, "projection_results");
   if (!string_array_valid(context->request.focus) ||
       !string_array_valid(context->request.paths) ||
       !string_array_valid(context->request.symbols) ||
@@ -708,17 +701,11 @@ static ArchbirdStatus decode_request(QueryContext *context,
     return query_error(context, "query selectors must be arrays of strings");
   if (validate_change_set(context, context->request.change_set) != ARCHBIRD_OK)
     return ARCHBIRD_INVALID_SCHEMA;
-  if (validate_saved_plan(context, context->request.plan) != ARCHBIRD_OK)
+  if (validate_context_request(
+          context, ab_value_member(operations, "context")) != ARCHBIRD_OK)
     return ARCHBIRD_INVALID_SCHEMA;
-  if (validate_projection_results(
-          context, context->request.projection_results) != ARCHBIRD_OK)
-    return ARCHBIRD_INVALID_SCHEMA;
-  if (validate_plan_evaluation(context) != ARCHBIRD_OK)
-    return ARCHBIRD_INVALID_SCHEMA;
-  if (validate_context_request(context, ab_value_member(request, "context")) !=
-      ARCHBIRD_OK)
-    return ARCHBIRD_INVALID_SCHEMA;
-  direction = ab_value_member(request, "direction");
+  context->request.context = ab_value_member(operations, "context");
+  direction = ab_value_member(operations, "direction");
   context->request.direction = direction && direction->kind == AB_VALUE_STRING
                                    ? &direction->as.text
                                    : &both;
@@ -739,21 +726,21 @@ static ArchbirdStatus decode_request(QueryContext *context,
     return query_error(context,
                        "query.producer_policy must be compatible or current");
   context->request.depth = 1;
-  depth = ab_value_member(request, "depth");
+  depth = ab_value_member(operations, "depth");
   if (depth) {
     if (!ab_value_u64(depth, &number) || number > SIZE_MAX)
       return query_error(context, "query.depth must be an integer >= 0");
     context->request.depth = (size_t)number;
   }
   context->request.test_depth = 8;
-  test_depth = ab_value_member(request, "test_depth");
+  test_depth = ab_value_member(operations, "test_depth");
   if (test_depth) {
     if (!ab_value_u64(test_depth, &number) || number > SIZE_MAX)
       return query_error(context, "query.test_depth must be an integer >= 0");
     context->request.test_depth = (size_t)number;
   }
   context->request.search_limit = 8;
-  depth = ab_value_member(request, "search_limit");
+  depth = ab_value_member(operations, "search_limit");
   if (depth) {
     if (!ab_value_u64(depth, &number) || !number || number > 100)
       return query_error(context,
@@ -766,7 +753,9 @@ static ArchbirdStatus decode_request(QueryContext *context,
       !context->request.components->as.array.count &&
       !context->request.packages->as.array.count &&
       !context->request.artifacts->as.array.count &&
-      !context->request.search->as.array.count && !context->request.change_set)
+      !context->request.search->as.array.count &&
+      (!projections || !projections->as.array.count) &&
+      !context->request.change_set)
     return query_error(context, "query requires at least one focus selector");
   return ARCHBIRD_OK;
 }
@@ -900,6 +889,8 @@ static ArchbirdStatus build_edges(QueryContext *context) {
 }
 
 static void query_context_free(QueryContext *context) {
+  ab_query_projection_set_free(context->engine, &context->projections);
+  ab_value_free(context->engine, &context->owned_plan);
   ab_free(context->engine, context->files);
   ab_free(context->engine, context->edges);
   ab_free(context->engine, context->symbols);
@@ -915,7 +906,7 @@ static void query_context_free(QueryContext *context) {
   ab_free(context->engine, context->package_selected);
   ab_free(context->engine, context->artifact_selected);
   ab_free(context->engine, context->component_selected);
-  ab_map_retrieval_free(context->engine, &context->retrieval);
+  ab_query_retrieval_free(context->engine, &context->retrieval);
   memset(context, 0, sizeof(*context));
 }
 
@@ -1067,78 +1058,6 @@ static ArchbirdStatus append_symbol(QueryContext *context, size_t file_index,
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus match_symbols(QueryContext *context,
-                                    const AbValue *patterns) {
-  size_t file_index;
-  for (file_index = 0; file_index < context->file_count; file_index++) {
-    const QueryFile *file = &context->files[file_index];
-    size_t symbol_index;
-    for (symbol_index = 0; symbol_index < file->symbols->as.array.count;
-         symbol_index++) {
-      const AbValue *row = &file->symbols->as.array.items[symbol_index];
-      const AbString *name;
-      const AbString *kind;
-      const AbString *scope;
-      AbString base;
-      size_t base_start;
-      uint64_t line;
-      int qualified;
-      if (row->kind != AB_VALUE_OBJECT)
-        return query_error(context, "map.files[].symbols[] must be objects");
-      name = required_string(context, row, "name", "map.files[].symbols[]");
-      kind = required_string(context, row, "kind", "map.files[].symbols[]");
-      scope = required_string(context, row, "scope", "map.files[].symbols[]");
-      if (!name || !kind || !scope ||
-          !ab_value_u64(ab_value_member(row, "line"), &line) || line > SIZE_MAX)
-        return query_error(context,
-                           "map.files[].symbols[].line must be an integer");
-      base_start = name->length;
-      while (base_start && name->data[base_start - 1] != '.')
-        base_start--;
-      base.data = name->data + base_start;
-      base.length = name->length - base_start;
-      qualified = qualified_matches(context, file->path, name, patterns);
-      if (qualified < 0)
-        return ARCHBIRD_OUT_OF_MEMORY;
-      if (!array_matches(patterns, name) && !array_matches(patterns, &base) &&
-          !qualified)
-        continue;
-      context->files[file_index].symbol_seed = 1;
-      context->files[file_index].matched_symbol_seed = 1;
-      if (append_symbol(context, file_index, row, name, kind, scope,
-                        (size_t)line, 1) != ARCHBIRD_OK)
-        return ARCHBIRD_OUT_OF_MEMORY;
-    }
-  }
-  return ARCHBIRD_OK;
-}
-
-static ArchbirdStatus select_files(QueryContext *context,
-                                   const AbValue *patterns) {
-  size_t index;
-  for (index = 0; index < context->file_count; index++) {
-    if (path_array_matches(patterns, context->files[index].path))
-      context->files[index].seed = 1;
-  }
-  return ARCHBIRD_OK;
-}
-
-static const AbValue *member_array_checked(QueryContext *context,
-                                           const AbValue *object,
-                                           const char *name,
-                                           const char *where) {
-  const AbValue *value = ab_value_member(object, name);
-  if (!value)
-    return optional_array(object, name);
-  if (value->kind != AB_VALUE_ARRAY) {
-    archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
-                       ARCHBIRD_NO_OFFSET, "%s.%s must be an array", where,
-                       name);
-    return NULL;
-  }
-  return value;
-}
-
 static void seed_string_array(QueryContext *context, const AbValue *values) {
   size_t index;
   for (index = 0; index < values->as.array.count; index++) {
@@ -1155,198 +1074,6 @@ static void seed_retrieval_string_array(QueryContext *context,
     if (values->as.array.items[index].kind == AB_VALUE_STRING)
       mark_retrieval_seed(context, &values->as.array.items[index].as.text,
                           score, rank);
-}
-
-static ArchbirdStatus select_components(QueryContext *context,
-                                        const AbValue *patterns) {
-  const AbValue *components =
-      required_array(context, context->map, "components", "map");
-  size_t index;
-  if (!components)
-    return ARCHBIRD_INVALID_SCHEMA;
-  if (!context->component_selected && components->as.array.count) {
-    context->component_selected = (int *)ab_calloc(
-        context->engine, components->as.array.count, sizeof(int));
-    if (!context->component_selected)
-      return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
-                                ARCHBIRD_NO_OFFSET,
-                                "out of memory selecting query components");
-    context->component_count = components->as.array.count;
-  }
-  for (index = 0; index < components->as.array.count; index++) {
-    const AbValue *row = &components->as.array.items[index];
-    const AbString *name;
-    const AbValue *files;
-    if (row->kind != AB_VALUE_OBJECT)
-      return query_error(context, "map.components[] must be objects");
-    name = required_string(context, row, "name", "map.components[]");
-    files = required_array(context, row, "files", "map.components[]");
-    if (!name || !files || !string_array_valid(files))
-      return ARCHBIRD_INVALID_SCHEMA;
-    if (array_matches(patterns, name)) {
-      context->component_selected[index] = 1;
-      seed_string_array(context, files);
-    }
-  }
-  return ARCHBIRD_OK;
-}
-
-static ArchbirdStatus select_packages(QueryContext *context,
-                                      const AbValue *patterns,
-                                      const AbValue *export_patterns) {
-  const AbValue *packages =
-      required_array(context, context->map, "packages", "map");
-  size_t index;
-  if (!packages)
-    return ARCHBIRD_INVALID_SCHEMA;
-  if (!context->package_selected && packages->as.array.count) {
-    context->package_selected = (int *)ab_calloc(
-        context->engine, packages->as.array.count, sizeof(int));
-    if (!context->package_selected)
-      return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
-                                ARCHBIRD_NO_OFFSET,
-                                "out of memory selecting query packages");
-    context->package_count = packages->as.array.count;
-  }
-  for (index = 0; index < packages->as.array.count; index++) {
-    const AbValue *row = &packages->as.array.items[index];
-    const AbString *name;
-    const AbValue *identity;
-    const AbValue *aliases;
-    const AbValue *entrypoints;
-    const AbValue *origins;
-    size_t alias_index;
-    int matched = 0;
-    if (row->kind != AB_VALUE_OBJECT)
-      return query_error(context, "map.packages[] must be objects");
-    name = required_string(context, row, "name", "map.packages[]");
-    identity = ab_value_member(row, "identity");
-    aliases = member_array_checked(context, row, "aliases", "map.packages[]");
-    entrypoints = ab_value_member(row, "entrypoints");
-    origins = ab_value_member(row, "export_origins");
-    if (!name || !aliases || !string_array_valid(aliases) || !identity ||
-        identity->kind != AB_VALUE_STRING || !entrypoints ||
-        entrypoints->kind != AB_VALUE_OBJECT || !origins ||
-        origins->kind != AB_VALUE_OBJECT)
-      return query_error(context, "map package shape is invalid");
-    matched = array_matches(patterns, name) ||
-              (identity->as.text.length &&
-               array_matches(patterns, &identity->as.text));
-    for (alias_index = 0; !matched && alias_index < aliases->as.array.count;
-         alias_index++)
-      matched = array_matches(patterns,
-                              &aliases->as.array.items[alias_index].as.text);
-    if (matched) {
-      size_t field;
-      context->package_selected[index] = 1;
-      for (field = 0; field < entrypoints->as.object.count; field++) {
-        const AbValue *target = &entrypoints->as.object.fields[field].value;
-        if (target->kind != AB_VALUE_STRING)
-          return query_error(context,
-                             "map package entrypoint must be a string");
-        mark_seed(context, &target->as.text);
-      }
-    }
-    for (alias_index = 0; alias_index < origins->as.object.count;
-         alias_index++) {
-      const AbObjectField *origin = &origins->as.object.fields[alias_index];
-      if (!array_matches(export_patterns, &origin->name))
-        continue;
-      if (!string_array_valid(&origin->value))
-        return query_error(context,
-                           "map package export origins must be string arrays");
-      context->package_selected[index] = 1;
-      seed_string_array(context, &origin->value);
-    }
-  }
-  return ARCHBIRD_OK;
-}
-
-static int artifact_matches(QueryContext *context, const AbValue *row,
-                            const AbValue *patterns) {
-  const AbString *name =
-      required_string(context, row, "name", "map.artifacts[]");
-  const AbString *output =
-      required_string(context, row, "output", "map.artifacts[]");
-  const AbValue *loaders =
-      required_array(context, row, "loaded_by", "map.artifacts[]");
-  size_t index;
-  if (!name || !output || !loaders)
-    return -1;
-  if (array_matches(patterns, name) || path_array_matches(patterns, output))
-    return 1;
-  for (index = 0; index < loaders->as.array.count; index++) {
-    const AbValue *loader = &loaders->as.array.items[index];
-    const AbString *path;
-    if (loader->kind != AB_VALUE_OBJECT)
-      return -1;
-    path =
-        required_string(context, loader, "path", "map.artifacts[].loaded_by[]");
-    if (!path)
-      return -1;
-    if (path_array_matches(patterns, path))
-      return 1;
-  }
-  return 0;
-}
-
-static ArchbirdStatus select_artifacts(QueryContext *context,
-                                       const AbValue *patterns) {
-  const AbValue *artifacts =
-      required_array(context, context->map, "artifacts", "map");
-  size_t index;
-  if (!artifacts)
-    return ARCHBIRD_INVALID_SCHEMA;
-  if (!context->artifact_selected && artifacts->as.array.count) {
-    context->artifact_selected = (int *)ab_calloc(
-        context->engine, artifacts->as.array.count, sizeof(int));
-    if (!context->artifact_selected)
-      return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
-                                ARCHBIRD_NO_OFFSET,
-                                "out of memory selecting query artifacts");
-    context->artifact_count = artifacts->as.array.count;
-  }
-  for (index = 0; index < artifacts->as.array.count; index++) {
-    const AbValue *row = &artifacts->as.array.items[index];
-    const AbValue *inputs;
-    size_t input_index;
-    int matched;
-    if (row->kind != AB_VALUE_OBJECT)
-      return query_error(context, "map.artifacts[] must be objects");
-    matched = artifact_matches(context, row, patterns);
-    if (matched < 0)
-      return ARCHBIRD_INVALID_SCHEMA;
-    if (!matched)
-      continue;
-    context->artifact_selected[index] = 1;
-    inputs = required_array(context, row, "inputs", "map.artifacts[]");
-    if (!inputs)
-      return ARCHBIRD_INVALID_SCHEMA;
-    for (input_index = 0; input_index < inputs->as.array.count; input_index++) {
-      const AbValue *input = &inputs->as.array.items[input_index];
-      const AbString *path;
-      if (input->kind != AB_VALUE_OBJECT)
-        return query_error(context, "map.artifacts[].inputs[] must be objects");
-      path =
-          required_string(context, input, "path", "map.artifacts[].inputs[]");
-      if (!path)
-        return ARCHBIRD_INVALID_SCHEMA;
-      mark_seed(context, path);
-    }
-    {
-      const AbValue *loaders = ab_value_member(row, "loaded_by");
-      for (input_index = 0; input_index < loaders->as.array.count;
-           input_index++) {
-        const AbString *path =
-            required_string(context, &loaders->as.array.items[input_index],
-                            "path", "map.artifacts[].loaded_by[]");
-        if (!path)
-          return ARCHBIRD_INVALID_SCHEMA;
-        mark_seed(context, path);
-      }
-    }
-  }
-  return ARCHBIRD_OK;
 }
 
 static ArchbirdStatus select_change_set(QueryContext *context) {
@@ -1367,6 +1094,250 @@ static ArchbirdStatus select_change_set(QueryContext *context) {
       context->files[file_index].seed = 1;
   }
   return ARCHBIRD_OK;
+}
+
+static const AbValue *projection_attribute(const AbProjectionItem *item,
+                                           const char *name) {
+  size_t index;
+  size_t length = strlen(name);
+  for (index = 0; index < item->attribute_count; index++)
+    if (item->attributes[index].name.length == length &&
+        !memcmp(item->attributes[index].name.data, name, length))
+      return &item->attributes[index].value;
+  return NULL;
+}
+
+static ArchbirdStatus initialize_named_selection(QueryContext *context) {
+  const AbValue *components =
+      required_array(context, context->map, "components", "map");
+  const AbValue *packages =
+      required_array(context, context->map, "packages", "map");
+  const AbValue *artifacts =
+      required_array(context, context->map, "artifacts", "map");
+  if (!components || !packages || !artifacts)
+    return ARCHBIRD_INVALID_SCHEMA;
+  context->component_count = components->as.array.count;
+  context->package_count = packages->as.array.count;
+  context->artifact_count = artifacts->as.array.count;
+  if (context->component_count)
+    context->component_selected = (int *)ab_calloc(
+        context->engine, context->component_count, sizeof(int));
+  if (context->package_count)
+    context->package_selected =
+        (int *)ab_calloc(context->engine, context->package_count, sizeof(int));
+  if (context->artifact_count)
+    context->artifact_selected =
+        (int *)ab_calloc(context->engine, context->artifact_count, sizeof(int));
+  if ((context->component_count && !context->component_selected) ||
+      (context->package_count && !context->package_selected) ||
+      (context->artifact_count && !context->artifact_selected))
+    return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory selecting projected query inputs");
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus select_component_identity(QueryContext *context,
+                                                const AbString *identity) {
+  const AbValue *components = ab_value_member(context->map, "components");
+  size_t index;
+  for (index = 0; index < components->as.array.count; index++) {
+    const AbValue *component = &components->as.array.items[index];
+    const AbValue *name = ab_value_member(component, "name");
+    const AbValue *files = ab_value_member(component, "files");
+    if (!name || name->kind != AB_VALUE_STRING || !files ||
+        files->kind != AB_VALUE_ARRAY)
+      return query_error(context, "map component shape is invalid");
+    if (!ab_string_equal(&name->as.text, identity))
+      continue;
+    context->component_selected[index] = 1;
+    seed_string_array(context, files);
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus select_package_identity(QueryContext *context,
+                                              const AbString *identity) {
+  const AbValue *packages = ab_value_member(context->map, "packages");
+  size_t index;
+  for (index = 0; index < packages->as.array.count; index++) {
+    const AbValue *package = &packages->as.array.items[index];
+    const AbValue *name = ab_value_member(package, "name");
+    const AbValue *canonical = ab_value_member(package, "identity");
+    const AbValue *aliases = ab_value_member(package, "aliases");
+    size_t alias_index;
+    int matched;
+    if (!name || name->kind != AB_VALUE_STRING || !canonical ||
+        canonical->kind != AB_VALUE_STRING || !aliases ||
+        aliases->kind != AB_VALUE_ARRAY)
+      return query_error(context, "map package shape is invalid");
+    matched = ab_string_equal(&name->as.text, identity) ||
+              ab_string_equal(&canonical->as.text, identity);
+    for (alias_index = 0; !matched && alias_index < aliases->as.array.count;
+         alias_index++)
+      matched = aliases->as.array.items[alias_index].kind == AB_VALUE_STRING &&
+                ab_string_equal(&aliases->as.array.items[alias_index].as.text,
+                                identity);
+    if (matched)
+      context->package_selected[index] = 1;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus select_artifact_identity(QueryContext *context,
+                                               const AbString *identity) {
+  const AbValue *artifacts = ab_value_member(context->map, "artifacts");
+  size_t index;
+  for (index = 0; index < artifacts->as.array.count; index++) {
+    const AbValue *artifact = &artifacts->as.array.items[index];
+    const AbValue *name = ab_value_member(artifact, "name");
+    if (!name || name->kind != AB_VALUE_STRING)
+      return query_error(context, "map artifact shape is invalid");
+    if (ab_string_equal(&name->as.text, identity))
+      context->artifact_selected[index] = 1;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus select_symbol_item(QueryContext *context,
+                                         const AbProjectionItem *item) {
+  const AbValue *locations = projection_attribute(item, "locations");
+  size_t location_index;
+  if (!locations || locations->kind != AB_VALUE_ARRAY ||
+      !locations->as.array.count)
+    return query_error(context, "symbol projection has no exact Map locations");
+  for (location_index = 0; location_index < locations->as.array.count;
+       location_index++) {
+    const AbValue *location = &locations->as.array.items[location_index];
+    const AbValue *path = ab_value_member(location, "path");
+    const AbValue *source_value = ab_value_member(location, "source_index");
+    const AbValue *nested_value = ab_value_member(location, "nested_index");
+    const AbValue *row;
+    const AbString *name;
+    const AbString *kind;
+    const AbString *scope;
+    uint64_t source_index;
+    uint64_t nested_index;
+    uint64_t line;
+    if (location->kind != AB_VALUE_OBJECT || !path ||
+        path->kind != AB_VALUE_STRING ||
+        !ab_value_u64(source_value, &source_index) ||
+        !ab_value_u64(nested_value, &nested_index) ||
+        source_index >= context->file_count ||
+        nested_index >= context->files[source_index].symbols->as.array.count ||
+        !ab_string_equal(&path->as.text, context->files[source_index].path))
+      return query_error(context,
+                         "symbol projection contains an invalid Map location");
+    row = &context->files[source_index].symbols->as.array.items[nested_index];
+    name = required_string(context, row, "name", "map.files[].symbols[]");
+    kind = required_string(context, row, "kind", "map.files[].symbols[]");
+    scope = required_string(context, row, "scope", "map.files[].symbols[]");
+    if (!name || !kind || !scope ||
+        !ab_value_u64(ab_value_member(row, "line"), &line) || line > SIZE_MAX)
+      return ARCHBIRD_INVALID_SCHEMA;
+    context->files[source_index].symbol_seed = 1;
+    context->files[source_index].matched_symbol_seed = 1;
+    if (append_symbol(context, (size_t)source_index, row, name, kind, scope,
+                      (size_t)line, 1) != ARCHBIRD_OK)
+      return ARCHBIRD_OUT_OF_MEMORY;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus select_projection(QueryContext *context,
+                                        const AbQueryProjection *projection) {
+  const AbValue *select =
+      ab_value_member(&projection->plan.definition, "select");
+  const AbProjectionData *data = &projection->result.data;
+  size_t item_index;
+  if (ab_projection_value_is(select, "search_domain"))
+    return ARCHBIRD_OK;
+  for (item_index = 0; item_index < data->item_count; item_index++) {
+    const AbProjectionItem *item = &data->items[item_index];
+    const AbValue *source = projection_attribute(item, "source");
+    const AbValue *target = projection_attribute(item, "target");
+    size_t evidence_index;
+    if (!string_literal(&item->state, "current"))
+      return query_error(context, "query seed projection contains stale data");
+    if (ab_projection_value_is(select, "symbols")) {
+      ArchbirdStatus status = select_symbol_item(context, item);
+      if (status != ARCHBIRD_OK)
+        return status;
+      continue;
+    }
+    if (ab_projection_value_is(select, "component_membership")) {
+      mark_seed(context, &item->key);
+      {
+        const AbValue *components = projection_attribute(item, "components");
+        size_t component_index;
+        for (component_index = 0;
+             components && component_index < components->as.array.count;
+             component_index++) {
+          ArchbirdStatus status = select_component_identity(
+              context, &components->as.array.items[component_index].as.text);
+          if (status != ARCHBIRD_OK)
+            return status;
+        }
+      }
+      continue;
+    }
+    if (ab_projection_value_is(select, "component_edges")) {
+      ArchbirdStatus status;
+      if (source && source->kind == AB_VALUE_STRING) {
+        status = select_component_identity(context, &source->as.text);
+        if (status != ARCHBIRD_OK)
+          return status;
+      }
+      if (target && target->kind == AB_VALUE_STRING) {
+        status = select_component_identity(context, &target->as.text);
+        if (status != ARCHBIRD_OK)
+          return status;
+      }
+      continue;
+    }
+    if (ab_projection_value_is(select, "package_entrypoints") ||
+        ab_projection_value_is(select, "package_exports")) {
+      if (source && source->kind == AB_VALUE_STRING) {
+        ArchbirdStatus status =
+            select_package_identity(context, &source->as.text);
+        if (status != ARCHBIRD_OK)
+          return status;
+      }
+      if (target && target->kind == AB_VALUE_STRING)
+        mark_seed(context, &target->as.text);
+      continue;
+    }
+    if (ab_projection_value_is(select, "artifact_routes")) {
+      if (source && source->kind == AB_VALUE_STRING) {
+        ArchbirdStatus status =
+            select_artifact_identity(context, &source->as.text);
+        if (status != ARCHBIRD_OK)
+          return status;
+      }
+      if (target && target->kind == AB_VALUE_STRING)
+        mark_seed(context, &target->as.text);
+      continue;
+    }
+    if (source && source->kind == AB_VALUE_STRING)
+      mark_seed(context, &source->as.text);
+    if (target && target->kind == AB_VALUE_STRING)
+      mark_seed(context, &target->as.text);
+    for (evidence_index = 0; evidence_index < item->evidence_count;
+         evidence_index++)
+      mark_seed(context, &item->evidence[evidence_index].path);
+    if (!item->evidence_count)
+      mark_seed(context, &item->key);
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus select_projections(QueryContext *context) {
+  size_t index;
+  ArchbirdStatus status = initialize_named_selection(context);
+  for (index = 0; status == ARCHBIRD_OK && index < context->projections.count;
+       index++)
+    status = select_projection(context, &context->projections.items[index]);
+  return status;
 }
 
 static ArchbirdStatus seed_retrieved_component(QueryContext *context,
@@ -1430,14 +1401,31 @@ static ArchbirdStatus seed_retrieved_artifact(QueryContext *context,
   return ARCHBIRD_OK;
 }
 
+static const AbProjectionData *
+search_projection_domain(const QueryContext *context) {
+  size_t index;
+  for (index = 0; index < context->projections.count; index++)
+    if (ab_projection_value_is(
+            ab_value_member(&context->projections.items[index].plan.definition,
+                            "select"),
+            "search_domain"))
+      return &context->projections.items[index].result.data;
+  return NULL;
+}
+
 static ArchbirdStatus select_retrieval(QueryContext *context) {
+  const AbProjectionData *domain;
   size_t index;
   ArchbirdStatus status;
   if (!context->request.search->as.array.count)
     return ARCHBIRD_OK;
-  status =
-      ab_map_retrieve(context->engine, context->map, context->request.search,
-                      context->request.search_limit, &context->retrieval);
+  domain = search_projection_domain(context);
+  if (!domain)
+    return query_error(context,
+                       "search query has no exhaustive search projection");
+  status = ab_query_retrieve(
+      context->engine, context->map, domain, context->request.search,
+      context->request.search_limit, &context->retrieval);
   if (status != ARCHBIRD_OK)
     return status;
   for (index = 0; index < context->retrieval.hit_count; index++) {
@@ -1480,27 +1468,7 @@ static ArchbirdStatus select_initial(QueryContext *context) {
   ArchbirdStatus status;
   status = select_change_set(context);
   if (status == ARCHBIRD_OK)
-    status = select_files(context, context->request.focus);
-  if (status == ARCHBIRD_OK)
-    status = select_files(context, context->request.paths);
-  if (status == ARCHBIRD_OK)
-    status = match_symbols(context, context->request.focus);
-  if (status == ARCHBIRD_OK)
-    status = match_symbols(context, context->request.symbols);
-  if (status == ARCHBIRD_OK)
-    status = select_components(context, context->request.focus);
-  if (status == ARCHBIRD_OK)
-    status = select_components(context, context->request.components);
-  if (status == ARCHBIRD_OK)
-    status = select_packages(context, context->request.focus,
-                             context->request.focus);
-  if (status == ARCHBIRD_OK)
-    status = select_packages(context, context->request.packages,
-                             context->request.symbols);
-  if (status == ARCHBIRD_OK)
-    status = select_artifacts(context, context->request.focus);
-  if (status == ARCHBIRD_OK)
-    status = select_artifacts(context, context->request.artifacts);
+    status = select_projections(context);
   if (status == ARCHBIRD_OK)
     status = select_retrieval(context);
   if (status != ARCHBIRD_OK)
@@ -2265,7 +2233,7 @@ static uint64_t test_match_affinity(const QueryContext *context,
   size_t symbol_length;
   uint64_t score = requested_symbol_affinity(context, match->row);
   if (context->retrieval.term_count)
-    score += ab_map_retrieval_text_score(
+    score += ab_query_retrieval_text_score(
         &context->retrieval, match->row->selector, 8, match->row->path, 4);
   if (match->evidence_target == SIZE_MAX)
     return 0;
@@ -4360,9 +4328,9 @@ static ArchbirdStatus render_retrieval(AbBuffer *buffer,
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "{\"kind\":");
     if (status == ARCHBIRD_OK)
-      status =
-          ab_buffer_json_string(buffer, ab_map_retrieval_kind_name(hit->kind),
-                                strlen(ab_map_retrieval_kind_name(hit->kind)));
+      status = ab_buffer_json_string(
+          buffer, ab_query_retrieval_kind_name(hit->kind),
+          strlen(ab_query_retrieval_kind_name(hit->kind)));
     if (status == ARCHBIRD_OK && hit->line) {
       status = ab_buffer_literal(buffer, ",\"line\":");
       if (status == ARCHBIRD_OK)
@@ -4520,16 +4488,15 @@ static ArchbirdStatus render_query_metadata(AbBuffer *buffer,
     status = ab_buffer_literal(buffer, ",\"producer_policy\":");
   if (status == ARCHBIRD_OK)
     status = render_string(buffer, context->request.producer_policy);
-  if (status == ARCHBIRD_OK && context->request.plan) {
-    status = ab_buffer_literal(buffer, ",\"saved_plan\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(buffer, context->request.plan);
-  }
-  if (status == ARCHBIRD_OK && context->request.projection_results) {
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"plan\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(buffer, context->plan);
+  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"projection_results\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(buffer, context->request.projection_results);
-  }
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_query_projection_identities_render(buffer, &context->projections);
   if (status == ARCHBIRD_OK && context->request.search->as.array.count) {
     status = ab_buffer_literal(buffer, ",\"retrieval\":");
     if (status == ARCHBIRD_OK)
@@ -4678,45 +4645,56 @@ static ArchbirdStatus render_query_document(QueryContext *context,
   return status;
 }
 
-ArchbirdStatus archbird_map_query(ArchbirdEngine *engine,
-                                  const uint8_t *map_json, size_t map_length,
-                                  const uint8_t *query_json,
-                                  size_t query_length, uint32_t json_flags,
-                                  ArchbirdWriteFn write_fn, void *user_data) {
-  AbValue map = {0};
-  AbValue request = {0};
+ArchbirdStatus ab_query_execute_value(ArchbirdEngine *engine,
+                                      const AbValue *map,
+                                      const AbValue *resolution,
+                                      const AbValue *request, AbBuffer *out) {
   QueryContext context = {0};
+  const AbValue *supplied_plan;
+  int saved_plan;
   QueryOrder *order = NULL;
   size_t order_count = 0;
-  AbBuffer buffer;
   ArchbirdStatus status;
   uint64_t schema;
-  if (!engine || (!map_json && map_length) || (!query_json && query_length) ||
-      !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+  if (!engine || !map || !request || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
-  status = ab_build_identity_validate(engine);
-  if (status != ARCHBIRD_OK)
-    return status;
   context.engine = engine;
-  ab_buffer_init(&buffer, engine);
-  status = ab_json_value_decode(engine, map_json, map_length, &map);
+  context.map = map;
+  supplied_plan = request->kind == AB_VALUE_OBJECT
+                      ? ab_value_member(request, "plan")
+                      : NULL;
+  saved_plan = supplied_plan != NULL;
+  status =
+      map->kind == AB_VALUE_OBJECT &&
+              ab_value_string_is(ab_value_member(map, "artifact"), "map") &&
+              ab_value_u64(ab_value_member(map, "schema_version"), &schema) &&
+              schema >= ARCHBIRD_MAP_SCHEMA_MIN &&
+              schema <= ARCHBIRD_MAP_SCHEMA_CURRENT
+          ? ARCHBIRD_OK
+          : query_error(&context, "query input must be an Archbird map "
+                                  "schema " ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT);
   if (status == ARCHBIRD_OK)
-    status = ab_json_value_decode(engine, query_json, query_length, &request);
-  context.map = &map;
-  if (status == ARCHBIRD_OK &&
-      (map.kind != AB_VALUE_OBJECT ||
-       !ab_value_string_is(ab_value_member(&map, "artifact"), "map") ||
-       !ab_value_u64(ab_value_member(&map, "schema_version"), &schema) ||
-       schema < ARCHBIRD_MAP_SCHEMA_MIN ||
-       schema > ARCHBIRD_MAP_SCHEMA_CURRENT))
-    status =
-        query_error(&context, "query input must be an Archbird map "
-                              "schema " ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT);
+    status = ab_projection_map_validate(engine, map, "query Map");
+  if (status == ARCHBIRD_OK && resolution)
+    status = ab_projection_resolution_validate(engine, resolution, map,
+                                               "query resolution");
+  if (status == ARCHBIRD_OK && supplied_plan)
+    context.plan = supplied_plan;
+  else if (status == ARCHBIRD_OK) {
+    status = ab_query_plan_compile_ad_hoc(engine, request, &context.owned_plan);
+    if (status == ARCHBIRD_OK)
+      context.plan = &context.owned_plan;
+  }
   if (status == ARCHBIRD_OK)
-    status = decode_request(&context, &request);
+    status = validate_saved_plan(&context, context.plan);
+  if (status == ARCHBIRD_OK)
+    status = decode_request(&context, context.plan, request, saved_plan);
   if (status == ARCHBIRD_OK)
     status = validate_producer_policy(&context);
+  if (status == ARCHBIRD_OK)
+    status = ab_query_projections_evaluate(
+        engine, ab_value_member(context.plan, "projections"), map, resolution,
+        &context.projections);
   if (status == ARCHBIRD_OK)
     status = build_files(&context);
   if (status == ARCHBIRD_OK)
@@ -4746,13 +4724,48 @@ ArchbirdStatus archbird_map_query(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = selected_order(&context, &order, &order_count);
   if (status == ARCHBIRD_OK)
-    status = render_query_document(&context, &buffer, order, order_count);
+    status = render_query_document(&context, out, order, order_count);
+  ab_free(context.engine, order);
+  query_context_free(&context);
+  return status;
+}
+
+ArchbirdStatus archbird_map_query(ArchbirdEngine *engine,
+                                  const uint8_t *map_json, size_t map_length,
+                                  const uint8_t *resolution_json,
+                                  size_t resolution_length,
+                                  const uint8_t *query_json,
+                                  size_t query_length, uint32_t json_flags,
+                                  ArchbirdWriteFn write_fn, void *user_data) {
+  AbValue map = {0};
+  AbValue resolution = {0};
+  AbValue request = {0};
+  AbBuffer buffer;
+  ArchbirdStatus status;
+  if (!engine || (!map_json && map_length) ||
+      (!resolution_json && resolution_length) ||
+      (!query_json && query_length) || !write_fn ||
+      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_build_identity_validate(engine);
+  if (status != ARCHBIRD_OK)
+    return status;
+  ab_buffer_init(&buffer, engine);
+  status = ab_json_value_decode(engine, map_json, map_length, &map);
+  if (status == ARCHBIRD_OK && resolution_length)
+    status = ab_json_value_decode(engine, resolution_json, resolution_length,
+                                  &resolution);
+  if (status == ARCHBIRD_OK)
+    status = ab_json_value_decode(engine, query_json, query_length, &request);
+  if (status == ARCHBIRD_OK)
+    status = ab_query_execute_value(engine, &map,
+                                    resolution_length ? &resolution : NULL,
+                                    &request, &buffer);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, buffer.data, buffer.length,
                                         json_flags, write_fn, user_data);
-  ab_free(context.engine, order);
-  query_context_free(&context);
   ab_value_free(engine, &request);
+  ab_value_free(engine, &resolution);
   ab_value_free(engine, &map);
   ab_buffer_free(&buffer);
   return status;

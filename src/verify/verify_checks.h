@@ -11,7 +11,7 @@ typedef struct AbVerifyFinding {
   AbString disposition;
   AbString key;
   AbString message;
-  AbVerifyEvidence *evidence;
+  AbProjectionEvidence *evidence;
   size_t evidence_count;
   size_t evidence_capacity;
   AbString waiver;
@@ -26,7 +26,7 @@ typedef struct AbVerifyCheckResult {
   size_t finding_count;
   size_t finding_capacity;
   AbStringArray coverage;
-  AbVerifyEvidence *witnesses;
+  AbProjectionEvidence *witnesses;
   size_t witness_count;
   size_t witness_capacity;
 } AbVerifyCheckResult;

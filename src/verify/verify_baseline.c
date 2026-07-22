@@ -156,7 +156,7 @@ static int string_is(const AbString *value, const char *literal) {
 static int finding_blocks(const AbVerifyFinding *finding,
                           const AbValue *check) {
   const AbValue *severity = ab_value_member(check, "severity");
-  return (!severity || ab_verify_string_is(severity, "error")) &&
+  return (!severity || ab_projection_value_is(severity, "error")) &&
          string_is(&finding->applicability, "applicable") &&
          string_is(&finding->disposition, "open") &&
          (!string_is(&finding->comparison, "equal") ||
@@ -264,8 +264,8 @@ ArchbirdStatus ab_constraints_apply_baseline(AbVerificationContext *context) {
   schema = ab_value_member(root, "schema_version");
   if (!ab_value_u64(schema, &schema_version) || schema_version != 1)
     return invalid(context, "constraint baseline schema_version must be 1");
-  if (!ab_verify_string_is(ab_value_member(root, "artifact"),
-                           "constraint-baseline"))
+  if (!ab_projection_value_is(ab_value_member(root, "artifact"),
+                              "constraint-baseline"))
     return invalid(context, "invalid constraint baseline artifact");
   {
     const AbValue *policy = ab_value_member(root, "constraint_policy_sha256");
@@ -274,14 +274,14 @@ ArchbirdStatus ab_constraints_apply_baseline(AbVerificationContext *context) {
         memcmp(policy->as.text.data, context->constraint_policy_sha256, 64))
       return invalid(context, "constraint baseline policy identity differs");
   }
-  if (!ab_verify_nonblank(ab_value_member(root, "owner")) ||
-      !ab_verify_nonblank(ab_value_member(root, "rationale")))
+  if (!ab_projection_nonblank(ab_value_member(root, "owner")) ||
+      !ab_projection_nonblank(ab_value_member(root, "rationale")))
     return invalid(context,
                    "verification baseline requires owner and rationale");
   tool = ab_value_member(root, "tool");
   if (!exact_fields(tool, tool_fields, 3) ||
-      !ab_verify_string_is(ab_value_member(tool, "name"), "archbird") ||
-      !ab_verify_nonblank(ab_value_member(tool, "version")) ||
+      !ab_projection_value_is(ab_value_member(tool, "name"), "archbird") ||
+      !ab_projection_nonblank(ab_value_member(tool, "version")) ||
       !lowercase_sha256(ab_value_member(tool, "implementation_sha256")))
     return invalid(context, "invalid verification baseline producer");
   active = ab_value_member(root, "active");

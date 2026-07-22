@@ -167,10 +167,10 @@ static ArchbirdStatus validate_evidence_array(ArchbirdEngine *engine,
   if (!rows || rows->kind != AB_VALUE_ARRAY)
     return invalid(engine, "invalid canonical verification evidence array");
   for (index = 0; index < rows->as.array.count; index++) {
-    AbVerifyEvidence evidence = {0};
-    ArchbirdStatus status = ab_verify_evidence_decode_artifact(
+    AbProjectionEvidence evidence = {0};
+    ArchbirdStatus status = ab_projection_evidence_decode_artifact(
         engine, &rows->as.array.items[index], &evidence);
-    ab_verify_evidence_free(engine, &evidence);
+    ab_projection_evidence_free(engine, &evidence);
     if (status != ARCHBIRD_OK)
       return status;
   }
@@ -442,7 +442,7 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
     goto fail;
   }
   if (out->fact_count) {
-    out->decoded_facts = (AbVerifyFactSet *)ab_calloc(
+    out->decoded_facts = (AbProjectionData *)ab_calloc(
         engine, out->fact_count, sizeof(*out->decoded_facts));
     if (!out->decoded_facts) {
       status =
@@ -452,7 +452,7 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
     }
   }
   for (index = 0; index < out->fact_count; index++) {
-    status = ab_verify_fact_decode_artifact(
+    status = ab_projection_data_decode_artifact(
         engine, &out->operands->as.array.items[index],
         &out->decoded_facts[index]);
     if (status != ARCHBIRD_OK)
@@ -481,7 +481,7 @@ void ab_act_verification_free(AbActVerification *artifact) {
   engine = artifact->engine;
   for (index = 0; artifact->decoded_facts && index < artifact->fact_count;
        index++)
-    ab_verify_fact_free(engine, &artifact->decoded_facts[index]);
+    ab_projection_data_free(engine, &artifact->decoded_facts[index]);
   ab_free(engine, artifact->decoded_facts);
   ab_value_free(engine, &artifact->root);
   memset(artifact, 0, sizeof(*artifact));
@@ -551,7 +551,7 @@ const AbValue *ab_act_verification_finding(const AbActVerification *artifact,
 const AbValue *
 ab_act_verification_fact_value(const AbActVerification *artifact,
                                const AbString *name,
-                               const AbVerifyFactSet **out_fact) {
+                               const AbProjectionData **out_fact) {
   size_t index;
   if (out_fact)
     *out_fact = NULL;
@@ -587,8 +587,8 @@ ab_act_verification_observation(const AbActVerification *artifact,
 
 ArchbirdStatus ab_act_evidence_list_add(ArchbirdEngine *engine,
                                         AbActEvidenceList *list,
-                                        const AbVerifyEvidence *evidence) {
-  AbVerifyEvidence *resized;
+                                        const AbProjectionEvidence *evidence) {
+  AbProjectionEvidence *resized;
   ArchbirdStatus status;
   if (!engine || !list || !evidence)
     return ARCHBIRD_INVALID_ARGUMENT;
@@ -600,8 +600,8 @@ ArchbirdStatus ab_act_evidence_list_add(ArchbirdEngine *engine,
     if (capacity < list->capacity || capacity > SIZE_MAX / sizeof(*list->items))
       return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
                                 ARCHBIRD_NO_OFFSET, "too much Act evidence");
-    resized = (AbVerifyEvidence *)ab_realloc(engine, list->items,
-                                             capacity * sizeof(*list->items));
+    resized = (AbProjectionEvidence *)ab_realloc(
+        engine, list->items, capacity * sizeof(*list->items));
     if (!resized)
       return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
@@ -610,7 +610,7 @@ ArchbirdStatus ab_act_evidence_list_add(ArchbirdEngine *engine,
     list->capacity = capacity;
   }
   memset(&list->items[list->count], 0, sizeof(*list->items));
-  status = ab_verify_evidence_init(
+  status = ab_projection_evidence_init(
       engine, &list->items[list->count], evidence->provenance.data,
       &evidence->project, &evidence->path, evidence->line,
       evidence->sha256.data, evidence->detail.data, evidence->detail.length);
@@ -628,12 +628,12 @@ ArchbirdStatus ab_act_evidence_list_add_array(ArchbirdEngine *engine,
     return invalid(engine, "Act evidence must be an array");
   for (index = 0; status == ARCHBIRD_OK && index < rows->as.array.count;
        index++) {
-    AbVerifyEvidence evidence = {0};
-    status = ab_verify_evidence_decode_artifact(
+    AbProjectionEvidence evidence = {0};
+    status = ab_projection_evidence_decode_artifact(
         engine, &rows->as.array.items[index], &evidence);
     if (status == ARCHBIRD_OK)
       status = ab_act_evidence_list_add(engine, list, &evidence);
-    ab_verify_evidence_free(engine, &evidence);
+    ab_projection_evidence_free(engine, &evidence);
   }
   return status;
 }
@@ -645,11 +645,11 @@ void ab_act_evidence_list_finish(AbActEvidenceList *list) {
     return;
   if (list->count > 1)
     qsort(list->items, list->count, sizeof(*list->items),
-          ab_verify_evidence_compare);
+          ab_projection_evidence_compare);
   for (read = 0; read < list->count; read++) {
-    if (write && ab_verify_evidence_compare(&list->items[write - 1],
-                                            &list->items[read]) == 0) {
-      ab_verify_evidence_free(list->engine, &list->items[read]);
+    if (write && ab_projection_evidence_compare(&list->items[write - 1],
+                                                &list->items[read]) == 0) {
+      ab_projection_evidence_free(list->engine, &list->items[read]);
       continue;
     }
     if (write != read) {
@@ -666,7 +666,7 @@ void ab_act_evidence_list_free(AbActEvidenceList *list) {
   if (!list)
     return;
   for (index = 0; list->items && index < list->count; index++)
-    ab_verify_evidence_free(list->engine, &list->items[index]);
+    ab_projection_evidence_free(list->engine, &list->items[index]);
   ab_free(list->engine, list->items);
   memset(list, 0, sizeof(*list));
 }
@@ -679,7 +679,7 @@ ArchbirdStatus ab_act_evidence_list_render(AbBuffer *buffer,
     if (index)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
-      status = ab_verify_evidence_render(buffer, &list->items[index]);
+      status = ab_projection_evidence_render(buffer, &list->items[index]);
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "]");

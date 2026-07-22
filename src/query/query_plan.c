@@ -3,6 +3,7 @@
 #include "../configuration/project_configuration.h"
 #include "../projection/projection_internal.h"
 #include "json_value.h"
+#include "query_internal.h"
 #include "render_internal.h"
 #include "sha256.h"
 
@@ -92,6 +93,17 @@ static ArchbirdStatus field_string(ArchbirdEngine *engine, AbObjectField *field,
     field->value.kind = AB_VALUE_STRING;
     status =
         ab_string_copy(engine, &field->value.as.text, value, strlen(value));
+  }
+  return status;
+}
+
+static ArchbirdStatus field_text(ArchbirdEngine *engine, AbObjectField *field,
+                                 const char *name, const char *value,
+                                 size_t value_length) {
+  ArchbirdStatus status = field_name(engine, field, name);
+  if (status == ARCHBIRD_OK) {
+    field->value.kind = AB_VALUE_STRING;
+    status = ab_string_copy(engine, &field->value.as.text, value, value_length);
   }
   return status;
 }
@@ -341,195 +353,92 @@ static ArchbirdStatus build_options(ArchbirdEngine *engine,
   return status;
 }
 
-static AbObjectField *mutable_member(AbValue *object, const char *name) {
+static ArchbirdStatus copy_selected_fields(ArchbirdEngine *engine,
+                                           const AbValue *source,
+                                           const char *const *names,
+                                           size_t count, AbValue *out) {
   size_t index;
-  for (index = 0; index < object->as.object.count; index++)
-    if (string_is(&object->as.object.fields[index].name, name))
-      return &object->as.object.fields[index];
-  return NULL;
-}
-
-static ArchbirdStatus append_selector(ArchbirdEngine *engine, AbValue *array,
-                                      const char *data, size_t length) {
-  AbValue *items;
-  AbValue *item;
-  if (array->as.array.count == SIZE_MAX ||
-      array->as.array.count + 1 > SIZE_MAX / sizeof(*items))
-    return ARCHBIRD_LIMIT_EXCEEDED;
-  items = (AbValue *)ab_realloc(engine, array->as.array.items,
-                                (array->as.array.count + 1) * sizeof(*items));
-  if (!items)
-    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                              ARCHBIRD_NO_OFFSET,
-                              "out of memory expanding query projection seeds");
-  array->as.array.items = items;
-  item = &items[array->as.array.count];
-  memset(item, 0, sizeof(*item));
-  item->kind = AB_VALUE_STRING;
-  TRY(ab_string_copy(engine, &item->as.text, data, length));
-  array->as.array.count++;
-  return ARCHBIRD_OK;
-}
-
-static ArchbirdStatus append_symbol_selector(ArchbirdEngine *engine,
-                                             AbValue *array,
-                                             const AbString *path,
-                                             const AbString *symbol) {
-  AbBuffer buffer;
-  ArchbirdStatus status;
-  ab_buffer_init(&buffer, engine);
-  status = ab_buffer_append(&buffer, path->data, path->length);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_append(&buffer, symbol->data, symbol->length);
-  if (status == ARCHBIRD_OK)
-    status = append_selector(engine, array, (const char *)buffer.data,
-                             buffer.length);
-  ab_buffer_free(&buffer);
+  ArchbirdStatus status = object_init(engine, out, count);
+  for (index = 0; status == ARCHBIRD_OK && index < count; index++) {
+    const AbValue *value = ab_value_member(source, names[index]);
+    if (!value) {
+      status = invalid(engine, "normalized query option is missing");
+      break;
+    }
+    status =
+        field_copy(engine, &out->as.object.fields[index], names[index], value);
+  }
+  if (status == ARCHBIRD_OK && count > 1)
+    qsort(out->as.object.fields, count, sizeof(*out->as.object.fields),
+          field_compare);
+  if (status != ARCHBIRD_OK)
+    ab_value_free(engine, out);
   return status;
 }
 
-static ArchbirdStatus
-add_projection_seeds(ArchbirdEngine *engine, AbValue *options,
-                     const AbValue *definition,
-                     const AbProjectionEvaluation *evaluation) {
-  AbValue paths = {.kind = AB_VALUE_ARRAY};
-  AbValue symbols = {.kind = AB_VALUE_ARRAY};
-  const AbValue *select = ab_value_member(definition, "select");
-  int symbol_projection = ab_value_string_is(select, "symbols");
-  int path_keys = ab_value_string_is(select, "mapped_paths") ||
-                  ab_value_string_is(select, "inventory_paths");
-  int relation_targets = ab_value_string_is(select, "artifact_routes") ||
-                         ab_value_string_is(select, "package_entrypoints") ||
-                         ab_value_string_is(select, "package_exports") ||
-                         ab_value_string_is(select, "test_routes");
-  size_t item_index;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  for (item_index = 0;
-       status == ARCHBIRD_OK && item_index < evaluation->fact.item_count;
-       item_index++) {
-    const AbVerifyFactItem *item = &evaluation->fact.items[item_index];
-    size_t evidence_index;
-    if (relation_targets) {
-      size_t attribute_index;
-      for (attribute_index = 0; attribute_index < item->attribute_count;
-           attribute_index++) {
-        const AbObjectField *attribute = &item->attributes[attribute_index];
-        if (string_is(&attribute->name, "target") &&
-            attribute->value.kind == AB_VALUE_STRING) {
-          status =
-              append_selector(engine, &paths, attribute->value.as.text.data,
-                              attribute->value.as.text.length);
-          break;
-        }
-      }
-      continue;
-    }
-    if (!item->evidence_count && path_keys)
-      status =
-          append_selector(engine, &paths, item->key.data, item->key.length);
-    for (evidence_index = 0;
-         status == ARCHBIRD_OK && evidence_index < item->evidence_count;
-         evidence_index++) {
-      const AbString *path = &item->evidence[evidence_index].path;
-      if (!path->length)
-        continue;
-      status = symbol_projection
-                   ? append_symbol_selector(engine, &symbols, path, &item->key)
-                   : append_selector(engine, &paths, path->data, path->length);
-    }
-  }
-  if (status == ARCHBIRD_OK) {
-    AbObjectField *field = mutable_member(options, "paths");
-    AbValue merged = {0};
-    status = normalized_string_union(engine, &field->value, &paths, &merged);
-    if (status == ARCHBIRD_OK) {
-      ab_value_free(engine, &field->value);
-      field->value = merged;
-    }
-  }
-  if (status == ARCHBIRD_OK) {
-    AbObjectField *field = mutable_member(options, "symbols");
-    AbValue merged = {0};
-    status = normalized_string_union(engine, &field->value, &symbols, &merged);
-    if (status == ARCHBIRD_OK) {
-      ab_value_free(engine, &field->value);
-      field->value = merged;
-    }
-  }
-  ab_value_free(engine, &paths);
-  ab_value_free(engine, &symbols);
+static ArchbirdStatus build_plan_sections(ArchbirdEngine *engine,
+                                          const AbValue *options,
+                                          AbValue *selection,
+                                          AbValue *operations) {
+  static const char *const selection_fields[] = {
+      "artifacts", "components", "focus", "packages", "paths", "symbols"};
+  static const char *const operation_fields[] = {
+      "context", "depth", "direction", "search", "search_limit", "test_depth"};
+  ArchbirdStatus status = copy_selected_fields(
+      engine, options, selection_fields,
+      sizeof(selection_fields) / sizeof(selection_fields[0]), selection);
+  if (status == ARCHBIRD_OK)
+    status = copy_selected_fields(
+        engine, options, operation_fields,
+        sizeof(operation_fields) / sizeof(operation_fields[0]), operations);
+  if (status != ARCHBIRD_OK)
+    ab_value_free(engine, selection);
   return status;
 }
 
-static ArchbirdStatus
-render_projection_definition_row(AbBuffer *buffer, const AbString *id,
-                                 const AbProjectionEvaluation *evaluation) {
+static ArchbirdStatus render_projection_plan(AbBuffer *buffer,
+                                             const AbProjectionPlan *plan) {
   TRY(ab_buffer_literal(buffer, "{\"id\":"));
-  TRY(ab_buffer_json_string(buffer, id->data, id->length));
+  TRY(ab_buffer_json_string(buffer, plan->id.data, plan->id.length));
+  TRY(ab_buffer_literal(buffer, ",\"operation\":"));
+  TRY(ab_value_render(buffer, &plan->definition));
   TRY(ab_buffer_literal(buffer, ",\"projection_definition_sha256\":"));
-  TRY(ab_buffer_json_string(buffer, evaluation->definition_sha256, 64));
+  TRY(ab_buffer_json_string(buffer, plan->definition_sha256, 64));
   return ab_buffer_literal(buffer, "}");
 }
-
-static ArchbirdStatus
-render_projection_result_row(AbBuffer *buffer, const AbString *id,
-                             const AbProjectionEvaluation *evaluation) {
-  TRY(ab_buffer_literal(buffer, "{\"id\":"));
-  TRY(ab_buffer_json_string(buffer, id->data, id->length));
-  TRY(ab_buffer_literal(buffer, ",\"projection_definition_sha256\":"));
-  TRY(ab_buffer_json_string(buffer, evaluation->definition_sha256, 64));
-  TRY(ab_buffer_literal(buffer, ",\"projection_result_sha256\":"));
-  TRY(ab_buffer_json_string(buffer, evaluation->result_sha256, 64));
-  return ab_buffer_literal(buffer, "}");
-}
-
-typedef struct QueryProjectionNode {
-  AbValue definition;
-  AbString id;
-  AbProjectionEvaluation evaluation;
-} QueryProjectionNode;
 
 static ArchbirdStatus inline_projection_id(ArchbirdEngine *engine,
                                            const AbString *query_id,
                                            const char sha256[65],
                                            AbString *out);
 
-static int projection_node_compare(const void *left_raw,
+static int projection_plan_compare(const void *left_raw,
                                    const void *right_raw) {
-  const QueryProjectionNode *left = (const QueryProjectionNode *)left_raw;
-  const QueryProjectionNode *right = (const QueryProjectionNode *)right_raw;
-  int compared = strcmp(left->evaluation.definition_sha256,
-                        right->evaluation.definition_sha256);
+  const AbProjectionPlan *left = (const AbProjectionPlan *)left_raw;
+  const AbProjectionPlan *right = (const AbProjectionPlan *)right_raw;
+  int compared = strcmp(left->definition_sha256, right->definition_sha256);
   return compared ? compared : ab_string_compare(&left->id, &right->id);
 }
 
-static void projection_nodes_free(ArchbirdEngine *engine,
-                                  QueryProjectionNode *nodes, size_t count) {
+static void projection_plans_free(ArchbirdEngine *engine,
+                                  AbProjectionPlan *plans, size_t count) {
   size_t index;
-  for (index = 0; index < count; index++) {
-    ab_value_free(engine, &nodes[index].definition);
-    ab_string_free(engine, &nodes[index].id);
-    ab_projection_evaluation_free(engine, &nodes[index].evaluation);
-  }
-  ab_free(engine, nodes);
+  for (index = 0; index < count; index++)
+    ab_projection_plan_free(engine, &plans[index]);
+  ab_free(engine, plans);
 }
 
 static ArchbirdStatus
-projection_node_add(ArchbirdEngine *engine, const AbValue *definition,
+projection_plan_add(ArchbirdEngine *engine, const AbValue *definition,
                     const AbString *declared_id, const AbString *query_id,
-                    const AbValue *map, const AbValue *resolution,
-                    QueryProjectionNode *nodes, size_t capacity,
-                    size_t *count) {
+                    AbProjectionPlan *nodes, size_t capacity, size_t *count) {
   char definition_sha256[65] = {0};
   AbString node_id = {0};
   size_t previous;
   ArchbirdStatus status =
       ab_projection_definition_sha256(engine, definition, definition_sha256);
   for (previous = 0; status == ARCHBIRD_OK && previous < *count; previous++)
-    if (!strcmp(nodes[previous].evaluation.definition_sha256,
-                definition_sha256))
+    if (!strcmp(nodes[previous].definition_sha256, definition_sha256))
       return ARCHBIRD_OK;
   if (status != ARCHBIRD_OK)
     return status;
@@ -544,22 +453,10 @@ projection_node_add(ArchbirdEngine *engine, const AbValue *definition,
     status =
         inline_projection_id(engine, query_id, definition_sha256, &node_id);
   if (status == ARCHBIRD_OK)
-    status = ab_projection_evaluate_fact(engine, definition, map, resolution,
-                                         &node_id, &nodes[*count].evaluation);
-  if (status == ARCHBIRD_OK && strcmp(ab_verify_fact_selection_classification(
-                                          &nodes[*count].evaluation.fact),
-                                      "complete"))
-    status = invalid(engine, "query seed projection is incomplete");
+    status = ab_projection_plan_compile(engine, definition, &node_id,
+                                        &nodes[*count]);
   if (status == ARCHBIRD_OK)
-    status = ab_value_copy(engine, &nodes[*count].definition, definition);
-  if (status == ARCHBIRD_OK) {
-    nodes[*count].id = node_id;
-    memset(&node_id, 0, sizeof(node_id));
     (*count)++;
-  } else {
-    ab_projection_evaluation_free(engine, &nodes[*count].evaluation);
-    ab_value_free(engine, &nodes[*count].definition);
-  }
   ab_string_free(engine, &node_id);
   return status;
 }
@@ -592,17 +489,18 @@ static ArchbirdStatus inferred_definition(ArchbirdEngine *engine,
   return status;
 }
 
-static ArchbirdStatus inferred_projection_add(
-    ArchbirdEngine *engine, const char *select, const char *first_name,
-    const AbValue *first, const char *second_name, const AbValue *second,
-    const AbString *query_id, const AbValue *map, const AbValue *resolution,
-    QueryProjectionNode *nodes, size_t capacity, size_t *count) {
+static ArchbirdStatus
+inferred_projection_add(ArchbirdEngine *engine, const char *select,
+                        const char *first_name, const AbValue *first,
+                        const char *second_name, const AbValue *second,
+                        const AbString *query_id, AbProjectionPlan *nodes,
+                        size_t capacity, size_t *count) {
   AbValue definition = {0};
   ArchbirdStatus status = inferred_definition(engine, select, first_name, first,
                                               second_name, second, &definition);
   if (status == ARCHBIRD_OK)
-    status = projection_node_add(engine, &definition, NULL, query_id, map,
-                                 resolution, nodes, capacity, count);
+    status = projection_plan_add(engine, &definition, NULL, query_id, nodes,
+                                 capacity, count);
   ab_value_free(engine, &definition);
   return status;
 }
@@ -629,19 +527,20 @@ static ArchbirdStatus inline_projection_id(ArchbirdEngine *engine,
 }
 
 static ArchbirdStatus
-prepare_projection_nodes(ArchbirdEngine *engine,
+prepare_projection_plans(ArchbirdEngine *engine,
                          const AbProjectConfiguration *configuration,
-                         const AbValue *query, const AbString *query_id,
-                         const AbValue *map, const AbValue *resolution,
-                         QueryProjectionNode **out_nodes, size_t *out_count) {
-  const AbValue *references = ab_value_member(query, "projection");
-  const AbValue *paths = ab_value_member(query, "paths");
-  const AbValue *symbols = ab_value_member(query, "symbols");
-  const AbValue *components = ab_value_member(query, "components");
-  const AbValue *packages = ab_value_member(query, "packages");
-  const AbValue *artifacts = ab_value_member(query, "artifacts");
-  const AbValue *focus = ab_value_member(query, "focus");
-  QueryProjectionNode *nodes = NULL;
+                         const AbValue *definition, const AbValue *selection,
+                         const AbValue *operations, const AbString *query_id,
+                         AbProjectionPlan **out_nodes, size_t *out_count) {
+  const AbValue *references = ab_value_member(definition, "projection");
+  const AbValue *paths = ab_value_member(selection, "paths");
+  const AbValue *symbols = ab_value_member(selection, "symbols");
+  const AbValue *components = ab_value_member(selection, "components");
+  const AbValue *packages = ab_value_member(selection, "packages");
+  const AbValue *artifacts = ab_value_member(selection, "artifacts");
+  const AbValue *focus = ab_value_member(selection, "focus");
+  const AbValue *search = ab_value_member(operations, "search");
+  AbProjectionPlan *nodes = NULL;
   size_t reference_count = !references ? 0
                            : references->kind == AB_VALUE_ARRAY
                                ? references->as.array.count
@@ -652,11 +551,11 @@ prepare_projection_nodes(ArchbirdEngine *engine,
   ArchbirdStatus status = ARCHBIRD_OK;
   *out_nodes = NULL;
   *out_count = 0;
-  if (reference_count > SIZE_MAX - 16 ||
-      reference_count + 16 > SIZE_MAX / sizeof(*nodes))
+  if (reference_count > SIZE_MAX - 17 ||
+      reference_count + 17 > SIZE_MAX / sizeof(*nodes))
     return ARCHBIRD_LIMIT_EXCEEDED;
-  capacity = reference_count + 16;
-  nodes = (QueryProjectionNode *)ab_calloc(engine, capacity, sizeof(*nodes));
+  capacity = reference_count + 17;
+  nodes = (AbProjectionPlan *)ab_calloc(engine, capacity, sizeof(*nodes));
   if (!nodes)
     return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                               ARCHBIRD_NO_OFFSET,
@@ -687,70 +586,73 @@ prepare_projection_nodes(ArchbirdEngine *engine,
       break;
     }
     if (status == ARCHBIRD_OK)
-      status =
-          projection_node_add(engine, definition, declared_id, query_id, map,
-                              resolution, nodes, capacity, &node_count);
+      status = projection_plan_add(engine, definition, declared_id, query_id,
+                                   nodes, capacity, &node_count);
   }
   if (status == ARCHBIRD_OK && paths && paths->as.array.count)
-    status = inferred_projection_add(engine, "mapped_paths", "paths", paths,
-                                     NULL, NULL, query_id, map, resolution,
-                                     nodes, capacity, &node_count);
+    status =
+        inferred_projection_add(engine, "mapped_paths", "paths", paths, NULL,
+                                NULL, query_id, nodes, capacity, &node_count);
   if (status == ARCHBIRD_OK && symbols && symbols->as.array.count)
     status = inferred_projection_add(engine, "symbols", "name_patterns",
-                                     symbols, NULL, NULL, query_id, map,
-                                     resolution, nodes, capacity, &node_count);
+                                     symbols, NULL, NULL, query_id, nodes,
+                                     capacity, &node_count);
   if (status == ARCHBIRD_OK && symbols && symbols->as.array.count)
     status = inferred_projection_add(engine, "package_exports", "name_patterns",
-                                     symbols, NULL, NULL, query_id, map,
-                                     resolution, nodes, capacity, &node_count);
+                                     symbols, NULL, NULL, query_id, nodes,
+                                     capacity, &node_count);
   if (status == ARCHBIRD_OK && components && components->as.array.count)
-    status = inferred_projection_add(
-        engine, "component_membership", "components", components, NULL, NULL,
-        query_id, map, resolution, nodes, capacity, &node_count);
+    status = inferred_projection_add(engine, "component_membership",
+                                     "components", components, NULL, NULL,
+                                     query_id, nodes, capacity, &node_count);
   if (status == ARCHBIRD_OK && packages && packages->as.array.count)
     status = inferred_projection_add(engine, "package_entrypoints", "packages",
-                                     packages, NULL, NULL, query_id, map,
-                                     resolution, nodes, capacity, &node_count);
+                                     packages, NULL, NULL, query_id, nodes,
+                                     capacity, &node_count);
   if (status == ARCHBIRD_OK && artifacts && artifacts->as.array.count)
     status = inferred_projection_add(engine, "artifact_routes", "artifacts",
-                                     artifacts, NULL, NULL, query_id, map,
-                                     resolution, nodes, capacity, &node_count);
+                                     artifacts, NULL, NULL, query_id, nodes,
+                                     capacity, &node_count);
   if (status == ARCHBIRD_OK && focus && focus->as.array.count)
-    status = inferred_projection_add(engine, "mapped_paths", "paths", focus,
-                                     NULL, NULL, query_id, map, resolution,
+    status =
+        inferred_projection_add(engine, "mapped_paths", "paths", focus, NULL,
+                                NULL, query_id, nodes, capacity, &node_count);
+  if (status == ARCHBIRD_OK && focus && focus->as.array.count)
+    status =
+        inferred_projection_add(engine, "symbols", "name_patterns", focus, NULL,
+                                NULL, query_id, nodes, capacity, &node_count);
+  if (status == ARCHBIRD_OK && focus && focus->as.array.count)
+    status = inferred_projection_add(engine, "component_membership",
+                                     "components", focus, NULL, NULL, query_id,
                                      nodes, capacity, &node_count);
-  if (status == ARCHBIRD_OK && focus && focus->as.array.count)
-    status = inferred_projection_add(engine, "symbols", "name_patterns", focus,
-                                     NULL, NULL, query_id, map, resolution,
-                                     nodes, capacity, &node_count);
-  if (status == ARCHBIRD_OK && focus && focus->as.array.count)
-    status = inferred_projection_add(
-        engine, "component_membership", "components", focus, NULL, NULL,
-        query_id, map, resolution, nodes, capacity, &node_count);
   if (status == ARCHBIRD_OK && focus && focus->as.array.count)
     status = inferred_projection_add(engine, "package_entrypoints", "packages",
-                                     focus, NULL, NULL, query_id, map,
-                                     resolution, nodes, capacity, &node_count);
+                                     focus, NULL, NULL, query_id, nodes,
+                                     capacity, &node_count);
   if (status == ARCHBIRD_OK && focus && focus->as.array.count)
     status = inferred_projection_add(engine, "package_exports", "name_patterns",
-                                     focus, NULL, NULL, query_id, map,
-                                     resolution, nodes, capacity, &node_count);
+                                     focus, NULL, NULL, query_id, nodes,
+                                     capacity, &node_count);
   if (status == ARCHBIRD_OK && focus && focus->as.array.count)
     status = inferred_projection_add(engine, "artifact_routes", "artifacts",
-                                     focus, NULL, NULL, query_id, map,
-                                     resolution, nodes, capacity, &node_count);
+                                     focus, NULL, NULL, query_id, nodes,
+                                     capacity, &node_count);
   if (status == ARCHBIRD_OK && focus && focus->as.array.count)
-    status = inferred_projection_add(engine, "test_routes", "paths", focus,
-                                     NULL, NULL, query_id, map, resolution,
-                                     nodes, capacity, &node_count);
+    status =
+        inferred_projection_add(engine, "test_routes", "paths", focus, NULL,
+                                NULL, query_id, nodes, capacity, &node_count);
   if (status == ARCHBIRD_OK && focus && focus->as.array.count)
-    status = inferred_projection_add(engine, "test_routes", "selectors", focus,
-                                     NULL, NULL, query_id, map, resolution,
-                                     nodes, capacity, &node_count);
+    status =
+        inferred_projection_add(engine, "test_routes", "selectors", focus, NULL,
+                                NULL, query_id, nodes, capacity, &node_count);
+  if (status == ARCHBIRD_OK && search && search->as.array.count)
+    status =
+        inferred_projection_add(engine, "search_domain", NULL, NULL, NULL, NULL,
+                                query_id, nodes, capacity, &node_count);
   if (status == ARCHBIRD_OK && node_count > 1)
-    qsort(nodes, node_count, sizeof(*nodes), projection_node_compare);
+    qsort(nodes, node_count, sizeof(*nodes), projection_plan_compare);
   if (status != ARCHBIRD_OK) {
-    projection_nodes_free(engine, nodes, node_count);
+    projection_plans_free(engine, nodes, node_count);
     return status;
   }
   *out_nodes = nodes;
@@ -758,24 +660,227 @@ prepare_projection_nodes(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus
+projection_plan_values(ArchbirdEngine *engine,
+                       const AbProjectionPlan *projections,
+                       size_t projection_count, AbValue *out) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  memset(out, 0, sizeof(*out));
+  out->kind = AB_VALUE_ARRAY;
+  out->as.array.count = projection_count;
+  if (projection_count) {
+    if (projection_count > SIZE_MAX / sizeof(*out->as.array.items))
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    out->as.array.items = (AbValue *)ab_calloc(engine, projection_count,
+                                               sizeof(*out->as.array.items));
+    if (!out->as.array.items)
+      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory compiling query plan");
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < projection_count; index++) {
+    AbValue *row = &out->as.array.items[index];
+    status = object_init(engine, row, 3);
+    if (status == ARCHBIRD_OK)
+      status =
+          field_text(engine, &row->as.object.fields[0], "id",
+                     projections[index].id.data, projections[index].id.length);
+    if (status == ARCHBIRD_OK)
+      status = field_copy(engine, &row->as.object.fields[1], "operation",
+                          &projections[index].definition);
+    if (status == ARCHBIRD_OK)
+      status = field_string(engine, &row->as.object.fields[2],
+                            "projection_definition_sha256",
+                            projections[index].definition_sha256);
+  }
+  if (status != ARCHBIRD_OK)
+    ab_value_free(engine, out);
+  return status;
+}
+
+static ArchbirdStatus query_plan_value(
+    ArchbirdEngine *engine, const AbString *id, const char *map_config_sha256,
+    const char *project_configuration_sha256, const AbValue *operations,
+    const AbValue *selection, const AbProjectionPlan *projections,
+    size_t projection_count, const char query_definition_sha256[65],
+    const char query_plan_sha256[65], AbValue *out) {
+  ArchbirdStatus status = object_init(engine, out, 8);
+  if (status == ARCHBIRD_OK)
+    status = field_text(engine, &out->as.object.fields[0], "id", id->data,
+                        id->length);
+  if (status == ARCHBIRD_OK && map_config_sha256)
+    status = field_string(engine, &out->as.object.fields[1],
+                          "map_config_sha256", map_config_sha256);
+  else if (status == ARCHBIRD_OK) {
+    status = field_name(engine, &out->as.object.fields[1], "map_config_sha256");
+    out->as.object.fields[1].value.kind = AB_VALUE_NULL;
+  }
+  if (status == ARCHBIRD_OK)
+    status =
+        field_copy(engine, &out->as.object.fields[2], "operations", operations);
+  if (status == ARCHBIRD_OK && project_configuration_sha256)
+    status = field_string(engine, &out->as.object.fields[3],
+                          "project_configuration_sha256",
+                          project_configuration_sha256);
+  else if (status == ARCHBIRD_OK) {
+    status = field_name(engine, &out->as.object.fields[3],
+                        "project_configuration_sha256");
+    out->as.object.fields[3].value.kind = AB_VALUE_NULL;
+  }
+  if (status == ARCHBIRD_OK) {
+    status = field_name(engine, &out->as.object.fields[4], "projections");
+    if (status == ARCHBIRD_OK)
+      status = projection_plan_values(engine, projections, projection_count,
+                                      &out->as.object.fields[4].value);
+  }
+  if (status == ARCHBIRD_OK)
+    status = field_string(engine, &out->as.object.fields[5],
+                          "query_definition_sha256", query_definition_sha256);
+  if (status == ARCHBIRD_OK)
+    status = field_string(engine, &out->as.object.fields[6],
+                          "query_plan_sha256", query_plan_sha256);
+  if (status == ARCHBIRD_OK)
+    status =
+        field_copy(engine, &out->as.object.fields[7], "selection", selection);
+  if (status == ARCHBIRD_OK)
+    qsort(out->as.object.fields, out->as.object.count,
+          sizeof(*out->as.object.fields), field_compare);
+  if (status != ARCHBIRD_OK)
+    ab_value_free(engine, out);
+  return status;
+}
+
+static ArchbirdStatus ad_hoc_definition(ArchbirdEngine *engine,
+                                        const AbValue *request, AbValue *out) {
+  size_t index;
+  size_t count = 0;
+  size_t output = 0;
+  ArchbirdStatus status;
+  if (!request || request->kind != AB_VALUE_OBJECT)
+    return invalid(engine, "query request must be an object");
+  for (index = 0; index < request->as.object.count; index++) {
+    const AbObjectField *field = &request->as.object.fields[index];
+    if (string_is(&field->name, "change_set") ||
+        string_is(&field->name, "producer_policy"))
+      continue;
+    if (!override_allowed(&field->name))
+      return invalid(engine, "query request contains an unknown field");
+    count++;
+  }
+  status = object_init(engine, out, count);
+  for (index = 0; status == ARCHBIRD_OK && index < request->as.object.count;
+       index++) {
+    const AbObjectField *field = &request->as.object.fields[index];
+    AbObjectField *target;
+    if (string_is(&field->name, "change_set") ||
+        string_is(&field->name, "producer_policy"))
+      continue;
+    target = &out->as.object.fields[output++];
+    status = ab_string_copy(engine, &target->name, field->name.data,
+                            field->name.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_value_copy(engine, &target->value, &field->value);
+  }
+  if (status == ARCHBIRD_OK && count > 1)
+    qsort(out->as.object.fields, count, sizeof(*out->as.object.fields),
+          field_compare);
+  if (status != ARCHBIRD_OK)
+    ab_value_free(engine, out);
+  return status;
+}
+
+ArchbirdStatus ab_query_plan_compile_ad_hoc(ArchbirdEngine *engine,
+                                            const AbValue *request,
+                                            AbValue *out_plan) {
+  const AbProjectConfiguration configuration = {0};
+  const AbValue empty = {.kind = AB_VALUE_OBJECT};
+  AbString id = {(char *)"ad-hoc", 6};
+  AbValue definition = {0};
+  AbValue options = {0};
+  AbValue plan_selection = {0};
+  AbValue plan_operations = {0};
+  AbValue plan = {0};
+  AbProjectionPlan *projections = NULL;
+  size_t projection_count = 0;
+  size_t projection_index;
+  char query_definition_sha256[65] = {0};
+  char query_plan_sha256[65] = {0};
+  AbBuffer plan_base;
+  ArchbirdStatus status;
+  if (!engine || !request || !out_plan)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memset(out_plan, 0, sizeof(*out_plan));
+  ab_buffer_init(&plan_base, engine);
+  status = ad_hoc_definition(engine, request, &definition);
+  if (status == ARCHBIRD_OK)
+    status = build_options(engine, &definition, &empty, &options);
+  if (status == ARCHBIRD_OK)
+    status = build_plan_sections(engine, &options, &plan_selection,
+                                 &plan_operations);
+  if (status == ARCHBIRD_OK)
+    status = digest_value(engine, &definition, query_definition_sha256);
+  if (status == ARCHBIRD_OK)
+    status = prepare_projection_plans(engine, &configuration, &definition,
+                                      &plan_selection, &plan_operations, &id,
+                                      &projections, &projection_count);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&plan_base, "{\"operations\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&plan_base, &plan_operations);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&plan_base, ",\"projections\":[");
+  for (projection_index = 0;
+       status == ARCHBIRD_OK && projection_index < projection_count;
+       projection_index++) {
+    if (projection_index)
+      status = ab_buffer_literal(&plan_base, ",");
+    if (status == ARCHBIRD_OK)
+      status =
+          render_projection_plan(&plan_base, &projections[projection_index]);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&plan_base, "],\"selection\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&plan_base, &plan_selection);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&plan_base, "}");
+  if (status == ARCHBIRD_OK)
+    status = digest_buffer(&plan_base, query_plan_sha256);
+  if (status == ARCHBIRD_OK)
+    status = query_plan_value(
+        engine, &id, NULL, NULL, &plan_operations, &plan_selection, projections,
+        projection_count, query_definition_sha256, query_plan_sha256, &plan);
+  if (status == ARCHBIRD_OK)
+    *out_plan = plan;
+  if (status == ARCHBIRD_OK)
+    memset(&plan, 0, sizeof(plan));
+  ab_buffer_free(&plan_base);
+  projection_plans_free(engine, projections, projection_count);
+  ab_value_free(engine, &plan);
+  ab_value_free(engine, &plan_operations);
+  ab_value_free(engine, &plan_selection);
+  ab_value_free(engine, &options);
+  ab_value_free(engine, &definition);
+  return status;
+}
+
 ArchbirdStatus archbird_query_plan_compile(
     ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
-    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
-    size_t resolution_length, const char *query_id, size_t query_id_length,
-    const uint8_t *overrides_json, size_t overrides_length, uint32_t json_flags,
-    ArchbirdWriteFn write_fn, void *user_data) {
+    const char *query_id, size_t query_id_length, const uint8_t *overrides_json,
+    size_t overrides_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data) {
   AbProjectConfiguration configuration = {0};
-  AbValue map = {0};
-  AbValue resolution = {0};
   AbValue overrides = {.kind = AB_VALUE_OBJECT};
   AbValue options = {0};
-  AbValue plan_options = {0};
-  QueryProjectionNode *projections = NULL;
+  AbValue plan_selection = {0};
+  AbValue plan_operations = {0};
+  AbValue plan = {0};
+  AbProjectionPlan *projections = NULL;
   size_t projection_count = 0;
   size_t projection_index;
   const AbObjectField *query;
   const AbValue *definition = NULL;
-  const AbValue *map_config = NULL;
   const AbValue empty = {.kind = AB_VALUE_OBJECT};
   AbString id;
   int named;
@@ -784,10 +889,9 @@ ArchbirdStatus archbird_query_plan_compile(
   AbBuffer plan_base;
   AbBuffer rendered;
   ArchbirdStatus status;
-  if (!engine || (!config_json && config_length) || !map_json || !map_length ||
-      (!query_id && query_id_length) ||
-      (!resolution_json && resolution_length) ||
-      (!overrides_json && overrides_length) || !write_fn ||
+  if (!engine || (!config_json && config_length) ||
+      (!query_id && query_id_length) || (!overrides_json && overrides_length) ||
+      !write_fn ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
   named = query_id_length != 0;
@@ -800,32 +904,9 @@ ArchbirdStatus archbird_query_plan_compile(
   status = named ? ab_project_configuration_decode(
                        engine, config_json, config_length, &configuration)
                  : ARCHBIRD_OK;
-  if (status == ARCHBIRD_OK)
-    status = ab_json_value_decode(engine, map_json, map_length, &map);
-  if (status == ARCHBIRD_OK && resolution_length)
-    status = ab_json_value_decode(engine, resolution_json, resolution_length,
-                                  &resolution);
   if (status == ARCHBIRD_OK && overrides_length)
     status = ab_json_value_decode(engine, overrides_json, overrides_length,
                                   &overrides);
-  if (status == ARCHBIRD_OK)
-    status = ab_projection_map_validate(engine, &map, "query plan Map");
-  if (status == ARCHBIRD_OK) {
-    const AbValue *evidence = ab_value_member(&map, "evidence");
-    map_config = evidence ? ab_value_member(evidence, "config_sha256") : NULL;
-  }
-  if (status == ARCHBIRD_OK && named) {
-    if (!map_config || map_config->kind != AB_VALUE_STRING ||
-        map_config->as.text.length != 64 ||
-        memcmp(map_config->as.text.data, configuration.map_config_sha256, 64) !=
-            0)
-      status = invalid(
-          engine,
-          "project configuration Map definition does not match saved Map");
-  }
-  if (status == ARCHBIRD_OK && resolution_length)
-    status = ab_projection_resolution_validate(engine, &resolution, &map,
-                                               "query plan resolution");
   if (status == ARCHBIRD_OK && overrides.kind != AB_VALUE_OBJECT)
     status = invalid(engine, "runtime overrides must be an object");
   query = status == ARCHBIRD_OK && named
@@ -839,110 +920,63 @@ ArchbirdStatus archbird_query_plan_compile(
     status = build_options(engine, definition, named ? &overrides : &empty,
                            &options);
   if (status == ARCHBIRD_OK)
-    status = ab_value_copy(engine, &plan_options, &options);
+    status = build_plan_sections(engine, &options, &plan_selection,
+                                 &plan_operations);
   if (status == ARCHBIRD_OK)
     status = digest_value(engine, definition, query_definition_sha256);
   if (status == ARCHBIRD_OK)
-    status =
-        prepare_projection_nodes(engine, &configuration, definition, &id, &map,
-                                 resolution_length ? &resolution : NULL,
-                                 &projections, &projection_count);
+    status = prepare_projection_plans(engine, &configuration, definition,
+                                      &plan_selection, &plan_operations, &id,
+                                      &projections, &projection_count);
   if (status == ARCHBIRD_OK) {
     status = ab_buffer_literal(&plan_base, "{\"operations\":");
     if (status == ARCHBIRD_OK)
-      status = ab_value_render(&plan_base, &plan_options);
+      status = ab_value_render(&plan_base, &plan_operations);
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(&plan_base, ",\"projection_definitions\":[");
+      status = ab_buffer_literal(&plan_base, ",\"projections\":[");
     for (projection_index = 0;
          status == ARCHBIRD_OK && projection_index < projection_count;
          projection_index++) {
       if (projection_index)
         status = ab_buffer_literal(&plan_base, ",");
       if (status == ARCHBIRD_OK)
-        status = render_projection_definition_row(
-            &plan_base, &projections[projection_index].id,
-            &projections[projection_index].evaluation);
+        status =
+            render_projection_plan(&plan_base, &projections[projection_index]);
     }
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(&plan_base, "]}");
+      status = ab_buffer_literal(&plan_base, "],\"selection\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&plan_base, &plan_selection);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&plan_base, "}");
     if (status == ARCHBIRD_OK)
       status = digest_buffer(&plan_base, query_plan_sha256);
   }
-  for (projection_index = 0;
-       status == ARCHBIRD_OK && projection_index < projection_count;
-       projection_index++)
-    status = add_projection_seeds(engine, &options,
-                                  &projections[projection_index].definition,
-                                  &projections[projection_index].evaluation);
+  if (status == ARCHBIRD_OK)
+    status = query_plan_value(
+        engine, &id, named ? configuration.map_config_sha256 : NULL,
+        named ? configuration.sha256 : NULL, &plan_operations, &plan_selection,
+        projections, projection_count, query_definition_sha256,
+        query_plan_sha256, &plan);
   if (status == ARCHBIRD_OK)
     status =
-        ab_buffer_literal(&rendered, "{\"artifact\":\"query-plan\",\"plan\":{");
+        ab_buffer_literal(&rendered, "{\"artifact\":\"query-plan\",\"plan\":");
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, "\"id\":");
+    status = ab_value_render(&rendered, &plan);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(&rendered, id.data, id.length);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, ",\"map_config_sha256\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_value_render(&rendered, map_config);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, ",\"project_configuration_sha256\":");
-  if (status == ARCHBIRD_OK && named)
-    status = ab_buffer_json_string(&rendered, configuration.sha256, 64);
-  else if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, "null");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, ",\"projection_definitions\":[");
-  for (projection_index = 0;
-       status == ARCHBIRD_OK && projection_index < projection_count;
-       projection_index++) {
-    if (projection_index)
-      status = ab_buffer_literal(&rendered, ",");
-    if (status == ARCHBIRD_OK)
-      status = render_projection_definition_row(
-          &rendered, &projections[projection_index].id,
-          &projections[projection_index].evaluation);
-  }
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, "]");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, ",\"query_definition_sha256\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(&rendered, query_definition_sha256, 64);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, ",\"query_plan_sha256\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(&rendered, query_plan_sha256, 64);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, "},\"projection_results\":[");
-  for (projection_index = 0;
-       status == ARCHBIRD_OK && projection_index < projection_count;
-       projection_index++) {
-    if (projection_index)
-      status = ab_buffer_literal(&rendered, ",");
-    if (status == ARCHBIRD_OK)
-      status = render_projection_result_row(
-          &rendered, &projections[projection_index].id,
-          &projections[projection_index].evaluation);
-  }
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, "],\"request\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_value_render(&rendered, &options);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, ",\"schema_version\":1}");
+    status = ab_buffer_literal(&rendered, ",\"schema_version\":2}");
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, rendered.data, rendered.length,
                                         json_flags, write_fn, user_data);
   ab_buffer_free(&plan_base);
   ab_buffer_free(&rendered);
-  projection_nodes_free(engine, projections, projection_count);
+  projection_plans_free(engine, projections, projection_count);
+  ab_value_free(engine, &plan);
   ab_value_free(engine, &options);
-  ab_value_free(engine, &plan_options);
+  ab_value_free(engine, &plan_operations);
+  ab_value_free(engine, &plan_selection);
   if (overrides_length)
     ab_value_free(engine, &overrides);
-  ab_value_free(engine, &resolution);
-  ab_value_free(engine, &map);
   ab_project_configuration_free(engine, &configuration);
   return status;
 }

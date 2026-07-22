@@ -393,31 +393,61 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
         sizeValue(detail, "detail"),
         sizeValue(maxChars, "maxChars"),
       ),
-    mapQuery: (map, query, pretty = false) =>
-      twoInputs(map, query, "_ab_wasm_map_query", boolFlags(pretty)),
-    mapQueryMarkdown: (map, query, maxChars = 0) =>
-      twoInputs(
-        map,
-        query,
-        "_ab_wasm_map_query_markdown",
-        sizeValue(maxChars, "maxChars"),
-      ),
+    mapQuery(map, resolution, query, pretty = false) {
+      return withInputs(
+        [map, resolution, query],
+        ([mapInput, resolutionInput, queryInput]) =>
+          result(module._ab_wasm_map_query(
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            queryInput.pointer,
+            queryInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
+    mapQueryMarkdown(map, resolution, query, maxChars = 0) {
+      return withInputs(
+        [map, resolution, query],
+        ([mapInput, resolutionInput, queryInput]) =>
+          result(module._ab_wasm_map_query_markdown(
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            queryInput.pointer,
+            queryInput.length,
+            sizeValue(maxChars, "maxChars"),
+          )),
+      );
+    },
     mapQueryMarkdownView: (
       map,
+      resolution,
       query,
       view = 0,
       detail = 1,
       maxChars = 0,
       verification = Buffer.alloc(0),
     ) =>
-      threeInputs(
-        map,
-        query,
-        verification,
-        "_ab_wasm_map_query_markdown_view_with_verification",
-        sizeValue(view, "view"),
-        sizeValue(detail, "detail"),
-        sizeValue(maxChars, "maxChars"),
+      withInputs(
+        [map, resolution, query, verification],
+        ([mapInput, resolutionInput, queryInput, verificationInput]) =>
+          result(module._ab_wasm_map_query_markdown_view_with_verification(
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            queryInput.pointer,
+            queryInput.length,
+            verificationInput.pointer,
+            verificationInput.length,
+            sizeValue(view, "view"),
+            sizeValue(detail, "detail"),
+            sizeValue(maxChars, "maxChars"),
+          )),
       ),
     mapDiff: (before, after, pretty = false) =>
       twoInputs(before, after, "_ab_wasm_map_diff", boolFlags(pretty)),
@@ -497,22 +527,16 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
     },
     queryPlanCompile(
       config,
-      map,
-      resolution,
       queryId,
       overrides,
       pretty = false,
     ) {
       return withInputs(
-        [config, map, resolution, queryId, overrides],
-        ([configInput, mapInput, resolutionInput, idInput, overridesInput]) =>
+        [config, queryId, overrides],
+        ([configInput, idInput, overridesInput]) =>
           result(module._ab_wasm_query_plan_compile(
             configInput.pointer,
             configInput.length,
-            mapInput.pointer,
-            mapInput.length,
-            resolutionInput.pointer,
-            resolutionInput.length,
             idInput.pointer,
             idInput.length,
             overridesInput.pointer,

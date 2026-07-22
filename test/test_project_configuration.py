@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from archbird import _native
 from archbird.errors import ConfigError
 from archbird.native import (
     Project,
+    Source,
     change_contract,
     change_proposal,
     change_verify,
@@ -166,6 +168,19 @@ def main() -> None:
     assert first_projection["projection_result_sha256"] == second_projection[
         "projection_result_sha256"
     ]
+    reordered_projection = json.loads(
+        _native.projection_evaluate(
+            modern_map,
+            b'{"select":"symbols","paths":["include/**"],"id":"reordered"}',
+        )
+    )
+    assert "id" not in reordered_projection["definition"]
+    assert reordered_projection["projection_definition_sha256"] == first_projection[
+        "projection_definition_sha256"
+    ]
+    assert reordered_projection["projection_result_sha256"] == first_projection[
+        "projection_result_sha256"
+    ]
     exact_symbol_projection = json.loads(
         evaluate_projection_json(
             modern_map,
@@ -242,63 +257,40 @@ def main() -> None:
         for row in component_projection["fact"]["items"]
     } == expected_component_edges
 
-    query_options, query_plan, projection_results = compile_named_query(
-        config_json=json.dumps(
-            modern, sort_keys=True, separators=(",", ":")
-        ).encode(),
-        query_id="api-impact",
-        map_json=modern_map,
-    )
+    config_json = json.dumps(
+        modern, sort_keys=True, separators=(",", ":")
+    ).encode()
+    query_plan = compile_named_query(config_json, "api-impact")
     assert query_plan["id"] == "api-impact"
-    assert len(query_plan["projection_definitions"]) == 2
-    assert len(projection_results) == 2
-    assert "projection_result_sha256" not in query_plan["projection_definitions"][0]
-    assert query_plan["projection_definitions"][0][
-        "projection_definition_sha256"
-    ] == projection_results[0]["projection_definition_sha256"]
-    assert query_options["symbols"]
+    assert len(query_plan["projections"]) == 2
+    assert all(
+        "projection_result_sha256" not in row
+        for row in query_plan["projections"]
+    )
     public_query_plan = json.loads(
-        compile_query_plan_json(
-            json.dumps(modern, sort_keys=True, separators=(",", ":")).encode(),
-            modern_map,
-            "api-impact",
-        )
+        compile_query_plan_json(config_json, "api-impact")
     )
     assert public_query_plan == {
         "artifact": "query-plan",
         "plan": query_plan,
-        "projection_results": projection_results,
-        "request": query_options,
-        "schema_version": 1,
+        "schema_version": 2,
     }
-    named_query = json.loads(
-        query_map_json(
-            modern_map,
-            **query_options,
-            plan=query_plan,
-            projection_results=projection_results,
-        )
-    )
-    assert named_query["query"]["saved_plan"] == query_plan
-    assert named_query["query"]["projection_results"] == projection_results
+    named_query = json.loads(query_map_json(modern_map, plan=query_plan))
+    assert named_query["query"]["plan"] == query_plan
+    projection_results = named_query["query"]["projection_results"]
+    assert len(projection_results) == 2
+    assert [
+        row["projection_definition_sha256"]
+        for row in query_plan["projections"]
+    ] == [
+        row["projection_definition_sha256"] for row in projection_results
+    ]
+    assert all("projection_result_sha256" in row for row in projection_results)
 
-    inferred_options, inferred_plan, inferred_results = compile_named_query(
-        config_json=json.dumps(
-            modern, sort_keys=True, separators=(",", ":")
-        ).encode(),
-        query_id="inferred-impact",
-        map_json=modern_map,
-    )
-    assert len(inferred_plan["projection_definitions"]) == 14
-    assert len(inferred_results) == 14
-    inferred_query = json.loads(
-        query_map_json(
-            modern_map,
-            **inferred_options,
-            plan=inferred_plan,
-            projection_results=inferred_results,
-        )
-    )
+    inferred_plan = compile_named_query(config_json, "inferred-impact")
+    assert len(inferred_plan["projections"]) == 14
+    inferred_query = json.loads(query_map_json(modern_map, plan=inferred_plan))
+    assert len(inferred_query["query"]["projection_results"]) == 14
     direct_query = json.loads(
         query_map_json(
             modern_map,
@@ -325,34 +317,71 @@ def main() -> None:
     ):
         assert inferred_query.get(field, []) == direct_query.get(field, []), field
 
-    ad_hoc_options, ad_hoc_plan, ad_hoc_results = compile_ad_hoc_query(
-        modern_map, {"paths": ["src/base/**"]}
-    )
+    ad_hoc_plan = compile_ad_hoc_query({"paths": ["src/base/**"]})
     assert ad_hoc_plan["id"] == "ad-hoc"
     assert ad_hoc_plan["project_configuration_sha256"] is None
-    assert len(ad_hoc_plan["projection_definitions"]) == 1
-    assert len(ad_hoc_results) == 1
-    ad_hoc_query = json.loads(
-        query_map_json(
-            modern_map,
-            **ad_hoc_options,
-            plan=ad_hoc_plan,
-            projection_results=ad_hoc_results,
-        )
-    )
+    assert len(ad_hoc_plan["projections"]) == 1
+    ad_hoc_query = json.loads(query_map_json(modern_map, plan=ad_hoc_plan))
+    assert len(ad_hoc_query["query"]["projection_results"]) == 1
     direct_path_query = json.loads(
         query_map_json(modern_map, paths=["src/base/**"])
     )
     assert ad_hoc_query["files"] == direct_path_query["files"]
+
+    normalized_symbol_config = {
+        "schema_version": 2,
+        "project": "normalized-symbol-query",
+        "layers": [
+            {
+                "globs": ["src/**/*.js"],
+                "language": "javascript",
+                "name": "javascript",
+            }
+        ],
+        "projections": {
+            "one": {
+                "names": ["one"],
+                "paths": ["src/same-line.js"],
+                "select": "symbols",
+                "strip_prefix": "api_",
+            }
+        },
+        "queries": {"one": {"depth": 0, "projection": "one"}},
+    }
+    normalized_symbol_config_json = json.dumps(
+        normalized_symbol_config, sort_keys=True, separators=(",", ":")
+    ).encode()
+    normalized_project = Project(
+        "normalized-symbol-query",
+        (
+            Source(
+                "src/same-line.js",
+                b"function api_one() {} function api_two() {}\n",
+                language="javascript",
+                layer="javascript",
+            ),
+        ),
+    )
+    normalized_project.set_config(normalized_symbol_config_json)
+    normalized_project.scan(jobs=1, map_cache=False)
+    normalized_map = normalized_project.map_json()
+    normalized_plan = compile_named_query(
+        normalized_symbol_config_json, "one"
+    )
+    normalized_query = json.loads(
+        query_map_json(normalized_map, plan=normalized_plan)
+    )
+    assert [
+        row["name"]
+        for row in normalized_query["files"][0]["symbols"]
+    ] == ["api_one"]
 
     invalid_named_plan = dict(query_plan)
     invalid_named_plan["project_configuration_sha256"] = None
     try:
         query_map_json(
             modern_map,
-            **query_options,
             plan=invalid_named_plan,
-            projection_results=projection_results,
         )
     except RuntimeError as error:
         assert "identity does not match its kind" in str(error)
@@ -366,9 +395,7 @@ def main() -> None:
     try:
         query_map_json(
             modern_map,
-            **ad_hoc_options,
             plan=invalid_ad_hoc_plan,
-            projection_results=ad_hoc_results,
         )
     except RuntimeError as error:
         assert "identity does not match its kind" in str(error)
@@ -543,7 +570,7 @@ def main() -> None:
             {"id": "invalid", "select": "provider_surface", "surface": "ffi"},
         )
     except RuntimeError as error:
-        assert "provider_surface requires a non-empty name" in str(error)
+        assert "definition contains an unknown field" in str(error)
     else:
         raise AssertionError("incomplete provider-surface projection was accepted")
     provider_config = (provider_root / "subject/archbird.json").read_bytes()
@@ -598,37 +625,41 @@ def main() -> None:
     metadata_only["constraints"]["DISJOINT"]["rationale"] = (
         "Reviewed wording only."
     )
-    _, metadata_plan, metadata_results = compile_named_query(
+    metadata_plan = compile_named_query(
         json.dumps(metadata_only, sort_keys=True, separators=(",", ":")).encode(),
         "api-impact",
-        modern_map,
     )
     assert metadata_plan["query_plan_sha256"] == query_plan["query_plan_sha256"]
     assert metadata_plan["project_configuration_sha256"] != query_plan[
         "project_configuration_sha256"
     ]
-    assert metadata_results == projection_results
+    assert metadata_plan["projections"] == query_plan["projections"]
     mismatched_model = json.loads(json.dumps(modern))
     mismatched_model["layers"][0]["globs"].append("not-present/**/*.c")
     mismatched_json = json.dumps(
         mismatched_model, sort_keys=True, separators=(",", ":")
     ).encode()
+    mismatched_plan = compile_named_query(
+        mismatched_json, "api-impact"
+    )
+    assert mismatched_plan["map_config_sha256"] != query_plan[
+        "map_config_sha256"
+    ]
     try:
-        compile_named_query(mismatched_json, "api-impact", modern_map)
-    except ConfigError as error:
-        assert "Map definition does not match saved Map" in str(error)
+        query_map_json(modern_map, plan=mismatched_plan)
+    except RuntimeError as error:
+        assert "Map configuration does not match query input" in str(error)
     else:
-        raise AssertionError("named Query accepted a mismatched Map definition")
+        raise AssertionError("Query execution accepted a mismatched Map definition")
     try:
         evaluate_constraints_json(mismatched_json, modern_map)
     except RuntimeError as error:
         assert "Map definition does not match current Map" in str(error)
     else:
         raise AssertionError("Verify accepted a mismatched Map definition")
-    _, overridden_plan, _ = compile_named_query(
+    overridden_plan = compile_named_query(
         json.dumps(modern, sort_keys=True, separators=(",", ":")).encode(),
         "api-impact",
-        modern_map,
         overrides={"depth": 3},
     )
     assert overridden_plan["query_plan_sha256"] != query_plan["query_plan_sha256"]
@@ -639,13 +670,12 @@ def main() -> None:
         "public-api",
         {"paths": ["include/**"], "select": "symbols"},
     ]
-    _, reordered_plan, reordered_results = compile_named_query(
+    reordered_plan = compile_named_query(
         json.dumps(reordered, sort_keys=True, separators=(",", ":")).encode(),
         "api-impact",
-        modern_map,
     )
     assert reordered_plan["query_plan_sha256"] == query_plan["query_plan_sha256"]
-    assert reordered_results == projection_results
+    assert reordered_plan["projections"] == query_plan["projections"]
 
     config_json = json.dumps(
         modern, sort_keys=True, separators=(",", ":")

@@ -250,16 +250,16 @@ ARCHBIRD_API ArchbirdStatus archbird_projection_evaluate(
     const uint8_t *projection_json, size_t projection_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
-/* Compile a QueryPlan and its exhaustive projection inputs. A non-empty query
- * id selects a named Query from schema-2 project configuration and applies
- * overrides. An empty id compiles overrides_json as an ad-hoc Query and accepts
- * an empty configuration; its plan has no project-configuration identity. */
+/* Compile a Map-independent QueryPlan. The plan contains normalized operations
+ * and executable projection definitions, but never Map-bound projection
+ * results. A non-empty id selects a named Query from schema-2 project
+ * configuration and applies overrides. An empty id compiles overrides_json as
+ * an ad-hoc Query and accepts an empty configuration. */
 ARCHBIRD_API ArchbirdStatus archbird_query_plan_compile(
     ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
-    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
-    size_t resolution_length, const char *query_id, size_t query_id_length,
-    const uint8_t *overrides_json, size_t overrides_length, uint32_t json_flags,
-    ArchbirdWriteFn write_fn, void *user_data);
+    const char *query_id, size_t query_id_length, const uint8_t *overrides_json,
+    size_t overrides_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data);
 
 /*
  * Evaluate schema-2 project constraints directly over one canonical Map and
@@ -273,9 +273,8 @@ ARCHBIRD_API ArchbirdStatus archbird_constraints_evaluate(
     size_t request_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
     void *user_data);
 
-/* Evaluate project constraints and render Markdown, SARIF, or JUnit directly
- * from the resulting ConstraintPlan. JSON uses archbird_constraints_evaluate.
- */
+/* Evaluate project constraints and render Markdown, SARIF, or JUnit. JSON uses
+ * archbird_constraints_evaluate. */
 ARCHBIRD_API ArchbirdStatus archbird_constraints_report(
     ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
     const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
@@ -430,6 +429,7 @@ ARCHBIRD_API ArchbirdStatus archbird_map_render_markdown_view(
  * producer policy is separate from live source/config freshness. */
 ARCHBIRD_API ArchbirdStatus archbird_map_query(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
     const uint8_t *query_json, size_t query_length, uint32_t json_flags,
     ArchbirdWriteFn write_fn, void *user_data);
 
@@ -442,6 +442,7 @@ ARCHBIRD_API ArchbirdStatus archbird_map_query(
  */
 ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
     const uint8_t *query_json, size_t query_length, size_t max_chars,
     ArchbirdWriteFn write_fn, void *user_data);
 
@@ -453,6 +454,7 @@ ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown(
  */
 ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown_view(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
     const uint8_t *query_json, size_t query_length, ArchbirdQueryView view,
     ArchbirdReportDetail detail, size_t max_chars, ArchbirdWriteFn write_fn,
     void *user_data);
@@ -466,6 +468,7 @@ ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown_view(
  */
 ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown_view_with_verification(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
     const uint8_t *query_json, size_t query_length,
     const uint8_t *verification_json, size_t verification_length,
     ArchbirdQueryView view, ArchbirdReportDetail detail, size_t max_chars,

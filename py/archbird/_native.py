@@ -686,26 +686,21 @@ def projection_evaluate(
 
 def query_plan_compile(
     config: bytes,
-    map_json: bytes,
     query_id: str,
     *,
-    resolution_json: bytes = b"",
     overrides_json: bytes = b"",
     pretty: bool = False,
 ) -> bytes:
-    """Compile and evaluate one named QueryPlan."""
+    """Compile one Map-independent QueryPlan."""
 
     return _simple_render(
         "archbird_query_plan_compile",
         [
             _bytes(config, "project configuration"),
-            _bytes(map_json, "Map"),
-            _bytes(resolution_json),
             _bytes(query_id.encode("utf-8"), "query id"),
             _bytes(overrides_json),
         ],
         flags=_json_flags(pretty),
-        saved_artifact=True,
     )
 
 
@@ -970,11 +965,14 @@ def discovery_descend(
         _engine_destroy(engine)
 
 
-def map_query(map: bytes, query: bytes, pretty: bool = False) -> bytes:
+def map_query(
+    map: bytes, query: bytes, pretty: bool = False, resolution: bytes = b""
+) -> bytes:
     return _simple_render(
         "archbird_map_query",
-        [_bytes(map), _bytes(query)],
+        [_bytes(map), _bytes(resolution), _bytes(query)],
         flags=_json_flags(pretty),
+        nullable_empty_indices=(1,),
         saved_artifact=True,
     )
 
@@ -1005,15 +1003,18 @@ def map_markdown_view(map: bytes, view: int, detail: int, max_chars=0) -> bytes:
     )
 
 
-def map_query_markdown(map: bytes, query: bytes, max_chars=0) -> bytes:
+def map_query_markdown(
+    map: bytes, query: bytes, max_chars=0, resolution: bytes = b""
+) -> bytes:
     if max_chars < 0:
         raise ValueError("query max_chars must be a nonnegative integer")
     return _simple_render(
         "archbird_map_query_markdown",
-        [_bytes(map), _bytes(query)],
+        [_bytes(map), _bytes(resolution), _bytes(query)],
         suffix_types=(ctypes.c_size_t,),
         suffix_values=(max_chars,),
         include_flags=False,
+        nullable_empty_indices=(1,),
         saved_artifact=True,
     )
 
@@ -1025,16 +1026,22 @@ def map_query_markdown_view(
     detail: int,
     max_chars=0,
     verification: bytes = b"",
+    resolution: bytes = b"",
 ) -> bytes:
     if max_chars < 0:
         raise ValueError("query max_chars must be a nonnegative integer")
     return _simple_render(
         "archbird_map_query_markdown_view_with_verification",
-        [_bytes(map), _bytes(query), _bytes(verification)],
+        [
+            _bytes(map),
+            _bytes(resolution),
+            _bytes(query),
+            _bytes(verification),
+        ],
         suffix_types=(ctypes.c_int, ctypes.c_int, ctypes.c_size_t),
         suffix_values=(view, detail, max_chars),
         include_flags=False,
-        nullable_empty_indices=(2,),
+        nullable_empty_indices=(1, 3),
         saved_artifact=True,
     )
 

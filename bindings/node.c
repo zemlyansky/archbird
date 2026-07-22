@@ -981,11 +981,13 @@ static napi_value discovery_resolve(napi_env env, napi_callback_info info) {
 }
 
 static napi_value map_query(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
   const uint8_t *map;
+  const uint8_t *resolution;
   const uint8_t *query;
   size_t map_length;
+  size_t resolution_length;
   size_t query_length;
   int pretty;
   ArchbirdEngine *engine = NULL;
@@ -993,16 +995,19 @@ static napi_value map_query(napi_env env, napi_callback_info info) {
   NodeOutput output = {0};
   napi_value result;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 2 || !get_buffer(env, argv[0], &map, &map_length) ||
-      !get_buffer(env, argv[1], &query, &query_length) ||
-      !get_optional_bool(env, argc, argv, 2, 0, &pretty))
+  if (argc < 3 || !get_buffer(env, argv[0], &map, &map_length) ||
+      !get_buffer(env, argv[1], &resolution, &resolution_length) ||
+      !get_buffer(env, argv[2], &query, &query_length) ||
+      !get_optional_bool(env, argc, argv, 3, 0, &pretty))
     return NULL;
-  status =
-      saved_artifact_engine(larger_input(map_length, query_length), &engine);
+  status = saved_artifact_engine(
+      larger_input(larger_input(map_length, query_length), resolution_length),
+      &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_map_query(engine, map, map_length, query, query_length,
-                                pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
-                                &output);
+    status = archbird_map_query(
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, query, query_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(env, engine, status, &output);
   archbird_engine_destroy(engine);
   return result;
@@ -1062,11 +1067,13 @@ static napi_value map_markdown_view(napi_env env, napi_callback_info info) {
 }
 
 static napi_value map_query_markdown(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
   const uint8_t *map;
+  const uint8_t *resolution;
   const uint8_t *query;
   size_t map_length;
+  size_t resolution_length;
   size_t query_length;
   size_t max_chars;
   ArchbirdEngine *engine = NULL;
@@ -1074,16 +1081,19 @@ static napi_value map_query_markdown(napi_env env, napi_callback_info info) {
   NodeOutput output = {0};
   napi_value result;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 2 || !get_buffer(env, argv[0], &map, &map_length) ||
-      !get_buffer(env, argv[1], &query, &query_length) ||
-      !get_optional_size(env, argc, argv, 2, 0, "maxChars", &max_chars))
+  if (argc < 3 || !get_buffer(env, argv[0], &map, &map_length) ||
+      !get_buffer(env, argv[1], &resolution, &resolution_length) ||
+      !get_buffer(env, argv[2], &query, &query_length) ||
+      !get_optional_size(env, argc, argv, 3, 0, "maxChars", &max_chars))
     return NULL;
-  status =
-      saved_artifact_engine(larger_input(map_length, query_length), &engine);
+  status = saved_artifact_engine(
+      larger_input(larger_input(map_length, query_length), resolution_length),
+      &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_map_query_markdown(engine, map, map_length, query,
-                                         query_length, max_chars, output_write,
-                                         &output);
+    status = archbird_map_query_markdown(engine, map, map_length,
+                                         resolution_length ? resolution : NULL,
+                                         resolution_length, query, query_length,
+                                         max_chars, output_write, &output);
   result = render_result(env, engine, status, &output);
   archbird_engine_destroy(engine);
   return result;
@@ -1091,12 +1101,14 @@ static napi_value map_query_markdown(napi_env env, napi_callback_info info) {
 
 static napi_value map_query_markdown_view(napi_env env,
                                           napi_callback_info info) {
-  size_t argc = 6;
-  napi_value argv[6];
+  size_t argc = 7;
+  napi_value argv[7];
   const uint8_t *map;
+  const uint8_t *resolution;
   const uint8_t *query;
   const uint8_t *verification = NULL;
   size_t map_length;
+  size_t resolution_length;
   size_t query_length;
   size_t verification_length = 0;
   size_t view;
@@ -1107,20 +1119,24 @@ static napi_value map_query_markdown_view(napi_env env,
   NodeOutput output = {0};
   napi_value result;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 4 || !get_buffer(env, argv[0], &map, &map_length) ||
-      !get_buffer(env, argv[1], &query, &query_length) ||
-      !get_optional_size(env, argc, argv, 2, 0, "view", &view) ||
-      !get_optional_size(env, argc, argv, 3, 1, "detail", &detail) ||
-      !get_optional_size(env, argc, argv, 4, 0, "maxChars", &max_chars) ||
-      (argc > 5 &&
-       !get_buffer(env, argv[5], &verification, &verification_length)))
+  if (argc < 5 || !get_buffer(env, argv[0], &map, &map_length) ||
+      !get_buffer(env, argv[1], &resolution, &resolution_length) ||
+      !get_buffer(env, argv[2], &query, &query_length) ||
+      !get_optional_size(env, argc, argv, 3, 0, "view", &view) ||
+      !get_optional_size(env, argc, argv, 4, 1, "detail", &detail) ||
+      !get_optional_size(env, argc, argv, 5, 0, "maxChars", &max_chars) ||
+      (argc > 6 &&
+       !get_buffer(env, argv[6], &verification, &verification_length)))
     return NULL;
   status = saved_artifact_engine(
-      larger_input(larger_input(map_length, query_length), verification_length),
+      larger_input(larger_input(larger_input(map_length, query_length),
+                                verification_length),
+                   resolution_length),
       &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown_view_with_verification(
-        engine, map, map_length, query, query_length, verification,
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, query, query_length, verification,
         verification_length, (ArchbirdQueryView)view,
         (ArchbirdReportDetail)detail, max_chars, output_write, &output);
   result = render_result(env, engine, status, &output);
@@ -1490,15 +1506,11 @@ static napi_value projection_evaluate(napi_env env, napi_callback_info info) {
 }
 
 static napi_value query_plan_compile(napi_env env, napi_callback_info info) {
-  size_t argc = 6;
-  napi_value argv[6];
+  size_t argc = 4;
+  napi_value argv[4];
   const uint8_t *config;
-  const uint8_t *map;
-  const uint8_t *resolution;
   const uint8_t *overrides;
   size_t config_length;
-  size_t map_length;
-  size_t resolution_length;
   size_t overrides_length;
   char *query_id = NULL;
   size_t query_id_length = 0;
@@ -1508,25 +1520,19 @@ static napi_value query_plan_compile(napi_env env, napi_callback_info info) {
   NodeOutput output = {0};
   napi_value result;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 5 || !get_buffer(env, argv[0], &config, &config_length) ||
-      !get_buffer(env, argv[1], &map, &map_length) ||
-      !get_buffer(env, argv[2], &resolution, &resolution_length) ||
-      !get_buffer(env, argv[4], &overrides, &overrides_length))
+  if (argc < 3 || !get_buffer(env, argv[0], &config, &config_length) ||
+      !get_buffer(env, argv[2], &overrides, &overrides_length))
     return NULL;
-  query_id = get_string(env, argv[3], &query_id_length);
-  if (!query_id || !get_optional_bool(env, argc, argv, 5, 0, &pretty)) {
+  query_id = get_string(env, argv[1], &query_id_length);
+  if (!query_id || !get_optional_bool(env, argc, argv, 3, 0, &pretty)) {
     free(query_id);
     return NULL;
   }
-  status = saved_artifact_engine(
-      larger_input(larger_input(config_length, map_length),
-                   larger_input(resolution_length, overrides_length)),
-      &engine);
+  status = input_engine(larger_input(config_length, overrides_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_query_plan_compile(
-        engine, config, config_length, map, map_length,
-        resolution_length ? resolution : NULL, resolution_length, query_id,
-        query_id_length, overrides_length ? overrides : NULL, overrides_length,
+        engine, config, config_length, query_id, query_id_length,
+        overrides_length ? overrides : NULL, overrides_length,
         pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   free(query_id);
   result = render_result(env, engine, status, &output);

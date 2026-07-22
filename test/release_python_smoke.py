@@ -69,11 +69,15 @@ def main() -> int:
     query_plan = json.loads(
         archbird.compile_query_plan_json(
             b"",
-            first,
             overrides={"paths": ["py/pkg"], "depth": 0},
         )
     )
-    if query_plan["artifact"] != "query-plan" or not query_plan["request"]["paths"]:
+    if (
+        query_plan["artifact"] != "query-plan"
+        or query_plan["plan"]["selection"]["paths"] != ["py/pkg"]
+        or "projection_result_sha256"
+        in query_plan["plan"]["projections"][0]
+    ):
         raise AssertionError("installed Python QueryPlan compiler failed")
     verification = json.loads(
         archbird.evaluate_constraints_json(config_json, first)

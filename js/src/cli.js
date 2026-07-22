@@ -741,6 +741,7 @@ function queryMain(argv, command) {
     packages: options.package,
     paths: options.path,
     producerPolicy: options.check && options.map ? "current" : "compatible",
+    resolutionJson,
     search: options.search,
     searchLimit: options.searchLimit,
     symbols: options.symbol,
@@ -780,30 +781,15 @@ function queryMain(argv, command) {
     if (Object.keys(context).length) overrides.context = context;
     const artifact = JSON.parse(archbird.compileQueryPlan(
       configJson,
-      source,
       queryId,
       {
-        resolutionJson,
         overridesJson: Buffer.from(JSON.stringify(overrides)),
       },
     ).toString("utf8"));
-    const request = artifact.request;
     queryOptions = {
-      artifacts: request.artifacts,
-      components: request.components,
-      context: request.context,
-      depth: request.depth,
-      direction: request.direction,
-      focus: request.focus,
-      packages: request.packages,
-      paths: request.paths,
       plan: artifact.plan,
       producerPolicy: options.check && options.map ? "current" : "compatible",
-      projectionResults: artifact.projection_results,
-      search: request.search,
-      searchLimit: request.search_limit,
-      symbols: request.symbols,
-      testDepth: request.test_depth,
+      resolutionJson,
       changeSet,
     };
   }

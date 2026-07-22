@@ -935,6 +935,7 @@ class Project:
             direction=direction,
             depth=depth,
             test_depth=test_depth,
+            resolution_json=self.resolution_json or b"",
             pretty=pretty,
         )
 
@@ -985,6 +986,7 @@ class Project:
             compact=compact,
             full=full,
             max_chars=max_chars,
+            resolution_json=self.resolution_json or b"",
         )
 
     def graph_view_json(
@@ -1098,12 +1100,37 @@ def _query_request(
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
     plan: Optional[Mapping[str, object]] = None,
-    projection_results: Sequence[Mapping[str, object]] = (),
     direction: str = "both",
     producer_policy: str = "compatible",
     depth: int = 1,
     test_depth: int = 8,
 ) -> bytes:
+    if plan is not None:
+        if (
+            focus
+            or paths
+            or symbols
+            or components
+            or packages
+            or artifacts
+            or search
+            or context is not None
+            or search_limit != 8
+            or direction != "both"
+            or depth != 1
+            or test_depth != 8
+        ):
+            raise ValueError(
+                "QueryPlan execution accepts only change_set and producer_policy; "
+                "compile query operations into the plan"
+            )
+        request: dict[str, object] = {
+            "plan": dict(plan),
+            "producer_policy": producer_policy,
+        }
+        if change_set is not None:
+            request["change_set"] = dict(change_set)
+        return _canonical(request)
     request = {
         "artifacts": list(artifacts),
         "components": list(components),
@@ -1122,41 +1149,7 @@ def _query_request(
         request["context"] = dict(context)
     if change_set is not None:
         request["change_set"] = dict(change_set)
-    if plan is not None:
-        request["plan"] = dict(plan)
-    if projection_results:
-        request["projection_results"] = [dict(row) for row in projection_results]
     return _canonical(request)
-
-
-def _query_request_with_plan(
-    map_json: bytes, request: bytes, resolution_json: bytes
-) -> bytes:
-    document = json.loads(request)
-    if "plan" in document:
-        return request
-    definition = {
-        name: value
-        for name, value in document.items()
-        if name not in {"change_set", "producer_policy"}
-    }
-    artifact = json.loads(
-        _native.query_plan_compile(
-            b"",
-            map_json,
-            "",
-            resolution_json=resolution_json,
-            overrides_json=_canonical(definition),
-            pretty=False,
-        )
-    )
-    planned = dict(artifact["request"])
-    planned["producer_policy"] = document["producer_policy"]
-    if "change_set" in document:
-        planned["change_set"] = document["change_set"]
-    planned["plan"] = artifact["plan"]
-    planned["projection_results"] = artifact["projection_results"]
-    return _canonical(planned)
 
 
 def query_map_json(
@@ -1173,7 +1166,6 @@ def query_map_json(
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
     plan: Optional[Mapping[str, object]] = None,
-    projection_results: Sequence[Mapping[str, object]] = (),
     direction: str = "both",
     producer_policy: str = "compatible",
     depth: int = 1,
@@ -1188,7 +1180,6 @@ def query_map_json(
         components=components,
         context=context,
         plan=plan,
-        projection_results=projection_results,
         packages=packages,
         artifacts=artifacts,
         search=search,
@@ -1200,9 +1191,7 @@ def query_map_json(
         test_depth=test_depth,
     )
     return _native.map_query(
-        map_json,
-        _query_request_with_plan(map_json, request, resolution_json),
-        pretty=pretty,
+        map_json, request, pretty=pretty, resolution=resolution_json
     )
 
 
@@ -1247,7 +1236,6 @@ def query_map_markdown(
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
     plan: Optional[Mapping[str, object]] = None,
-    projection_results: Sequence[Mapping[str, object]] = (),
     direction: str = "both",
     producer_policy: str = "compatible",
     depth: int = 1,
@@ -1284,7 +1272,6 @@ def query_map_markdown(
         components=components,
         context=context,
         plan=plan,
-        projection_results=projection_results,
         packages=packages,
         artifacts=artifacts,
         search=search,
@@ -1297,11 +1284,12 @@ def query_map_markdown(
     )
     return _native.map_query_markdown_view(
         map_json,
-        _query_request_with_plan(map_json, request, resolution_json),
+        request,
         views[view],
         details[selected_detail],
         max_chars=max_chars,
         verification=verification_result,
+        resolution=resolution_json,
     )
 
 
@@ -1753,20 +1741,16 @@ def evaluate_projection_json(
 
 def compile_query_plan_json(
     config_json: bytes,
-    map_json: bytes,
     query_id: str = "",
     *,
-    resolution_json: bytes = b"",
     overrides: Optional[Mapping[str, object]] = None,
     pretty: bool = False,
 ) -> bytes:
-    """Compile one saved or ad-hoc QueryPlan over canonical Map evidence."""
+    """Compile one saved or ad-hoc Map-independent QueryPlan."""
 
     return _native.query_plan_compile(
         config_json,
-        map_json,
         query_id,
-        resolution_json=resolution_json,
         overrides_json=_canonical(dict(overrides or {})),
         pretty=pretty,
     )

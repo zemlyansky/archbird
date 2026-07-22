@@ -13,7 +13,7 @@
   "\"call_resolutions\":[],\"components\":[],\"description\":\"\","            \
   "\"diagnostics\":[],\"edges\":[],\"evidence\":{"                             \
   "\"absolute_paths_included\":false,\"config_sha256\":"                       \
-  "\"1111111111111111111111111111111111111111111111111111111111111111\","      \
+  "\"07f114f9f920ee168c64035e868121f22bfc888d65fde4610d6d243073e3f687\","      \
   "\"input_sha256\":"                                                          \
   "\"2222222222222222222222222222222222222222222222222222222222222222\"},"     \
   "\"files\":[{\"bytes\":6,\"call_counts\":{},\"calls\":[],"                   \
@@ -46,7 +46,9 @@ static const uint8_t fuzz_workspace_maps_json[] =
     "[" ARCHBIRD_FUZZ_MAP_JSON "]";
 
 static const uint8_t fuzz_project_configuration_json[] =
-    "{\"schema_version\":2,\"project\":\"fuzz\",\"constraints\":{"
+    "{\"schema_version\":2,\"project\":\"fuzz\",\"layers\":[{"
+    "\"name\":\"core\",\"role\":\"core\",\"language\":\"c\","
+    "\"globs\":[\"src/**/*.c\"]}],\"constraints\":{"
     "\"FUZZ-SET\":{\"assert\":\"set_equal\","
     "\"expected\":{\"literal\":[\"A\"]},"
     "\"actual\":{\"literal\":[\"B\"]},"

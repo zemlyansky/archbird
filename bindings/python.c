@@ -851,27 +851,32 @@ static PyObject *py_discovery_descend(PyObject *self, PyObject *args) {
 
 static PyObject *py_map_query(PyObject *self, PyObject *args,
                               PyObject *kwargs) {
-  static char *keywords[] = {"map", "query", "pretty", NULL};
+  static char *keywords[] = {"map", "query", "pretty", "resolution", NULL};
   const char *map;
   const char *query;
+  const char *resolution = "";
   Py_ssize_t map_length;
   Py_ssize_t query_length;
+  Py_ssize_t resolution_length = 0;
   int pretty = 0;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
   PyOutput output = {0};
   PyObject *result;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|p:map_query", keywords,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|py#:map_query", keywords,
                                    &map, &map_length, &query, &query_length,
-                                   &pretty))
+                                   &pretty, &resolution, &resolution_length))
     return NULL;
   status = saved_artifact_engine(
-      larger_input((size_t)map_length, (size_t)query_length), &engine);
+      larger_input(larger_input((size_t)map_length, (size_t)query_length),
+                   (size_t)resolution_length),
+      &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query(
         engine, (const uint8_t *)map, (size_t)map_length,
-        (const uint8_t *)query, (size_t)query_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, (const uint8_t *)query, (size_t)query_length,
         pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);
@@ -942,20 +947,23 @@ static PyObject *py_map_markdown_view(PyObject *self, PyObject *args,
 
 static PyObject *py_map_query_markdown(PyObject *self, PyObject *args,
                                        PyObject *kwargs) {
-  static char *keywords[] = {"map", "query", "max_chars", NULL};
+  static char *keywords[] = {"map", "query", "max_chars", "resolution", NULL};
   const char *map;
   const char *query;
+  const char *resolution = "";
   Py_ssize_t map_length;
   Py_ssize_t query_length;
+  Py_ssize_t resolution_length = 0;
   Py_ssize_t max_chars = 0;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
   PyOutput output = {0};
   PyObject *result;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|n:map_query_markdown",
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|ny#:map_query_markdown",
                                    keywords, &map, &map_length, &query,
-                                   &query_length, &max_chars))
+                                   &query_length, &max_chars, &resolution,
+                                   &resolution_length))
     return NULL;
   if (max_chars < 0) {
     PyErr_SetString(PyExc_ValueError,
@@ -963,12 +971,15 @@ static PyObject *py_map_query_markdown(PyObject *self, PyObject *args,
     return NULL;
   }
   status = saved_artifact_engine(
-      larger_input((size_t)map_length, (size_t)query_length), &engine);
+      larger_input(larger_input((size_t)map_length, (size_t)query_length),
+                   (size_t)resolution_length),
+      &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown(
         engine, (const uint8_t *)map, (size_t)map_length,
-        (const uint8_t *)query, (size_t)query_length, (size_t)max_chars,
-        output_write, &output);
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, (const uint8_t *)query, (size_t)query_length,
+        (size_t)max_chars, output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);
   return result;
@@ -976,14 +987,17 @@ static PyObject *py_map_query_markdown(PyObject *self, PyObject *args,
 
 static PyObject *py_map_query_markdown_view(PyObject *self, PyObject *args,
                                             PyObject *kwargs) {
-  static char *keywords[] = {"map",       "query",        "view", "detail",
-                             "max_chars", "verification", NULL};
+  static char *keywords[] = {"map",        "query",     "view",
+                             "detail",     "max_chars", "verification",
+                             "resolution", NULL};
   const char *map;
   const char *query;
   const char *verification = NULL;
+  const char *resolution = "";
   Py_ssize_t map_length;
   Py_ssize_t query_length;
   Py_ssize_t verification_length = 0;
+  Py_ssize_t resolution_length = 0;
   Py_ssize_t max_chars = 0;
   int view;
   int detail;
@@ -993,9 +1007,9 @@ static PyObject *py_map_query_markdown_view(PyObject *self, PyObject *args,
   PyObject *result;
   (void)self;
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#y#ii|ny#:map_query_markdown_view", keywords, &map,
+          args, kwargs, "y#y#ii|ny#y#:map_query_markdown_view", keywords, &map,
           &map_length, &query, &query_length, &view, &detail, &max_chars,
-          &verification, &verification_length))
+          &verification, &verification_length, &resolution, &resolution_length))
     return NULL;
   if (max_chars < 0) {
     PyErr_SetString(PyExc_ValueError,
@@ -1003,13 +1017,16 @@ static PyObject *py_map_query_markdown_view(PyObject *self, PyObject *args,
     return NULL;
   }
   status = saved_artifact_engine(
-      larger_input(larger_input((size_t)map_length, (size_t)query_length),
-                   (size_t)verification_length),
+      larger_input(
+          larger_input(larger_input((size_t)map_length, (size_t)query_length),
+                       (size_t)verification_length),
+          (size_t)resolution_length),
       &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_map_query_markdown_view_with_verification(
         engine, (const uint8_t *)map, (size_t)map_length,
-        (const uint8_t *)query, (size_t)query_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, (const uint8_t *)query, (size_t)query_length,
         verification_length ? (const uint8_t *)verification : NULL,
         (size_t)verification_length, (ArchbirdQueryView)view,
         (ArchbirdReportDetail)detail, (size_t)max_chars, output_write, &output);
@@ -1367,18 +1384,13 @@ static PyObject *py_projection_evaluate(PyObject *self, PyObject *args,
 
 static PyObject *py_query_plan_compile(PyObject *self, PyObject *args,
                                        PyObject *kwargs) {
-  static char *keywords[] = {
-      "config",         "map_json", "query_id", "resolution_json",
-      "overrides_json", "pretty",   NULL};
+  static char *keywords[] = {"config", "query_id", "overrides_json", "pretty",
+                             NULL};
   const char *config;
-  const char *map;
   const char *query_id;
-  const char *resolution = "";
   const char *overrides = "";
   Py_ssize_t config_length;
-  Py_ssize_t map_length;
   Py_ssize_t query_id_length;
-  Py_ssize_t resolution_length = 0;
   Py_ssize_t overrides_length = 0;
   int pretty = 0;
   ArchbirdEngine *engine = NULL;
@@ -1387,22 +1399,17 @@ static PyObject *py_query_plan_compile(PyObject *self, PyObject *args,
   PyObject *result;
   size_t budget;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#y#s#|y#y#p:query_plan_compile", keywords, &config,
-          &config_length, &map, &map_length, &query_id, &query_id_length,
-          &resolution, &resolution_length, &overrides, &overrides_length,
-          &pretty))
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#s#|y#p:query_plan_compile",
+                                   keywords, &config, &config_length, &query_id,
+                                   &query_id_length, &overrides,
+                                   &overrides_length, &pretty))
     return NULL;
-  budget = larger_input(
-      larger_input((size_t)config_length, (size_t)map_length),
-      larger_input((size_t)resolution_length, (size_t)overrides_length));
+  budget = larger_input((size_t)config_length, (size_t)overrides_length);
   status = saved_artifact_engine(budget, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_query_plan_compile(
-        engine, (const uint8_t *)config, (size_t)config_length,
-        (const uint8_t *)map, (size_t)map_length,
-        resolution_length ? (const uint8_t *)resolution : NULL,
-        (size_t)resolution_length, query_id, (size_t)query_id_length,
+        engine, (const uint8_t *)config, (size_t)config_length, query_id,
+        (size_t)query_id_length,
         overrides_length ? (const uint8_t *)overrides : NULL,
         (size_t)overrides_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
         output_write, &output);

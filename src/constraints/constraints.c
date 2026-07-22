@@ -23,6 +23,13 @@
       return status__;                                                         \
   } while (0)
 
+typedef struct ConstraintProjectionBinding {
+  AbString name;
+  AbString map_id;
+  AbValue source_lock;
+  AbProjectionPlan plan;
+} ConstraintProjectionBinding;
+
 typedef struct ConstraintExecution {
   ArchbirdEngine *engine;
   AbProjectConfiguration configuration;
@@ -34,6 +41,8 @@ typedef struct ConstraintExecution {
   AbValue constraint_plans;
   AbValue policy;
   AbVerificationContext context;
+  ConstraintProjectionBinding *projection_bindings;
+  size_t projection_binding_count;
   size_t operand_capacity;
   size_t mapping_capacity;
 } ConstraintExecution;
@@ -56,8 +65,8 @@ static int object_field_compare(const void *left_raw, const void *right_raw) {
 }
 
 static int fact_compare(const void *left_raw, const void *right_raw) {
-  const AbVerifyFactSet *left = (const AbVerifyFactSet *)left_raw;
-  const AbVerifyFactSet *right = (const AbVerifyFactSet *)right_raw;
+  const AbProjectionData *left = (const AbProjectionData *)left_raw;
+  const AbProjectionData *right = (const AbProjectionData *)right_raw;
   return ab_string_compare(&left->name, &right->name);
 }
 
@@ -407,23 +416,20 @@ static ArchbirdStatus constraint_map(ConstraintExecution *execution,
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus add_projection_fact(ConstraintExecution *execution,
-                                          const AbValue *definition,
-                                          const AbString *map_id,
-                                          const AbValue *source_lock,
-                                          const AbString **name) {
+static ArchbirdStatus add_projection_operand(ConstraintExecution *execution,
+                                             const AbValue *definition,
+                                             const AbString *map_id,
+                                             const AbValue *source_lock,
+                                             const AbString **name) {
   static const AbString current = {(char *)"current", 7};
   AbString generated = {0};
   const AbObjectField *previous;
-  const AbValue *map = NULL;
-  const AbValue *resolution = NULL;
-  AbProjectionEvaluation evaluation = {0};
+  AbProjectionPlan plan = {0};
   AbObjectField *stored = NULL;
-  AbVerifyFactSet *fact;
-  ArchbirdStatus status = constraint_map(execution, map_id, &map, &resolution);
-  if (status == ARCHBIRD_OK)
-    status = projection_operand_name(execution, map_id ? map_id : &current,
-                                     definition, source_lock, &generated);
+  ConstraintProjectionBinding *binding = NULL;
+  ArchbirdStatus status =
+      projection_operand_name(execution, map_id ? map_id : &current, definition,
+                              source_lock, &generated);
   if (status != ARCHBIRD_OK)
     return status;
   previous = named_field(&execution->operand_definitions, &generated);
@@ -434,64 +440,59 @@ static ArchbirdStatus add_projection_fact(ConstraintExecution *execution,
   }
   if (execution->operand_definitions.as.object.count >=
           execution->operand_capacity ||
-      execution->context.fact_count >= execution->operand_capacity) {
+      execution->projection_binding_count >= execution->operand_capacity) {
     ab_string_free(execution->engine, &generated);
     return ARCHBIRD_LIMIT_EXCEEDED;
   }
-  status = ab_projection_evaluate_fact(execution->engine, definition, map,
-                                       resolution, &generated, &evaluation);
-  if (status == ARCHBIRD_OK && source_lock) {
-    AbBuffer message;
-    int current_lock = 0;
-    ab_buffer_init(&message, execution->engine);
-    status = source_lock_current(map, source_lock, &current_lock, &message);
+  status = ab_projection_plan_compile(execution->engine, definition, &generated,
+                                      &plan);
+  if (status == ARCHBIRD_OK) {
+    stored = &execution->operand_definitions.as.object
+                  .fields[execution->operand_definitions.as.object.count];
+    status = ab_string_copy(execution->engine, &stored->name, generated.data,
+                            generated.length);
     if (status == ARCHBIRD_OK)
-      status = prepared_add_source_lock(execution, &evaluation.prepared,
-                                        source_lock);
-    if (status == ARCHBIRD_OK && !current_lock) {
-      const AbValue *project = ab_value_member(map, "project");
-      char shape[32];
-      size_t shape_length = evaluation.fact.shape.length;
-      if (shape_length >= sizeof(shape))
-        status = ARCHBIRD_CONFLICT;
-      else {
-        memcpy(shape, evaluation.fact.shape.data, shape_length);
-        shape[shape_length] = '\0';
-        status = ab_buffer_append(&message, "\0", 1);
-        if (status == ARCHBIRD_OK) {
-          ab_verify_fact_free(execution->engine, &evaluation.fact);
-          status = ab_verify_fact_unknown(
-              execution->engine, &evaluation.fact, &generated,
-              project ? &project->as.text : NULL, shape,
-              message.data ? (const char *)message.data
-                           : "source lock is not current");
-        }
-      }
-    }
-    ab_buffer_free(&message);
+      status =
+          ab_value_copy(execution->engine, &stored->value, &plan.definition);
+  }
+  if (status == ARCHBIRD_OK && source_lock)
+    status = prepared_add_source_lock(execution, stored, source_lock);
+  if (status == ARCHBIRD_OK) {
+    binding =
+        &execution->projection_bindings[execution->projection_binding_count];
+    status = ab_string_copy(execution->engine, &binding->name, generated.data,
+                            generated.length);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_string_copy(execution->engine, &binding->map_id,
+                            map_id ? map_id->data : current.data,
+                            map_id ? map_id->length : current.length);
+  if (status == ARCHBIRD_OK && source_lock)
+    status =
+        ab_value_copy(execution->engine, &binding->source_lock, source_lock);
+  if (status == ARCHBIRD_OK) {
+    binding->plan = plan;
+    memset(&plan, 0, sizeof(plan));
   }
   if (status != ARCHBIRD_OK) {
-    ab_projection_evaluation_free(execution->engine, &evaluation);
+    if (stored) {
+      ab_string_free(execution->engine, &stored->name);
+      ab_value_free(execution->engine, &stored->value);
+    }
+    if (binding) {
+      ab_string_free(execution->engine, &binding->name);
+      ab_string_free(execution->engine, &binding->map_id);
+      ab_value_free(execution->engine, &binding->source_lock);
+      ab_projection_plan_free(execution->engine, &binding->plan);
+    }
+    ab_projection_plan_free(execution->engine, &plan);
     ab_string_free(execution->engine, &generated);
     return status;
   }
-  stored = &execution->operand_definitions.as.object
-                .fields[execution->operand_definitions.as.object.count];
-  *stored = evaluation.prepared;
-  memset(&evaluation.prepared, 0, sizeof(evaluation.prepared));
-  fact = &execution->context.facts[execution->context.fact_count];
-  *fact = evaluation.fact;
-  memset(&evaluation.fact, 0, sizeof(evaluation.fact));
-  status = ARCHBIRD_OK;
-  if (status == ARCHBIRD_OK) {
-    execution->operand_definitions.as.object.count++;
-    execution->context.fact_count++;
-    *name = &stored->name;
-  } else {
-    ab_string_free(execution->engine, &stored->name);
-    ab_value_free(execution->engine, &stored->value);
-  }
-  ab_projection_evaluation_free(execution->engine, &evaluation);
+  execution->operand_definitions.as.object.count++;
+  execution->projection_binding_count++;
+  *name = &stored->name;
+  ab_projection_plan_free(execution->engine, &plan);
   ab_string_free(execution->engine, &generated);
   return status;
 }
@@ -525,15 +526,14 @@ static ArchbirdStatus literal_spec(ArchbirdEngine *engine,
   return object_add_copy(engine, out, field, literal);
 }
 
-static ArchbirdStatus add_literal_fact(ConstraintExecution *execution,
-                                       const AbValue *literal,
-                                       int relation_hint,
-                                       const AbString **name) {
+static ArchbirdStatus add_literal_operand(ConstraintExecution *execution,
+                                          const AbValue *literal,
+                                          int relation_hint,
+                                          const AbString **name) {
   AbValue spec = {0};
   AbString generated = {0};
   const AbObjectField *previous;
   AbObjectField *stored;
-  AbVerifyFactSet *fact;
   ArchbirdStatus status =
       literal_spec(execution->engine, literal, relation_hint, &spec);
   if (status == ARCHBIRD_OK)
@@ -550,8 +550,7 @@ static ArchbirdStatus add_literal_fact(ConstraintExecution *execution,
     return ARCHBIRD_OK;
   }
   if (execution->operand_definitions.as.object.count >=
-          execution->operand_capacity ||
-      execution->context.fact_count >= execution->operand_capacity) {
+      execution->operand_capacity) {
     status = ARCHBIRD_LIMIT_EXCEEDED;
     goto done;
   }
@@ -562,12 +561,9 @@ static ArchbirdStatus add_literal_fact(ConstraintExecution *execution,
   if (status == ARCHBIRD_OK) {
     stored->value = spec;
     memset(&spec, 0, sizeof(spec));
-    fact = &execution->context.facts[execution->context.fact_count];
-    status = ab_projection_extract_literal(execution->engine, stored, fact);
   }
   if (status == ARCHBIRD_OK) {
     execution->operand_definitions.as.object.count++;
-    execution->context.fact_count++;
     *name = &stored->name;
   } else if (stored) {
     ab_string_free(execution->engine, &stored->name);
@@ -722,22 +718,14 @@ static ArchbirdStatus compile_operand(ConstraintExecution *execution,
                    "operand requires exactly one projection, literal, or "
                    "observation");
   if (observation) {
-    const AbValue *observations =
-        ab_value_member(&execution->request, "observations");
-    const AbObjectField *provided =
-        observations && observations->kind == AB_VALUE_OBJECT
-            ? named_field(observations, &observation->as.text)
-            : NULL;
-    if (!provided)
-      return invalid(execution->engine,
-                     "constraint references an unsupplied observation");
-    *name = &provided->name;
+    *name = &observation->as.text;
     return ARCHBIRD_OK;
   }
-  return projection ? add_projection_fact(execution, projection,
-                                          map ? &map->as.text : NULL,
-                                          source_lock, name)
-                    : add_literal_fact(execution, literal, relation_hint, name);
+  return projection
+             ? add_projection_operand(execution, projection,
+                                      map ? &map->as.text : NULL, source_lock,
+                                      name)
+             : add_literal_operand(execution, literal, relation_hint, name);
 }
 
 static ArchbirdStatus compile_typed(ConstraintExecution *execution,
@@ -811,7 +799,7 @@ static ArchbirdStatus compile_typed(ConstraintExecution *execution,
     } else {
       assertion = "required_subset";
       if (status == ARCHBIRD_OK)
-        status = add_literal_fact(execution, values, 0, &expected);
+        status = add_literal_operand(execution, values, 0, &expected);
     }
   } else if (value_string_is(kind, "required_symbols") ||
              value_string_is(kind, "forbidden_symbols")) {
@@ -826,7 +814,7 @@ static ArchbirdStatus compile_typed(ConstraintExecution *execution,
     assertion = value_string_is(kind, "required_symbols") ? "required_subset"
                                                           : "disjoint";
     if (status == ARCHBIRD_OK)
-      status = add_literal_fact(execution, values, 0, &expected);
+      status = add_literal_operand(execution, values, 0, &expected);
   } else if (value_string_is(kind, "symbol_cardinality")) {
     status = projection_from_fields(execution, "symbols", definition, symbols,
                                     8, NULL, 0, &projection);
@@ -998,7 +986,7 @@ static ArchbirdStatus compile_typed(ConstraintExecution *execution,
         component ? component_edges : file_edges, component ? 1u : 5u, NULL, 1,
         &projection);
     if (status == ARCHBIRD_OK)
-      status = add_literal_fact(execution, values, 1, &expected);
+      status = add_literal_operand(execution, values, 1, &expected);
     assertion =
         string_is(&kind->as.text,
                   component ? "allowed_component_edges" : "allowed_file_edges")
@@ -1015,7 +1003,8 @@ static ArchbirdStatus compile_typed(ConstraintExecution *execution,
     qsort(projection.as.object.fields, projection.as.object.count,
           sizeof(*projection.as.object.fields), object_field_compare);
   if (status == ARCHBIRD_OK)
-    status = add_projection_fact(execution, &projection, NULL, NULL, &actual);
+    status =
+        add_projection_operand(execution, &projection, NULL, NULL, &actual);
   if (status == ARCHBIRD_OK)
     status = object_add_string(execution->engine, check, "assert", assertion,
                                strlen(assertion));
@@ -1213,11 +1202,6 @@ static ArchbirdStatus validate_request(ConstraintExecution *execution,
                      "request.policy_date must be a valid YYYY-MM-DD date");
   }
   {
-    ArchbirdStatus status = validate_request_maps(execution);
-    if (status != ARCHBIRD_OK)
-      return status;
-  }
-  {
     const AbValue *observations =
         ab_value_member(&execution->request, "observations");
     if (observations && observations->kind != AB_VALUE_OBJECT)
@@ -1370,9 +1354,6 @@ static ArchbirdStatus compile_constraints(ConstraintExecution *execution,
           execution->operand_definitions.as.object.count,
           sizeof(*execution->operand_definitions.as.object.fields),
           object_field_compare);
-  if (status == ARCHBIRD_OK && execution->context.fact_count > 1)
-    qsort(execution->context.facts, execution->context.fact_count,
-          sizeof(*execution->context.facts), fact_compare);
   if (status == ARCHBIRD_OK && execution->mappings.as.object.count > 1)
     qsort(execution->mappings.as.object.fields,
           execution->mappings.as.object.count,
@@ -1425,6 +1406,115 @@ static ArchbirdStatus compile_constraints(ConstraintExecution *execution,
 }
 
 static ArchbirdStatus
+evaluate_projection_binding(ConstraintExecution *execution,
+                            ConstraintProjectionBinding *binding) {
+  const AbValue *map = NULL;
+  const AbValue *resolution = NULL;
+  AbProjectionResult result = {0};
+  ArchbirdStatus status =
+      constraint_map(execution, &binding->map_id, &map, &resolution);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_plan_evaluate(execution->engine, &binding->plan, map,
+                                         resolution, &result);
+  if (status == ARCHBIRD_OK && binding->source_lock.kind == AB_VALUE_OBJECT) {
+    AbBuffer message;
+    int current = 0;
+    ab_buffer_init(&message, execution->engine);
+    status =
+        source_lock_current(map, &binding->source_lock, &current, &message);
+    if (status == ARCHBIRD_OK && !current) {
+      const AbValue *project = ab_value_member(map, "project");
+      char shape[32];
+      size_t shape_length = result.data.shape.length;
+      if (shape_length >= sizeof(shape))
+        status = ARCHBIRD_CONFLICT;
+      else {
+        memcpy(shape, result.data.shape.data, shape_length);
+        shape[shape_length] = '\0';
+        status = ab_buffer_append(&message, "\0", 1);
+        if (status == ARCHBIRD_OK) {
+          ab_projection_data_free(execution->engine, &result.data);
+          status = ab_projection_data_unknown(
+              execution->engine, &result.data, &binding->name,
+              project ? &project->as.text : NULL, shape,
+              message.data ? (const char *)message.data
+                           : "source lock is not current");
+        }
+      }
+    }
+    ab_buffer_free(&message);
+  }
+  if (status == ARCHBIRD_OK) {
+    execution->context.facts[execution->context.fact_count++] = result.data;
+    memset(&result.data, 0, sizeof(result.data));
+  }
+  ab_projection_result_free(execution->engine, &result);
+  return status;
+}
+
+static ArchbirdStatus evaluate_operands(ConstraintExecution *execution) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  size_t count = execution->operand_definitions.as.object.count;
+  if (count) {
+    execution->context.facts = (AbProjectionData *)ab_calloc(
+        execution->engine, count, sizeof(*execution->context.facts));
+    if (!execution->context.facts)
+      return archbird_error_set(execution->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory evaluating constraint operands");
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < count; index++) {
+    const AbObjectField *operand =
+        &execution->operand_definitions.as.object.fields[index];
+    if (operand->name.length >= 2 && operand->name.data[0] == 'l' &&
+        operand->name.data[1] == '.') {
+      status = ab_projection_extract_literal(
+          execution->engine, operand,
+          &execution->context.facts[execution->context.fact_count]);
+      if (status == ARCHBIRD_OK)
+        execution->context.fact_count++;
+    }
+  }
+  for (index = 0;
+       status == ARCHBIRD_OK && index < execution->projection_binding_count;
+       index++)
+    status = evaluate_projection_binding(
+        execution, &execution->projection_bindings[index]);
+  if (status == ARCHBIRD_OK && execution->context.fact_count != count)
+    status = ARCHBIRD_CONFLICT;
+  if (status == ARCHBIRD_OK && execution->context.fact_count > 1)
+    qsort(execution->context.facts, execution->context.fact_count,
+          sizeof(*execution->context.facts), fact_compare);
+  return status;
+}
+
+static ArchbirdStatus
+validate_observation_operands(ConstraintExecution *execution) {
+  size_t index;
+  for (index = 0; index < execution->constraint_plans.as.array.count; index++) {
+    const AbValue *constraint =
+        &execution->constraint_plans.as.array.items[index];
+    const AbValue *assertion = ab_value_member(constraint, "assert");
+    const AbValue *actual;
+    const AbValue *expected;
+    if (!value_string_is(assertion, "observations_equal"))
+      continue;
+    actual = ab_value_member(constraint, "actual");
+    expected = ab_value_member(constraint, "expected");
+    if (!actual || actual->kind != AB_VALUE_STRING || !expected ||
+        expected->kind != AB_VALUE_STRING ||
+        !ab_constraints_observation_find(&execution->context,
+                                         &actual->as.text) ||
+        !ab_constraints_observation_find(&execution->context,
+                                         &expected->as.text))
+      return invalid(execution->engine,
+                     "constraint references an unsupplied observation");
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus
 execution_prepare(ConstraintExecution *execution, const uint8_t *config_json,
                   size_t config_length, const uint8_t *map_json,
                   size_t map_length, const uint8_t *resolution_json,
@@ -1435,38 +1525,11 @@ execution_prepare(ConstraintExecution *execution, const uint8_t *config_json,
   ArchbirdStatus status;
   status = ab_project_configuration_decode(
       execution->engine, config_json, config_length, &execution->configuration);
-  if (status == ARCHBIRD_OK)
-    status = ab_json_value_decode(execution->engine, map_json, map_length,
-                                  &execution->map);
-  if (status == ARCHBIRD_OK && resolution_length)
-    status = ab_json_value_decode(execution->engine, resolution_json,
-                                  resolution_length, &execution->resolution);
   if (status == ARCHBIRD_OK && request_length)
     status = ab_json_value_decode(execution->engine, request_json,
                                   request_length, &execution->request);
   if (status != ARCHBIRD_OK)
     return status;
-  status = validate_map_artifact(execution, &execution->map, "current Map");
-  if (status != ARCHBIRD_OK)
-    return status;
-  {
-    const AbValue *map_evidence = ab_value_member(&execution->map, "evidence");
-    const AbValue *map_config =
-        map_evidence ? ab_value_member(map_evidence, "config_sha256") : NULL;
-    if (!map_config || map_config->as.text.length != 64 ||
-        memcmp(map_config->as.text.data,
-               execution->configuration.map_config_sha256, 64) != 0)
-      return invalid(
-          execution->engine,
-          "project configuration Map definition does not match current Map");
-  }
-  if (execution->resolution.kind == AB_VALUE_OBJECT) {
-    status = ab_projection_resolution_validate(
-        execution->engine, &execution->resolution, &execution->map,
-        "constraint resolution");
-    if (status != ARCHBIRD_OK)
-      return status;
-  }
   status = validate_request(execution, &selected);
   if (status != ARCHBIRD_OK)
     return status;
@@ -1483,21 +1546,50 @@ execution_prepare(ConstraintExecution *execution, const uint8_t *config_json,
   if (status == ARCHBIRD_OK)
     status =
         array_init(execution->engine, &execution->constraint_plans, selected);
+  if (status == ARCHBIRD_OK) {
+    execution->projection_bindings = (ConstraintProjectionBinding *)ab_calloc(
+        execution->engine, execution->operand_capacity,
+        sizeof(*execution->projection_bindings));
+    if (!execution->projection_bindings)
+      status = archbird_error_set(
+          execution->engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+          "out of memory compiling constraint projection bindings");
+  }
   if (status != ARCHBIRD_OK)
     return status;
   execution->context.engine = execution->engine;
+  status = compile_constraints(execution, selected);
+  if (status == ARCHBIRD_OK)
+    status = ab_json_value_decode(execution->engine, map_json, map_length,
+                                  &execution->map);
+  if (status == ARCHBIRD_OK && resolution_length)
+    status = ab_json_value_decode(execution->engine, resolution_json,
+                                  resolution_length, &execution->resolution);
+  if (status == ARCHBIRD_OK)
+    status = validate_map_artifact(execution, &execution->map, "current Map");
+  if (status == ARCHBIRD_OK) {
+    const AbValue *map_evidence = ab_value_member(&execution->map, "evidence");
+    const AbValue *map_config =
+        map_evidence ? ab_value_member(map_evidence, "config_sha256") : NULL;
+    if (!map_config || map_config->as.text.length != 64 ||
+        memcmp(map_config->as.text.data,
+               execution->configuration.map_config_sha256, 64) != 0)
+      status = invalid(
+          execution->engine,
+          "project configuration Map definition does not match current Map");
+  }
+  if (status == ARCHBIRD_OK && execution->resolution.kind == AB_VALUE_OBJECT)
+    status = ab_projection_resolution_validate(
+        execution->engine, &execution->resolution, &execution->map,
+        "constraint resolution");
+  if (status == ARCHBIRD_OK)
+    status = validate_request_maps(execution);
   execution->context.current_map = &execution->map;
   execution->context.current_resolution =
       execution->resolution.kind == AB_VALUE_OBJECT ? &execution->resolution
                                                     : NULL;
-  execution->context.facts = (AbVerifyFactSet *)ab_calloc(
-      execution->engine, execution->operand_capacity,
-      sizeof(*execution->context.facts));
-  if (!execution->context.facts)
-    return archbird_error_set(execution->engine, ARCHBIRD_OUT_OF_MEMORY,
-                              ARCHBIRD_NO_OFFSET,
-                              "out of memory evaluating constraint operands");
-  status = compile_constraints(execution, selected);
+  if (status == ARCHBIRD_OK)
+    status = evaluate_operands(execution);
   if (status != ARCHBIRD_OK)
     return status;
   project = ab_value_member(&execution->configuration.normalized, "project");
@@ -1518,9 +1610,11 @@ execution_prepare(ConstraintExecution *execution, const uint8_t *config_json,
       ab_value_member(&execution->request, "maps");
   memcpy(execution->context.constraint_policy_sha256,
          execution->configuration.constraint_policy_sha256, 65);
-  return ab_constraints_observations_load(
+  status = ab_constraints_observations_load(
       &execution->context,
       ab_value_member(&execution->request, "observations"));
+  return status == ARCHBIRD_OK ? validate_observation_operands(execution)
+                               : status;
 }
 
 static ArchbirdStatus result_identities(ConstraintExecution *execution) {
@@ -1916,7 +2010,7 @@ static ArchbirdStatus render_constraint_result(ConstraintExecution *execution,
       status = ab_buffer_literal(&base, ",");
     if (status == ARCHBIRD_OK)
       status =
-          ab_verify_fact_render(&base, &execution->context.facts[index], 1);
+          ab_projection_data_render(&base, &execution->context.facts[index], 1);
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&base, "],\"policy\":");
@@ -1951,9 +2045,19 @@ static ArchbirdStatus render_constraint_result(ConstraintExecution *execution,
 }
 
 static void execution_free(ConstraintExecution *execution) {
+  size_t index;
   if (!execution)
     return;
   ab_verification_context_free(&execution->context);
+  for (index = 0; index < execution->projection_binding_count; index++) {
+    ConstraintProjectionBinding *binding =
+        &execution->projection_bindings[index];
+    ab_projection_plan_free(execution->engine, &binding->plan);
+    ab_value_free(execution->engine, &binding->source_lock);
+    ab_string_free(execution->engine, &binding->map_id);
+    ab_string_free(execution->engine, &binding->name);
+  }
+  ab_free(execution->engine, execution->projection_bindings);
   ab_value_free(execution->engine, &execution->policy);
   ab_value_free(execution->engine, &execution->constraint_plans);
   ab_value_free(execution->engine, &execution->mappings);

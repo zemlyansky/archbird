@@ -30,7 +30,7 @@ static ArchbirdStatus render_value_or(AbBuffer *buffer, const AbValue *object,
 static int finding_blocks(const AbVerifyFinding *finding,
                           const AbValue *check) {
   const AbValue *severity = ab_value_member(check, "severity");
-  return (!severity || ab_verify_string_is(severity, "error")) &&
+  return (!severity || ab_projection_value_is(severity, "error")) &&
          string_literal(&finding->applicability, "applicable") &&
          string_literal(&finding->disposition, "open") &&
          (!string_literal(&finding->comparison, "equal") ||
@@ -54,7 +54,7 @@ static ArchbirdStatus render_string_array(AbBuffer *buffer,
 }
 
 static ArchbirdStatus render_sarif_uri(AbBuffer *buffer,
-                                       const AbVerifyEvidence *evidence) {
+                                       const AbProjectionEvidence *evidence) {
   if (evidence->project.length && evidence->path.length) {
     AbBuffer uri;
     ArchbirdStatus status;
@@ -146,7 +146,7 @@ static ArchbirdStatus render_sarif_finding(AbBuffer *buffer,
     size_t emitted = 0;
     REPORT_TRY(ab_buffer_literal(buffer, ",\"locations\":["));
     for (index = 0; index < finding->evidence_count; index++) {
-      const AbVerifyEvidence *evidence = &finding->evidence[index];
+      const AbProjectionEvidence *evidence = &finding->evidence[index];
       if (!evidence->path.length && !evidence->project.length)
         continue;
       if (emitted++)
@@ -341,7 +341,7 @@ static ArchbirdStatus xml_attribute(AbBuffer *buffer, const char *name,
 }
 
 static ArchbirdStatus render_evidence_label(AbBuffer *buffer,
-                                            const AbVerifyEvidence *row) {
+                                            const AbProjectionEvidence *row) {
   if (row->project.length && row->path.length) {
     REPORT_TRY(
         ab_buffer_append(buffer, row->project.data, row->project.length));

@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_VERIFY_RUNTIME_H
 #define ARCHBIRD_VERIFY_RUNTIME_H
 
-#include "verify_model.h"
+#include "../projection/projection_model.h"
 
 typedef struct AbVerifyDiagnostic {
   AbString severity;
@@ -87,7 +87,7 @@ typedef struct AbVerifyObservationState {
   int whole_map_matches;
   int has_data;
   AbVerifyObservationDocument data;
-  AbVerifyEvidence *witnesses;
+  AbProjectionEvidence *witnesses;
   size_t witness_count;
   size_t witness_capacity;
 } AbVerifyObservationState;
@@ -107,7 +107,7 @@ typedef struct AbVerificationContext {
   const AbValue *current_map;
   const AbValue *current_resolution;
   char constraint_policy_sha256[65];
-  AbVerifyFactSet *facts;
+  AbProjectionData *facts;
   size_t fact_count;
   struct AbVerifyCheckResult *checks;
   size_t check_count;
@@ -118,21 +118,6 @@ typedef struct AbVerificationContext {
   AbVerifyObservationState *observations;
   size_t observation_count;
 } AbVerificationContext;
-ArchbirdStatus ab_projection_extract_map(ArchbirdEngine *engine,
-                                         const AbValue *map,
-                                         const AbValue *resolution,
-                                         const AbObjectField *projection,
-                                         AbVerifyFactSet *out);
-ArchbirdStatus ab_projection_extract_literal(ArchbirdEngine *engine,
-                                             const AbObjectField *operand,
-                                             AbVerifyFactSet *out);
-/* Decode one canonical verification-result fact and verify its content hash. */
-ArchbirdStatus ab_verify_fact_decode_artifact(ArchbirdEngine *engine,
-                                              const AbValue *value,
-                                              AbVerifyFactSet *out);
-ArchbirdStatus ab_verify_evidence_decode_artifact(ArchbirdEngine *engine,
-                                                  const AbValue *value,
-                                                  AbVerifyEvidence *out);
 ArchbirdStatus ab_constraints_render_summary(AbVerificationContext *context,
                                              AbBuffer *buffer);
 ArchbirdStatus ab_verify_render_diagnostics(AbVerificationContext *context,
@@ -169,19 +154,5 @@ int ab_constraints_observation_values_equal(
     const AbVerifyObservationView *actual,
     const AbVerifyEqualityPolicy *policy);
 void ab_verification_context_free(AbVerificationContext *context);
-
-ArchbirdStatus ab_verify_item_init(ArchbirdEngine *engine,
-                                   AbVerifyFactItem *item, const AbString *key,
-                                   const AbString *label, const AbValue *value);
-ArchbirdStatus ab_verify_item_add_evidence(ArchbirdEngine *engine,
-                                           AbVerifyFactItem *item,
-                                           const AbVerifyEvidence *source);
-ArchbirdStatus ab_verify_item_set_state(ArchbirdEngine *engine,
-                                        AbVerifyFactItem *item,
-                                        const char *state, const char *message);
-ArchbirdStatus ab_verify_normalized_name(ArchbirdEngine *engine,
-                                         const AbValue *spec,
-                                         const AbString *raw, AbString *out,
-                                         int *selected);
 
 #endif

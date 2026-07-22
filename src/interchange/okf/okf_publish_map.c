@@ -2273,8 +2273,10 @@ static ArchbirdStatus add_layers(AbOkfPublication *pub,
       const AbString *file_language = ab_okf_pub_text(file, "language");
       const AbString *sha = ab_okf_pub_text(file, "sha256");
       const AbValue *symbols = array_or_empty(file, "symbols");
-      if (!file_layer || !file_path || !file_language || !sha || !symbols)
-        return ab_okf_pub_error(pub, "invalid Map layer file row");
+      if (!file_layer || !file_path || !file_language || !sha || !symbols) {
+        status = ab_okf_pub_error(pub, "invalid Map layer file row");
+        break;
+      }
       if (!ab_string_equal(file_layer, &path->name))
         continue;
       status = md_row_start(&body);
