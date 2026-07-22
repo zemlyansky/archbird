@@ -18,11 +18,13 @@ static int collect(void *user_data, const uint8_t *bytes, size_t length) {
   if (length > SIZE_MAX - output->length)
     return 1;
   needed = output->length + length;
-  if (needed > output->capacity) {
+  if (needed == SIZE_MAX)
+    return 1;
+  if (needed + 1 > output->capacity) {
     capacity = output->capacity ? output->capacity : 1024;
-    while (capacity < needed) {
+    while (capacity < needed + 1) {
       if (capacity > SIZE_MAX / 2) {
-        capacity = needed;
+        capacity = needed + 1;
         break;
       }
       capacity *= 2;
@@ -36,6 +38,7 @@ static int collect(void *user_data, const uint8_t *bytes, size_t length) {
   if (length)
     memcpy(output->data + output->length, bytes, length);
   output->length = needed;
+  output->data[output->length] = '\0';
   return 0;
 }
 
@@ -80,9 +83,43 @@ int main(void) {
       "\"symbols\"}],\"queries\":[{\"direction\":\"upstream\",\"id\":"
       "\"api-impact\",\"projection\":\"public-api\"}],"
       "\"schema_version\":2}";
+  static const char same_line_map[] =
+      "{\"artifact\":\"map\",\"artifacts\":[],\"builds\":[],"
+      "\"call_resolutions\":[],\"components\":[],\"description\":\"\","
+      "\"diagnostics\":[],\"edges\":[],\"evidence\":{"
+      "\"absolute_paths_included\":false,\"config_sha256\":"
+      "\"07f114f9f920ee168c64035e868121f22bfc888d65fde4610d6d243073e3f687\","
+      "\"input_sha256\":"
+      "\"2222222222222222222222222222222222222222222222222222222222222222\"},"
+      "\"files\":[{\"bytes\":64,\"call_counts\":{},\"calls\":[],"
+      "\"export_origins\":{},\"exports\":[],\"imported_names\":{},"
+      "\"imports\":[],\"language\":\"c\",\"layer\":\"core\","
+      "\"messages\":{\"receives\":[],\"sends\":[]},"
+      "\"method_call_counts\":{},\"method_calls\":[],"
+      "\"path\":\"src/api.c\",\"reexport_candidates\":[],\"sha256\":"
+      "\"4444444444444444444444444444444444444444444444444444444444444444\","
+      "\"symbols\":[{\"kind\":\"declaration\",\"line\":1,"
+      "\"name\":\"archbird_pair\",\"scope\":\"module\","
+      "\"signature\":\"int archbird_pair(void)\"},{"
+      "\"kind\":\"function\",\"line\":1,\"name\":\"archbird_pair\","
+      "\"scope\":\"function\",\"signature\":"
+      "\"int archbird_pair(void)\"}]}],\"indexes\":[],"
+      "\"layers\":[{\"files\":1,\"language\":\"c\",\"name\":\"core\","
+      "\"role\":\"core\",\"symbols\":2}],\"limits\":{"
+      "\"compact_edge_names\":12,\"compact_symbols\":10},"
+      "\"named_entries\":{},\"packages\":[],\"parity\":[],"
+      "\"project\":\"same-line-c-query\",\"schema_version\":6,"
+      "\"surfaces\":[],\"tests\":[],\"tool\":{"
+      "\"implementation_sha256\":"
+      "\"3333333333333333333333333333333333333333333333333333333333333333\","
+      "\"name\":\"archbird\",\"version\":\"fixture\"}}";
+  static const char same_line_query[] =
+      "{\"depth\":0,\"search\":[\"archbird pair\"],"
+      "\"search_limit\":8,\"test_depth\":0}";
   ArchbirdEngine *engine = NULL;
   Output first = {0};
   Output second = {0};
+  Output query = {0};
   if (archbird_engine_create(NULL, &engine) != ARCHBIRD_OK)
     return 1;
   if (!compile(engine, keyed, &first) || !compile(engine, arrays, &second) ||
@@ -181,14 +218,27 @@ int main(void) {
     fprintf(stderr, "inverted constraint bounds were not rejected\n");
     goto failed;
   }
+  if (archbird_map_query(
+          engine, (const uint8_t *)same_line_map, strlen(same_line_map), NULL,
+          0, (const uint8_t *)same_line_query, strlen(same_line_query), 0,
+          collect, &query) != ARCHBIRD_OK ||
+      !strstr((const char *)query.data, "\"classification\":\"complete\"") ||
+      !strstr((const char *)query.data, "\"symbol_kind\":\"declaration\"") ||
+      !strstr((const char *)query.data, "\"symbol_kind\":\"function\"")) {
+    fprintf(stderr, "same-line declaration/definition Query failed: %s\n",
+            archbird_engine_error(engine));
+    goto failed;
+  }
   free(first.data);
   free(second.data);
+  free(query.data);
   archbird_engine_destroy(engine);
   return 0;
 
 failed:
   free(first.data);
   free(second.data);
+  free(query.data);
   archbird_engine_destroy(engine);
   return 1;
 }

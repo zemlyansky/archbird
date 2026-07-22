@@ -28,6 +28,8 @@ typedef struct AbRetrievalHit {
   const AbValue *row;
   const AbString *path;
   const AbString *name;
+  const AbString *symbol_scope;
+  const AbString *symbol_signature;
   const AbString *symbol_kind;
   size_t line;
   size_t source_index;

@@ -57,6 +57,7 @@ async function main() {
       membershipFinding: "src/defs.js",
       membershipOverlap: "src/defs.js",
       project: "browser-release",
+      sameLineKinds: ["declaration", "function"],
       semanticEdges: 1,
       version: "0.0.1",
     };

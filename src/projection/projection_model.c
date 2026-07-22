@@ -379,13 +379,10 @@ ArchbirdStatus ab_projection_data_add_item(ArchbirdEngine *engine,
       if (status != ARCHBIRD_OK)
         return status;
     }
-    ab_string_free(engine, &fact->state);
     ab_string_free(engine, &fact->message);
     ab_string_free(engine, &previous->state);
     ab_string_free(engine, &previous->message);
-    status = copy_literal(engine, &fact->state, "unknown");
-    if (status == ARCHBIRD_OK)
-      status = copy_literal(engine, &fact->message, "normalization collision");
+    status = copy_literal(engine, &fact->message, "normalization collision");
     if (status == ARCHBIRD_OK)
       status = copy_literal(engine, &previous->state, "unknown");
     if (status == ARCHBIRD_OK)
@@ -582,6 +579,9 @@ ArchbirdStatus ab_projection_data_finish(ArchbirdEngine *engine,
       fact->selection.selected = (uint64_t)fact->item_count;
       fact->selection.has_selected = 1;
     }
+    if (fact->selection.selected >= evaluated &&
+        fact->selection.selected - evaluated > unknown)
+      unknown = fact->selection.selected - evaluated;
     fact->selection.evaluated = evaluated;
     fact->selection.unknown = unknown;
     fact->selection.has_evaluated = 1;

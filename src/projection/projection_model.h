@@ -91,6 +91,9 @@ ArchbirdStatus ab_projection_data_completeness_exact(
 
 const char *ab_projection_data_classification(const AbProjectionData *fact);
 
+ArchbirdStatus ab_projection_completeness_render(AbBuffer *buffer,
+                                                 const AbProjectionData *fact);
+
 ArchbirdStatus ab_projection_data_render(AbBuffer *buffer,
                                          const AbProjectionData *fact,
                                          int include_sha256);

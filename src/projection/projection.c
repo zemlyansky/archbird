@@ -43,8 +43,8 @@ static ArchbirdStatus render_nullable(AbBuffer *buffer, uint64_t value,
                  : ab_buffer_literal(buffer, "null");
 }
 
-static ArchbirdStatus render_completeness(AbBuffer *buffer,
-                                          const AbProjectionData *fact) {
+ArchbirdStatus ab_projection_completeness_render(AbBuffer *buffer,
+                                                 const AbProjectionData *fact) {
   const AbProjectionCompleteness *selection = &fact->selection;
   const char *classification = ab_projection_data_classification(fact);
   TRY(ab_buffer_literal(buffer, "{\"classification\":"));
@@ -156,7 +156,7 @@ static ArchbirdStatus render_projection_base(
     const AbValue *resolution, const AbProjectionData *fact) {
   TRY(ab_buffer_literal(
       buffer, "{\"artifact\":\"projection-result\",\"completeness\":"));
-  TRY(render_completeness(buffer, fact));
+  TRY(ab_projection_completeness_render(buffer, fact));
   TRY(ab_buffer_literal(buffer, ",\"definition\":"));
   TRY(ab_value_render(buffer, definition));
   TRY(ab_buffer_literal(buffer, ",\"projection_definition_sha256\":"));
@@ -174,7 +174,7 @@ static ArchbirdStatus render_projection_result_identity(
     AbBuffer *buffer, const char definition_sha256[65], const AbValue *map,
     const AbValue *resolution, const AbProjectionData *fact) {
   TRY(ab_buffer_literal(buffer, "{\"completeness\":"));
-  TRY(render_completeness(buffer, fact));
+  TRY(ab_projection_completeness_render(buffer, fact));
   TRY(ab_buffer_literal(buffer, ",\"evaluation\":"));
   TRY(render_evaluation(buffer, map, resolution));
   TRY(ab_buffer_literal(buffer, ",\"fact\":"));

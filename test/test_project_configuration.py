@@ -328,6 +328,104 @@ def main() -> None:
     )
     assert ad_hoc_query["files"] == direct_path_query["files"]
 
+    same_line_config = {
+        "schema_version": 2,
+        "project": "same-line-c-query",
+        "layers": [
+            {
+                "globs": ["src/**/*.c"],
+                "language": "c",
+                "name": "c",
+            }
+        ],
+    }
+    same_line_project = Project(
+        "same-line-c-query",
+        (
+            Source(
+                "src/api.c",
+                b"int archbird_pair(void); "
+                b"int archbird_pair(void) { return 0; }\n",
+                language="c",
+                layer="c",
+            ),
+        ),
+    )
+    same_line_project.set_config(
+        json.dumps(same_line_config, separators=(",", ":")).encode()
+    )
+    same_line_project.scan(jobs=1, map_cache=False)
+    same_line_query = json.loads(
+        query_map_json(
+            same_line_project.map_json(),
+            search=["archbird pair"],
+            search_limit=8,
+            depth=0,
+            test_depth=0,
+        )
+    )
+    same_line_hits = same_line_query["query"]["retrieval"]["hits"]
+    assert {
+        (row["name"], row["symbol_kind"], row["line"])
+        for row in same_line_hits
+        if row["kind"] == "symbol"
+    } == {
+        ("archbird_pair", "declaration", 1),
+        ("archbird_pair", "function", 1),
+    }
+    assert same_line_query["query"]["projection_results"][0]["completeness"][
+        "classification"
+    ] == "complete"
+
+    overload_config = {
+        "schema_version": 2,
+        "project": "same-line-cpp-overloads",
+        "layers": [
+            {
+                "globs": ["src/**/*.cpp"],
+                "language": "cpp",
+                "name": "cpp",
+            }
+        ],
+    }
+    overload_project = Project(
+        "same-line-cpp-overloads",
+        (
+            Source(
+                "src/api.cpp",
+                b"int archbird_overload(int); "
+                b"double archbird_overload(double);\n",
+                language="cpp",
+                layer="cpp",
+            ),
+        ),
+    )
+    overload_project.set_config(
+        json.dumps(overload_config, separators=(",", ":")).encode()
+    )
+    overload_project.scan(jobs=1, map_cache=False)
+    overload_query = json.loads(
+        query_map_json(
+            overload_project.map_json(),
+            search=["archbird overload"],
+            search_limit=8,
+            depth=0,
+            test_depth=0,
+        )
+    )
+    overload_hits = [
+        row
+        for row in overload_query["query"]["retrieval"]["hits"]
+        if row["kind"] == "symbol"
+    ]
+    assert [row["symbol_signature"] for row in overload_hits] == [
+        "double archbird_overload(double)",
+        "int archbird_overload(int)",
+    ]
+    assert overload_query["query"]["projection_results"][0]["completeness"][
+        "classification"
+    ] == "complete"
+
     normalized_symbol_config = {
         "schema_version": 2,
         "project": "normalized-symbol-query",
@@ -375,6 +473,75 @@ def main() -> None:
         row["name"]
         for row in normalized_query["files"][0]["symbols"]
     ] == ["api_one"]
+
+    partial_config = {
+        "schema_version": 2,
+        "project": "partial-constant-query",
+        "layers": [
+            {
+                "globs": ["src/**/*.c"],
+                "language": "c",
+                "name": "c",
+            }
+        ],
+        "projections": {
+            "normalized": {
+                "container": "Ops",
+                "select": "constant_values",
+                "strip_prefix": "API_",
+            }
+        },
+        "queries": {"valid": {"depth": 0, "projection": "normalized"}},
+        "constraints": {
+            "INCOMPLETE-SHAPE": {
+                "actual": {"projection": "normalized"},
+                "assert": "acyclic",
+                "owner": "test",
+                "rationale": "Completeness is checked before predicate shape.",
+            },
+            "NORMALIZED-CONSTANTS": {
+                "actual": {"projection": "normalized"},
+                "assert": "values_equal",
+                "expected": {"literal": {"TWO": 3}},
+                "owner": "test",
+                "rationale": "Incomplete normalized identities cannot pass.",
+            }
+        },
+    }
+    partial_config_json = json.dumps(
+        partial_config, sort_keys=True, separators=(",", ":")
+    ).encode()
+    partial_project = Project(
+        "partial-constant-query",
+        (
+            Source(
+                "src/collision.c",
+                b"enum Ops { API_ONE = 1, ONE = 2, API_TWO = 3 };\n",
+                language="c",
+                layer="c",
+            ),
+        ),
+    )
+    partial_project.set_config(partial_config_json)
+    partial_project.scan(jobs=1, map_cache=False)
+    partial_map = partial_project.map_json()
+    partial_plan = compile_named_query(partial_config_json, "valid")
+    partial_query = json.loads(query_map_json(partial_map, plan=partial_plan))
+    partial_result = partial_query["query"]["projection_results"][0]
+    assert partial_result["completeness"]["classification"] == "incomplete"
+    assert partial_result["completeness"]["counts"]["unknown"] == 2
+    assert [row["path"] for row in partial_query["files"]] == [
+        "src/collision.c"
+    ]
+    partial_verification = json.loads(
+        evaluate_constraints_json(partial_config_json, partial_map)
+    )
+    assert {
+        row["id"]: row["status"] for row in partial_verification["constraints"]
+    } == {
+        "INCOMPLETE-SHAPE": "unknown",
+        "NORMALIZED-CONSTANTS": "unknown",
+    }
 
     invalid_named_plan = dict(query_plan)
     invalid_named_plan["project_configuration_sha256"] = None

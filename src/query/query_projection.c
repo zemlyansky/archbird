@@ -99,10 +99,6 @@ ArchbirdStatus ab_query_projections_evaluate(ArchbirdEngine *engine,
       status =
           ab_projection_plan_evaluate(engine, &out->items[index].plan, map,
                                       resolution, &out->items[index].result);
-    if (status == ARCHBIRD_OK && strcmp(ab_projection_data_classification(
-                                            &out->items[index].result.data),
-                                        "complete") != 0)
-      status = invalid(engine, "query seed projection is incomplete");
   }
   if (status != ARCHBIRD_OK)
     ab_query_projection_set_free(engine, out);
@@ -132,7 +128,12 @@ ab_query_projection_identities_render(AbBuffer *buffer,
     if (index)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer, "{\"id\":");
+      status = ab_buffer_literal(buffer, "{\"completeness\":");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_projection_completeness_render(buffer, &projection->result.data);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"id\":");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_json_string(buffer, projection->plan.id.data,
                                      projection->plan.id.length);
@@ -146,6 +147,17 @@ ab_query_projection_identities_render(AbBuffer *buffer,
     if (status == ARCHBIRD_OK)
       status =
           ab_buffer_json_string(buffer, projection->result.result_sha256, 64);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"message\":");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_buffer_json_string(buffer, projection->result.data.message.data,
+                                projection->result.data.message.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"state\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, projection->result.data.state.data,
+                                     projection->result.data.state.length);
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "}");
   }

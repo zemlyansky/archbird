@@ -30,6 +30,11 @@ static int string_literal(const AbString *value, const char *literal) {
          (!length || memcmp(value->data, literal, length) == 0);
 }
 
+static int projection_complete(const AbProjectionData *fact) {
+  return fact &&
+         strcmp(ab_projection_data_classification(fact), "complete") == 0;
+}
+
 static void string_array_free(ArchbirdEngine *engine, AbStringArray *array) {
   size_t index;
   for (index = 0; array->items && index < array->count; index++)
@@ -173,6 +178,12 @@ static ArchbirdStatus fact_summary(ArchbirdEngine *engine,
     status = ab_buffer_literal(&detail, " state=");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_append(&detail, fact->state.data, fact->state.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, " completeness=");
+  if (status == ARCHBIRD_OK) {
+    const char *classification = ab_projection_data_classification(fact);
+    status = ab_buffer_append(&detail, classification, strlen(classification));
+  }
   if (status == ARCHBIRD_OK) {
     AbString empty = {0};
     status = ab_projection_evidence_init(
@@ -432,8 +443,9 @@ static ArchbirdStatus unavailable_finding(ArchbirdEngine *engine,
                                           int *unavailable) {
   AbBuffer message;
   AbString key;
+  const char *classification = ab_projection_data_classification(fact);
   ArchbirdStatus status;
-  *unavailable = !string_literal(&fact->state, "current");
+  *unavailable = !projection_complete(fact);
   if (!*unavailable)
     return ARCHBIRD_OK;
   ab_buffer_init(&message, engine);
@@ -456,12 +468,14 @@ static ArchbirdStatus unavailable_finding(ArchbirdEngine *engine,
         status = ab_buffer_literal(&detail, " is ");
       if (status == ARCHBIRD_OK)
         status =
-            ab_buffer_append(&detail, fact->state.data, fact->state.length);
+            ab_buffer_append(&detail, classification, strlen(classification));
     }
     if (status == ARCHBIRD_OK)
       status = finding_init_n(engine, out, check, "different", &key,
                               (const char *)detail.data, detail.length,
-                              fact->state.data);
+                              string_literal(&fact->state, "current")
+                                  ? "unknown"
+                                  : fact->state.data);
     ab_buffer_free(&detail);
   }
   if (status == ARCHBIRD_OK)
@@ -749,8 +763,7 @@ compare_facts(ArchbirdEngine *engine, const AbValue *check,
   ArchbirdStatus status = result_init(engine, result, check, expected, actual);
   if (status != ARCHBIRD_OK)
     return status;
-  if (string_literal(&expected->state, "current") &&
-      string_literal(&actual->state, "current") &&
+  if (projection_complete(expected) && projection_complete(actual) &&
       ((values && (!string_literal(&expected->shape, "values") ||
                    !string_literal(&actual->shape, "values"))) ||
        (!values && (!(string_literal(&expected->shape, "set") ||
@@ -958,8 +971,7 @@ static ArchbirdStatus relation_check(ArchbirdEngine *engine,
   ArchbirdStatus status = result_init(engine, result, check, expected, actual);
   if (status != ARCHBIRD_OK)
     return status;
-  if (string_literal(&expected->state, "current") &&
-      string_literal(&actual->state, "current") &&
+  if (projection_complete(expected) && projection_complete(actual) &&
       (!string_literal(&expected->shape, "relation") ||
        !string_literal(&actual->shape, "relation"))) {
     AbVerifyFinding finding = {0};
@@ -1082,8 +1094,7 @@ static ArchbirdStatus disjoint_check(ArchbirdEngine *engine,
   ArchbirdStatus status = result_init(engine, result, check, expected, actual);
   if (status != ARCHBIRD_OK)
     return status;
-  if (string_literal(&expected->state, "current") &&
-      string_literal(&actual->state, "current") &&
+  if (projection_complete(expected) && projection_complete(actual) &&
       (!(string_literal(&expected->shape, "set") ||
          string_literal(&expected->shape, "values")) ||
        !(string_literal(&actual->shape, "set") ||
@@ -1399,7 +1410,7 @@ static ArchbirdStatus acyclic_check(ArchbirdEngine *engine,
   ArchbirdStatus status = result_init(engine, result, check, actual, NULL);
   if (status != ARCHBIRD_OK)
     return status;
-  if (string_literal(&actual->state, "current") &&
+  if (projection_complete(actual) &&
       !string_literal(&actual->shape, "relation")) {
     AbVerifyFinding finding = {0};
     status =
@@ -1679,7 +1690,7 @@ static ArchbirdStatus numeric_bounds_check(ArchbirdEngine *engine,
   ArchbirdStatus status = result_init(engine, result, check, actual, NULL);
   if (status != ARCHBIRD_OK)
     return status;
-  if (string_literal(&actual->state, "current") &&
+  if (projection_complete(actual) &&
       !string_literal(&actual->shape, "values")) {
     AbVerifyFinding finding = {0};
     status = shape_finding(engine, check,
@@ -1851,7 +1862,7 @@ static ArchbirdStatus min_test_routes_check(ArchbirdEngine *engine,
   ArchbirdStatus status = result_init(engine, result, check, actual, NULL);
   if (status != ARCHBIRD_OK)
     return status;
-  if (string_literal(&actual->state, "current") &&
+  if (projection_complete(actual) &&
       !string_literal(&actual->shape, "relation")) {
     AbVerifyFinding finding = {0};
     status = shape_finding(engine, check,

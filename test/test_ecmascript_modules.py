@@ -539,6 +539,9 @@ test('constructs PPO', () => { new PPO(); });
             "line": 2,
             "path": "callable/index.js",
             "symbol": "PPO",
+            "symbol_kind": "class",
+            "symbol_scope": "class",
+            "symbol_signature": "class PPO",
         }
     ], callable_query["query"]
     assert any(

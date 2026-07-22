@@ -243,7 +243,7 @@ static ArchbirdStatus coverage_init(ArchbirdEngine *engine,
         kind && kind->kind == AB_VALUE_STRING ? "" : "unknown");
   if (status != ARCHBIRD_OK)
     return status;
-  if (fact->state.length != 7 || memcmp(fact->state.data, "current", 7) != 0) {
+  if (strcmp(ab_projection_data_classification(fact), "complete") != 0) {
     coverage->classification = "partial";
     coverage->unknown = "unavailable_fact_evidence";
     return ARCHBIRD_OK;

@@ -826,11 +826,11 @@ static const char *file_sha(const AbValue *map, const AbString *path) {
   return sha && sha->kind == AB_VALUE_STRING ? sha->as.text.data : "";
 }
 
-static ArchbirdStatus search_domain_key(ArchbirdEngine *engine,
-                                        const AbString *entity_kind,
-                                        const AbString *path,
-                                        const AbString *name, uint64_t line,
-                                        AbString *out) {
+static ArchbirdStatus
+search_domain_key(ArchbirdEngine *engine, const AbString *entity_kind,
+                  const AbString *path, const AbString *name,
+                  const AbString *scope, const AbString *signature,
+                  const AbString *symbol_kind, uint64_t line, AbString *out) {
   AbBuffer buffer;
   ArchbirdStatus status;
   ab_buffer_init(&buffer, engine);
@@ -853,6 +853,22 @@ static ArchbirdStatus search_domain_key(ArchbirdEngine *engine,
     status = ab_buffer_json_string(&buffer, path ? path->data : "",
                                    path ? path->length : 0);
   if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"scope\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(&buffer, scope ? scope->data : "",
+                                   scope ? scope->length : 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"signature\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(&buffer, signature ? signature->data : "",
+                                   signature ? signature->length : 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"symbol_kind\":");
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_json_string(&buffer, symbol_kind ? symbol_kind->data : "",
+                              symbol_kind ? symbol_kind->length : 0);
+  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, "}");
   if (status == ARCHBIRD_OK)
     status =
@@ -864,8 +880,9 @@ static ArchbirdStatus search_domain_key(ArchbirdEngine *engine,
 static ArchbirdStatus add_search_domain_item(
     AbProjectionContext *context, AbProjectionData *fact,
     const AbString *project, const char *entity_kind, const AbString *path,
-    const AbString *name, const AbString *symbol_kind, uint64_t line,
-    size_t source_index, size_t nested_index, const AbString *evidence_path,
+    const AbString *name, const AbString *scope, const AbString *signature,
+    const AbString *symbol_kind, uint64_t line, size_t source_index,
+    size_t nested_index, const AbString *evidence_path,
     const char *evidence_sha) {
   AbString kind = {(char *)entity_kind, strlen(entity_kind)};
   AbString empty = {0};
@@ -874,7 +891,8 @@ static ArchbirdStatus add_search_domain_item(
   AbProjectionEvidence evidence = {0};
   AbBuffer detail;
   ArchbirdStatus status =
-      search_domain_key(context->engine, &kind, path, name, line, &item.key);
+      search_domain_key(context->engine, &kind, path, name, scope, signature,
+                        symbol_kind, line, &item.key);
   if (status == ARCHBIRD_OK)
     status =
         ab_string_copy(context->engine, &item.label, label ? label->data : "",
@@ -893,6 +911,12 @@ static ArchbirdStatus add_search_domain_item(
   if (status == ARCHBIRD_OK)
     status = item_add_string_attribute(context->engine, &item, "path",
                                        path ? path : &empty);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, &item, "scope",
+                                       scope ? scope : &empty);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, &item, "signature",
+                                       signature ? signature : &empty);
   if (status == ARCHBIRD_OK)
     status = item_add_string_attribute(context->engine, &item, "symbol_kind",
                                        symbol_kind ? symbol_kind : &empty);
@@ -964,9 +988,10 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
           context, "Map contains an invalid searchable file row");
       break;
     }
-    status = add_search_domain_item(
-        context, fact, &project->as.text, "file", &path->as.text,
-        &path->as.text, NULL, 0, index, 0, &path->as.text, sha->as.text.data);
+    status =
+        add_search_domain_item(context, fact, &project->as.text, "file",
+                               &path->as.text, &path->as.text, NULL, NULL, NULL,
+                               0, index, 0, &path->as.text, sha->as.text.data);
     universe++;
     for (symbol_index = 0;
          status == ARCHBIRD_OK && symbol_index < symbols->as.array.count;
@@ -974,6 +999,8 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
       const AbValue *symbol = &symbols->as.array.items[symbol_index];
       const AbValue *name = ab_value_member(symbol, "name");
       const AbValue *kind = ab_value_member(symbol, "kind");
+      const AbValue *scope = ab_value_member(symbol, "scope");
+      const AbValue *signature = ab_value_member(symbol, "signature");
       uint64_t line = 0;
       if (!valid_symbol_row(symbol) ||
           !ab_value_u64(ab_value_member(symbol, "line"), &line)) {
@@ -981,10 +1008,13 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
             context, "Map contains an invalid searchable symbol row");
         break;
       }
-      status = add_search_domain_item(context, fact, &project->as.text,
-                                      "symbol", &path->as.text, &name->as.text,
-                                      &kind->as.text, line, index, symbol_index,
-                                      &path->as.text, sha->as.text.data);
+      status = add_search_domain_item(
+          context, fact, &project->as.text, "symbol", &path->as.text,
+          &name->as.text, &scope->as.text,
+          signature && signature->kind == AB_VALUE_STRING ? &signature->as.text
+                                                          : NULL,
+          &kind->as.text, line, index, symbol_index, &path->as.text,
+          sha->as.text.data);
       universe++;
     }
   }
@@ -1001,9 +1031,10 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
     }
     if (members->as.array.count)
       witness = &members->as.array.items[0].as.text;
-    status = add_search_domain_item(
-        context, fact, &project->as.text, "component", NULL, &name->as.text,
-        NULL, 0, index, 0, witness, witness ? file_sha(map, witness) : "");
+    status = add_search_domain_item(context, fact, &project->as.text,
+                                    "component", NULL, &name->as.text, NULL,
+                                    NULL, NULL, 0, index, 0, witness,
+                                    witness ? file_sha(map, witness) : "");
     universe++;
   }
   for (index = 0; status == ARCHBIRD_OK && index < packages->as.array.count;
@@ -1017,8 +1048,8 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
       break;
     }
     status = add_search_domain_item(context, fact, &project->as.text, "package",
-                                    &manifest->as.text, &name->as.text, NULL, 0,
-                                    index, 0, &manifest->as.text,
+                                    &manifest->as.text, &name->as.text, NULL,
+                                    NULL, NULL, 0, index, 0, &manifest->as.text,
                                     file_sha(map, &manifest->as.text));
     universe++;
   }
@@ -1038,10 +1069,10 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
       const AbValue *path = ab_value_member(&inputs->as.array.items[0], "path");
       witness = path ? &path->as.text : NULL;
     }
-    status = add_search_domain_item(context, fact, &project->as.text,
-                                    "artifact", &output->as.text,
-                                    &name->as.text, NULL, 0, index, 0, witness,
-                                    witness ? file_sha(map, witness) : "");
+    status = add_search_domain_item(
+        context, fact, &project->as.text, "artifact", &output->as.text,
+        &name->as.text, NULL, NULL, NULL, 0, index, 0, witness,
+        witness ? file_sha(map, witness) : "");
     universe++;
   }
   if (status == ARCHBIRD_OK)

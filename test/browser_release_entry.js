@@ -65,6 +65,32 @@ const config = {
       "",
     ).toString("utf8"),
   );
+  const sameLineProject = new archbird.Project(JSON.stringify({
+    schema_version: 2,
+    project: "same-line-c-query",
+    layers: [{
+      name: "c",
+      language: "c",
+      globs: ["src/**/*.c"],
+    }],
+  }), [
+    new archbird.Source(
+      "src/api.c",
+      "int archbird_pair(void); "
+      + "int archbird_pair(void) { return 0; }\n",
+    ),
+  ], { typescript: false });
+  const sameLineQuery = JSON.parse(sameLineProject.queryJson({
+    search: ["archbird pair"],
+    searchLimit: 8,
+    depth: 0,
+    testDepth: 0,
+  }).toString("utf8"));
+  const sameLineKinds = sameLineQuery.query.retrieval.hits
+    .filter((row) => row.kind === "symbol")
+    .map((row) => row.symbol_kind)
+    .sort();
+  sameLineProject.dispose();
   project.dispose();
   document.body.textContent = JSON.stringify({
     engine: archbird.ENGINE.kind,
@@ -74,6 +100,7 @@ const config = {
     membershipFinding: verification.constraints[0].findings[0].key,
     membershipOverlap: verification.constraints[0].findings[0].evidence[0].path,
     project: map.project,
+    sameLineKinds,
     semanticEdges: map.edges.filter((edge) => edge.kind === "semantic-reference").length,
     version: archbird.VERSION,
   });

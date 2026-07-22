@@ -636,6 +636,45 @@ assert.ok(retrievalQuery.query.retrieval.hits[0].reasons.some(
 assert.ok(queryMapMarkdown(repositoryMapJson, {
   search: ["twce javascript"], searchLimit: 4, depth: 0, testDepth: 0,
 }).includes("## Candidate seeds"));
+const sameLineCConfig = Buffer.from(JSON.stringify({
+  schema_version: 2,
+  project: "same-line-c-query",
+  layers: [{
+    name: "c",
+    language: "c",
+    globs: ["src/**/*.c"],
+  }],
+}));
+const sameLineCProject = new Project("same-line-c-query", [
+  new Source(
+    "src/api.c",
+    Buffer.from(
+      "int archbird_pair(void); "
+      + "int archbird_pair(void) { return 0; }\n",
+    ),
+    { language: "c", layer: "c" },
+  ),
+]);
+sameLineCProject.setConfig(sameLineCConfig);
+sameLineCProject.scan("primary", { typescript: false });
+const sameLineCQuery = JSON.parse(queryMap(sameLineCProject.mapJson(), {
+  search: ["archbird pair"], searchLimit: 8, depth: 0, testDepth: 0,
+}));
+assert.deepEqual(
+  sameLineCQuery.query.retrieval.hits
+    .filter((row) => row.kind === "symbol")
+    .map((row) => [row.name, row.symbol_kind, row.line])
+    .sort(),
+  [
+    ["archbird_pair", "declaration", 1],
+    ["archbird_pair", "function", 1],
+  ],
+);
+assert.equal(
+  sameLineCQuery.query.projection_results[0].completeness.classification,
+  "complete",
+);
+sameLineCProject.dispose();
 const differentProducerMap = JSON.parse(repositoryMapJson);
 differentProducerMap.tool.implementation_sha256 = "0".repeat(64);
 const compatibleProducerQuery = JSON.parse(queryMap(

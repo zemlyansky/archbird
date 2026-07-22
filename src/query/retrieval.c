@@ -18,6 +18,12 @@ typedef struct RetrievalCandidate {
   unsigned weights[AB_RETRIEVAL_MAX_TERMS];
 } RetrievalCandidate;
 
+static int string_is(const AbString *value, const char *literal) {
+  size_t length = strlen(literal);
+  return value && value->length == length &&
+         (!length || memcmp(value->data, literal, length) == 0);
+}
+
 static int ascii_alnum(unsigned char value) {
   return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
          (value >= '0' && value <= '9');
@@ -381,8 +387,9 @@ static ArchbirdStatus
 add_candidate(ArchbirdEngine *engine, const AbRetrievalResult *result,
               RetrievalCandidate **items, size_t *count, size_t *capacity,
               AbRetrievalKind kind, const AbValue *row, const AbString *path,
-              const AbString *name, const AbString *symbol_kind, size_t line,
-              size_t source_index, const RetrievalField *fields,
+              const AbString *name, const AbString *symbol_scope,
+              const AbString *symbol_signature, const AbString *symbol_kind,
+              size_t line, size_t source_index, const RetrievalField *fields,
               size_t field_count) {
   RetrievalCandidate *candidate;
   size_t field_index;
@@ -397,6 +404,8 @@ add_candidate(ArchbirdEngine *engine, const AbRetrievalResult *result,
   candidate->hit.row = row;
   candidate->hit.path = path;
   candidate->hit.name = name;
+  candidate->hit.symbol_scope = symbol_scope;
+  candidate->hit.symbol_signature = symbol_signature;
   candidate->hit.symbol_kind = symbol_kind;
   candidate->hit.line = line;
   candidate->hit.source_index = source_index;
@@ -531,6 +540,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     const AbProjectionItem *item = &domain->items[index];
     const AbValue *kind = projection_attribute(item, "entity_kind");
     size_t source_index = 0;
+    if (!string_is(&item->state, "current"))
+      continue;
     if (!kind || kind->kind != AB_VALUE_STRING) {
       status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                                   ARCHBIRD_NO_OFFSET,
@@ -605,8 +616,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     file_fields[2] = (RetrievalField){"file.language", language, 2};
     if (file_selected[index])
       status = add_candidate(engine, result, &items, &count, &capacity,
-                             AB_RETRIEVAL_FILE, file, path, path, NULL, 0,
-                             index, file_fields, 3);
+                             AB_RETRIEVAL_FILE, file, path, path, NULL, NULL,
+                             NULL, 0, index, file_fields, 3);
     while (status == ARCHBIRD_OK && file_selected[index] &&
            call_index < calls->as.array.count) {
       const AbValue *call = &calls->as.array.items[call_index];
@@ -662,8 +673,9 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
         fields[field_count++] =
             (RetrievalField){"symbol.signature", signature, 4};
       status = add_candidate(engine, result, &items, &count, &capacity,
-                             AB_RETRIEVAL_SYMBOL, symbol, path, name, kind,
-                             (size_t)line, index, fields, field_count);
+                             AB_RETRIEVAL_SYMBOL, symbol, path, name, scope,
+                             signature, kind, (size_t)line, index, fields,
+                             field_count);
     }
   }
   for (index = 0; status == ARCHBIRD_OK && index < components->as.array.count;
@@ -686,8 +698,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
       fields[field_count++] =
           (RetrievalField){"component.description", description, 5};
     status = add_candidate(engine, result, &items, &count, &capacity,
-                           AB_RETRIEVAL_COMPONENT, row, NULL, name, NULL, 0,
-                           index, fields, field_count);
+                           AB_RETRIEVAL_COMPONENT, row, NULL, name, NULL, NULL,
+                           NULL, 0, index, fields, field_count);
   }
   for (index = 0; status == ARCHBIRD_OK && index < packages->as.array.count;
        index++) {
@@ -714,7 +726,7 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     fields[field_count++] = (RetrievalField){"package.manifest", manifest, 5};
     status = add_candidate(engine, result, &items, &count, &capacity,
                            AB_RETRIEVAL_PACKAGE, row, manifest, identity, NULL,
-                           0, index, fields, field_count);
+                           NULL, NULL, 0, index, fields, field_count);
     if (status != ARCHBIRD_OK)
       break;
     aliases = optional_array_member(row, "aliases");
@@ -787,8 +799,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     fields[0] = (RetrievalField){"artifact.name", name, 12};
     fields[1] = (RetrievalField){"artifact.output", output, 8};
     status = add_candidate(engine, result, &items, &count, &capacity,
-                           AB_RETRIEVAL_ARTIFACT, row, output, name, NULL, 0,
-                           index, fields, 2);
+                           AB_RETRIEVAL_ARTIFACT, row, output, name, NULL, NULL,
+                           NULL, 0, index, fields, 2);
   }
 cleanup:
   ab_free(engine, artifact_selected);
@@ -828,6 +840,30 @@ static int hit_compare(const void *left_raw, const void *right_raw) {
     if (compared)
       return compared;
   }
+  if (left->symbol_kind || right->symbol_kind) {
+    static const AbString empty = {NULL, 0};
+    compared =
+        ab_string_compare(left->symbol_kind ? left->symbol_kind : &empty,
+                          right->symbol_kind ? right->symbol_kind : &empty);
+    if (compared)
+      return compared;
+  }
+  if (left->symbol_scope || right->symbol_scope) {
+    static const AbString empty = {NULL, 0};
+    compared =
+        ab_string_compare(left->symbol_scope ? left->symbol_scope : &empty,
+                          right->symbol_scope ? right->symbol_scope : &empty);
+    if (compared)
+      return compared;
+  }
+  if (left->symbol_signature || right->symbol_signature) {
+    static const AbString empty = {NULL, 0};
+    compared = ab_string_compare(
+        left->symbol_signature ? left->symbol_signature : &empty,
+        right->symbol_signature ? right->symbol_signature : &empty);
+    if (compared)
+      return compared;
+  }
   return (left->line > right->line) - (left->line < right->line);
 }
 
@@ -839,7 +875,10 @@ static int hit_identity_equal(const AbRetrievalHit *left,
                               const AbRetrievalHit *right) {
   return left->kind == right->kind && left->line == right->line &&
          nullable_string_equal(left->path, right->path) &&
-         nullable_string_equal(left->name, right->name);
+         nullable_string_equal(left->name, right->name) &&
+         nullable_string_equal(left->symbol_kind, right->symbol_kind) &&
+         nullable_string_equal(left->symbol_scope, right->symbol_scope) &&
+         nullable_string_equal(left->symbol_signature, right->symbol_signature);
 }
 
 static int hit_location_equal(const AbRetrievalHit *left,
@@ -904,10 +943,8 @@ ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
   ArchbirdStatus status = ARCHBIRD_OK;
   memset(out, 0, sizeof(*out));
   out->limit = limit;
-  if (!domain ||
-      strcmp(ab_projection_data_classification(domain), "complete") ||
-      !queries || queries->kind != AB_VALUE_ARRAY || !queries->as.array.count ||
-      !limit)
+  if (!domain || !queries || queries->kind != AB_VALUE_ARRAY ||
+      !queries->as.array.count || !limit)
     return archbird_error_set(
         engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
         "retrieval requires search strings and limit > 0");

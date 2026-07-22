@@ -295,6 +295,9 @@ def check_map(extension, mapped: dict) -> None:
             "line": 3,
             "path": "js/factory.js",
             "symbol": "jsFactory.Product",
+            "symbol_kind": "class",
+            "symbol_scope": "class",
+            "symbol_signature": "class Product",
         }
     ], query["query"]
     report = extension.map_query_markdown(canonical(mapped), request).decode()

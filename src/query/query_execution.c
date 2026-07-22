@@ -1017,6 +1017,21 @@ static int symbol_compare(const void *left_raw, const void *right_raw) {
   if (compared)
     return compared;
   compared = ab_string_compare(left->scope, right->scope);
+  if (compared)
+    return compared;
+  {
+    static const AbString empty = {NULL, 0};
+    const AbValue *left_value = ab_value_member(left->row, "signature");
+    const AbValue *right_value = ab_value_member(right->row, "signature");
+    const AbString *left_signature =
+        left_value && left_value->kind == AB_VALUE_STRING ? &left_value->as.text
+                                                          : &empty;
+    const AbString *right_signature =
+        right_value && right_value->kind == AB_VALUE_STRING
+            ? &right_value->as.text
+            : &empty;
+    compared = ab_string_compare(left_signature, right_signature);
+  }
   return compared ? compared
                   : (left->line > right->line) - (left->line < right->line);
 }
@@ -1258,7 +1273,7 @@ static ArchbirdStatus select_projection(QueryContext *context,
     const AbValue *target = projection_attribute(item, "target");
     size_t evidence_index;
     if (!string_literal(&item->state, "current"))
-      return query_error(context, "query seed projection contains stale data");
+      continue;
     if (ab_projection_value_is(select, "symbols")) {
       ArchbirdStatus status = select_symbol_item(context, item);
       if (status != ARCHBIRD_OK)
@@ -4346,6 +4361,21 @@ static ArchbirdStatus render_retrieval(AbBuffer *buffer,
       if (status == ARCHBIRD_OK)
         status = render_string(buffer, hit->path);
     }
+    if (status == ARCHBIRD_OK && hit->symbol_kind) {
+      status = ab_buffer_literal(buffer, ",\"symbol_kind\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer, hit->symbol_kind);
+    }
+    if (status == ARCHBIRD_OK && hit->symbol_scope) {
+      status = ab_buffer_literal(buffer, ",\"symbol_scope\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer, hit->symbol_scope);
+    }
+    if (status == ARCHBIRD_OK && hit->symbol_signature) {
+      status = ab_buffer_literal(buffer, ",\"symbol_signature\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer, hit->symbol_signature);
+    }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"reasons\":[");
     for (reason_index = 0;
@@ -4446,6 +4476,23 @@ static ArchbirdStatus render_seed_identities(AbBuffer *buffer,
       status = ab_buffer_literal(buffer, ",\"symbol\":");
     if (status == ARCHBIRD_OK)
       status = render_string(buffer, symbol->name);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"symbol_kind\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string(buffer, symbol->kind);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"symbol_scope\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string(buffer, symbol->scope);
+    {
+      const AbValue *signature = ab_value_member(symbol->row, "signature");
+      if (status == ARCHBIRD_OK && signature &&
+          signature->kind == AB_VALUE_STRING) {
+        status = ab_buffer_literal(buffer, ",\"symbol_signature\":");
+        if (status == ARCHBIRD_OK)
+          status = render_string(buffer, &signature->as.text);
+      }
+    }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "}");
     first = 0;
