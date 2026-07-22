@@ -93,6 +93,13 @@ Workspace, Verification, ChangeProposal, ChangeContract, change-result,
 graph-view, freshness, diff, OKF, and report functions use the same canonical
 schemas as the CLI and C core.
 
+The top-level package also exposes the schema-2 planning primitives:
+`compile_project_configuration()`, `evaluate_projection_json()`,
+`compile_query_plan_json()`, `evaluate_constraints_json()`, and
+`freeze_constraints_json()`. These return the same canonical artifacts as the
+C and Node APIs; normal application code can continue to use `Project` and the
+CLI workflows above.
+
 ### Import observed test routes
 
 Generate coverage.py JSON with pytest dynamic contexts, then convert it without

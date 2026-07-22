@@ -10,6 +10,7 @@ from archbird.native import (
     change_proposal,
     change_verify,
     compile_project_configuration,
+    compile_query_plan_json,
     diff_maps_json,
     evaluate_constraints_json,
     evaluate_projection_json,
@@ -256,6 +257,20 @@ def main() -> None:
         "projection_definition_sha256"
     ] == projection_results[0]["projection_definition_sha256"]
     assert query_options["symbols"]
+    public_query_plan = json.loads(
+        compile_query_plan_json(
+            json.dumps(modern, sort_keys=True, separators=(",", ":")).encode(),
+            modern_map,
+            "api-impact",
+        )
+    )
+    assert public_query_plan == {
+        "artifact": "query-plan",
+        "plan": query_plan,
+        "projection_results": projection_results,
+        "request": query_options,
+        "schema_version": 1,
+    }
     named_query = json.loads(
         query_map_json(
             modern_map,

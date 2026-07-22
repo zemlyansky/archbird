@@ -8,13 +8,6 @@ from pathlib import Path
 import sys
 
 import archbird
-from archbird.native import (
-    evaluate_constraints_json,
-    evaluate_projection_json,
-    freeze_constraints_json,
-)
-
-
 def main() -> int:
     if len(sys.argv) != 3:
         raise SystemExit("usage: release_python_smoke.py CONFIG ROOT")
@@ -36,6 +29,9 @@ def main() -> int:
         "NEVER_CALLOUT,JIT_DISABLED"
     ):
         raise AssertionError("unexpected configured-pattern options")
+    compiled_config = json.loads(archbird.compile_project_configuration(config_json))
+    if compiled_config["artifact"] != "project-configuration-plan":
+        raise AssertionError("installed Python configuration compiler failed")
     project = archbird.Project.from_config(config, root=root)
     if len(project.map_input_sha256) != 64:
         raise AssertionError("installed Python host returned an invalid Map-input digest")
@@ -54,7 +50,7 @@ def main() -> int:
     if query["artifact"] != "query" or len(query["files"]) != 2:
         raise AssertionError("installed Python query failed")
     projection = json.loads(
-        evaluate_projection_json(
+        archbird.evaluate_projection_json(
             first,
             {
                 "id": "release-symbols",
@@ -70,18 +66,29 @@ def main() -> int:
         != ["add", "twice"]
     ):
         raise AssertionError("installed Python projection failed")
-    verification = json.loads(evaluate_constraints_json(config_json, first))
+    query_plan = json.loads(
+        archbird.compile_query_plan_json(
+            b"",
+            first,
+            overrides={"paths": ["py/pkg"], "depth": 0},
+        )
+    )
+    if query_plan["artifact"] != "query-plan" or not query_plan["request"]["paths"]:
+        raise AssertionError("installed Python QueryPlan compiler failed")
+    verification = json.loads(
+        archbird.evaluate_constraints_json(config_json, first)
+    )
     if verification["artifact"] != "verification" or len(
         verification["constraints"]
     ) != 3:
         raise AssertionError("installed Python constraint evaluation failed")
     sarif = json.loads(
-        evaluate_constraints_json(config_json, first, format="sarif")
+        archbird.evaluate_constraints_json(config_json, first, format="sarif")
     )
     if sarif["version"] != "2.1.0" or len(sarif["runs"]) != 1:
         raise AssertionError("installed Python constraint report failed")
     baseline = json.loads(
-        freeze_constraints_json(
+        archbird.freeze_constraints_json(
             config_json,
             first,
             owner="release",

@@ -5,15 +5,8 @@ from __future__ import annotations
 import json
 from typing import Mapping
 
-from . import _native
 from .errors import ConfigError
-
-
-def _canonical(value: object) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=True, separators=(",", ":"), sort_keys=True
-    ).encode("utf-8")
-
+from .native import compile_query_plan_json
 
 def compile_named_query(
     config_json: bytes,
@@ -29,12 +22,12 @@ def compile_named_query(
 
     try:
         artifact = json.loads(
-            _native.query_plan_compile(
+            compile_query_plan_json(
                 config_json,
                 map_json,
                 query_id,
                 resolution_json=resolution_json,
-                overrides_json=_canonical(dict(overrides or {})),
+                overrides=overrides,
                 pretty=False,
             )
         )
@@ -64,12 +57,12 @@ def compile_ad_hoc_query(
 
     try:
         artifact = json.loads(
-            _native.query_plan_compile(
+            compile_query_plan_json(
                 b"",
                 map_json,
                 "",
                 resolution_json=resolution_json,
-                overrides_json=_canonical(dict(options)),
+                overrides=options,
                 pretty=False,
             )
         )

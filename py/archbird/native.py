@@ -1751,6 +1751,27 @@ def evaluate_projection_json(
     )
 
 
+def compile_query_plan_json(
+    config_json: bytes,
+    map_json: bytes,
+    query_id: str = "",
+    *,
+    resolution_json: bytes = b"",
+    overrides: Optional[Mapping[str, object]] = None,
+    pretty: bool = False,
+) -> bytes:
+    """Compile one saved or ad-hoc QueryPlan over canonical Map evidence."""
+
+    return _native.query_plan_compile(
+        config_json,
+        map_json,
+        query_id,
+        resolution_json=resolution_json,
+        overrides_json=_canonical(dict(overrides or {})),
+        pretty=pretty,
+    )
+
+
 def evaluate_constraints_json(
     config_json: bytes,
     map_json: bytes,
