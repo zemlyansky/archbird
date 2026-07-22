@@ -1,5 +1,5 @@
 PYTHON ?= python
-NODE ?= node
+NODE ?= $(shell command -v node 2>/dev/null || printf '%s\n' node)
 NPM ?= npm
 CMAKE ?= cmake
 CLANG ?= clang
@@ -7,7 +7,7 @@ EMCMAKE ?= emcmake
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
 CPPCHECK_JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
-ESBUILD ?= esbuild
+ESBUILD ?= $(CURDIR)/app/node_modules/.bin/esbuild
 AUDITWHEEL ?= auditwheel
 TWINE ?= twine
 MANYLINUX_PLATFORM ?= manylinux_2_17_x86_64
@@ -26,8 +26,8 @@ EMSCRIPTEN_CACHE ?= $(CURDIR)/build/emscripten-cache
 PYTHON_NATIVE := $(CURDIR)/py/archbird/_native.py
 NODE_NATIVE := $(CURDIR)/js/build/Release/_native.node
 PY_RELEASE_RAW ?= $(CURDIR)/build/release-py-raw
-PY_RAW_WHEEL = $(PY_RELEASE_RAW)/archbird-0.0.1-cp310-cp310-linux_x86_64.whl
-PY_MANYLINUX_WHEEL = $(RELEASE_DIR)/archbird-0.0.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+PY_RAW_WHEEL = $(PY_RELEASE_RAW)/archbird-0.0.1-*-linux_*.whl
+PY_MANYLINUX_WHEEL = $(RELEASE_DIR)/archbird-0.0.1-*manylinux*.whl
 PY_SDIST = $(RELEASE_DIR)/archbird-0.0.1.tar.gz
 JS_PACKAGE = $(RELEASE_DIR)/archbird-0.0.1.tgz
 JS_RELEASE_SMOKE = $(CURDIR)/build/release-node-smoke
@@ -290,9 +290,9 @@ release-js: app-test
 	command mkdir -p $(RELEASE_DIR)
 	cd js && ARCHBIRD_NATIVE_ADDON=$(abspath $(NATIVE_RELEASE_BUILD)/node/_native.node) \
 		ARCHBIRD_WASM_BUILD=$(abspath $(NATIVE_WASM_BUILD)/wasm) \
-		node scripts/stage-native.js
-	cd js && npm pack --ignore-scripts --pack-destination $(RELEASE_DIR)
-	cd js && node scripts/clean-staged.js
+		$(NODE) scripts/stage-native.js
+	cd js && $(NPM) pack --ignore-scripts --pack-destination $(RELEASE_DIR)
+	cd js && $(NODE) scripts/clean-staged.js
 
 release-check: export TMPDIR := $(BUILD_TMP)
 release-check: release-py release-js
