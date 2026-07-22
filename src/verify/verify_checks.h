@@ -37,7 +37,8 @@ ArchbirdStatus ab_verify_evaluate_check(AbVerificationContext *context,
                                         const AbValue *check,
                                         AbVerifyCheckResult *result);
 ArchbirdStatus ab_verify_evaluate_checks(AbVerificationContext *context);
-ArchbirdStatus ab_verify_apply_waivers(AbVerificationContext *context);
+ArchbirdStatus ab_verify_check_refresh_status(ArchbirdEngine *engine,
+                                              AbVerifyCheckResult *result);
 ArchbirdStatus ab_verify_check_render(AbBuffer *buffer,
                                       const AbVerifyCheckResult *result);
 

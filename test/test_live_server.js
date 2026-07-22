@@ -108,14 +108,16 @@ async function main() {
     assert.match(escape.error.message, /escapes repository root/);
 
     const initialGeneration = initial.descriptor.generation;
-    fs.writeFileSync(path.join(repositoryRoot, ".archbird.json"), "{}\n");
+    const configurationPath = path.join(repositoryRoot, "archbird.json");
+    const configuration = fs.readFileSync(configurationPath);
+    fs.writeFileSync(configurationPath, "{}\n");
     await waitFor(
       () => events.some((value) => value.includes("candidate-failed")),
       "failed candidate event",
     );
     assert.equal(server.repository.current.generation, initialGeneration);
 
-    fs.rmSync(path.join(repositoryRoot, ".archbird.json"));
+    fs.writeFileSync(configurationPath, configuration);
     fs.appendFileSync(path.join(repositoryRoot, "js/index.js"), "\nexport const three = 3;\n");
     await waitFor(
       () => server.repository.current.generation !== initialGeneration,

@@ -1202,63 +1202,32 @@ overlay_finding_paths(ArchbirdEngine *engine, const AbValue *check,
   return status;
 }
 
-static ArchbirdStatus
-overlay_freshness(ArchbirdEngine *engine, const AbValue *projects,
-                  const AbString *map_project, const AbString *map_config,
-                  const AbString *map_inputs, AbReportStringList *aliases,
-                  const char **out) {
-  size_t index;
-  size_t matches = 0;
-  size_t current = 0;
-  size_t complete = 0;
-  for (index = 0; index < projects->as.array.count; index++) {
-    const AbValue *row = &projects->as.array.items[index];
-    const AbString *project = ab_report_string(row, "project");
-    const AbString *name = ab_report_string(row, "name");
-    const AbString *config = ab_report_string(row, "config_sha256");
-    const AbString *inputs = ab_report_string(row, "input_sha256");
-    if (!project || !name || !config || !inputs)
-      return query_schema_error(
-          engine, "verification overlay project row is malformed");
-    if (!ab_string_equal(project, map_project))
-      continue;
-    matches++;
-    if (config->length && inputs->length)
-      complete++;
-    if (ab_string_equal(config, map_config) &&
-        ab_string_equal(inputs, map_inputs))
-      current++;
-  }
-  for (index = 0; index < projects->as.array.count; index++) {
-    const AbValue *row = &projects->as.array.items[index];
-    const AbString *project = ab_report_string(row, "project");
-    const AbString *name = ab_report_string(row, "name");
-    const AbString *config = ab_report_string(row, "config_sha256");
-    const AbString *inputs = ab_report_string(row, "input_sha256");
-    int exact;
-    ArchbirdStatus status;
-    if (!project || !name || !config || !inputs)
-      return query_schema_error(
-          engine, "verification overlay project row is malformed");
-    if (!ab_string_equal(project, map_project) || !name->length)
-      continue;
-    exact = ab_string_equal(config, map_config) &&
-            ab_string_equal(inputs, map_inputs);
-    if ((current && !exact) || (!current && matches != 1))
-      continue;
-    status = ab_report_list_add(aliases, name->data, name->length);
-    if (status != ARCHBIRD_OK)
-      return status;
-  }
-  ab_report_list_sort_unique(aliases);
-  if (!matches)
+static ArchbirdStatus overlay_constraint_freshness(
+    ArchbirdEngine *engine, const AbValue *evaluation,
+    const AbString *map_project, const AbString *map_config,
+    const AbString *map_inputs, AbReportStringList *aliases, const char **out) {
+  const AbString *project = ab_report_string(evaluation, "project");
+  const AbString *config = ab_report_string(evaluation, "map_config_sha256");
+  const AbString *inputs = ab_report_string(evaluation, "map_input_sha256");
+  ArchbirdStatus status;
+  if (!project || !config || !inputs)
+    return query_schema_error(engine,
+                              "verification evaluation identity is malformed");
+  if (!ab_string_equal(project, map_project)) {
     *out = "not-applicable";
-  else if (current)
-    *out = "current";
-  else if (matches > 1)
+    return ARCHBIRD_OK;
+  }
+  status = ab_report_list_add(aliases, project->data, project->length);
+  if (status != ARCHBIRD_OK)
+    return status;
+  ab_report_list_sort_unique(aliases);
+  if (!config->length || !inputs->length)
     *out = "unknown";
+  else if (ab_string_equal(config, map_config) &&
+           ab_string_equal(inputs, map_inputs))
+    *out = "current";
   else
-    *out = complete == matches ? "stale" : "unknown";
+    *out = "stale";
   return ARCHBIRD_OK;
 }
 
@@ -1325,10 +1294,10 @@ static ArchbirdStatus
 render_verification_overlay(ArchbirdEngine *engine, const AbValue *map,
                             const AbValue *query, const AbValue *verification,
                             ArchbirdReportDetail detail, AbBuffer *out) {
-  const AbValue *projects;
+  const AbValue *evaluations;
+  const AbValue *evaluation;
   const AbValue *facts;
   const AbValue *checks;
-  const AbValue *suite;
   const AbValue *summary;
   const AbValue *map_evidence = ab_report_object(map, "evidence");
   const AbString *map_project = ab_report_string(map, "project");
@@ -1336,7 +1305,7 @@ render_verification_overlay(ArchbirdEngine *engine, const AbValue *map,
       map_evidence ? ab_report_string(map_evidence, "config_sha256") : NULL;
   const AbString *map_inputs =
       map_evidence ? ab_report_string(map_evidence, "input_sha256") : NULL;
-  const AbString *suite_name;
+  const AbString *policy_name;
   AbReportStringList selected;
   AbReportStringList aliases;
   const char *freshness = "unknown";
@@ -1361,16 +1330,25 @@ render_verification_overlay(ArchbirdEngine *engine, const AbValue *map,
       !ab_value_string_is(ab_value_member(verification, "artifact"),
                           "verification") ||
       !ab_value_u64(ab_value_member(verification, "schema_version"), &schema) ||
-      schema != 1)
+      schema != 2)
     return query_schema_error(
-        engine, "verification overlay must be a canonical schema-1 result");
-  projects = ab_report_array(verification, "projects");
-  facts = ab_report_array(verification, "facts");
-  checks = ab_report_array(verification, "checks");
-  suite = ab_report_object(verification, "suite");
+        engine, "verification overlay must be a canonical schema-2 result");
+  evaluations = ab_report_array(verification, "evaluations");
+  evaluation = NULL;
+  if (evaluations)
+    for (index = 0; index < evaluations->as.array.count; index++) {
+      const AbValue *row = &evaluations->as.array.items[index];
+      const AbString *id = ab_report_string(row, "id");
+      if (id && id->length == 7 && !memcmp(id->data, "current", 7)) {
+        evaluation = row;
+        break;
+      }
+    }
+  facts = ab_report_array(verification, "operands");
+  checks = ab_report_array(verification, "constraints");
   summary = ab_report_object(verification, "summary");
-  suite_name = suite ? ab_report_string(suite, "name") : NULL;
-  if (!projects || !facts || !checks || !summary || !suite_name ||
+  policy_name = evaluation ? ab_report_string(evaluation, "project") : NULL;
+  if (!evaluation || !facts || !checks || !summary || !policy_name ||
       !map_project || !map_config || !map_inputs) {
     status = query_schema_error(engine,
                                 "verification overlay structure is malformed");
@@ -1379,8 +1357,9 @@ render_verification_overlay(ArchbirdEngine *engine, const AbValue *map,
   status = overlay_selected_paths(engine, query, &selected);
   if (status != ARCHBIRD_OK)
     goto cleanup;
-  status = overlay_freshness(engine, projects, map_project, map_config,
-                             map_inputs, &aliases, &freshness);
+  status =
+      overlay_constraint_freshness(engine, evaluation, map_project, map_config,
+                                   map_inputs, &aliases, &freshness);
   if (status != ARCHBIRD_OK)
     goto cleanup;
   producer = overlay_producer(verification, query);
@@ -1415,22 +1394,23 @@ render_verification_overlay(ArchbirdEngine *engine, const AbValue *map,
   }
   if (status != ARCHBIRD_OK)
     goto cleanup;
-  status = ab_report_literal_line(out, "## Architecture checks");
+  status = ab_report_literal_line(out, "## Architecture constraints");
   if (status == ARCHBIRD_OK)
     status = ab_report_blank(out);
   if (status == ARCHBIRD_OK)
     status = ab_report_linef(
         out,
         "Verification `%.*s`; evidence=%s; producer=%s; relevant=%zu/%zu "
-        "checks; findings=%zu; suite-blocking=%s.",
-        (int)suite_name->length, suite_name->data, freshness, producer,
+        "constraints; findings=%zu; policy-blocking=%s.",
+        (int)policy_name->length, policy_name->data, freshness, producer,
         relevant_checks, checks->as.array.count, relevant_findings,
         ab_report_bool(summary, "blocking", 0) ? "yes" : "no");
   if (status == ARCHBIRD_OK)
     status = ab_report_blank(out);
   if (!relevant_checks && status == ARCHBIRD_OK)
     status = ab_report_literal_line(
-        out, "No check has exact source-path evidence in this change slice.");
+        out,
+        "No constraint has exact source-path evidence in this change slice.");
   if (relevant_checks && status == ARCHBIRD_OK)
     status = ab_report_literal_line(out, "```text");
   for (index = 0; status == ARCHBIRD_OK && index < checks->as.array.count;
@@ -1478,8 +1458,8 @@ render_verification_overlay(ArchbirdEngine *engine, const AbValue *map,
     }
     if (!id || !check_status || !severity || !owner) {
       ab_report_list_free(&paths);
-      status =
-          query_schema_error(engine, "verification overlay check is malformed");
+      status = query_schema_error(
+          engine, "verification overlay constraint is malformed");
       break;
     }
     status = ab_report_appendf(
@@ -1538,8 +1518,9 @@ render_verification_overlay(ArchbirdEngine *engine, const AbValue *map,
     ab_report_list_free(&paths);
   }
   if (relevant_checks && status == ARCHBIRD_OK && relevant_checks > check_limit)
-    status = ab_report_linef(out, "… %zu relevant checks omitted by detail",
-                             relevant_checks - check_limit);
+    status =
+        ab_report_linef(out, "… %zu relevant constraints omitted by detail",
+                        relevant_checks - check_limit);
   if (relevant_checks && status == ARCHBIRD_OK &&
       relevant_findings > finding_limit)
     status = ab_report_linef(out, "… %zu relevant findings omitted by detail",

@@ -18,15 +18,9 @@ def main() -> int:
     if request.get("config_path") is not None:
         config = Path(request["config_path"]).read_bytes()
     if not request.get("no_config") and config is None:
-        candidates = [
-            candidate
-            for candidate in (root / "archbird.json", root / ".archbird.json")
-            if candidate.is_file() and not candidate.is_symlink()
-        ]
-        if len(candidates) > 1:
-            raise ValueError("repository contains both archbird.json and .archbird.json")
-        if candidates:
-            config = candidates[0].read_bytes()
+        candidate = root / "archbird.json"
+        if candidate.is_file() and not candidate.is_symlink():
+            config = candidate.read_bytes()
     options = dict(request.get("project_options") or {})
     project = Project.from_repository(root, config=config, **options)
     map_json = project.map_json()

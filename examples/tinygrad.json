@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "tinygrad-reference",
   "description": "Canonical tinygrad Python compiler/runtime sources used as a Polygrad architecture reference.",
-  "root": ".",
   "exclude": [
     "tinygrad/runtime/autogen/**",
     "tinygrad/viz/assets/**",
@@ -38,11 +37,27 @@
     {"name": "jit", "paths": ["tinygrad/engine/jit.py"], "description": "capture and replay"},
     {"name": "frontends", "paths": ["tinygrad/__init__.py", "tinygrad/nn/**/*.py"], "description": "public Python and neural-network surfaces"}
   ],
-  "checks": {
-    "files": ["tinygrad/uop/ops.py", "tinygrad/tensor.py", "tinygrad/engine/realize.py", "tinygrad/engine/jit.py"],
-    "symbols": [
-      {"layer": "core", "name": "Tensor"},
-      {"layer": "core", "name": "UOp"}
-    ]
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "tinygrad/uop/ops.py",
+        "tinygrad/tensor.py",
+        "tinygrad/engine/realize.py",
+        "tinygrad/engine/jit.py"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    },
+    "REQUIRED-SYMBOLS-CORE": {
+      "kind": "required_symbols",
+      "layer": "core",
+      "symbols": [
+        "Tensor",
+        "UOp"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed core symbols remain present."
+    }
   }
 }

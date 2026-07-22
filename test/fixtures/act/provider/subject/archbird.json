@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "provider-subject",
   "description": "Subject side of a cross-language provider rename.",
-  "root": ".",
   "layers": [
     {"name": "core", "role": "core", "language": "c", "globs": ["src/*.c", "src/*.h"], "public_headers": ["src/core.h"]},
     {"name": "python", "role": "frontend", "language": "python", "globs": ["py/*.py"]},
@@ -53,5 +52,37 @@
   "components": [
     {"name": "core", "paths": ["src/**"]},
     {"name": "frontends", "paths": ["py/**", "js/**"]}
-  ]
+  ],
+  "projections": {
+    "ffi-provider-surface": {
+      "select": "provider_surface",
+      "name": "ffi"
+    },
+    "frontend-test-routes": {
+      "select": "test_routes"
+    }
+  },
+  "constraints": {
+    "PROVIDER-RENAME": {
+      "assert": "mapped_values_equal",
+      "expected": {
+        "map": "reference",
+        "projection": "ffi-provider-surface"
+      },
+      "actual": {"projection": "ffi-provider-surface"},
+      "mapping": {"core_add": "core_sum"},
+      "severity": "error",
+      "owner": "bindings",
+      "rationale": "The physical provider name and its declaration, use, and implementation state match the reviewed reference.",
+      "requirement": "FFI-RENAME-001"
+    },
+    "PROVIDER-TEST-ROUTES": {
+      "assert": "min_test_routes",
+      "actual": {"projection": "frontend-test-routes"},
+      "min": 2,
+      "severity": "error",
+      "owner": "bindings",
+      "rationale": "Python and JavaScript frontend test routes remain connected."
+    }
+  }
 }

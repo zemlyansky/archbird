@@ -87,7 +87,7 @@ def main() -> int:
     write_index(root / "index.scip")
     shutil.copyfile(root / "index.scip", root / "second.scip")
     config = {
-        "schema_version": 1,
+        "schema_version": 2,
         "project": "scip-native",
         "layers": [
             {

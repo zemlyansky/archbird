@@ -122,13 +122,9 @@ def main() -> None:
     repository = Path(__file__).resolve().parents[1]
     check_public_readmes(repository)
     project_template = repository / "examples" / "minimal.archbird.json"
-    verify_template = repository / "examples" / "minimal.verify.json"
     project_config = json.loads(project_template.read_text(encoding="utf-8"))
-    verification = json.loads(verify_template.read_text(encoding="utf-8"))
-    if project_config.get("schema_version") != 1:
-        raise AssertionError("quick-start project config is not schema 1")
-    if verification.get("schema_version") != 1:
-        raise AssertionError("quick-start verification suite is not schema 1")
+    if project_config.get("schema_version") != 2:
+        raise AssertionError("quick-start project config is not schema 2")
     for readme in (
         repository / "README.md",
         repository / "py" / "README.md",
@@ -136,8 +132,6 @@ def main() -> None:
     ):
         if marked_json(readme, "archbird-minimal-project-config") != project_config:
             raise AssertionError(f"{readme}: project config drifted from template")
-        if marked_json(readme, "archbird-minimal-verify-config") != verification:
-            raise AssertionError(f"{readme}: Verify suite drifted from template")
 
     temporary_root = repository / "build" / "tmp"
     temporary_root.mkdir(parents=True, exist_ok=True)
@@ -145,7 +139,6 @@ def main() -> None:
         root = Path(raw)
         (root / ".archbird").mkdir()
         shutil.copyfile(project_template, root / "archbird.json")
-        shutil.copyfile(verify_template, root / "archbird.verify.json")
         write(
             root / "include" / "demo.h",
             "#ifndef DEMO_H\n#define DEMO_H\n"
@@ -188,6 +181,34 @@ def main() -> None:
         )
         write(root / "Makefile", "all:\n\t@echo demo\n")
 
+        explicit_stdout = run(
+            "map",
+            ".",
+            "--format",
+            "json",
+            "--check",
+            cwd=root,
+        ).stdout
+        bare = run(cwd=root)
+        if not bare.stdout.startswith("# demo architecture\n") or "\nMap `" not in bare.stdout:
+            raise AssertionError("bare archbird shortcut did not render a Map")
+        bare_stdout = run(
+            "--format",
+            "json",
+            "--check",
+            cwd=root,
+        ).stdout
+        dot_stdout = run(
+            ".",
+            "--format",
+            "json",
+            "--check",
+            cwd=root,
+        ).stdout
+        if bare_stdout != explicit_stdout:
+            raise AssertionError("bare archbird shortcut changed canonical Map output")
+        if dot_stdout != explicit_stdout:
+            raise AssertionError("archbird . shortcut changed canonical Map output")
         run(
             "map",
             ".",
@@ -211,8 +232,22 @@ def main() -> None:
             cwd=root,
         )
         run(
+            "query",
+            "public-api-impact",
+            "--map",
+            ".archbird/map.json",
+            "--config",
+            "archbird.json",
+            "--format",
+            "json",
+            "--output",
+            ".archbird/public-api-impact.json",
+            cwd=root,
+        )
+        run(
             "verify",
-            ".",
+            "--map",
+            ".archbird/map.json",
             "--format",
             "json",
             "--output",
@@ -221,7 +256,7 @@ def main() -> None:
             cwd=root,
         )
         result = json.loads((root / "verification.json").read_text(encoding="utf-8"))
-        if result["summary"]["checks"] != {
+        if result["summary"]["constraints"] != {
             "fail": 0,
             "not_applicable": 0,
             "pass": 1,

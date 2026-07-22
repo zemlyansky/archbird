@@ -173,55 +173,6 @@ typedef struct AbConfigParity {
   int enforce;
 } AbConfigParity;
 
-typedef struct AbConfigSymbolCheck {
-  AbString layer;
-  AbString name;
-} AbConfigSymbolCheck;
-
-typedef struct AbConfigEdgeCheck {
-  AbString kind;
-  AbString source;
-  AbString target;
-  AbString name;
-} AbConfigEdgeCheck;
-
-typedef struct AbConfigEntrypointCheck {
-  AbString package;
-  AbString route;
-  AbString target;
-} AbConfigEntrypointCheck;
-
-typedef struct AbConfigTestRouteCheck {
-  AbString group;
-  AbString target;
-} AbConfigTestRouteCheck;
-
-typedef struct AbConfigSurfaceCheck {
-  AbString bridge;
-  AbStringArray declared;
-  int forbid_unregistered;
-  int forbid_unresolved;
-  int forbid_ambiguous;
-} AbConfigSurfaceCheck;
-
-typedef struct AbConfigChecks {
-  AbStringArray files;
-  AbConfigSymbolCheck *symbols;
-  size_t symbol_count;
-  AbConfigEdgeCheck *edges;
-  size_t edge_count;
-  AbStringArray bridges;
-  AbConfigEntrypointCheck *entrypoints;
-  size_t entrypoint_count;
-  AbConfigTestRouteCheck *test_routes;
-  size_t test_route_count;
-  AbConfigSurfaceCheck *surfaces;
-  size_t surface_count;
-  AbStringArray forbid_paths;
-  AbConfigSymbolCheck *forbid_symbols;
-  size_t forbid_symbol_count;
-} AbConfigChecks;
-
 typedef struct AbMapConfig {
   AbString project;
   AbString description;
@@ -247,7 +198,6 @@ typedef struct AbMapConfig {
   size_t named_entry_count;
   AbConfigParity *parity;
   size_t parity_count;
-  AbConfigChecks checks;
   size_t max_file_bytes;
   size_t max_index_bytes;
   size_t compact_symbols;

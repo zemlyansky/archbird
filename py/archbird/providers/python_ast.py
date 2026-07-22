@@ -30,6 +30,8 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, 
 _DOMAINS = (
     "calls",
     "class-bases",
+    "constant-memberships",
+    "constant-values",
     "decorators",
     "export-origins",
     "exports",
@@ -314,6 +316,8 @@ class _Facts:
         key: str,
         name: Optional[str] = None,
         attributes: Optional[Mapping[str, object]] = None,
+        *,
+        correlate_by_span: bool = True,
     ) -> None:
         analysis_start, analysis_end = span
         normalized_attributes = dict(attributes) if attributes else {}
@@ -347,7 +351,7 @@ class _Facts:
             "span": {"end": end, "start": start},
         }
         if start < end:
-            row["correlation"] = "span"
+            row["correlation"] = "span" if correlate_by_span else "key"
         if name is not None:
             row["name"] = name
         if normalized_attributes:
@@ -432,6 +436,92 @@ class _ReceiverOrigin:
     assignment_end: int
     derivation: str
     import_binding: Tuple[str, str, str] | None = None
+
+
+class _UnsupportedConstant(ValueError):
+    pass
+
+
+def _constant_integer(node: ast.AST, env: Mapping[str, int]) -> int:
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in env:
+        return env[node.id]
+    if isinstance(node, ast.UnaryOp):
+        value = _constant_integer(node.operand, env)
+        if isinstance(node.op, ast.UAdd):
+            return value
+        if isinstance(node.op, ast.USub):
+            return -value
+        if isinstance(node.op, ast.Invert):
+            return ~value
+    if isinstance(node, ast.BinOp):
+        left = _constant_integer(node.left, env)
+        right = _constant_integer(node.right, env)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.FloorDiv):
+            return left // right
+        if isinstance(node.op, ast.Mod):
+            return left % right
+        if isinstance(node.op, ast.LShift):
+            return left << right
+        if isinstance(node.op, ast.RShift):
+            return left >> right
+        if isinstance(node.op, ast.BitOr):
+            return left | right
+        if isinstance(node.op, ast.BitAnd):
+            return left & right
+        if isinstance(node.op, ast.BitXor):
+            return left ^ right
+    raise _UnsupportedConstant(ast.dump(node, include_attributes=False))
+
+
+def _constant_member_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    raise _UnsupportedConstant(ast.dump(node, include_attributes=False))
+
+
+def _constant_members(
+    node: ast.AST, env: Mapping[str, frozenset[str]]
+) -> frozenset[str]:
+    if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+        return frozenset(_constant_member_name(item) for item in node.elts)
+    if isinstance(node, ast.Name) and node.id in env:
+        return env[node.id]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _constant_members(node.left, env) | _constant_members(node.right, env)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"union", "intersection", "difference"}
+    ):
+        operands = [_constant_members(argument, env) for argument in node.args]
+        if isinstance(node.func.value, ast.Name) and node.func.value.id != "set":
+            operands.insert(0, _constant_members(node.func.value, env))
+        if not operands:
+            return frozenset()
+        result = operands[0]
+        for operand in operands[1:]:
+            if node.func.attr == "union":
+                result |= operand
+            elif node.func.attr == "intersection":
+                result &= operand
+            else:
+                result -= operand
+        return result
+    raise _UnsupportedConstant(ast.dump(node, include_attributes=False))
 
 
 @dataclass(frozen=True)
@@ -596,6 +686,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         imports, receivers = _scope_state(tree.body, starts)
         self.imports: List[Dict[str, Tuple[str, str, str]]] = [imports]
         self.receivers: List[_ReceiverScope] = [receivers]
+        self.enum_classes: set[str] = set()
         self.module_table = table
         self.child_tables: Dict[
             symtable.SymbolTable,
@@ -931,12 +1022,192 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         if node.value is not None:
             self.visit(node.value)
 
+    @staticmethod
+    def _class_assignment(
+        statement: ast.stmt,
+    ) -> Tuple[ast.Name, ast.expr] | None:
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+        ):
+            return statement.targets[0], statement.value
+        if (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.value is not None
+        ):
+            return statement.target, statement.value
+        return None
+
+    def _enum_base(self, base: ast.expr) -> bool:
+        enum_bases = {"Enum", "Flag", "IntEnum", "IntFlag", "StrEnum"}
+        if isinstance(base, ast.Name):
+            if base.id in enum_bases or self._qualname(base.id) in self.enum_classes:
+                return True
+            binding = self._import_binding(base.id)
+            return bool(
+                binding
+                and binding[0] == "enum"
+                and binding[1] in enum_bases
+            )
+        if isinstance(base, ast.Attribute):
+            rendered = ast.unparse(base)
+            if rendered in self.enum_classes or self._qualname(rendered) in self.enum_classes:
+                return True
+            chain = _attribute_chain(base)
+            if chain is not None:
+                root, attributes = chain
+                binding = self._import_binding(root)
+                if (
+                    binding
+                    and binding[0] == "enum"
+                    and attributes
+                    and attributes[-1] in enum_bases
+                ):
+                    return True
+            return base.attr in enum_bases
+        return False
+
+    def _record_class_constants(
+        self, node: ast.ClassDef, qualified: str, enum_like: bool
+    ) -> None:
+        integers: Dict[str, int] = {}
+        memberships: Dict[str, frozenset[str]] = {}
+        next_auto = 1
+        for statement in node.body:
+            assignment = self._class_assignment(statement)
+            if assignment is None:
+                continue
+            target, expression = assignment
+            if target.id.startswith("_"):
+                continue
+            target_span = _absolute_span(target, self.starts)
+            common = {
+                "container": qualified,
+                "line": int(getattr(statement, "lineno", target.lineno)),
+            }
+            integer_known = False
+            try:
+                if (
+                    enum_like
+                    and isinstance(expression, ast.Call)
+                    and isinstance(expression.func, ast.Name)
+                    and expression.func.id == "auto"
+                    and not expression.args
+                    and not expression.keywords
+                ):
+                    integer = next_auto
+                else:
+                    integer = _constant_integer(expression, integers)
+                integer_known = True
+            except (ArithmeticError, _UnsupportedConstant):
+                integer = 0
+            if integer_known:
+                integers[target.id] = integer
+                next_auto = max(next_auto, integer + 1)
+                self.facts.add(
+                    "constant-values",
+                    "enum-member" if enum_like else "class-integer",
+                    target_span,
+                    f"{len(qualified.encode('utf-8'))}:{qualified}:{target.id}",
+                    target.id,
+                    {**common, "state": "current", "value": integer},
+                    correlate_by_span=False,
+                )
+            elif enum_like:
+                self.facts.add(
+                    "constant-values",
+                    "enum-member",
+                    target_span,
+                    f"{len(qualified.encode('utf-8'))}:{qualified}:{target.id}",
+                    target.id,
+                    {
+                        **common,
+                        "expression": ast.unparse(expression),
+                        "state": "unknown",
+                    },
+                    correlate_by_span=False,
+                )
+
+            collection_expression = isinstance(
+                expression, (ast.Set, ast.List, ast.Tuple)
+            ) or (
+                isinstance(expression, ast.BinOp)
+                and isinstance(expression.op, ast.BitOr)
+            ) or (
+                isinstance(expression, ast.Call)
+                and (
+                    (isinstance(expression.func, ast.Name)
+                     and expression.func.id == "set")
+                    or isinstance(expression.func, ast.Attribute)
+                )
+            )
+            if not collection_expression:
+                continue
+            try:
+                if (
+                    isinstance(expression, ast.Call)
+                    and isinstance(expression.func, ast.Name)
+                    and expression.func.id == "set"
+                    and not expression.args
+                    and not expression.keywords
+                ):
+                    members = frozenset()
+                else:
+                    members = _constant_members(expression, memberships)
+            except _UnsupportedConstant:
+                self.facts.add(
+                    "constant-memberships",
+                    "unknown",
+                    target_span,
+                    f"{len(qualified.encode('utf-8'))}:{qualified}:{target.id}:unknown",
+                    target.id,
+                    {
+                        **common,
+                        "container": f"{qualified}.{target.id}",
+                        "expression": ast.unparse(expression),
+                        "state": "unknown",
+                    },
+                    correlate_by_span=False,
+                )
+                continue
+            memberships[target.id] = members
+            container = f"{qualified}.{target.id}"
+            self.facts.add(
+                "constant-memberships",
+                "class-collection",
+                target_span,
+                f"{len(container.encode('utf-8'))}:{container}",
+                target.id,
+                {
+                    **common,
+                    "container": container,
+                    "member_count": len(members),
+                    "state": "current",
+                },
+                correlate_by_span=False,
+            )
+            for member in sorted(members):
+                self.facts.add(
+                    "constant-memberships",
+                    "class-collection-member",
+                    target_span,
+                    f"{len(container.encode('utf-8'))}:{container}:{member}",
+                    member,
+                    {**common, "container": container, "state": "current"},
+                    correlate_by_span=False,
+                )
+
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         node_span = _absolute_span(node, self.starts)
         name_span = self.tokens.named(node.name, node_span)
         bases = ", ".join(ast.unparse(base) for base in node.bases)
         signature = f"class {node.name}({bases})" if bases else f"class {node.name}"
         qualified = self._qualname(node.name)
+        enum_like = any(self._enum_base(base) for base in node.bases)
+        if enum_like:
+            self.enum_classes.add(qualified)
         self.facts.add(
             "symbols",
             "class",
@@ -945,6 +1216,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             qualified,
             {"line": node.lineno, "scope": "class", "signature": signature},
         )
+        self._record_class_constants(node, qualified, enum_like)
         self._record_decorators(node, qualified)
         for decorator in node.decorator_list:
             self.visit(decorator)

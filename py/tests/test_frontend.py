@@ -81,30 +81,36 @@ def projection(row: dict) -> tuple:
 
 
 def verify_binding(extension) -> None:
-    suite = {
-        "schema_version": 1,
-        "suite": "python-binding",
-        "projects": {"subject": {"map": "subject.json"}},
-        "extractors": {
-            "expected": {"kind": "literal_set", "values": ["A"]},
-            "actual": {"kind": "literal_set", "values": ["A"]},
-        },
-        "checks": [
+    config = {
+        "schema_version": 2,
+        "project": "python-binding",
+        "layers": [
             {
-                "id": "PY-BINDING",
-                "assert": "set_equal",
-                "expected": "expected",
-                "actual": "actual",
-                "owner": "test",
-                "rationale": "Exercise the public CPython verification binding.",
+                "name": "python",
+                "language": "python",
+                "globs": ["**/*.py"],
+                "required": False,
             }
         ],
+        "constraints": {
+            "PY-BINDING": {
+                "assert": "set_equal",
+                "expected": {"literal": ["A"]},
+                "actual": {"literal": ["A"]},
+                "owner": "test",
+                "rationale": "Exercise the public CPython constraint binding.",
+            }
+        },
     }
+    compiled = json.loads(extension.project_configuration_compile(canonical(config)))
     map_document = {
         "artifact": "map",
         "schema_version": 6,
         "project": "python-binding",
-        "evidence": {"config_sha256": "1" * 64, "input_sha256": "2" * 64},
+        "evidence": {
+            "config_sha256": compiled["map_config_sha256"],
+            "input_sha256": "2" * 64,
+        },
         "tool": {
             "name": "archbird",
             "version": "fixture",
@@ -112,22 +118,17 @@ def verify_binding(extension) -> None:
         },
         "diagnostics": [],
     }
-    evidence = {
-        "schema_version": 1,
-        "artifact": "verification-input",
-        "suite_path": "binding.verify.json",
-        "projects": [
-            {"name": "subject", "map": map_document, "sources": []}
-        ],
-        "provided_facts": [],
-        "attestations": [],
-        "baseline": None,
-    }
     result = json.loads(
-        extension.verification_analyze(canonical(suite), canonical(evidence))
+        extension.constraints_evaluate(
+            canonical(config), canonical(map_document)
+        )
     )
-    if result["artifact"] != "verification" or result["checks"][0]["status"] != "pass":
-        raise AssertionError("public CPython verification binding failed")
+    if (
+        result["artifact"] != "verification"
+        or result["schema_version"] != 2
+        or result["constraints"][0]["status"] != "pass"
+    ):
+        raise AssertionError("public CPython constraint binding failed")
 
 
 def oracle_projection(facts) -> tuple:
@@ -366,8 +367,7 @@ def main() -> int:
             }
         ],
         "project": "python-error-test",
-        "root": ".",
-        "schema_version": 1,
+        "schema_version": 2,
     }
     extension.project_set_config(invalid_project, canonical(invalid_config))
     extension.project_add_provider(
@@ -446,8 +446,7 @@ def main() -> int:
             }
         ],
         "project": "python-portable",
-        "root": ".",
-        "schema_version": 1,
+        "schema_version": 2,
     }
     extension.project_set_config(portable_project, canonical(portable_config))
     extension.project_add_provider(portable_project, "primary", rejected_provider)

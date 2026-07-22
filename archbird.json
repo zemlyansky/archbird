@@ -1,0 +1,968 @@
+{
+  "schema_version": 2,
+  "project": "archbird",
+  "description": "Language-neutral C core with Python, Node, and Wasm hosts.",
+  "exclude": ["build/**", "py/build/**", "py/dist/**", "py/csrc/**", "js/native/**", "js/node_modules/**"],
+  "limits": {
+    "max_file_bytes": 20000000,
+    "max_index_bytes": 536870912
+  },
+  "layers": [
+    {
+      "name": "core",
+      "role": "core",
+      "language": "c",
+      "globs": ["include/**/*.h", "src/**/*.c", "src/**/*.h"],
+      "public_headers": ["include/archbird/archbird.h"],
+      "import_roots": ["include", "src", "src/api", "src/base", "src/evidence", "src/map", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "vendor/yyjson/src", "vendor/pcre2/src", "vendor/tree-sitter/lib/include", "vendor/tree-sitter/lib/src"]
+    },
+    {
+      "name": "bindings",
+      "role": "frontend",
+      "language": "c",
+      "globs": ["bindings/*.c"],
+      "import_roots": ["include", "src", "src/api", "src/base", "src/evidence", "src/map", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
+    },
+    {
+      "name": "python-host",
+      "role": "frontend",
+      "language": "python",
+      "globs": ["py/archbird/**/*.py"],
+      "import_roots": ["py"]
+    },
+    {
+      "name": "javascript-host",
+      "role": "frontend",
+      "language": "javascript",
+      "globs": ["js/src/**/*.js"],
+      "import_roots": ["js/src"]
+    },
+    {
+      "name": "json-parser",
+      "role": "vendor",
+      "language": "c",
+      "globs": ["vendor/yyjson/src/yyjson.c", "vendor/yyjson/src/yyjson.h"],
+      "import_roots": ["vendor/yyjson/src"]
+    },
+    {
+      "name": "regex-engine",
+      "role": "vendor",
+      "language": "c",
+      "globs": [
+        "vendor/pcre2/src/config.h.generic",
+        "vendor/pcre2/src/pcre2.h.generic",
+        "vendor/pcre2/src/pcre2_auto_possess.c",
+        "vendor/pcre2/src/pcre2_chartables.c.dist",
+        "vendor/pcre2/src/pcre2_chkdint.c",
+        "vendor/pcre2/src/pcre2_compile.c",
+        "vendor/pcre2/src/pcre2_compile.h",
+        "vendor/pcre2/src/pcre2_compile_cgroup.c",
+        "vendor/pcre2/src/pcre2_compile_class.c",
+        "vendor/pcre2/src/pcre2_config.c",
+        "vendor/pcre2/src/pcre2_context.c",
+        "vendor/pcre2/src/pcre2_convert.c",
+        "vendor/pcre2/src/pcre2_dfa_match.c",
+        "vendor/pcre2/src/pcre2_error.c",
+        "vendor/pcre2/src/pcre2_extuni.c",
+        "vendor/pcre2/src/pcre2_find_bracket.c",
+        "vendor/pcre2/src/pcre2_internal.h",
+        "vendor/pcre2/src/pcre2_intmodedep.h",
+        "vendor/pcre2/src/pcre2_jit_char_inc.h",
+        "vendor/pcre2/src/pcre2_jit_compile.c",
+        "vendor/pcre2/src/pcre2_jit_match_inc.h",
+        "vendor/pcre2/src/pcre2_jit_misc_inc.h",
+        "vendor/pcre2/src/pcre2_jit_simd_inc.h",
+        "vendor/pcre2/src/pcre2_maketables.c",
+        "vendor/pcre2/src/pcre2_match.c",
+        "vendor/pcre2/src/pcre2_match_data.c",
+        "vendor/pcre2/src/pcre2_match_next.c",
+        "vendor/pcre2/src/pcre2_newline.c",
+        "vendor/pcre2/src/pcre2_ord2utf.c",
+        "vendor/pcre2/src/pcre2_pattern_info.c",
+        "vendor/pcre2/src/pcre2_script_run.c",
+        "vendor/pcre2/src/pcre2_serialize.c",
+        "vendor/pcre2/src/pcre2_string_utils.c",
+        "vendor/pcre2/src/pcre2_study.c",
+        "vendor/pcre2/src/pcre2_substitute.c",
+        "vendor/pcre2/src/pcre2_substring.c",
+        "vendor/pcre2/src/pcre2_tables.c",
+        "vendor/pcre2/src/pcre2_ucd.c",
+        "vendor/pcre2/src/pcre2_ucp.h",
+        "vendor/pcre2/src/pcre2_ucptables_inc.h",
+        "vendor/pcre2/src/pcre2_util.h",
+        "vendor/pcre2/src/pcre2_valid_utf.c",
+        "vendor/pcre2/src/pcre2_xclass.c"
+      ],
+      "import_roots": ["vendor/pcre2/src"]
+    },
+    {
+      "name": "syntax-vendor",
+      "role": "vendor",
+      "language": "c",
+      "globs": [
+        "vendor/tree-sitter/lib/include/**/*.h",
+        "vendor/tree-sitter/lib/src/**/*.c",
+        "vendor/tree-sitter/lib/src/**/*.h",
+        "vendor/tree-sitter-c/src/parser.c",
+        "vendor/tree-sitter-c/src/tree_sitter/*.h",
+        "vendor/tree-sitter-cpp/src/parser.c",
+        "vendor/tree-sitter-cpp/src/scanner.c",
+        "vendor/tree-sitter-cpp/src/tree_sitter/*.h",
+        "vendor/tree-sitter-python/src/parser.c",
+        "vendor/tree-sitter-python/src/scanner.c",
+        "vendor/tree-sitter-python/src/tree_sitter/*.h",
+        "vendor/tree-sitter-javascript/src/parser.c",
+        "vendor/tree-sitter-javascript/src/scanner.c",
+        "vendor/tree-sitter-javascript/src/tree_sitter/*.h",
+        "vendor/tree-sitter-typescript/common/scanner.h",
+        "vendor/tree-sitter-typescript/typescript/src/parser.c",
+        "vendor/tree-sitter-typescript/typescript/src/scanner.c",
+        "vendor/tree-sitter-typescript/typescript/src/tree_sitter/*.h",
+        "vendor/tree-sitter-typescript/tsx/src/parser.c",
+        "vendor/tree-sitter-typescript/tsx/src/scanner.c",
+        "vendor/tree-sitter-typescript/tsx/src/tree_sitter/*.h",
+        "vendor/tree-sitter-r/src/parser.c",
+        "vendor/tree-sitter-r/src/scanner.c",
+        "vendor/tree-sitter-r/src/tree_sitter/*.h"
+      ],
+      "import_roots": ["vendor/tree-sitter/lib/include", "vendor/tree-sitter/lib/src", "vendor/tree-sitter-c/src", "vendor/tree-sitter-cpp/src", "vendor/tree-sitter-python/src", "vendor/tree-sitter-javascript/src", "vendor/tree-sitter-typescript", "vendor/tree-sitter-r/src"]
+    },
+    {
+      "name": "core-tests",
+      "role": "test",
+      "language": "c",
+      "globs": ["test/*.c", "test/fuzz/*.c", "test/fuzz/*.h", "test/cmake_consumer/*.c"],
+      "import_roots": ["include", "src", "src/api", "src/base", "src/evidence", "src/map", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
+    },
+    {
+      "name": "oracle-tests",
+      "role": "test",
+      "language": "python",
+      "globs": ["test/*.py"],
+      "import_roots": ["."]
+    },
+    {
+      "name": "python-tests",
+      "role": "test",
+      "language": "python",
+      "globs": ["py/tests/*.py"],
+      "import_roots": ["py", "."]
+    },
+    {
+      "name": "javascript-tests",
+      "role": "test",
+      "language": "javascript",
+      "globs": ["js/test/*.js"],
+      "import_roots": ["js/src"]
+    },
+    {
+      "name": "test-data",
+      "role": "test-data",
+      "language": "text",
+      "globs": ["test/*.json", "test/fuzz/corpus/**/*"]
+    },
+    {
+      "name": "build",
+      "role": "build",
+      "language": "text",
+      "globs": ["CMakeLists.txt", "Makefile", "cmake/*.in", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/*.py", "js/package.json", "js/scripts/*.js"]
+    }
+  ],
+  "packages": [
+    {
+      "name": "python",
+      "kind": "python",
+      "path": "py/pyproject.toml",
+      "layer": "python-host",
+      "entries": ["py/archbird/__init__.py"]
+    },
+    {
+      "name": "npm",
+      "kind": "npm",
+      "path": "js/package.json",
+      "layer": "javascript-host",
+      "entries": ["js/src/index.js"]
+    }
+  ],
+  "builds": [
+    {"name": "make", "kind": "make", "path": "Makefile"},
+    {"name": "npm", "kind": "npm", "path": "js/package.json"}
+  ],
+  "artifacts": [
+    {
+      "name": "core-library",
+      "output": "build/native/libarchbird.a",
+      "inputs": ["include/**/*", "src/**/*", "vendor/yyjson/**/*", "vendor/pcre2/**/*", "vendor/tree-sitter*/**/*", "CMakeLists.txt"],
+      "loaded_by": [{"paths": ["CMakeLists.txt"], "pattern": "archbird_native"}],
+      "builds": [{"source": "Makefile", "target": "native-build"}]
+    },
+    {
+      "name": "python-extension",
+      "output": "build/native/python/archbird/_native.so",
+      "inputs": ["bindings/python.c", "py/archbird/**/*.py", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/**/*.py", "include/**/*.h", "src/**/*.c", "src/**/*.h", "vendor/tree-sitter*/**/*"],
+      "loaded_by": [{"paths": ["py/archbird/native.py"], "pattern": "_native"}],
+      "builds": [{"source": "Makefile", "target": "native-build"}]
+    },
+    {
+      "name": "node-addon",
+      "output": "build/native/node/_native.node",
+      "inputs": ["bindings/node.c", "js/src/**/*.js", "js/scripts/**/*.js", "include/**/*.h", "src/**/*.c", "src/**/*.h", "vendor/tree-sitter*/**/*", "js/package.json"],
+      "loaded_by": [{"paths": ["js/src/native.js"], "pattern": "_native\\.node"}],
+      "builds": [{"source": "Makefile", "target": "native-build"}]
+    },
+    {
+      "name": "wasm-core",
+      "output": "build/wasm/libarchbird.a",
+      "inputs": ["include/**/*", "src/**/*", "vendor/yyjson/**/*", "vendor/pcre2/**/*", "vendor/tree-sitter*/**/*", "CMakeLists.txt"],
+      "loaded_by": [{"paths": ["Makefile"], "pattern": "NATIVE_WASM_BUILD"}],
+      "builds": [{"source": "Makefile", "target": "native-wasm-smoke"}]
+    }
+  ],
+  "tests": [
+    {
+      "name": "core-c",
+      "language": "c",
+      "globs": ["test/test_*.c"],
+      "route_to": ["core", "json-parser", "regex-engine", "syntax-vendor"]
+    },
+    {
+      "name": "oracle",
+      "language": "python",
+      "globs": ["test/test_*.py"],
+      "route_to": ["core", "json-parser", "regex-engine", "syntax-vendor"]
+    },
+    {
+      "name": "python",
+      "language": "python",
+      "globs": ["py/tests/test_*.py"],
+      "route_to": ["python-host", "bindings", "core"]
+    },
+    {
+      "name": "javascript",
+      "language": "javascript",
+      "globs": ["js/test/test_*.js"],
+      "route_to": ["javascript-host", "bindings", "core"]
+    },
+    {
+      "name": "native-fuzz",
+      "language": "c",
+      "globs": ["test/fuzz/*.c"],
+      "route_to": ["core", "json-parser", "regex-engine", "syntax-vendor"]
+    }
+  ],
+  "components": [
+    {"name": "abi", "paths": ["include/archbird/archbird.h"], "description": "Foundational public C types, statuses, handles, and function declarations"},
+    {"name": "api", "paths": ["src/api/**"], "description": "Public operation composition over domain kernels and format adapters"},
+    {"name": "base", "paths": ["src/base/**"], "description": "Strict data primitives, hashing, patterns, and path matching"},
+    {"name": "evidence", "paths": ["src/evidence/config.h", "src/evidence/config_json.c", "src/evidence/config_resolution.c", "src/evidence/config_resolution.h", "src/evidence/discovery.c", "src/evidence/evidence.c", "src/evidence/evidence.h", "src/evidence/evidence_render.c", "src/evidence/evidence_render.h", "src/evidence/fact_builder.c", "src/evidence/fact_builder.h", "src/evidence/file_facts.c", "src/evidence/file_facts.h", "src/evidence/gitignore.c", "src/evidence/gitignore.h", "src/evidence/project.c", "src/evidence/project_internal.h", "src/evidence/test_observations.c", "src/evidence/test_observations.h"], "description": "Source discovery, configuration, typed provider facts, merge policy, and evidence ownership"},
+    {"name": "manifest-readers", "paths": ["src/evidence/manifests/**"], "description": "Bounded package and build-description metadata readers used by configuration and map analysis"},
+    {"name": "provider-registry", "paths": ["src/evidence/provider_registry.c", "src/evidence/lexical/registry.c", "src/evidence/lexical/registry.h", "src/evidence/syntax/registry.c", "src/evidence/syntax/registry.h", "src/evidence/semantic/registry.c", "src/evidence/semantic/registry.h"], "description": "Stable lexical, syntax, and semantic provider IDs plus host-neutral dispatch"},
+    {"name": "lexical-common", "paths": ["src/evidence/lexical/tokenizer.c", "src/evidence/lexical/tokenizer.h", "src/evidence/lexical/provider_identity.sources"], "description": "Portable source tokenizer and explicit identity closure shared by lexical evidence providers"},
+    {"name": "python-syntax-common", "paths": ["src/evidence/python/**"], "description": "Shared Python token positions and recovery-resistant definition scopes"},
+    {"name": "lexical-c", "paths": ["src/evidence/lexical/c/**"], "description": "Conservative portable C and C++ lexical evidence provider"},
+    {"name": "lexical-javascript", "paths": ["src/evidence/lexical/javascript/**"], "description": "Conservative portable JavaScript, TypeScript, and Vue lexical evidence provider"},
+    {"name": "lexical-python", "paths": ["src/evidence/lexical/python/**"], "description": "Conservative portable Python lexical evidence provider"},
+    {"name": "lexical-r", "paths": ["src/evidence/lexical/r/**"], "description": "Conservative portable R lexical evidence provider"},
+    {"name": "syntax", "paths": ["src/evidence/syntax/tree_sitter/**"], "description": "Portable Tree-sitter adapter and C/C++/Python/JavaScript/TypeScript/TSX/R syntax extraction packs"},
+    {"name": "semantic-scip", "paths": ["src/evidence/semantic/scip/**"], "description": "Bounded host-neutral SCIP protobuf decoding, source anchoring, and semantic facts"},
+    {"name": "configuration", "paths": ["src/configuration/**"], "description": "Schema-2 project configuration normalization, validation, and independent identities"},
+    {"name": "constraints", "paths": ["src/constraints/**"], "description": "Constraint planning, inferred exhaustive operands, and direct evaluation"},
+    {"name": "map", "paths": ["src/map/**"], "description": "Architecture Map construction, diff, and workspace analysis"},
+    {"name": "projection", "paths": ["src/projection/**"], "description": "Shared exhaustive typed derivations over canonical Map evidence"},
+    {"name": "query", "paths": ["src/query/**"], "description": "Named Query plan compilation over canonical Map projections"},
+    {"name": "verify", "paths": ["src/verify/**"], "description": "Typed facts, predicates, attestations, baselines, and canonical results"},
+    {"name": "act", "paths": ["src/act/**"], "description": "Derived proposals, asserted contracts, transition judgment, and canonical results"},
+    {"name": "interchange", "paths": ["src/interchange/**"], "description": "Host-neutral report and graph projections"},
+    {"name": "bindings", "paths": ["bindings/**"], "description": "CPython and Node-API ABI adapters"},
+    {"name": "python-host", "paths": ["py/archbird/**"], "description": "PyPI host and Python precision providers"},
+    {"name": "javascript-host", "paths": ["js/src/**"], "description": "npm host and TypeScript precision provider"},
+    {"name": "json-parser", "paths": ["vendor/yyjson/src/**"], "description": "Pinned strict JSON parser"},
+    {"name": "regex-engine", "paths": ["vendor/pcre2/src/**"], "description": "Pinned portable configured-pattern engine"},
+    {"name": "syntax-vendor", "paths": ["vendor/tree-sitter/lib/**", "vendor/tree-sitter-c/src/**", "vendor/tree-sitter-cpp/src/**", "vendor/tree-sitter-python/src/**", "vendor/tree-sitter-javascript/src/**", "vendor/tree-sitter-typescript/common/**", "vendor/tree-sitter-typescript/typescript/src/**", "vendor/tree-sitter-typescript/tsx/src/**", "vendor/tree-sitter-r/src/**"], "description": "Pinned Tree-sitter runtime and generated language grammars"},
+    {"name": "core-tests", "paths": ["test/**"], "description": "Core and Python-oracle conformance corpus"},
+    {"name": "python-tests", "paths": ["py/tests/**"], "description": "Python host and precision-provider tests"},
+    {"name": "javascript-tests", "paths": ["js/test/**"], "description": "Node host and TypeScript-provider tests"},
+    {"name": "build", "paths": ["CMakeLists.txt", "Makefile", "cmake/**", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/**", "js/package.json", "js/scripts/**"], "description": "Native and distribution build routes"}
+  ],
+  "projections": {
+    "public-core-api": {
+      "select": "symbols",
+      "paths": ["include/archbird/archbird.h"],
+      "public_only": true
+    }
+  },
+  "queries": {
+    "public-api-impact": {
+      "description": "Trace callers and tests affected by the public C ABI.",
+      "projection": "public-core-api",
+      "direction": "upstream",
+      "depth": 2,
+      "context": {"profile": "change"}
+    }
+  },
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "include/archbird/archbird.h",
+        "src/base/json.c",
+        "src/evidence/lexical/python/scanner.c",
+        "src/evidence/syntax/tree_sitter/scanner.c",
+        "src/evidence/semantic/scip/scanner.c",
+        "bindings/python.c",
+        "bindings/node.c",
+        "py/archbird/native.py",
+        "js/src/index.js",
+        "test/test_json.c",
+        "test/test_tree_sitter.c",
+        "test/test_scip.c",
+        "test/fuzz/fuzz_map.c",
+        "test/fuzz/fuzz_act.c",
+        "py/tests/test_repository.py",
+        "js/test/test_frontend.js"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    },
+    "REQUIRED-SYMBOLS-CORE": {
+      "kind": "required_symbols",
+      "layer": "core",
+      "symbols": [
+        "archbird_engine_create",
+        "archbird_project_render_map",
+        "archbird_workspace_analyze"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed core symbols remain present."
+    },
+    "REQUIRED-TEST-ROUTE-001": {
+      "kind": "required_test_route",
+      "group": "core-c",
+      "target": "src/base/json.c",
+      "owner": "architecture",
+      "rationale": "The reviewed static test route remains present."
+    },
+    "REQUIRED-TEST-ROUTE-002": {
+      "kind": "required_test_route",
+      "group": "python",
+      "target": "py/archbird/native.py",
+      "owner": "architecture",
+      "rationale": "The reviewed static test route remains present."
+    },
+    "REQUIRED-TEST-ROUTE-003": {
+      "kind": "required_test_route",
+      "group": "javascript",
+      "target": "js/src/index.js",
+      "owner": "architecture",
+      "rationale": "The reviewed static test route remains present."
+    },
+    "FORBIDDEN-REPOSITORY-PATHS": {
+      "kind": "forbidden_paths",
+      "paths": [
+        "native/**",
+        "tests/native/**",
+        "archbird/*.py",
+        "archbird/**/*.py"
+      ],
+      "owner": "architecture",
+      "rationale": "Deprecated repository paths remain absent."
+    },
+    "NATIVE-COMPONENT-EDGES": {
+      "assert": "allowed_edges",
+      "actual": {
+        "projection": {
+          "select": "component_edges",
+          "kinds": [
+            "attribute-call",
+            "call",
+            "decorator",
+            "import",
+            "imported-call",
+            "imported-reference",
+            "member-call",
+            "scip-definition",
+            "scip-implementation",
+            "scip-related-reference",
+            "scip-type-definition",
+            "semantic-call",
+            "semantic-construct",
+            "semantic-decorator",
+            "semantic-import",
+            "semantic-reference",
+            "semantic-type-reference"
+          ]
+        }
+      },
+      "expected": {
+        "literal": [
+          {
+            "source": "act",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "act",
+            "kind": "*",
+            "target": "verify"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "act"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "interchange"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "map"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "provider-registry"
+          },
+          {
+            "source": "api",
+            "kind": "*",
+            "target": "verify"
+          },
+          {
+            "source": "base",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "base",
+            "kind": "*",
+            "target": "json-parser"
+          },
+          {
+            "source": "base",
+            "kind": "*",
+            "target": "regex-engine"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "act"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "api"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "interchange"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "map"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "provider-registry"
+          },
+          {
+            "source": "bindings",
+            "kind": "*",
+            "target": "verify"
+          },
+          {
+            "source": "configuration",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "constraints",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "constraints",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "constraints",
+            "kind": "*",
+            "target": "configuration"
+          },
+          {
+            "source": "constraints",
+            "kind": "*",
+            "target": "interchange"
+          },
+          {
+            "source": "constraints",
+            "kind": "*",
+            "target": "projection"
+          },
+          {
+            "source": "constraints",
+            "kind": "*",
+            "target": "verify"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "act"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "api"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "interchange"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "manifest-readers"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "map"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "provider-registry"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "python-host"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "python-tests"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "regex-engine"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "verify"
+          },
+          {
+            "source": "evidence",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "evidence",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "evidence",
+            "kind": "*",
+            "target": "json-parser"
+          },
+          {
+            "source": "evidence",
+            "kind": "*",
+            "target": "manifest-readers"
+          },
+          {
+            "source": "interchange",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "interchange",
+            "kind": "*",
+            "target": "act"
+          },
+          {
+            "source": "interchange",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "interchange",
+            "kind": "*",
+            "target": "verify"
+          },
+          {
+            "source": "javascript-tests",
+            "kind": "*",
+            "target": "javascript-host"
+          },
+          {
+            "source": "lexical-c",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "lexical-c",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "lexical-c",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "lexical-common",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "lexical-common",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "lexical-javascript",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "lexical-javascript",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "lexical-javascript",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "lexical-python",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "lexical-python",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "lexical-python",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "lexical-python",
+            "kind": "*",
+            "target": "python-syntax-common"
+          },
+          {
+            "source": "lexical-r",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "lexical-r",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "lexical-r",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "manifest-readers",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "map",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "map",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "map",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "map",
+            "kind": "*",
+            "target": "json-parser"
+          },
+          {
+            "source": "map",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "map",
+            "kind": "*",
+            "target": "manifest-readers"
+          },
+          {
+            "source": "projection",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "projection",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "projection",
+            "kind": "*",
+            "target": "map"
+          },
+          {
+            "source": "projection",
+            "kind": "*",
+            "target": "verify"
+          },
+          {
+            "source": "query",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "query",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "query",
+            "kind": "*",
+            "target": "configuration"
+          },
+          {
+            "source": "query",
+            "kind": "*",
+            "target": "projection"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "lexical-c"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "lexical-javascript"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "lexical-python"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "lexical-r"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "semantic-scip"
+          },
+          {
+            "source": "provider-registry",
+            "kind": "*",
+            "target": "syntax"
+          },
+          {
+            "source": "python-syntax-common",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "python-syntax-common",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "python-syntax-common",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "python-tests",
+            "kind": "*",
+            "target": "python-host"
+          },
+          {
+            "source": "semantic-scip",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "semantic-scip",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "syntax",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "syntax",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "syntax",
+            "kind": "*",
+            "target": "python-syntax-common"
+          },
+          {
+            "source": "syntax",
+            "kind": "*",
+            "target": "syntax-vendor"
+          },
+          {
+            "source": "verify",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "verify",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "verify",
+            "kind": "*",
+            "target": "evidence"
+          },
+          {
+            "source": "verify",
+            "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "verify",
+            "kind": "*",
+            "target": "map"
+          }
+        ]
+      },
+      "severity": "error",
+      "owner": "native-core",
+      "rationale": "The I/O-free core may depend on its pinned parser; tests may depend on the core, never the reverse.",
+      "requirement": "ARCHBIRD-NATIVE-ARCH-001"
+    },
+    "NATIVE-COMPONENT-ACYCLIC": {
+      "kind": "component_cycles",
+      "severity": "error",
+      "owner": "native-core",
+      "rationale": "The native component graph remains acyclic.",
+      "requirement": "ARCHBIRD-NATIVE-ARCH-001"
+    },
+    "NATIVE-COMPONENT-COVERAGE": {
+      "kind": "component_membership",
+      "min": 1,
+      "severity": "error",
+      "owner": "native-core",
+      "rationale": "Every mapped source file belongs to at least one reviewed component; intentional overlaps remain permitted.",
+      "requirement": "ARCHBIRD-NATIVE-ARCH-001"
+    },
+    "NATIVE-JSON-TEST-ROUTE": {
+      "kind": "test_routes",
+      "group": "core-c",
+      "min": 1,
+      "required_routes": [
+        "src/base/json.c"
+      ],
+      "severity": "error",
+      "owner": "native-core",
+      "rationale": "The native JSON implementation remains statically connected to a native regression host.",
+      "requirement": "ARCHBIRD-NATIVE-JSON-001"
+    }
+  }
+}

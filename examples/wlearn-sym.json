@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "wlearn-sym",
   "description": "Symbolic-model C11 core with Python, JavaScript/WASM, Polygrad, and verifier paths.",
-  "root": ".",
   "exclude": ["**/csrc/**", "js/wasm/**", "references/**", ".emscripten-cache/**"],
   "layers": [
     {"name": "core", "role": "core", "language": "c", "globs": ["src/**/*.c", "src/**/*.h"], "public_headers": ["src/sym.h"]},
@@ -43,5 +42,17 @@
       "enforce": false
     }
   ],
-  "checks": {"files": ["src/sym.c", "src/sym.h", "py/wlearn_sym/__init__.py", "js/src/polygrad.js"]}
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "src/sym.c",
+        "src/sym.h",
+        "py/wlearn_sym/__init__.py",
+        "js/src/polygrad.js"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    }
+  }
 }

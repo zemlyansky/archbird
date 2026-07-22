@@ -209,7 +209,7 @@ ARCHBIRD_API ArchbirdStatus archbird_discovery_render(
     ArchbirdWriteFn write_fn, void *user_data);
 ARCHBIRD_API void archbird_discovery_destroy(ArchbirdDiscovery *discovery);
 
-/* Resolve deterministic discovery defaults, an optional schema-1 project
+/* Resolve deterministic discovery defaults, an optional schema-2 project
  * configuration, and explicit CLI overlays against a host-provided repository
  * inventory. The result contains the effective configuration, selected file
  * plan, origin ledger, coverage, ignore-input hashes, and a content digest. */
@@ -227,6 +227,72 @@ ARCHBIRD_API size_t archbird_engine_error_offset(const ArchbirdEngine *engine);
 ARCHBIRD_API ArchbirdStatus archbird_json_validate(ArchbirdEngine *engine,
                                                    const uint8_t *input,
                                                    size_t input_length);
+
+/*
+ * Validate and normalize one schema-2 archbird.json project configuration.
+ * The result exposes isolated Map configuration plus named projection, Query,
+ * and Constraint definitions. Repository location is host execution context
+ * and is never accepted from the project configuration.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_project_configuration_compile(
+    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Evaluate one exhaustive typed projection over a canonical saved Map.
+ * resolution_json is optional unless the projection declares the repository
+ * inventory as its domain. It is the configuration-resolution artifact used
+ * to construct the Map, never live filesystem state read by the core.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_projection_evaluate(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
+    const uint8_t *projection_json, size_t projection_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/* Compile a QueryPlan and its exhaustive projection inputs. A non-empty query
+ * id selects a named Query from schema-2 project configuration and applies
+ * overrides. An empty id compiles overrides_json as an ad-hoc Query and accepts
+ * an empty configuration; its plan has no project-configuration identity. */
+ARCHBIRD_API ArchbirdStatus archbird_query_plan_compile(
+    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
+    size_t resolution_length, const char *query_id, size_t query_id_length,
+    const uint8_t *overrides_json, size_t overrides_length, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Evaluate schema-2 project constraints directly over one canonical Map and
+ * its optional matching configuration-resolution artifact. request_json is
+ * empty for the complete policy or {"ids":[...]} for an explicit subset.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_constraints_evaluate(
+    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
+    size_t resolution_length, const uint8_t *request_json,
+    size_t request_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data);
+
+/* Evaluate project constraints and render Markdown, SARIF, or JUnit directly
+ * from the resulting ConstraintPlan. JSON uses archbird_constraints_evaluate.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_constraints_report(
+    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
+    size_t resolution_length, const uint8_t *request_json,
+    size_t request_length, ArchbirdVerificationFormat format,
+    size_t max_findings, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data);
+
+/* Freeze the complete evaluated project constraint policy as a reviewed
+ * violation and coverage baseline. Selected constraint subsets are rejected. */
+ARCHBIRD_API ArchbirdStatus archbird_constraints_freeze(
+    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
+    size_t resolution_length, const uint8_t *request_json,
+    size_t request_length, const char *owner, size_t owner_length,
+    const char *rationale, size_t rationale_length, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data);
 
 ARCHBIRD_API ArchbirdStatus archbird_source_manifest_validate(
     ArchbirdEngine *engine, const uint8_t *input, size_t input_length);
@@ -392,10 +458,11 @@ ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown_view(
     void *user_data);
 
 /*
- * Render a change brief with an optional canonical schema-1 Verification
+ * Render a change brief with an optional canonical Verification
  * result. The overlay correlates only exact source paths and reports Map/
  * Verification producer and input freshness; it does not modify either
- * canonical artifact or infer that a check applies without evidence overlap.
+ * canonical artifact or infer that a constraint applies without evidence
+ * overlap.
  */
 ARCHBIRD_API ArchbirdStatus archbird_map_query_markdown_view_with_verification(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
@@ -479,90 +546,6 @@ ARCHBIRD_API ArchbirdStatus archbird_workspace_analyze(
     ArchbirdEngine *engine, const uint8_t *workspace_json,
     size_t workspace_length, const uint8_t *maps_json, size_t maps_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
-
-/* Validate a verification suite and render its deterministic host I/O plan. */
-ARCHBIRD_API ArchbirdStatus archbird_verification_plan(
-    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
-    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
-
-/*
- * Evaluate a reviewed verification suite over host-supplied, content-addressed
- * project evidence.  verification_input_json is a schema-1
- * "verification-input" artifact produced from the deterministic host plan;
- * the core performs no filesystem or project I/O.
- */
-ARCHBIRD_API ArchbirdStatus archbird_verification_analyze(
-    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
-    const uint8_t *verification_input_json, size_t verification_input_length,
-    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
-
-/*
- * Evaluate the same reviewed suite and project evidence, then project the
- * canonical result as Markdown, SARIF 2.1.0, or JUnit XML.  JSON callers use
- * archbird_verification_analyze.  max_findings bounds compact Markdown only;
- * SIZE_MAX requests full Markdown.  SARIF and JUnit always remain complete.
- */
-ARCHBIRD_API ArchbirdStatus archbird_verification_analyze_report(
-    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
-    const uint8_t *verification_input_json, size_t verification_input_length,
-    ArchbirdVerificationFormat format, size_t max_findings, uint32_t json_flags,
-    ArchbirdWriteFn write_fn, void *user_data);
-
-/*
- * Evaluate the same reviewed suite and render a deterministic selection or
- * unknown-evidence debug projection.  request_json is a strict schema-1
- * "verification-debug-request" with view="selection" or view="unknown" and
- * optional exact check/extractor filters.  JSON and Markdown are supported.
- */
-ARCHBIRD_API ArchbirdStatus archbird_verification_debug(
-    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
-    const uint8_t *verification_input_json, size_t verification_input_length,
-    const uint8_t *request_json, size_t request_length,
-    ArchbirdVerificationFormat format, uint32_t json_flags,
-    ArchbirdWriteFn write_fn, void *user_data);
-
-/*
- * Draft a candidate-only component dependency suite from one canonical Map.
- * project_config is the portable path that the resulting suite will use; the
- * core performs no path resolution and never promotes the draft to reviewed
- * architecture intent.
- */
-ARCHBIRD_API ArchbirdStatus archbird_verification_draft(
-    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
-    const char *project_config, size_t project_config_length,
-    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
-
-/*
- * Render the portable built-in verification recipe catalog.  An empty recipe
- * name lists every recipe; a non-empty name returns exactly one recipe or
- * fails when it is unknown.  Recipes describe explicit policy inputs and do
- * not infer architectural intent from the current repository graph.
- */
-ARCHBIRD_API ArchbirdStatus archbird_verification_recipe_catalog(
-    ArchbirdEngine *engine, const char *recipe, size_t recipe_length,
-    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
-
-/*
- * Compile a schema-1 verification-recipe-request into an ordinary reviewed
- * verification suite.  The resulting suite is evaluated by the existing
- * Verify kernel and can be stored, reviewed, baselined, or consumed by any
- * frontend.  The core performs no repository I/O.
- */
-ARCHBIRD_API ArchbirdStatus archbird_verification_recipe_compile(
-    ArchbirdEngine *engine, const uint8_t *request_json, size_t request_length,
-    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
-
-/*
- * Render a reviewed violation/coverage baseline from the same suite and input
- * used by Verify.  Existing baseline state in verification_input_json is
- * carried forward so resolved findings and coverage form a monotonic ratchet.
- */
-ARCHBIRD_API ArchbirdStatus archbird_verification_freeze(
-    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
-    const uint8_t *verification_input_json, size_t verification_input_length,
-    const char *owner, size_t owner_length, const char *rationale,
-    size_t rationale_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
-    void *user_data);
 
 /*
  * Compile one immutable derived architecture-change proposal from one exact

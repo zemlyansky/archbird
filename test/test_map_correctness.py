@@ -147,7 +147,7 @@ int main(void) {
         "schema_version": 1,
     }
     config = {
-        "schema_version": 1,
+        "schema_version": 2,
         "project": "c-test-function-candidates",
         "layers": [
             {
@@ -222,7 +222,7 @@ def check_stable_duplicate_reference_witness(extension) -> None:
             {"globs": [path], "language": "c", "name": "c"},
         ],
         "project": "duplicate-reference-witness",
-        "schema_version": 1,
+        "schema_version": 2,
     }
     project = extension.project_create(canonical(manifest))
     extension.project_add_source(project, path, source)
@@ -346,7 +346,7 @@ def check_external_call_namespace(extension) -> None:
         "schema_version": 1,
     }
     config = {
-        "schema_version": 1,
+        "schema_version": 2,
         "project": "external-call-namespace",
         "layers": [
             {
@@ -2363,68 +2363,47 @@ def main() -> int:
         if required not in report:
             raise AssertionError(f"missing honest test-report label: {required!r}")
 
-    suite = {
-        "schema_version": 1,
-        "suite": "configured-route-provenance",
-        "projects": {"subject": {"map": "subject.map.json"}},
-        "extractors": {
+    constraint_config = copy.deepcopy(config)
+    constraint_config["projections"] = {
             "cases": {
-                "kind": "test_selectors",
-                "project": "subject",
+                "select": "test_selectors",
                 "group": "c",
                 "paths": ["test/test_cases.c"],
                 "selectors": ["sched.*"],
             },
             "routes": {
-                "kind": "test_routes",
-                "project": "subject",
+                "select": "test_routes",
                 "group": "c",
                 "configured_only": True,
             }
-        },
-        "checks": [
-            {
-                "id": "CONFIGURED-ROUTE",
+    }
+    constraint_config["constraints"] = {
+            "CONFIGURED-ROUTE": {
                 "assert": "cardinality",
-                "actual": "routes",
+                "actual": {"projection": "cases"},
                 "min": 1,
                 "owner": "test",
                 "rationale": "Configured routes retain distinct case and assertion witnesses.",
             },
-            {
-                "id": "MISSING-ROUTE",
+            "MISSING-ROUTE": {
                 "assert": "min_test_routes",
-                "actual": "routes",
+                "actual": {"projection": "routes"},
                 "min": 1,
                 "required_routes": ["py/missing.py"],
                 "owner": "test",
                 "rationale": "Act must preserve route evidence provenance.",
             }
-        ],
-    }
-    verify_input = {
-        "schema_version": 1,
-        "artifact": "verification-input",
-        "suite_path": "configured-route.verify.json",
-        "projects": [
-            {
-                "name": "subject",
-                "map": mapped,
-                "sources": [
-                    {"path": relative, "text": raw.decode("utf-8")}
-                    for relative, raw in sources
-                ],
-            }
-        ],
-        "provided_facts": [],
-        "attestations": [],
-        "baseline": None,
     }
     verified = json.loads(
-        extension.verification_analyze(canonical(suite), canonical(verify_input))
+        extension.constraints_evaluate(
+            canonical(constraint_config), canonical(mapped)
+        )
     )
-    facts = {row["name"]: row for row in verified["facts"]}
-    case_items = facts["cases"]["items"]
+    facts = {row["name"]: row for row in verified["operands"]}
+    constraints = {row["id"]: row for row in verified["constraints"]}
+    case_fact_name = constraints["CONFIGURED-ROUTE"]["operands"]["actual"]
+    route_fact_name = constraints["MISSING-ROUTE"]["operands"]["actual"]
+    case_items = facts[case_fact_name]["items"]
     if [row["key"] for row in case_items] != [
         "test/test_cases.c::sched.2d_e2e"
     ]:
@@ -2443,45 +2422,41 @@ def main() -> int:
     duplicate_occurrence = copy.deepcopy(duplicate_test["cases"][0])
     duplicate_occurrence["line"] += 1
     duplicate_test["cases"].append(duplicate_occurrence)
-    duplicate_suite = {
-        "schema_version": 1,
-        "suite": "duplicate-test-selector",
-        "projects": {"subject": {"map": "subject.map.json"}},
-        "extractors": {
+    duplicate_config = copy.deepcopy(config)
+    duplicate_config["projections"] = {
             "cases": {
-                "kind": "test_selectors",
-                "project": "subject",
+                "select": "test_selectors",
                 "paths": ["test/test_cases.c"],
             }
-        },
-        "checks": [
-            {
-                "id": "ONE-TEST-IDENTITY",
+    }
+    duplicate_config["constraints"] = {
+            "ONE-TEST-IDENTITY": {
                 "assert": "cardinality",
-                "actual": "cases",
+                "actual": {"projection": "cases"},
                 "exact": 1,
                 "owner": "test",
                 "rationale": "Repeated occurrences cite one exact test identity.",
             }
-        ],
     }
-    duplicate_input = copy.deepcopy(verify_input)
-    duplicate_input["suite_path"] = "duplicate-test-selector.verify.json"
-    duplicate_input["projects"][0]["map"] = duplicate_map
     duplicate_result = json.loads(
-        extension.verification_analyze(
-            canonical(duplicate_suite), canonical(duplicate_input)
+        extension.constraints_evaluate(
+            canonical(duplicate_config), canonical(duplicate_map)
         )
     )
-    duplicate_fact = duplicate_result["facts"][0]
+    duplicate_constraint = duplicate_result["constraints"][0]
+    duplicate_fact = next(
+        row
+        for row in duplicate_result["operands"]
+        if row["name"] == duplicate_constraint["operands"]["actual"]
+    )
     if (
         duplicate_fact["state"] != "current"
         or len(duplicate_fact["items"]) != 1
         or len(duplicate_fact["items"][0]["evidence"]) != 2
-        or duplicate_result["checks"][0]["status"] != "pass"
+        or duplicate_constraint["status"] != "pass"
     ):
         raise AssertionError(duplicate_result)
-    route = facts["routes"]["items"][0]
+    route = facts[route_fact_name]["items"][0]
     if route["attributes"]["kind"] != "configured":
         raise AssertionError(route)
     if {row["provenance"] for row in route["evidence"]} != {
@@ -2501,14 +2476,13 @@ def main() -> int:
         )
     ):
         raise AssertionError(route["evidence"])
-    missing_check = next(
-        row for row in verified["checks"] if row["id"] == "MISSING-ROUTE"
-    )
-    if missing_check["status"] != "fail":
-        raise AssertionError(missing_check)
+    missing_constraint = constraints["MISSING-ROUTE"]
+    if missing_constraint["status"] != "fail":
+        raise AssertionError(missing_constraint)
     proposal = json.loads(
         extension.change_proposal(
-            canonical(verified), missing_check["findings"][0]["fingerprint"]
+            canonical(verified),
+            missing_constraint["findings"][0]["fingerprint"],
         )
     )
     proposal_evidence = [

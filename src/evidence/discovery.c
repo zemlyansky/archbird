@@ -271,38 +271,12 @@ static int excluded_subtree(const AbMapConfig *config,
   return 0;
 }
 
-static int pattern_could_enter(const AbString *directory,
-                               const AbString *pattern) {
-  const char *data = pattern->data;
-  size_t length = pattern->length;
-  size_t literal = 0;
-  size_t common;
-  if (length >= 2 && data[0] == '.' && data[1] == '/') {
-    data += 2;
-    length -= 2;
-  }
-  while (literal < length && data[literal] != '*' && data[literal] != '?' &&
-         data[literal] != '[')
-    literal++;
-  while (literal && data[literal - 1] == '/')
-    literal--;
-  if (!literal)
-    return 1;
-  common = literal < directory->length ? literal : directory->length;
-  if (memcmp(data, directory->data, common) != 0)
-    return 0;
-  return literal == directory->length ||
-         (literal > directory->length && data[directory->length] == '/') ||
-         (directory->length > literal && directory->data[literal] == '/');
-}
-
 ArchbirdStatus archbird_discovery_should_descend(ArchbirdEngine *engine,
                                                  ArchbirdDiscovery *discovery,
                                                  const char *directory,
                                                  size_t directory_length,
                                                  int *out_should_descend) {
   AbString path;
-  size_t index;
   if (!engine || !discovery || (!directory && directory_length) ||
       !out_should_descend)
     return ARCHBIRD_INVALID_ARGUMENT;
@@ -326,12 +300,6 @@ ArchbirdStatus archbird_discovery_should_descend(ArchbirdEngine *engine,
   if (!excluded_subtree(&discovery->config, &path) ||
       exact_input_below(&discovery->config, &path))
     return ARCHBIRD_OK;
-  for (index = 0; index < discovery->config.checks.forbid_paths.count;
-       index++) {
-    if (pattern_could_enter(
-            &path, &discovery->config.checks.forbid_paths.items[index]))
-      return ARCHBIRD_OK;
-  }
   *out_should_descend = 0;
   return ARCHBIRD_OK;
 }
@@ -464,13 +432,6 @@ static ArchbirdStatus classify(ArchbirdEngine *engine,
        index++) {
     if (!excluded && matches_any(path, &config->named_entries[index].globs, 1))
       status = append_unique(engine, &row->roles, "named-entry", 11);
-  }
-  for (index = 0;
-       status == ARCHBIRD_OK && index < config->checks.forbid_paths.count;
-       index++) {
-    if (ab_map_collection_match(path,
-                                &config->checks.forbid_paths.items[index]))
-      status = append_unique(engine, &row->roles, "forbidden-check", 15);
   }
   if (row->roles.count > 1)
     qsort(row->roles.items, row->roles.count, sizeof(*row->roles.items),

@@ -97,6 +97,7 @@ def main() -> None:
         )
         common = [
             "query",
+            "--root",
             str(root),
             "--no-config",
             "--git-diff",

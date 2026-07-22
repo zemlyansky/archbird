@@ -11,8 +11,10 @@ and check that coordinated changes produced the required structural result.
 ```bash
 npm install --save-dev archbird
 
-npx archbird .          # map the current repository
-npx archbird serve .    # explore it in the local web application
+npx archbird            # shorthand for: npx archbird map
+npx archbird .          # shorthand for: npx archbird map .
+npx archbird map        # explicit form
+npx archbird serve      # explore it in the local web application
 ```
 
 ## Map, Verify, Act
@@ -27,9 +29,13 @@ Every result links back to the source, configuration, or test data used to
 produce it. Missing or uncertain information is shown instead of guessed.
 
 Map works without configuration. Add Verify when you want automated
-architecture checks. Use Act when one change spans several files, packages, or
+architecture constraints. Use Act when one change spans several files, packages, or
 languages and you want to record the required outcome and check it afterward.
 Archbird never edits the code.
+
+`npx archbird` and `npx archbird .` remain supported shortcuts for mapping the
+current repository. The explicit `npx archbird map` form is useful in scripts
+and alongside the other stage commands.
 
 ## Use from JavaScript
 
@@ -77,7 +83,7 @@ Saved-Map functions `queryMap()` and `queryMapMarkdown()` accept
 rejects a missing or different core producer digest; it is independent of the
 live-source comparison performed by `auditMapFreshness()`.
 `queryMapMarkdown(map, { view: "changes", verificationResult: resultJson })`
-adds only checks with exact subject-side source-path overlap and reports input
+adds only constraints with exact subject-side source-path overlap and reports input
 and producer freshness. The browser `Project.queryMarkdown()` accepts the same
 option.
 
@@ -155,10 +161,10 @@ npx archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' \
   --view changes --detail compact --check
 
-npx archbird query . --git-diff HEAD \
+npx archbird query --git-diff HEAD \
   --view changes --detail compact --check
 
-npx archbird query . --git-diff HEAD --view changes \
+npx archbird query --git-diff HEAD --view changes \
   --verification-result .archbird/verify.json --check
 ```
 
@@ -172,9 +178,9 @@ change set. Current paths seed Query; deletions and paths outside the Map stay
 explicit. External diff/text-conversion commands are disabled, and untracked
 files require an explicit `--path`.
 
-`--verification-result PATH` adds overlapping subject-side architecture checks
+`--verification-result PATH` adds overlapping subject-side architecture constraints
 and findings, including requirement IDs and freshness. It does not rerun
-verification or infer relevance from prose, reference-only facts, or checks
+verification or infer relevance from prose, reference-only facts, or constraints
 without exact source-path evidence.
 
 Unchecked saved-Map queries accept supported older producers. Add `--check`
@@ -186,10 +192,10 @@ The default is an architecture-first overview. Canonical JSON contains every
 selected file and mapped fact; Markdown is only a human projection:
 
 ```bash
-npx archbird . --view overview --detail compact
-npx archbird . --view architecture
-npx archbird . --view audit --detail standard
-npx archbird . --view audit --full
+npx archbird map --view overview --detail compact
+npx archbird map --view architecture
+npx archbird map --view audit --detail standard
+npx archbird map --view audit --full
 ```
 
 `--compact` and `--full` alias the corresponding detail levels. Query context
@@ -205,7 +211,7 @@ claims that a test ran. Use project-runner observations for executed routes.
 Run the local application while source changes:
 
 ```bash
-npx archbird serve . --config archbird.json
+npx archbird serve --config archbird.json
 ```
 
 `serve` prints a loopback URL immediately, analyzes in a worker, publishes only
@@ -227,7 +233,7 @@ npx archbird config init . --output archbird.json
 <!-- archbird-minimal-project-config:start -->
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "demo",
   "layers": [
     {
@@ -247,7 +253,31 @@ npx archbird config init . --output archbird.json
   "components": [
     {"name": "native-core", "paths": ["include/**", "src/**"]},
     {"name": "javascript-api", "paths": ["js/src/**"]}
-  ]
+  ],
+  "projections": {
+    "public-core-api": {
+      "select": "symbols",
+      "paths": ["include/demo.h"],
+      "public_only": true
+    }
+  },
+  "queries": {
+    "public-api-impact": {
+      "projection": "public-core-api",
+      "direction": "upstream",
+      "depth": 1
+    }
+  },
+  "constraints": {
+    "CORE-PUBLIC-API": {
+      "assert": "required_subset",
+      "expected": {"literal": ["demo_close", "demo_open"]},
+      "actual": {"projection": "public-core-api"},
+      "severity": "error",
+      "owner": "core",
+      "rationale": "Supported native entrypoints must remain public."
+    }
+  }
 }
 ```
 <!-- archbird-minimal-project-config:end -->
@@ -261,7 +291,8 @@ Configuration can additionally declare:
 | `tests` | static cases, reviewed `case_routes`, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
-| `checks`, `limits` | basic Map-presence requirements and bounded resource policy |
+| `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
+| `limits` | bounded Map analysis policy |
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
 `src/**/*.c` is recursive. Components group selected files; they do not discover
@@ -294,88 +325,89 @@ source distribution.
 
 ## Verify architecture
 
-`archbird.verify.json` says which symbols, connections, surfaces, and test
-routes must be present or absent. Archbird compares those rules with the
-current map. Save this beside `archbird.json`:
-
-<!-- archbird-minimal-verify-config:start -->
-```json
-{
-  "schema_version": 1,
-  "suite": "demo-architecture",
-  "projects": {
-    "subject": {"config": "archbird.json"}
-  },
-  "extractors": {
-    "required.core_api": {
-      "kind": "literal_set",
-      "values": ["demo_close", "demo_open"]
-    },
-    "actual.core_api": {
-      "kind": "symbols",
-      "project": "subject",
-      "layer": "core",
-      "paths": ["include/demo.h"],
-      "public_only": true
-    }
-  },
-  "checks": [
-    {
-      "id": "CORE-PUBLIC-API",
-      "assert": "required_subset",
-      "expected": "required.core_api",
-      "actual": "actual.core_api",
-      "severity": "error",
-      "owner": "core",
-      "rationale": "Supported native entrypoints must remain public."
-    }
-  ]
-}
-```
-<!-- archbird-minimal-verify-config:end -->
+Reviewed architecture policy belongs in the `constraints` collection of the
+same `archbird.json` that defines project structure. Typed constraints infer
+their exhaustive Map projections; primitive assertions can use inline literals,
+observations, or named/inline projections. The quick-start configuration above
+therefore needs no second suite file.
 
 ```bash
-npx archbird verify --init archbird.json \
-  --output architecture.candidate.verify.json
+# Run one saved Query plan or an ad-hoc query.
+npx archbird query public-api-impact
+npx archbird query --symbol demo_open --direction upstream
 
-npx archbird verify . --check
-npx archbird verify . \
-  --format sarif --output .archbird/architecture.sarif --check
+# Evaluate the whole reviewed policy or one named constraint.
+npx archbird verify --check
+npx archbird verify CORE-PUBLIC-API --check
 
-npx archbird verify . \
-  --freeze .archbird/architecture.baseline.json \
+# Emit CI-native reports from the same constraints.
+npx archbird verify --format sarif --output .archbird/architecture.sarif --check
+npx archbird verify --format junit --output .archbird/architecture.junit.xml --check
+
+# Freeze reviewed existing debt and coverage as a ratchet.
+npx archbird verify --freeze .archbird/architecture.baseline.json \
   --freeze-owner architecture \
   --freeze-rationale "Reviewed starting point"
 ```
 
-`verify --init` drafts the current component-edge matrix and marks it
-`candidate=true`; review it before Archbird will run it. `--freeze` records the
-current violations and covered facts so later runs distinguish new, known,
-reintroduced, and resolved findings while coverage only grows.
+`verify` without IDs evaluates every configured constraint. Positional IDs
+select an explicit subset and the Verification artifact records configured,
+requested, evaluated, and omitted counts; a successful subset is never reported
+as whole-policy compliance. Unknown IDs are errors. Repository selection is
+execution context: run in the project root or use `--root PATH`; an external
+configuration uses `--config CONFIG --root PROJECT`.
 
-Without `--config`, `verify [ROOT]` discovers exactly one of
-`archbird.verify.json`, `.archbird.verify.json`, or the legacy
-`architecture.verify.json`. Missing or ambiguous suites are errors because
-implementation discovery does not establish reviewed architecture intent.
+Common typed constraints cover required/forbidden paths and symbols, file-size
+bounds, symbol cardinality, component membership and cycles, allowed/forbidden/
+required component or file edges, package entrypoints, bridges, test routes, and
+provider surfaces. They require no projection boilerplate. General predicates
+cover set/value equality, mapped equality, directional subsets, cardinality,
+numeric bounds, graph edges, acyclicity, minimum test routes, and observation
+equality.
 
-Verify supports set/value equality, mapped names/values, directional subsets,
-cardinality, required/forbidden/allowed edges, acyclicity, minimum test routes,
-and behavioral-attestation equality. Facts can come from symbols, values,
-component/file edges, provider surfaces, exact test selectors, test routes,
-Python/C structured entries, and supplied attestations.
+A projection result is exhaustive for its declared Map domain. If discovery,
+provider, resource, freshness, or source-lock evidence prevents a complete
+answer, the operand is partial or unknown and cannot make a constraint pass.
+Query may rank and bound context; Verify may not. Derived Map facts, asserted
+literals/mappings/waivers, and observed runner evidence retain distinct
+provenance.
 
-Derived source facts, asserted requirements/mappings/waivers, and observed
-runner evidence stay separate. Comparison, freshness, applicability,
-disposition, and baseline state are independent; stale or unknown evidence
-never becomes pass. Multi-project suites support source locks, explicit name
-mappings, intentional supersets, reviewed divergences, and project-root
-overrides that do not enter canonical evidence.
+Named projections are useful when several constraints or queries share a
+selection. One-off primitive operands stay inline:
 
-Use `required_subset`/`required_values` for missing members,
-`mapped_values_equal` for provider renames, `forbidden_edges` for forbidden
-dependencies, and `set_equal` or `required_subset` for public surfaces. The
-local application edits check metadata only as an unreviewed candidate and can
-create expiring waiver candidates without changing derived findings.
+```json
+{
+  "constraints": {
+    "API-SIZE": {
+      "assert": "cardinality",
+      "actual": {
+        "projection": {
+          "select": "symbols",
+          "paths": ["include/**"],
+          "public_only": true
+        }
+      },
+      "max": 30,
+      "owner": "core",
+      "rationale": "Keep the supported native surface reviewable."
+    }
+  }
+}
+```
+
+Constraint-owned waivers require an ID, owner, rationale, an exact finding
+fingerprint or comparison/key pair, and an expiry date or input-digest boundary.
+Baselines classify new, known, reintroduced, and resolved findings while
+ratcheting covered facts. Cross-repository constraints receive explicitly named
+saved Maps with `--map-input ID=PATH`; behavioral parity receives reviewed
+artifacts with `--observation ID=PATH`. Similar names alone never establish
+semantic equivalence.
+
+Every constraint has a stable ID, owner, rationale, optional requirement IDs,
+tags and severity. Findings cite exact evidence and separately record
+comparison, evidence state, applicability, disposition, baseline state, and a
+stable fingerprint. JSON, Markdown, SARIF, and JUnit are views of the same
+canonical Verification result.
 
 ## Act: review and judge a change
 
@@ -385,15 +417,15 @@ before and after repository state to see whether the required changes happened.
 
 ```bash
 # Before-state containing the finding.
-npx archbird verify . --format json \
-  --output .archbird/before.verify.json
+npx archbird verify --format json \
+  --output .archbird/before.verification.json
 
 # Derived proposal: postconditions, candidates, coverage, and unknown frontier.
-npx archbird plan --verification .archbird/before.verify.json \
+npx archbird plan --verification .archbird/before.verification.json \
   --finding FINGERPRINT --format markdown \
   --output .archbird/change.task.md
 
-npx archbird plan --verification .archbird/before.verify.json \
+npx archbird plan --verification .archbird/before.verification.json \
   --finding FINGERPRINT --output .archbird/change.proposal.json
 
 # Asserted human review; the proposal remains immutable.
@@ -403,15 +435,15 @@ npx archbird contract --proposal .archbird/change.proposal.json \
   --preserve-all --output .archbird/change.contract.json
 
 # An external person, agent, IDE, or codemod edits and tests the repository.
-npx archbird verify . --format json \
-  --output .archbird/after.verify.json
+npx archbird verify --format json \
+  --output .archbird/after.verification.json
 
 # Derived transition judgment.
 npx archbird verify-plan \
   --proposal .archbird/change.proposal.json \
   --contract .archbird/change.contract.json \
-  --before-verification .archbird/before.verify.json \
-  --after-verification .archbird/after.verify.json --check
+  --before-verification .archbird/before.verification.json \
+  --after-verification .archbird/after.verification.json --check
 ```
 
 Results distinguish satisfied, missing, unexpected, unknown, stale, and

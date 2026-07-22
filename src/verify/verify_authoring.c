@@ -6,7 +6,6 @@
 #include "verify_checks.h"
 #include "verify_runtime.h"
 
-#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -37,149 +36,6 @@ static int author_finding_blocks(const AbVerifyFinding *finding,
          (!text_is(&finding->comparison, "equal") ||
           text_is(&finding->evidence_state, "unknown") ||
           text_is(&finding->evidence_state, "stale"));
-}
-
-static ArchbirdStatus author_invalid(ArchbirdEngine *engine,
-                                     const char *message) {
-  return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
-                            "%s", message);
-}
-
-static ArchbirdStatus render_suite_name(AbBuffer *buffer,
-                                        const AbString *project) {
-  AbBuffer normalized;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  size_t index;
-  int dash = 0;
-  ab_buffer_init(&normalized, buffer->engine);
-  for (index = 0; index < project->length; index++) {
-    unsigned char byte = (unsigned char)project->data[index];
-    int allowed = (byte >= 'A' && byte <= 'Z') ||
-                  (byte >= 'a' && byte <= 'z') ||
-                  (byte >= '0' && byte <= '9') || byte == '_' || byte == '.' ||
-                  byte == ':';
-    if (allowed) {
-      status = ab_buffer_append(&normalized, &byte, 1);
-      if (status != ARCHBIRD_OK)
-        goto cleanup;
-      dash = 0;
-    } else if (!dash && normalized.length) {
-      status = ab_buffer_literal(&normalized, "-");
-      if (status != ARCHBIRD_OK)
-        goto cleanup;
-      dash = 1;
-    }
-  }
-  while (normalized.length && normalized.data[normalized.length - 1] == '-')
-    normalized.length--;
-  if (!normalized.length || !isalnum((unsigned char)normalized.data[0])) {
-    normalized.length = 0;
-    status = ab_buffer_literal(&normalized, "project");
-    if (status != ARCHBIRD_OK)
-      goto cleanup;
-  }
-  status = ab_buffer_literal(&normalized, "-architecture");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(buffer, (const char *)normalized.data,
-                                   normalized.length);
-cleanup:
-  ab_buffer_free(&normalized);
-  return status;
-}
-
-static ArchbirdStatus render_draft(ArchbirdEngine *engine, const AbValue *map,
-                                   const char *project_config,
-                                   size_t project_config_length,
-                                   AbBuffer *buffer) {
-  const AbValue *artifact = ab_value_member(map, "artifact");
-  const AbValue *project = ab_value_member(map, "project");
-  const AbValue *components = ab_value_member(map, "components");
-  size_t component_index;
-  int first = 1;
-  if (!map || map->kind != AB_VALUE_OBJECT || !value_text_is(artifact, "map") ||
-      !project || project->kind != AB_VALUE_STRING ||
-      !project->as.text.length || !components ||
-      components->kind != AB_VALUE_ARRAY)
-    return author_invalid(engine,
-                          "verification draft requires a canonical Map");
-  if (!components->as.array.count)
-    return author_invalid(
-        engine, "verify --init requires configured architecture components");
-  AUTHOR_TRY(ab_buffer_literal(
-      buffer, "{\"candidate\":true,\"checks\":[{\"actual\":"
-              "\"architecture.actual\",\"assert\":\"allowed_edges\","
-              "\"expected\":\"architecture.allowed\",\"id\":"
-              "\"ARCH-COMPONENT-EDGES\",\"owner\":"
-              "\"architecture\",\"rationale\":"
-              "\"Component dependencies must remain within the "
-              "reviewed allowed matrix.\",\"severity\":\"error\","
-              "\"tags\":[\"candidate-review-required\"]}],"
-              "\"description\":\"DRAFT generated from current "
-              "component edges. Review intended boundaries; remove "
-              "candidate=true only after human approval.\","
-              "\"extractors\":{\"architecture.actual\":{"
-              "\"kind\":\"component_edges\",\"project\":\"subject\"},"
-              "\"architecture.allowed\":{\"kind\":"
-              "\"literal_relation\",\"rows\":["));
-  for (component_index = 0; component_index < components->as.array.count;
-       component_index++) {
-    const AbValue *component = &components->as.array.items[component_index];
-    const AbValue *source = ab_value_member(component, "name");
-    const AbValue *outgoing = ab_value_member(component, "outgoing");
-    size_t target_index;
-    if (!source || source->kind != AB_VALUE_STRING || !outgoing ||
-        outgoing->kind != AB_VALUE_OBJECT)
-      return author_invalid(engine,
-                            "invalid Map component in verification draft");
-    for (target_index = 0; target_index < outgoing->as.object.count;
-         target_index++) {
-      const AbObjectField *target = &outgoing->as.object.fields[target_index];
-      if (target->value.kind != AB_VALUE_ARRAY || !target->value.as.array.count)
-        continue;
-      if (!first)
-        AUTHOR_TRY(ab_buffer_literal(buffer, ","));
-      first = 0;
-      AUTHOR_TRY(ab_buffer_literal(buffer, "{\"kind\":\"*\",\"source\":"));
-      AUTHOR_TRY(ab_value_render(buffer, source));
-      AUTHOR_TRY(ab_buffer_literal(buffer, ",\"target\":"));
-      AUTHOR_TRY(ab_buffer_json_string(buffer, target->name.data,
-                                       target->name.length));
-      AUTHOR_TRY(ab_buffer_literal(buffer, "}"));
-    }
-  }
-  AUTHOR_TRY(
-      ab_buffer_literal(buffer, "]}},\"projects\":{\"subject\":{\"config\":"));
-  AUTHOR_TRY(
-      ab_buffer_json_string(buffer, project_config, project_config_length));
-  AUTHOR_TRY(ab_buffer_literal(buffer, "}},\"schema_version\":1,\"suite\":"));
-  AUTHOR_TRY(render_suite_name(buffer, &project->as.text));
-  return ab_buffer_literal(buffer, "}");
-}
-
-ArchbirdStatus
-archbird_verification_draft(ArchbirdEngine *engine, const uint8_t *map_json,
-                            size_t map_length, const char *project_config,
-                            size_t project_config_length, uint32_t json_flags,
-                            ArchbirdWriteFn write_fn, void *user_data) {
-  AbValue map = {0};
-  AbBuffer draft;
-  ArchbirdStatus status;
-  if (!engine || (!map_json && map_length) ||
-      (!project_config && project_config_length) || !project_config_length ||
-      !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
-    return ARCHBIRD_INVALID_ARGUMENT;
-  ab_buffer_init(&draft, engine);
-  status = ab_json_value_decode(engine, map_json, map_length, &map);
-  if (status == ARCHBIRD_OK)
-    status = render_draft(engine, &map, project_config, project_config_length,
-                          &draft);
-  if (status == ARCHBIRD_OK)
-    status = archbird_json_canonicalize(engine, draft.data, draft.length,
-                                        json_flags, write_fn, user_data);
-  ab_buffer_free(&draft);
-  ab_value_free(engine, &map);
-  return status;
 }
 
 typedef struct AuthorFinding {
@@ -275,7 +131,7 @@ static ArchbirdStatus render_baseline(AbVerificationContext *context,
                                       const char *rationale,
                                       size_t rationale_length,
                                       AbBuffer *buffer) {
-  const AbValue *previous = context->input.baseline;
+  const AbValue *previous = context->baseline_input;
   const AbValue *previous_active = previous && previous->kind == AB_VALUE_OBJECT
                                        ? ab_value_member(previous, "active")
                                        : NULL;
@@ -403,7 +259,7 @@ static ArchbirdStatus render_baseline(AbVerificationContext *context,
     if (index)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer, "{\"check\":");
+      status = ab_buffer_literal(buffer, "{\"constraint\":");
     if (status == ARCHBIRD_OK)
       status = ab_value_render(buffer, id);
     if (status == ARCHBIRD_OK)
@@ -428,7 +284,7 @@ static ArchbirdStatus render_baseline(AbVerificationContext *context,
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
-        buffer, "],\"artifact\":\"verification-baseline\",\"coverage\":{");
+        buffer, "],\"artifact\":\"constraint-baseline\",\"coverage\":{");
   for (index = 0; status == ARCHBIRD_OK && index < coverage_key_count;
        index++) {
     const AbStringArray *current_coverage = NULL;
@@ -470,13 +326,12 @@ static ArchbirdStatus render_baseline(AbVerificationContext *context,
                                      resolved[index]->length);
   }
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(buffer, "],\"schema_version\":1,\"suite\":");
+    status = ab_buffer_literal(buffer, "],\"constraint_policy_sha256\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(buffer, context->suite.name);
+    status =
+        ab_buffer_json_string(buffer, context->constraint_policy_sha256, 64);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(buffer, ",\"suite_sha256\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(buffer, context->suite.sha256, 64);
+    status = ab_buffer_literal(buffer, ",\"schema_version\":1");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         buffer,
@@ -488,34 +343,9 @@ static ArchbirdStatus render_baseline(AbVerificationContext *context,
   return status;
 }
 
-ArchbirdStatus archbird_verification_freeze(
-    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
-    const uint8_t *verification_input_json, size_t verification_input_length,
-    const char *owner, size_t owner_length, const char *rationale,
-    size_t rationale_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
-    void *user_data) {
-  AbValue suite_document = {0};
-  AbValue input_document = {0};
-  AbVerificationContext context = {0};
-  AbBuffer baseline;
-  ArchbirdStatus status;
-  if (!engine || !owner || !owner_length || !rationale || !rationale_length ||
-      !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
-    return ARCHBIRD_INVALID_ARGUMENT;
-  ab_buffer_init(&baseline, engine);
-  status = ab_verification_context_analyze(
-      engine, suite_json, suite_length, verification_input_json,
-      verification_input_length, &suite_document, &input_document, &context);
-  if (status == ARCHBIRD_OK)
-    status = render_baseline(&context, owner, owner_length, rationale,
-                             rationale_length, &baseline);
-  if (status == ARCHBIRD_OK)
-    status = archbird_json_canonicalize(engine, baseline.data, baseline.length,
-                                        json_flags, write_fn, user_data);
-  ab_buffer_free(&baseline);
-  ab_verification_context_free(&context);
-  ab_value_free(engine, &input_document);
-  ab_value_free(engine, &suite_document);
-  return status;
+ArchbirdStatus ab_constraints_render_baseline(
+    AbVerificationContext *context, const char *owner, size_t owner_length,
+    const char *rationale, size_t rationale_length, AbBuffer *buffer) {
+  return render_baseline(context, owner, owner_length, rationale,
+                         rationale_length, buffer);
 }

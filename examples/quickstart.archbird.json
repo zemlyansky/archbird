@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "demo",
   "description": "Native core with Python and TypeScript frontends.",
-  "root": ".",
   "exclude": ["dist/**", "build/**"],
   "layers": [
     {
@@ -88,5 +87,42 @@
     {"name": "native-core", "paths": ["include/**", "src/**"]},
     {"name": "python-api", "paths": ["python/demo/**"]},
     {"name": "javascript-api", "paths": ["js/src/**"]}
-  ]
+  ],
+  "projections": {
+    "public-core-api": {
+      "select": "symbols",
+      "layer": "core",
+      "paths": ["include/demo.h"],
+      "public_only": true
+    }
+  },
+  "queries": {
+    "public-api-impact": {
+      "projection": "public-core-api",
+      "direction": "upstream",
+      "depth": 2,
+      "context": {"profile": "change"}
+    }
+  },
+  "constraints": {
+    "CORE-PUBLIC-API": {
+      "assert": "required_subset",
+      "expected": {"literal": ["demo_close", "demo_open"]},
+      "actual": {"projection": "public-core-api"},
+      "severity": "error",
+      "owner": "core",
+      "requirement": "ARCH-CORE-001",
+      "rationale": "Both supported native entrypoints must remain public."
+    },
+    "PYTHON-CORE-ROUTE": {
+      "kind": "test_routes",
+      "group": "python",
+      "min": 1,
+      "required_routes": ["src/core.c"],
+      "severity": "error",
+      "owner": "python",
+      "requirement": "TEST-PY-001",
+      "rationale": "At least one configured Python case must route to the core."
+    }
+  }
 }

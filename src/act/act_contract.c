@@ -15,7 +15,7 @@ typedef struct AbActReview {
   const AbValue *objective;
   const AbValue *owner;
   const AbValue *rationale;
-  const AbValue *preserve_checks;
+  const AbValue *preserve_constraints;
   const AbValue *selected_candidates;
 } AbActReview;
 
@@ -52,7 +52,7 @@ static int strings_unique(const AbValue *rows) {
 static ArchbirdStatus review_load(ArchbirdEngine *engine, const uint8_t *json,
                                   size_t json_length, AbActReview *out) {
   static const char *const allowed[] = {
-      "objective",           "owner", "preserve_checks", "rationale",
+      "objective",           "owner", "preserve_constraints", "rationale",
       "selected_candidates",
   };
   ArchbirdStatus status;
@@ -63,12 +63,13 @@ static ArchbirdStatus review_load(ArchbirdEngine *engine, const uint8_t *json,
   out->objective = ab_value_member(&out->root, "objective");
   out->owner = ab_value_member(&out->root, "owner");
   out->rationale = ab_value_member(&out->root, "rationale");
-  out->preserve_checks = ab_value_member(&out->root, "preserve_checks");
+  out->preserve_constraints =
+      ab_value_member(&out->root, "preserve_constraints");
   out->selected_candidates = ab_value_member(&out->root, "selected_candidates");
   if (!ab_act_object_fields_allowed(&out->root, allowed,
                                     sizeof(allowed) / sizeof(allowed[0])) ||
       !nonblank(out->objective) || !nonblank(out->owner) ||
-      !nonblank(out->rationale) || !strings_unique(out->preserve_checks) ||
+      !nonblank(out->rationale) || !strings_unique(out->preserve_constraints) ||
       !strings_unique(out->selected_candidates)) {
     ab_value_free(engine, &out->root);
     memset(out, 0, sizeof(*out));
@@ -131,13 +132,14 @@ validate_review_selection(ArchbirdEngine *engine,
                           const AbActProposalView *proposal,
                           const AbActReview *review) {
   size_t index;
-  for (index = 0; index < review->preserve_checks->as.array.count; index++) {
+  for (index = 0; index < review->preserve_constraints->as.array.count;
+       index++) {
     const AbString *id =
-        &review->preserve_checks->as.array.items[index].as.text;
+        &review->preserve_constraints->as.array.items[index].as.text;
     if (!row_by_id(proposal->preserved, id))
-      return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
-                                ARCHBIRD_NO_OFFSET,
-                                "review selects an unknown preserved check");
+      return archbird_error_set(
+          engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+          "review selects an unknown preserved constraint");
   }
   for (index = 0; index < review->selected_candidates->as.array.count;
        index++) {
@@ -190,9 +192,10 @@ static ArchbirdStatus render_proposal_ids(AbBuffer *buffer,
   return ab_buffer_literal(buffer, "]");
 }
 
-static ArchbirdStatus render_preserved_checks(AbBuffer *buffer,
-                                              const AbActProposalView *proposal,
-                                              const AbValue *selected) {
+static ArchbirdStatus
+render_preserved_constraints(AbBuffer *buffer,
+                             const AbActProposalView *proposal,
+                             const AbValue *selected) {
   const AbValue **values = NULL;
   size_t count;
   size_t index;
@@ -219,7 +222,8 @@ static ArchbirdStatus
 render_contract_document(AbBuffer *buffer, const AbActProposalView *proposal,
                          const AbActReview *review, int include_sha256,
                          const char sha256[65]) {
-  const AbValue *origin_check = ab_value_member(proposal->origin, "check");
+  const AbValue *origin_constraint =
+      ab_value_member(proposal->origin, "constraint");
   const AbValue *finding = ab_value_member(proposal->origin, "finding");
   const AbValue *fingerprint = ab_value_member(finding, "fingerprint");
   CONTRACT_TRY(ab_buffer_literal(buffer, "{\"acknowledged_unknowns\":"));
@@ -227,23 +231,23 @@ render_contract_document(AbBuffer *buffer, const AbActProposalView *proposal,
   CONTRACT_TRY(ab_buffer_literal(
       buffer, ",\"artifact\":\"change-contract\",\"objective\":"));
   CONTRACT_TRY(ab_value_render(buffer, review->objective));
-  CONTRACT_TRY(ab_buffer_literal(buffer, ",\"origin\":{\"check\":"));
-  CONTRACT_TRY(ab_value_render(buffer, origin_check));
+  CONTRACT_TRY(ab_buffer_literal(buffer, ",\"origin\":{\"constraint\":"));
+  CONTRACT_TRY(ab_value_render(buffer, origin_constraint));
   CONTRACT_TRY(ab_buffer_literal(buffer, ",\"fingerprint\":"));
   CONTRACT_TRY(ab_value_render(buffer, fingerprint));
   CONTRACT_TRY(ab_buffer_literal(buffer, "},\"owner\":"));
   CONTRACT_TRY(ab_value_render(buffer, review->owner));
   CONTRACT_TRY(ab_buffer_literal(buffer, ",\"postconditions\":"));
   CONTRACT_TRY(render_proposal_ids(buffer, proposal->postconditions));
-  CONTRACT_TRY(ab_buffer_literal(buffer, ",\"preserved_checks\":"));
-  CONTRACT_TRY(
-      render_preserved_checks(buffer, proposal, review->preserve_checks));
+  CONTRACT_TRY(ab_buffer_literal(buffer, ",\"preserved_constraints\":"));
+  CONTRACT_TRY(render_preserved_constraints(buffer, proposal,
+                                            review->preserve_constraints));
   CONTRACT_TRY(ab_buffer_literal(buffer, ",\"proposal_sha256\":"));
   CONTRACT_TRY(ab_buffer_json_string(buffer, proposal->sha256, 64));
   CONTRACT_TRY(
       ab_buffer_literal(buffer, ",\"provenance\":\"asserted\",\"rationale\":"));
   CONTRACT_TRY(ab_value_render(buffer, review->rationale));
-  CONTRACT_TRY(ab_buffer_literal(buffer, ",\"schema_version\":1,"
+  CONTRACT_TRY(ab_buffer_literal(buffer, ",\"schema_version\":2,"
                                          "\"selected_candidates\":"));
   CONTRACT_TRY(render_string_values(buffer, review->selected_candidates, 1));
   if (include_sha256) {

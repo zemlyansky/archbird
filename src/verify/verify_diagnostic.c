@@ -62,61 +62,57 @@ ArchbirdStatus ab_verify_add_diagnostic(AbVerificationContext *context,
   return status;
 }
 
-static const AbValue *named_project(const AbValue *rows, const AbString *name) {
-  size_t index;
-  if (!rows || rows->kind != AB_VALUE_ARRAY)
-    return NULL;
-  for (index = 0; index < rows->as.array.count; index++) {
-    const AbValue *row = &rows->as.array.items[index];
-    const AbValue *row_name = ab_value_member(row, "name");
-    if (row_name && row_name->kind == AB_VALUE_STRING &&
-        ab_string_equal(&row_name->as.text, name))
-      return row;
-  }
-  return NULL;
-}
-
 static int map_has_errors(const AbValue *map) {
   const AbValue *rows = ab_value_member(map, "diagnostics");
   size_t index;
   if (!rows || rows->kind != AB_VALUE_ARRAY)
     return 0;
-  for (index = 0; index < rows->as.array.count; index++)
-    if (ab_verify_string_is(
-            ab_value_member(&rows->as.array.items[index], "severity"), "error"))
+  for (index = 0; index < rows->as.array.count; index++) {
+    const AbValue *severity =
+        ab_value_member(&rows->as.array.items[index], "severity");
+    if (severity && severity->kind == AB_VALUE_STRING &&
+        severity->as.text.length == 5 &&
+        !memcmp(severity->as.text.data, "error", 5))
       return 1;
+  }
   return 0;
+}
+
+static ArchbirdStatus add_map_error(AbVerificationContext *context,
+                                    const AbString *id, const AbValue *map) {
+  AbBuffer message;
+  ArchbirdStatus status;
+  if (!map_has_errors(map))
+    return ARCHBIRD_OK;
+  ab_buffer_init(&message, context->engine);
+  status = ab_buffer_literal(&message, "map ");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&message, id->data, id->length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&message, " has validation errors");
+  if (status == ARCHBIRD_OK)
+    status = ab_verify_add_diagnostic(context, "error", "map-errors",
+                                      (const char *)message.data,
+                                      message.length, "", 0);
+  ab_buffer_free(&message);
+  return status;
 }
 
 ArchbirdStatus
 ab_verify_collect_project_diagnostics(AbVerificationContext *context) {
+  static const AbString current = {(char *)"current", 7};
   size_t index;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  if (!context || !context->suite.projects)
+  ArchbirdStatus status;
+  if (!context || !context->current_map)
     return ARCHBIRD_INVALID_ARGUMENT;
-  for (index = 0; status == ARCHBIRD_OK &&
-                  index < context->suite.projects->as.object.count;
+  status = add_map_error(context, &current, context->current_map);
+  for (index = 0; status == ARCHBIRD_OK && context->additional_maps &&
+                  index < context->additional_maps->as.object.count;
        index++) {
-    const AbObjectField *project =
-        &context->suite.projects->as.object.fields[index];
-    const AbValue *input =
-        named_project(context->input.projects, &project->name);
-    const AbValue *map = input ? ab_value_member(input, "map") : NULL;
-    if (map && map_has_errors(map)) {
-      AbBuffer message;
-      ab_buffer_init(&message, context->engine);
-      status = ab_buffer_literal(&message, "project ");
-      if (status == ARCHBIRD_OK)
-        status = ab_buffer_append(&message, project->name.data,
-                                  project->name.length);
-      if (status == ARCHBIRD_OK)
-        status = ab_buffer_literal(&message, " map has validation errors");
-      if (status == ARCHBIRD_OK)
-        status = ab_verify_add_diagnostic(
-            context, "error", "project-map-errors", (const char *)message.data,
-            message.length, "", 0);
-      ab_buffer_free(&message);
-    }
+    const AbObjectField *row =
+        &context->additional_maps->as.object.fields[index];
+    status =
+        add_map_error(context, &row->name, ab_value_member(&row->value, "map"));
   }
   return status;
 }

@@ -312,7 +312,8 @@ static const char *directory_description(const AbString *path) {
   if (path->length == 12 && !memcmp(path->data, "architecture", 12))
     return "Derived source architecture concepts.";
   if (path->length == 12 && !memcmp(path->data, "verification", 12))
-    return "Typed checks, facts, findings, requirements, and observations.";
+    return "Typed constraints, operands, findings, requirements, and "
+           "observations.";
   if (path->length == 7 && !memcmp(path->data, "changes", 7))
     return "Derived proposals, asserted contracts, and derived results.";
   if (path->length == 10 && !memcmp(path->data, "provenance", 10))

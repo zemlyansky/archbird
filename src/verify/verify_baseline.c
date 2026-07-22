@@ -75,13 +75,8 @@ static int string_array_valid(const AbValue *rows, int sha256) {
   return 1;
 }
 
-static int finding_rows_valid(const AbValue *rows) {
-  static const char *const fields[] = {
-      "check",
-      "comparison",
-      "fingerprint",
-      "key",
-  };
+static int finding_rows_valid(const AbValue *rows, const char *identity) {
+  const char *fields[] = {identity, "comparison", "fingerprint", "key"};
   size_t index;
   size_t previous;
   if (!rows || rows->kind != AB_VALUE_ARRAY)
@@ -90,12 +85,13 @@ static int finding_rows_valid(const AbValue *rows) {
     const AbValue *row = &rows->as.array.items[index];
     const AbValue *fingerprint;
     size_t field_index;
-    if (!exact_fields(row, fields, 4))
+    if (!exact_fields(row, fields, sizeof(fields) / sizeof(fields[0])))
       return 0;
     fingerprint = ab_value_member(row, "fingerprint");
     if (!lowercase_sha256(fingerprint))
       return 0;
-    for (field_index = 0; field_index < 4; field_index++) {
+    for (field_index = 0; field_index < sizeof(fields) / sizeof(fields[0]);
+         field_index++) {
       const AbValue *field = ab_value_member(row, fields[field_index]);
       if (!field || field->kind != AB_VALUE_STRING)
         return 0;
@@ -238,10 +234,10 @@ static int regression_compare(const void *left_raw, const void *right_raw) {
   return ab_string_compare(&left->check, &right->check);
 }
 
-ArchbirdStatus ab_verify_apply_baseline(AbVerificationContext *context) {
+ArchbirdStatus ab_constraints_apply_baseline(AbVerificationContext *context) {
   static const char *const root_fields[] = {
-      "active",   "artifact",       "coverage", "owner",        "rationale",
-      "resolved", "schema_version", "suite",    "suite_sha256", "tool",
+      "active",    "artifact", "constraint_policy_sha256", "coverage", "owner",
+      "rationale", "resolved", "schema_version",           "tool",
   };
   static const char *const tool_fields[] = {
       "implementation_sha256",
@@ -259,26 +255,24 @@ ArchbirdStatus ab_verify_apply_baseline(AbVerificationContext *context) {
   ArchbirdStatus status = ARCHBIRD_OK;
   if (!context || !context->engine)
     return ARCHBIRD_INVALID_ARGUMENT;
-  root = context->input.baseline;
+  root = context->baseline_input;
   if (!root || root->kind == AB_VALUE_NULL)
     return ARCHBIRD_OK;
-  if (!subset_fields(root, root_fields, 10))
-    return invalid(context, "verification baseline has unknown fields");
+  if (!subset_fields(root, root_fields,
+                     sizeof(root_fields) / sizeof(root_fields[0])))
+    return invalid(context, "constraint baseline has unknown fields");
   schema = ab_value_member(root, "schema_version");
   if (!ab_value_u64(schema, &schema_version) || schema_version != 1)
-    return invalid(context, "verification baseline schema_version must be 1");
+    return invalid(context, "constraint baseline schema_version must be 1");
   if (!ab_verify_string_is(ab_value_member(root, "artifact"),
-                           "verification-baseline"))
-    return invalid(context, "invalid verification baseline artifact");
+                           "constraint-baseline"))
+    return invalid(context, "invalid constraint baseline artifact");
   {
-    const AbValue *suite = ab_value_member(root, "suite");
-    const AbValue *suite_sha = ab_value_member(root, "suite_sha256");
-    if (!suite || suite->kind != AB_VALUE_STRING ||
-        !ab_string_equal(&suite->as.text, &context->suite.name->as.text) ||
-        !suite_sha || suite_sha->kind != AB_VALUE_STRING ||
-        suite_sha->as.text.length != 64 ||
-        memcmp(suite_sha->as.text.data, context->suite.sha256, 64))
-      return invalid(context, "verification baseline suite identity differs");
+    const AbValue *policy = ab_value_member(root, "constraint_policy_sha256");
+    if (!policy || policy->kind != AB_VALUE_STRING ||
+        policy->as.text.length != 64 ||
+        memcmp(policy->as.text.data, context->constraint_policy_sha256, 64))
+      return invalid(context, "constraint baseline policy identity differs");
   }
   if (!ab_verify_nonblank(ab_value_member(root, "owner")) ||
       !ab_verify_nonblank(ab_value_member(root, "rationale")))
@@ -307,9 +301,9 @@ ArchbirdStatus ab_verify_apply_baseline(AbVerificationContext *context) {
                                            {.object = {NULL, 0}}};
     coverage = &empty_coverage;
   }
-  if (!finding_rows_valid(active) || !string_array_valid(resolved, 1) ||
-      coverage->kind != AB_VALUE_OBJECT)
-    return invalid(context, "invalid verification baseline rows");
+  if (!finding_rows_valid(active, "constraint") ||
+      !string_array_valid(resolved, 1) || coverage->kind != AB_VALUE_OBJECT)
+    return invalid(context, "invalid constraint baseline rows");
   for (index = 0; index < coverage->as.object.count; index++)
     if (!coverage->as.object.fields[index].name.length ||
         !string_array_valid(&coverage->as.object.fields[index].value, 0))

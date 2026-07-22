@@ -34,9 +34,16 @@
 #endif
 
 #define ARCHBIRD_MAP_SCHEMA_MIN 4u
-#define ARCHBIRD_MAP_SCHEMA_CURRENT 7u
-#define ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT "7"
-#define ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT "4, 5, 6, or 7"
+#define ARCHBIRD_MAP_SCHEMA_CURRENT 9u
+#define ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT "9"
+#define ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT "4, 5, 6, 7, 8, or 9"
+
+/* Query artifacts have an independent compatibility namespace. The initial
+ * wire version intentionally remains 7 for backward compatibility. */
+#define ARCHBIRD_QUERY_SCHEMA_MIN 7u
+#define ARCHBIRD_QUERY_SCHEMA_CURRENT 7u
+#define ARCHBIRD_QUERY_SCHEMA_CURRENT_TEXT "7"
+#define ARCHBIRD_QUERY_SCHEMA_SUPPORTED_TEXT "7"
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_C
 #ifndef ARCHBIRD_TREE_SITTER_C_IMPLEMENTATION_SHA256
 #define ARCHBIRD_TREE_SITTER_C_IMPLEMENTATION_SHA256                           \

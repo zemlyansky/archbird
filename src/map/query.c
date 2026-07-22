@@ -19,6 +19,8 @@ typedef struct QueryRequest {
   const AbValue *search;
   const AbValue *change_set;
   const AbValue *context;
+  const AbValue *plan;
+  const AbValue *projection_results;
   const AbString *direction;
   const AbString *producer_policy;
   size_t depth;
@@ -150,6 +152,8 @@ typedef struct QueryContext {
   AbRetrievalResult retrieval;
 } QueryContext;
 
+static ArchbirdStatus query_error(QueryContext *context, const char *message);
+
 static int string_literal(const AbString *value, const char *literal) {
   size_t length = strlen(literal);
   return value && value->length == length &&
@@ -165,6 +169,170 @@ static int valid_sha256(const AbString *value) {
           (value->data[index] >= 'a' && value->data[index] <= 'f')))
       return 0;
   return 1;
+}
+
+static int valid_sha256_value(const AbValue *value) {
+  return value && value->kind == AB_VALUE_STRING &&
+         valid_sha256(&value->as.text);
+}
+
+static int stable_id_value(const AbValue *value) {
+  size_t index;
+  if (!value || value->kind != AB_VALUE_STRING || !value->as.text.length)
+    return 0;
+  for (index = 0; index < value->as.text.length; index++) {
+    unsigned char byte = (unsigned char)value->as.text.data[index];
+    if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
+          (byte >= '0' && byte <= '9') ||
+          (index &&
+           (byte == '_' || byte == '.' || byte == ':' || byte == '-'))))
+      return 0;
+  }
+  return 1;
+}
+
+static int field_allowed(const AbString *name, const char *const *allowed,
+                         size_t count) {
+  size_t index;
+  for (index = 0; index < count; index++)
+    if (string_literal(name, allowed[index]))
+      return 1;
+  return 0;
+}
+
+static ArchbirdStatus validate_saved_plan(QueryContext *context,
+                                          const AbValue *plan) {
+  static const char *const allowed[] = {
+      "id",
+      "map_config_sha256",
+      "project_configuration_sha256",
+      "projection_definitions",
+      "query_definition_sha256",
+      "query_plan_sha256",
+  };
+  static const char *const projection_allowed[] = {
+      "id",
+      "projection_definition_sha256",
+  };
+  const AbValue *rows;
+  const AbValue *id;
+  const AbValue *project_configuration;
+  size_t index;
+  if (!plan)
+    return ARCHBIRD_OK;
+  if (plan->kind != AB_VALUE_OBJECT)
+    return query_error(context, "query.plan must be an object");
+  for (index = 0; index < plan->as.object.count; index++)
+    if (!field_allowed(&plan->as.object.fields[index].name, allowed,
+                       sizeof(allowed) / sizeof(allowed[0])))
+      return query_error(context, "query.plan contains an unknown field");
+  id = ab_value_member(plan, "id");
+  project_configuration = ab_value_member(plan, "project_configuration_sha256");
+  if (!stable_id_value(id) || !project_configuration ||
+      (project_configuration->kind != AB_VALUE_NULL &&
+       !valid_sha256_value(project_configuration)) ||
+      !valid_sha256_value(ab_value_member(plan, "map_config_sha256")) ||
+      !valid_sha256_value(ab_value_member(plan, "query_definition_sha256")) ||
+      !valid_sha256_value(ab_value_member(plan, "query_plan_sha256")))
+    return query_error(context, "query.plan identities are invalid");
+  if ((string_literal(&id->as.text, "ad-hoc") &&
+       project_configuration->kind != AB_VALUE_NULL) ||
+      (!string_literal(&id->as.text, "ad-hoc") &&
+       project_configuration->kind == AB_VALUE_NULL))
+    return query_error(
+        context,
+        "query.plan project configuration identity does not match its kind");
+  rows = ab_value_member(plan, "projection_definitions");
+  if (!rows || rows->kind != AB_VALUE_ARRAY)
+    return query_error(context,
+                       "query.plan.projection_definitions must be an array");
+  for (index = 0; index < rows->as.array.count; index++) {
+    const AbValue *row = &rows->as.array.items[index];
+    size_t field_index;
+    if (!row || row->kind != AB_VALUE_OBJECT)
+      return query_error(
+          context, "query.plan.projection_definitions[] must be an object");
+    for (field_index = 0; field_index < row->as.object.count; field_index++)
+      if (!field_allowed(
+              &row->as.object.fields[field_index].name, projection_allowed,
+              sizeof(projection_allowed) / sizeof(projection_allowed[0])))
+        return query_error(
+            context,
+            "query.plan.projection_definitions[] contains an unknown field");
+    if (!stable_id_value(ab_value_member(row, "id")) ||
+        !valid_sha256_value(
+            ab_value_member(row, "projection_definition_sha256")))
+      return query_error(context,
+                         "query.plan projection identities are invalid");
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus validate_projection_results(QueryContext *context,
+                                                  const AbValue *rows) {
+  static const char *const allowed[] = {
+      "id",
+      "projection_definition_sha256",
+      "projection_result_sha256",
+  };
+  size_t index;
+  if (!rows)
+    return ARCHBIRD_OK;
+  if (rows->kind != AB_VALUE_ARRAY)
+    return query_error(context, "query.projection_results must be an array");
+  for (index = 0; index < rows->as.array.count; index++) {
+    const AbValue *row = &rows->as.array.items[index];
+    size_t field_index;
+    if (row->kind != AB_VALUE_OBJECT)
+      return query_error(context,
+                         "query.projection_results[] must be an object");
+    for (field_index = 0; field_index < row->as.object.count; field_index++)
+      if (!field_allowed(&row->as.object.fields[field_index].name, allowed,
+                         sizeof(allowed) / sizeof(allowed[0])))
+        return query_error(
+            context, "query.projection_results[] contains an unknown field");
+    if (!stable_id_value(ab_value_member(row, "id")) ||
+        !valid_sha256_value(
+            ab_value_member(row, "projection_definition_sha256")) ||
+        !valid_sha256_value(ab_value_member(row, "projection_result_sha256")))
+      return query_error(context,
+                         "query projection result identities are invalid");
+  }
+  return ARCHBIRD_OK;
+}
+
+static int string_values_equal(const AbValue *left, const AbValue *right) {
+  return left && right && left->kind == AB_VALUE_STRING &&
+         right->kind == AB_VALUE_STRING &&
+         ab_string_equal(&left->as.text, &right->as.text);
+}
+
+static ArchbirdStatus validate_plan_evaluation(QueryContext *context) {
+  const AbValue *definitions;
+  const AbValue *results = context->request.projection_results;
+  size_t index;
+  if (!results)
+    return ARCHBIRD_OK;
+  if (!context->request.plan)
+    return query_error(
+        context, "query projection results require a matching saved plan");
+  definitions =
+      ab_value_member(context->request.plan, "projection_definitions");
+  if (definitions->as.array.count != results->as.array.count)
+    return query_error(context,
+                       "query projection results do not match the saved plan");
+  for (index = 0; index < definitions->as.array.count; index++) {
+    const AbValue *definition = &definitions->as.array.items[index];
+    const AbValue *result = &results->as.array.items[index];
+    if (!string_values_equal(ab_value_member(definition, "id"),
+                             ab_value_member(result, "id")) ||
+        !string_values_equal(
+            ab_value_member(definition, "projection_definition_sha256"),
+            ab_value_member(result, "projection_definition_sha256")))
+      return query_error(
+          context, "query projection results do not match the saved plan");
+  }
+  return ARCHBIRD_OK;
 }
 
 static const AbString *match_target_symbol(const QueryContext *context,
@@ -506,8 +674,19 @@ static ArchbirdStatus decode_request(QueryContext *context,
   static const AbString both = {(char *)"both", 4};
   static const AbString compatible = {(char *)"compatible", 10};
   const AbValue *producer_policy;
+  static const char *const allowed[] = {
+      "artifacts", "change_set",   "components",      "context",
+      "depth",     "direction",    "focus",           "packages",
+      "paths",     "plan",         "producer_policy", "projection_results",
+      "search",    "search_limit", "symbols",         "test_depth",
+  };
+  size_t field_index;
   if (!request || request->kind != AB_VALUE_OBJECT)
     return query_error(context, "query request must be an object");
+  for (field_index = 0; field_index < request->as.object.count; field_index++)
+    if (!field_allowed(&request->as.object.fields[field_index].name, allowed,
+                       sizeof(allowed) / sizeof(allowed[0])))
+      return query_error(context, "query request contains an unknown field");
   context->request.focus = optional_array(request, "focus");
   context->request.paths = optional_array(request, "paths");
   context->request.symbols = optional_array(request, "symbols");
@@ -516,6 +695,9 @@ static ArchbirdStatus decode_request(QueryContext *context,
   context->request.artifacts = optional_array(request, "artifacts");
   context->request.search = optional_array(request, "search");
   context->request.change_set = ab_value_member(request, "change_set");
+  context->request.plan = ab_value_member(request, "plan");
+  context->request.projection_results =
+      ab_value_member(request, "projection_results");
   if (!string_array_valid(context->request.focus) ||
       !string_array_valid(context->request.paths) ||
       !string_array_valid(context->request.symbols) ||
@@ -525,6 +707,13 @@ static ArchbirdStatus decode_request(QueryContext *context,
       !string_array_valid(context->request.search))
     return query_error(context, "query selectors must be arrays of strings");
   if (validate_change_set(context, context->request.change_set) != ARCHBIRD_OK)
+    return ARCHBIRD_INVALID_SCHEMA;
+  if (validate_saved_plan(context, context->request.plan) != ARCHBIRD_OK)
+    return ARCHBIRD_INVALID_SCHEMA;
+  if (validate_projection_results(
+          context, context->request.projection_results) != ARCHBIRD_OK)
+    return ARCHBIRD_INVALID_SCHEMA;
+  if (validate_plan_evaluation(context) != ARCHBIRD_OK)
     return ARCHBIRD_INVALID_SCHEMA;
   if (validate_context_request(context, ab_value_member(request, "context")) !=
       ARCHBIRD_OK)
@@ -4331,6 +4520,16 @@ static ArchbirdStatus render_query_metadata(AbBuffer *buffer,
     status = ab_buffer_literal(buffer, ",\"producer_policy\":");
   if (status == ARCHBIRD_OK)
     status = render_string(buffer, context->request.producer_policy);
+  if (status == ARCHBIRD_OK && context->request.plan) {
+    status = ab_buffer_literal(buffer, ",\"saved_plan\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, context->request.plan);
+  }
+  if (status == ARCHBIRD_OK && context->request.projection_results) {
+    status = ab_buffer_literal(buffer, ",\"projection_results\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, context->request.projection_results);
+  }
   if (status == ARCHBIRD_OK && context->request.search->as.array.count) {
     status = ab_buffer_literal(buffer, ",\"retrieval\":");
     if (status == ARCHBIRD_OK)
@@ -4447,7 +4646,7 @@ static ArchbirdStatus render_query_document(QueryContext *context,
     status = render_query_metadata(buffer, context);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
-        buffer, ",\"schema_version\":" ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT
+        buffer, ",\"schema_version\":" ARCHBIRD_QUERY_SCHEMA_CURRENT_TEXT
                 ",\"source_tool\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(buffer, source_tool);

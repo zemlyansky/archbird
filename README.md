@@ -23,8 +23,10 @@ python -m pip install archbird
 # Or Node 18+
 npm install --save-dev archbird
 
-archbird .              # npm: npx archbird .
-archbird serve .        # npm: npx archbird serve .
+archbird                # shorthand for: archbird map
+archbird .              # shorthand for: archbird map .
+archbird map            # explicit form; npm: npx archbird map
+archbird serve          # npm: npx archbird serve
 ```
 
 ## Map, Verify, Act
@@ -39,9 +41,13 @@ Every result links back to the source, configuration, or test data used to
 produce it. Missing or uncertain information is shown instead of guessed.
 
 Map works without configuration. Add Verify when you want automated
-architecture checks. Use Act when one change spans several files, packages, or
+architecture constraints. Use Act when one change spans several files, packages, or
 languages and you want to record the required outcome and check it afterward.
 Archbird never edits the code.
+
+`archbird` and `archbird .` remain supported shortcuts for mapping the current
+repository. The explicit `archbird map` form is useful in scripts and alongside
+the other stage commands.
 
 ## Map and query a repository
 
@@ -65,10 +71,10 @@ archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' \
   --view changes --detail compact --check
 
-archbird query . --git-diff HEAD \
+archbird query --git-diff HEAD \
   --view changes --detail compact --check
 
-archbird query . --git-diff HEAD --view changes \
+archbird query --git-diff HEAD --view changes \
   --verification-result .archbird/verify.json --check
 ```
 
@@ -84,7 +90,7 @@ artifacts from names, paths, signatures, component descriptions, and package
 metadata, shows the exact field and match behind every score, then expands the
 selected candidates through the same typed graph. Prefix, substring, and
 bounded typo matches are advisory seeds; they never become semantic edges or
-make a Verify check pass. Symbol neighbors reached only from those advisory
+make a constraint pass. Symbol neighbors reached only from those advisory
 seeds do not strengthen a static test route.
 
 Focused test routes keep file distance and symbol-hop distance separate. A
@@ -107,11 +113,11 @@ visible instead of being invented as current code. External diff drivers and
 text-conversion commands are disabled. Untracked files require an explicit
 `--path` until they enter Git's diff.
 
-`--verification-result PATH` adds the architecture checks and findings
+`--verification-result PATH` adds the architecture constraints and findings
 whose subject-side source paths overlap the selected change. The brief shows
-their check IDs, requirement IDs, owners, severity, source paths, and whether
+their constraint IDs, requirement IDs, owners, severity, source paths, and whether
 the verification input and producer still match the current Map. It does not
-rerun verification, match reference-only evidence, or treat a path-free check
+rerun verification, match reference-only evidence, or treat a path-free constraint
 as relevant.
 
 ### Import tests that actually reached a symbol
@@ -125,7 +131,7 @@ archbird observe . --map .archbird/map.json \
   --request .archbird/coverage-request.json \
   --output .archbird/test-symbols.json
 
-archbird query . --symbol runtime_start \
+archbird query --symbol runtime_start \
   --test-symbol-observations .archbird/test-symbols.json
 ```
 
@@ -159,10 +165,10 @@ canonical JSON still contains every selected file and mapped fact. Choose the
 human projection and its amount of detail independently:
 
 ```bash
-archbird . --view overview --detail compact       # shortest repository brief
-archbird . --view architecture                    # components and connections
-archbird . --view audit --detail standard         # complete analysis accounting
-archbird . --view audit --full                    # all human-readable Map detail
+archbird map --view overview --detail compact     # shortest repository brief
+archbird map --view architecture                  # components and connections
+archbird map --view audit --detail standard       # complete analysis accounting
+archbird map --view audit --full                  # all human-readable Map detail
 ```
 
 `--compact` and `--full` are aliases for the corresponding `--detail` values.
@@ -198,7 +204,7 @@ archbird freshness . --snapshot .archbird/map.json \
 ## Local and offline visualization
 
 ```bash
-archbird serve . --config archbird.json
+archbird serve
 ```
 
 `serve` prints a loopback URL immediately, analyzes in a worker, publishes only
@@ -227,7 +233,7 @@ archbird config init . --output archbird.json
 <!-- archbird-minimal-project-config:start -->
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "demo",
   "layers": [
     {
@@ -247,7 +253,31 @@ archbird config init . --output archbird.json
   "components": [
     {"name": "native-core", "paths": ["include/**", "src/**"]},
     {"name": "javascript-api", "paths": ["js/src/**"]}
-  ]
+  ],
+  "projections": {
+    "public-core-api": {
+      "select": "symbols",
+      "paths": ["include/demo.h"],
+      "public_only": true
+    }
+  },
+  "queries": {
+    "public-api-impact": {
+      "projection": "public-core-api",
+      "direction": "upstream",
+      "depth": 1
+    }
+  },
+  "constraints": {
+    "CORE-PUBLIC-API": {
+      "assert": "required_subset",
+      "expected": {"literal": ["demo_close", "demo_open"]},
+      "actual": {"projection": "public-core-api"},
+      "severity": "error",
+      "owner": "core",
+      "rationale": "Supported native entrypoints must remain public."
+    }
+  }
 }
 ```
 <!-- archbird-minimal-project-config:end -->
@@ -262,7 +292,8 @@ The complete configuration vocabulary is:
 | `tests` | static cases, reviewed `case_routes`, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
-| `checks`, `limits` | basic Map-presence requirements and bounded resource policy |
+| `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
+| `limits` | bounded Map analysis policy |
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
 `src/**/*.c` is recursive. Components group selected files; they do not discover
@@ -296,211 +327,95 @@ The block above is mirrored by
 native/Python/TypeScript/package/build/test example is
 [`examples/quickstart.archbird.json`](examples/quickstart.archbird.json). The
 strict schema is [`schema/archbird.schema.json`](schema/archbird.schema.json).
+Its `schema_version` applies only to `archbird.json`. Map, ProjectionResult,
+Query, Verification, and change artifacts each carry an independent schema
+version and migration schedule; Archbird has no global schema version.
 
 ## Verify architecture
 
-`archbird.verify.json` says which symbols, connections, surfaces, and test
-routes must be present or absent. Archbird compares those rules with the
-current map. Save this beside `archbird.json`:
-
-<!-- archbird-minimal-verify-config:start -->
-```json
-{
-  "schema_version": 1,
-  "suite": "demo-architecture",
-  "projects": {
-    "subject": {"config": "archbird.json"}
-  },
-  "extractors": {
-    "required.core_api": {
-      "kind": "literal_set",
-      "values": ["demo_close", "demo_open"]
-    },
-    "actual.core_api": {
-      "kind": "symbols",
-      "project": "subject",
-      "layer": "core",
-      "paths": ["include/demo.h"],
-      "public_only": true
-    }
-  },
-  "checks": [
-    {
-      "id": "CORE-PUBLIC-API",
-      "assert": "required_subset",
-      "expected": "required.core_api",
-      "actual": "actual.core_api",
-      "severity": "error",
-      "owner": "core",
-      "rationale": "Supported native entrypoints must remain public."
-    }
-  ]
-}
-```
-<!-- archbird-minimal-verify-config:end -->
+Reviewed architecture policy belongs in the `constraints` collection of the
+same `archbird.json` that defines project structure. Typed constraints infer
+their exhaustive Map projections; primitive assertions can use inline literals,
+observations, or named/inline projections. The quick-start configuration above
+therefore needs no second suite file.
 
 ```bash
-# Draft the current component edges as an unreviewed starting point.
-archbird verify --init archbird.json \
-  --output architecture.candidate.verify.json
+# Run one saved Query plan or an ad-hoc query.
+archbird query public-api-impact
+archbird query --symbol demo_open --direction upstream
 
-# After review, remove candidate=true, save as archbird.verify.json, and run it.
-archbird verify . --check
-archbird verify . \
-  --format sarif --output .archbird/architecture.sarif --check
-archbird verify . \
-  --format junit --output .archbird/architecture.junit.xml --check
+# Evaluate the whole reviewed policy or one named constraint.
+archbird verify --check
+archbird verify CORE-PUBLIC-API --check
 
-# Freeze an existing codebase's reviewed starting point.
-archbird verify . \
-  --freeze .archbird/architecture.baseline.json \
+# Emit CI-native reports from the same constraints.
+archbird verify --format sarif --output .archbird/architecture.sarif --check
+archbird verify --format junit --output .archbird/architecture.junit.xml --check
+
+# Freeze reviewed existing debt and coverage as a ratchet.
+archbird verify --freeze .archbird/architecture.baseline.json \
   --freeze-owner architecture \
   --freeze-rationale "Reviewed starting point"
 ```
 
-`verify --init` writes only a candidate component-edge suite; Archbird refuses
-to run it until a reviewer removes `candidate=true`. `--freeze` records current
-blocking findings and the facts each check covered. Later runs classify new,
-known, reintroduced, and resolved findings, while coverage can only grow.
+`verify` without IDs evaluates every configured constraint. Positional IDs
+select an explicit subset and the Verification artifact records configured,
+requested, evaluated, and omitted counts; a successful subset is never reported
+as whole-policy compliance. Unknown IDs are errors. Repository selection is
+execution context: run in the project root or use `--root PATH`; an external
+configuration uses `--config CONFIG --root PROJECT`.
 
-Without `--config`, `verify [ROOT]` discovers exactly one of
-`archbird.verify.json`, `.archbird.verify.json`, or the legacy
-`architecture.verify.json`. Missing and ambiguous suites are errors: Map can
-reconstruct implementation evidence without configuration, but conformance
-requires reviewed architecture intent. Use explicit `--config` for a
-nonstandard filename or when invoking the suite from outside its repository.
+Common typed constraints cover required/forbidden paths and symbols, file-size
+bounds, symbol cardinality, component membership and cycles, allowed/forbidden/
+required component or file edges, package entrypoints, bridges, test routes, and
+provider surfaces. They require no projection boilerplate. General predicates
+cover set/value equality, mapped equality, directional subsets, cardinality,
+numeric bounds, graph edges, acyclicity, minimum test routes, and observation
+equality.
 
-For objective one-shot policy, a recipe command supplies the intent explicitly
-and needs no suite file:
+A projection result is exhaustive for its declared Map domain. If discovery,
+provider, resource, freshness, or source-lock evidence prevents a complete
+answer, the operand is partial or unknown and cannot make a constraint pass.
+Query may rank and bound context; Verify may not. Derived Map facts, asserted
+literals/mappings/waivers, and observed runner evidence retain distinct
+provenance.
 
-```bash
-archbird verify recipe list
-archbird verify recipe show max-file-bytes --pretty
-archbird verify recipe run max-file-bytes . \
-  --max 1MiB --include 'src/**' --check
-
-# Materialize the same policy as an ordinary reviewable Verify suite.
-archbird verify recipe compile max-file-bytes \
-  --max 1MiB --include 'src/**' \
-  --owner architecture \
-  --rationale "Keep source files reviewable" \
-  --output archbird.verify.json
-```
-
-Byte sizes are exact integers; `KiB`/`MiB`/`GiB` are binary units and
-`KB`/`MB`/`GB` are decimal units. A recipe selector that matches no files is a
-failure unless `--allow-empty` is asserted. Live recipe execution combines Map
-file evidence with discovery-resolution evidence, so source files omitted by
-the normal ingestion limit are still checked. A saved Map without that exact
-omission evidence remains unknown rather than passing. The native verification
-plan declares whether each project needs provider evidence; inventory-only
-recipes and suites skip lexical, syntax, and semantic scans while graph-backed
-checks retain the complete provider pipeline.
-
-Inspect what a reviewed check actually selected without changing its result:
-
-```bash
-archbird verify debug selection . --check CORE-FILE-SIZE
-archbird verify debug unknown . --format json
-archbird verify debug selection --config architecture.verify.json \
-  --extractor architecture.actual --format json
-archbird verify debug component core .
-archbird verify debug unassigned .
-archbird verify debug overlap . --project subject --limit 50
-```
-
-The debug artifact reports every selected extractor as `complete`, `bounded`,
-`incomplete`, or `unknown`. Counts distinguish the known candidate universe,
-normalized unique selection, evaluated and unknown items, excluded and
-unsupported entities, and enumeration truncation. An unavailable count is
-`null`, never an inferred zero. Literal facts and mapped-file metrics provide
-exact populations; extractors whose providers do not expose their complete
-pre-selection universe remain explicitly bounded. Project discovery coverage
-is reported separately so known unsupported source languages and assets remain
-visible even when a rule intentionally targets mapped source files. Explicit
-`selection_complete` and `enumeration_complete` fields distinguish unknown
-coverage from known truncation; the `unknown` view localizes stale or unknown
-facts, attestations, checks, findings, witnesses, and verification diagnostics.
-The component views use the canonical Map file/component inventory. They report
-exact mapped, assigned, unassigned, overlapping, and empty-component counts,
-plus file witnesses. A multi-project component lookup requires `--project`;
-unknown component names are errors instead of empty success.
-Membership views render at most 200 file witnesses by default; `--limit`
-changes only that projection. Exact `matched`, `rendered`, and `truncated`
-counts remain visible, and verification checks always evaluate every mapped
-file.
-
-Promote reviewed membership intent into the ordinary verification kernel rather
-than relying on a debug command:
+Named projections are reusable configuration for constraints and queries, not a
+separate required CLI stage. One-off primitive operands stay inline:
 
 ```json
 {
-  "extractors": {
-    "architecture.membership": {
-      "kind": "component_membership",
-      "project": "subject"
+  "constraints": {
+    "API-SIZE": {
+      "assert": "cardinality",
+      "actual": {
+        "projection": {
+          "select": "symbols",
+          "paths": ["include/**"],
+          "public_only": true
+        }
+      },
+      "max": 30,
+      "owner": "core",
+      "rationale": "Keep the supported native surface reviewable."
     }
-  },
-  "checks": [
-    {
-      "id": "COMPONENT-COVERAGE",
-      "assert": "numeric_bounds",
-      "actual": "architecture.membership",
-      "min": 1,
-      "owner": "architecture",
-      "rationale": "Every mapped source belongs to a reviewed component."
-    }
-  ]
+  }
 }
 ```
 
-The fact value is the number of components assigned to each mapped source.
-Use `min: 1` to reject unassigned files, `max: 1` to reject overlap, or
-`exact: 1` when both policies are intended. Overlap is not inherently invalid:
-build fixtures, generated adapters, and test support can legitimately belong to
-multiple architectural views.
+Constraint-owned waivers require an ID, owner, rationale, an exact finding
+fingerprint or comparison/key pair, and an expiry date or input-digest boundary.
+Baselines classify new, known, reintroduced, and resolved findings while
+ratcheting covered facts. Cross-repository constraints receive explicitly named
+saved Maps with `--map-input ID=PATH`; behavioral parity receives reviewed
+artifacts with `--observation ID=PATH`. Similar names alone never establish
+semantic equivalence.
 
-Verify supports set/value equality, mapped names/values, directional subsets,
-cardinality, numeric bounds, required/forbidden/allowed edges, acyclicity,
-minimum test routes, and behavioral-attestation equality. Extractors cover
-literal facts, symbols, values, file metrics, component membership,
-component/file edges, exact test selectors, test routes, provider surfaces, Python enums and sets, C
-enums/designated initializers/macros, and supplied attestations.
-
-Facts have three non-interchangeable provenances:
-
-| Provenance | Meaning | Examples |
-| --- | --- | --- |
-| `derived` | deterministically extracted | symbols, edges, registrations |
-| `asserted` | reviewed intent | requirements, mappings, waivers |
-| `observed` | project-runner output | behavior vectors, exact test-to-symbol hits |
-
-Comparison, freshness, applicability, disposition, and baseline state are
-independent; stale, unknown, unsupported, or inapplicable evidence never turns
-into pass. Every check has a stable ID, owner, severity, rationale, optional
-requirement IDs/tags, cited evidence, and stable finding fingerprints.
-
-Multi-project suites support source locks, explicit name/value mappings,
-intentional supersets, reviewed divergences, baselines, waivers, and local
-project-root overrides that do not enter canonical evidence. Use project-owned
-attestations for behavior; similar names alone are not semantic equivalence.
-See [`examples/tinygrad-polygrad.verify.json`](examples/tinygrad-polygrad.verify.json)
-for a porting contract.
-
-Common change intents use the same Verify checks rather than a separate rule
-language:
-
-| Intent | Check shape |
-| --- | --- |
-| require a missing member | `required_subset` or `required_values` |
-| keep renamed providers aligned | `mapped_values_equal` |
-| remove a forbidden dependency | `forbidden_edges` |
-| preserve a public surface | `set_equal` or `required_subset` |
-
-The local application can edit check IDs, owners, requirement IDs, and
-rationale, but every downloaded suite remains an unreviewed candidate. Derived
-findings cannot be edited; the application can instead create an explicit,
-expiring waiver candidate.
+Every constraint has a stable ID, owner, rationale, optional requirement IDs,
+tags and severity. Findings cite exact evidence and separately record
+comparison, evidence state, applicability, disposition, baseline state, and a
+stable fingerprint. JSON, Markdown, SARIF, and JUnit are views of the same
+canonical Verification result.
 
 ## Act: review and judge a change
 
@@ -515,14 +430,14 @@ new derived/observed evidence → derived transition result
 ```
 
 ```bash
-archbird verify . --format json \
-  --output .archbird/before.verify.json
+archbird verify --format json \
+  --output .archbird/before.verification.json
 
-archbird plan --verification .archbird/before.verify.json \
+archbird plan --verification .archbird/before.verification.json \
   --finding FINGERPRINT --format markdown \
   --output .archbird/change.task.md
 
-archbird plan --verification .archbird/before.verify.json \
+archbird plan --verification .archbird/before.verification.json \
   --finding FINGERPRINT --output .archbird/change.proposal.json
 
 archbird contract --proposal .archbird/change.proposal.json \
@@ -531,18 +446,18 @@ archbird contract --proposal .archbird/change.proposal.json \
   --preserve-all --output .archbird/change.contract.json
 
 # An external executor edits, builds, and tests; then regenerate Verify.
-archbird verify . --format json \
-  --output .archbird/after.verify.json
+archbird verify --format json \
+  --output .archbird/after.verification.json
 
 archbird verify-plan \
   --proposal .archbird/change.proposal.json \
   --contract .archbird/change.contract.json \
-  --before-verification .archbird/before.verify.json \
-  --after-verification .archbird/after.verify.json --check
+  --before-verification .archbird/before.verification.json \
+  --after-verification .archbird/after.verification.json --check
 ```
 
 Proposals separate required postconditions, evidence-backed candidates,
-preserved checks, coverage, and unknowns. Contracts are immutable asserted
+preserved constraints, coverage, and unknowns. Contracts are immutable asserted
 review. Results distinguish satisfied, missing, unexpected, unknown, stale,
 and superseded. Candidate paths are advice, not write authorization. Markdown
 task packets show the first 20 evidence rows by default; add `--full` when the
@@ -648,7 +563,7 @@ Canonical Archbird JSON is authoritative. Optional inputs/projections are:
 | Format | Direction | Role |
 | --- | --- | --- |
 | SCIP | input | semantic definitions, references, relationships |
-| OKF v0.1 | Python input/output; Node library projection | browsable knowledge bundle; prose never becomes checks |
+| OKF v0.1 | Python input/output; Node library projection | browsable knowledge bundle; prose never becomes constraints |
 | graph-view JSON | output | typed interactive graph |
 | GraphML, Mermaid | output | graph interchange and bounded diagrams |
 | SARIF, JUnit | output | Verify/change CI integration |
@@ -680,14 +595,15 @@ Cache eviction or write failure never changes canonical analysis output.
 
 ```bash
 archbird map . --format json --output .archbird/map.json --check
-archbird verify . \
+archbird verify \
   --format sarif --output .archbird/architecture.sarif --check
 ```
 
 For agents:
 
 1. Generate one checked canonical Map before broad exploration.
-2. Run the reviewed Verify suite and start from stable check/requirement IDs.
+2. Run the reviewed constraint policy and start from stable constraint and
+   requirement IDs.
 3. Query bounded context and inspect the exact witnesses used for decisions.
 4. Treat candidate/conservative tests as navigation, not execution.
 5. Review every change contract before it becomes asserted intent.
@@ -733,7 +649,7 @@ make native-test
 
 # Build the live source frontends against build/libarchbird.so.
 make build-py
-./archbird .
+./archbird map
 
 make build-js
 node js/src/cli.js .

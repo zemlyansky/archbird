@@ -42,6 +42,12 @@ typedef struct CountingOutput {
   size_t length;
 } CountingOutput;
 
+typedef struct HeapOutput {
+  uint8_t *bytes;
+  size_t length;
+  size_t capacity;
+} HeapOutput;
+
 static int failures;
 static uint8_t *report_map;
 static size_t report_map_length;
@@ -173,6 +179,30 @@ static int count_write(void *user_data, const uint8_t *bytes, size_t length) {
   return 0;
 }
 
+static int heap_write(void *user_data, const uint8_t *bytes, size_t length) {
+  HeapOutput *output = (HeapOutput *)user_data;
+  uint8_t *resized;
+  size_t capacity;
+  if (length > SIZE_MAX - output->length)
+    return 1;
+  if (output->length + length > output->capacity) {
+    capacity = output->capacity ? output->capacity : 4096;
+    while (capacity < output->length + length) {
+      if (capacity > SIZE_MAX / 2)
+        return 1;
+      capacity *= 2;
+    }
+    resized = (uint8_t *)realloc(output->bytes, capacity);
+    if (!resized)
+      return 1;
+    output->bytes = resized;
+    output->capacity = capacity;
+  }
+  memcpy(output->bytes + output->length, bytes, length);
+  output->length += length;
+  return 0;
+}
+
 static ArchbirdStatus exercise_json(TestAllocator *allocator) {
   static const char input[] =
       "{\"z\":[3,2,1,{\"nested\":true}],\"a\":1.25,\"text\":\"value\"}";
@@ -255,7 +285,7 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
       "\"name\":\"allocator-test\",\"version\":\"1\"},\"project\":"
       "\"allocator-test\",\"schema_version\":1}";
   static const char config[] =
-      "{\"schema_version\":1,\"project\":\"allocator-test\","
+      "{\"schema_version\":2,\"project\":\"allocator-test\","
       "\"description\":\"Allocator ownership fixture\",\"layers\":[{"
       "\"name\":\"core\",\"role\":\"core\",\"language\":\"c\","
       "\"globs\":[\"src/**\"]}],\"components\":[{\"name\":\"core\","
@@ -314,7 +344,7 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
 static ArchbirdStatus exercise_scip(TestAllocator *allocator) {
   static const uint8_t source[] = "int add(void) { return 1; }\n";
   static const char config[] =
-      "{\"schema_version\":1,\"project\":\"allocator-scip\",\"layers\":[{"
+      "{\"schema_version\":2,\"project\":\"allocator-scip\",\"layers\":[{"
       "\"name\":\"core\",\"role\":\"core\",\"language\":\"c\","
       "\"globs\":[\"src/**\"]}],\"indexes\":[{\"name\":\"compiler\","
       "\"format\":\"scip\",\"path\":\"valid.scip\"}]}";
@@ -513,35 +543,31 @@ exercise_verification_query_report(TestAllocator *allocator) {
 }
 
 static ArchbirdStatus exercise_verify(TestAllocator *allocator) {
-  static const char suite[] =
-      "{\"schema_version\":1,\"suite\":\"allocator-test\",\"projects\":{"
-      "\"subject\":{\"map\":\"subject.json\"}},\"extractors\":{\"expected\":{"
-      "\"kind\":\"literal_set\",\"values\":[\"A\"]},\"actual\":{\"kind\":"
-      "\"literal_set\",\"values\":[\"B\"]}},\"checks\":[{\"id\":"
-      "\"ALLOC-VERIFY\",\"assert\":\"set_equal\",\"expected\":\"expected\","
-      "\"actual\":\"actual\",\"owner\":\"test\",\"rationale\":"
-      "\"Exercise allocator ownership through Verify.\"}]}";
-  static const char input[] =
-      "{\"schema_version\":1,\"artifact\":\"verification-input\","
-      "\"suite_path\":\"allocator.verify.json\",\"projects\":[{\"name\":"
-      "\"subject\",\"map\":{\"artifact\":\"map\",\"schema_version\":6,"
-      "\"project\":\"allocator-test\",\"evidence\":{\"config_sha256\":"
-      "\"1111111111111111111111111111111111111111111111111111111111111111\","
+  static const char config[] =
+      "{\"constraints\":{\"ALLOC-VERIFY\":{\"actual\":{\"literal\":[\"B\"]},"
+      "\"assert\":\"set_equal\",\"expected\":{\"literal\":[\"A\"]},"
+      "\"owner\":\"test\",\"rationale\":\"Exercise allocator ownership "
+      "through constraints.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
+      "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
+      "\"project\":\"allocator-test\",\"schema_version\":2}";
+  static const char map[] =
+      "{\"artifact\":\"map\",\"diagnostics\":[],\"evidence\":{"
+      "\"config_sha256\":"
+      "\"07aba52df9d1c027596c7ff22c340e21734e8f5065c76161dae6859605dc309d\","
       "\"input_sha256\":"
       "\"2222222222222222222222222222222222222222222222222222222222222222\"},"
-      "\"tool\":{\"name\":\"archbird\",\"version\":\"fixture\","
+      "\"project\":\"allocator-test\",\"schema_version\":7,\"tool\":{"
       "\"implementation_sha256\":"
-      "\"3333333333333333333333333333333333333333333333333333333333333333\"},"
-      "\"diagnostics\":[]},\"sources\":[]}],\"provided_facts\":[],"
-      "\"attestations\":[],\"baseline\":null}";
+      "\"3333333333333333333333333333333333333333333333333333333333333333\","
+      "\"name\":\"archbird\",\"version\":\"fixture\"}}";
   ArchbirdStatus status;
   ArchbirdEngine *engine = create_engine(allocator, &status);
   CountingOutput output = {0};
   if (!engine)
     return status;
-  status = archbird_verification_analyze(
-      engine, (const uint8_t *)suite, sizeof(suite) - 1, (const uint8_t *)input,
-      sizeof(input) - 1, 0, count_write, &output);
+  status = archbird_constraints_evaluate(
+      engine, (const uint8_t *)config, sizeof(config) - 1, (const uint8_t *)map,
+      sizeof(map) - 1, NULL, 0, NULL, 0, 0, count_write, &output);
   if (status == ARCHBIRD_OK && !output.length)
     status = ARCHBIRD_CONFLICT;
   archbird_engine_destroy(engine);
@@ -550,45 +576,36 @@ static ArchbirdStatus exercise_verify(TestAllocator *allocator) {
 
 static ArchbirdStatus exercise_verify_authoring(TestAllocator *allocator) {
   static const char map[] =
-      "{\"artifact\":\"map\",\"components\":[{\"name\":\"api\","
-      "\"outgoing\":{\"core\":[\"src/api.c\"]}},{\"name\":\"core\","
-      "\"outgoing\":{}}],\"project\":\"allocator-test\","
-      "\"schema_version\":7}";
-  static const char suite[] =
-      "{\"schema_version\":1,\"suite\":\"allocator-test\",\"projects\":{"
-      "\"subject\":{\"map\":\"subject.json\"}},\"extractors\":{\"expected\":{"
-      "\"kind\":\"literal_set\",\"values\":[\"A\"]},\"actual\":{\"kind\":"
-      "\"literal_set\",\"values\":[\"B\"]}},\"checks\":[{\"id\":"
-      "\"ALLOC-AUTHOR\",\"assert\":\"set_equal\",\"expected\":\"expected\","
-      "\"actual\":\"actual\",\"owner\":\"test\",\"rationale\":"
-      "\"Exercise allocator ownership through authoring.\"}]}";
-  static const char input[] =
-      "{\"schema_version\":1,\"artifact\":\"verification-input\","
-      "\"suite_path\":\"allocator.verify.json\",\"projects\":[{\"name\":"
-      "\"subject\",\"map\":{\"artifact\":\"map\",\"schema_version\":6,"
-      "\"project\":\"allocator-test\",\"evidence\":{\"config_sha256\":"
-      "\"1111111111111111111111111111111111111111111111111111111111111111\","
+      "{\"artifact\":\"map\",\"diagnostics\":[],\"evidence\":{"
+      "\"config_sha256\":"
+      "\"07aba52df9d1c027596c7ff22c340e21734e8f5065c76161dae6859605dc309d\","
       "\"input_sha256\":"
       "\"2222222222222222222222222222222222222222222222222222222222222222\"},"
-      "\"tool\":{\"name\":\"archbird\",\"version\":\"fixture\","
+      "\"project\":\"allocator-test\",\"schema_version\":7,\"tool\":{"
       "\"implementation_sha256\":"
-      "\"3333333333333333333333333333333333333333333333333333333333333333\"},"
-      "\"diagnostics\":[]},\"sources\":[]}],\"provided_facts\":[],"
-      "\"attestations\":[],\"baseline\":null}";
+      "\"3333333333333333333333333333333333333333333333333333333333333333\","
+      "\"name\":\"archbird\",\"version\":\"fixture\"}}";
+  static const char config[] =
+      "{\"constraints\":{\"ALLOC-AUTHOR\":{\"actual\":{\"literal\":[\"B\"]},"
+      "\"assert\":\"set_equal\",\"expected\":{\"literal\":[\"A\"]},"
+      "\"owner\":\"test\",\"rationale\":\"Exercise allocator ownership "
+      "through authoring.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
+      "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
+      "\"project\":\"allocator-test\",\"schema_version\":2}";
   ArchbirdStatus status;
   ArchbirdEngine *engine = create_engine(allocator, &status);
   FixedOutput output = {{0}, 0};
   if (!engine)
     return status;
-  status = archbird_verification_draft(
-      engine, (const uint8_t *)map, sizeof(map) - 1, "archbird.json",
-      sizeof("archbird.json") - 1, 0, fixed_write, &output);
+  status = archbird_project_configuration_compile(
+      engine, (const uint8_t *)config, sizeof(config) - 1, 0, fixed_write,
+      &output);
   if (status == ARCHBIRD_OK) {
     output.length = 0;
-    status = archbird_verification_freeze(
-        engine, (const uint8_t *)suite, sizeof(suite) - 1,
-        (const uint8_t *)input, sizeof(input) - 1, "test", sizeof("test") - 1,
-        "Reviewed allocator baseline.",
+    status = archbird_constraints_freeze(
+        engine, (const uint8_t *)config, sizeof(config) - 1,
+        (const uint8_t *)map, sizeof(map) - 1, NULL, 0, NULL, 0, "test",
+        sizeof("test") - 1, "Reviewed allocator baseline.",
         sizeof("Reviewed allocator baseline.") - 1, 0, fixed_write, &output);
   }
   if (status == ARCHBIRD_OK && !output.length)
@@ -625,31 +642,27 @@ static int first_fingerprint(const FixedOutput *verification,
 }
 
 static ArchbirdStatus exercise_act(TestAllocator *allocator) {
-  static const char suite[] =
-      "{\"schema_version\":1,\"suite\":\"allocator-test\",\"projects\":{"
-      "\"subject\":{\"map\":\"subject.json\"}},\"extractors\":{\"expected\":{"
-      "\"kind\":\"literal_set\",\"values\":[\"A\"]},\"actual\":{\"kind\":"
-      "\"literal_set\",\"values\":[\"B\"]}},\"checks\":[{\"id\":"
-      "\"ALLOC-ACT\",\"assert\":\"set_equal\",\"expected\":\"expected\","
-      "\"actual\":\"actual\",\"owner\":\"test\",\"rationale\":"
-      "\"Exercise allocator ownership through Act.\"}]}";
-  static const char input[] =
-      "{\"schema_version\":1,\"artifact\":\"verification-input\","
-      "\"suite_path\":\"allocator.verify.json\",\"projects\":[{\"name\":"
-      "\"subject\",\"map\":{\"artifact\":\"map\",\"schema_version\":6,"
-      "\"project\":\"allocator-test\",\"evidence\":{\"config_sha256\":"
-      "\"1111111111111111111111111111111111111111111111111111111111111111\","
+  static const char config[] =
+      "{\"constraints\":{\"ALLOC-ACT\":{\"actual\":{\"literal\":[\"B\"]},"
+      "\"assert\":\"set_equal\",\"expected\":{\"literal\":[\"A\"]},"
+      "\"owner\":\"test\",\"rationale\":\"Exercise allocator ownership "
+      "through Act.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
+      "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
+      "\"project\":\"allocator-test\",\"schema_version\":2}";
+  static const char map[] =
+      "{\"artifact\":\"map\",\"diagnostics\":[],\"evidence\":{"
+      "\"config_sha256\":"
+      "\"07aba52df9d1c027596c7ff22c340e21734e8f5065c76161dae6859605dc309d\","
       "\"input_sha256\":"
       "\"2222222222222222222222222222222222222222222222222222222222222222\"},"
-      "\"tool\":{\"name\":\"archbird\",\"version\":\"fixture\","
+      "\"project\":\"allocator-test\",\"schema_version\":7,\"tool\":{"
       "\"implementation_sha256\":"
-      "\"3333333333333333333333333333333333333333333333333333333333333333\"},"
-      "\"diagnostics\":[]},\"sources\":[]}],\"provided_facts\":[],"
-      "\"attestations\":[],\"baseline\":null}";
+      "\"3333333333333333333333333333333333333333333333333333333333333333\","
+      "\"name\":\"archbird\",\"version\":\"fixture\"}}";
   static const char review[] =
       "{\"objective\":\"Exercise the reviewed allocator transition.\","
       "\"owner\":\"test\",\"rationale\":\"Allocation failures must not leak "
-      "Act state.\",\"preserve_checks\":[],\"selected_candidates\":[]}";
+      "Act state.\",\"preserve_constraints\":[],\"selected_candidates\":[]}";
   ArchbirdStatus status;
   ArchbirdEngine *engine = create_engine(allocator, &status);
   FixedOutput verification = {{0}, 0};
@@ -659,9 +672,9 @@ static ArchbirdStatus exercise_act(TestAllocator *allocator) {
   const char *fingerprint = NULL;
   if (!engine)
     return status;
-  status = archbird_verification_analyze(
-      engine, (const uint8_t *)suite, sizeof(suite) - 1, (const uint8_t *)input,
-      sizeof(input) - 1, 0, fixed_write, &verification);
+  status = archbird_constraints_evaluate(
+      engine, (const uint8_t *)config, sizeof(config) - 1, (const uint8_t *)map,
+      sizeof(map) - 1, NULL, 0, NULL, 0, 0, fixed_write, &verification);
   if (status == ARCHBIRD_OK && !first_fingerprint(&verification, &fingerprint))
     status = ARCHBIRD_CONFLICT;
   if (status == ARCHBIRD_OK)
@@ -769,23 +782,83 @@ static int load_fixture(const char *path, uint8_t **bytes, size_t *size) {
     fclose(file);
     return 0;
   }
-  *bytes = (uint8_t *)malloc((size_t)length);
+  if ((unsigned long)length >= SIZE_MAX) {
+    fclose(file);
+    return 0;
+  }
+  *bytes = (uint8_t *)malloc((size_t)length + 1);
   if (!*bytes || fread(*bytes, 1, (size_t)length, file) != (size_t)length) {
     free(*bytes);
     *bytes = NULL;
     fclose(file);
     return 0;
   }
+  (*bytes)[length] = '\0';
   fclose(file);
   *size = (size_t)length;
+  return 1;
+}
+
+static int generate_report_verification(void) {
+  static const char config[] =
+      "{\"constraints\":{\"ALLOC-OVERLAY\":{\"actual\":{\"literal\":[\"x\"]},"
+      "\"assert\":\"set_equal\",\"expected\":{\"literal\":[\"y\"]},"
+      "\"owner\":\"test\",\"rationale\":\"Exercise query overlay "
+      "allocation ownership.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
+      "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
+      "\"project\":\"sample\",\"schema_version\":2}";
+  ArchbirdEngineOptions options;
+  ArchbirdEngine *engine = NULL;
+  HeapOutput plan = {0};
+  HeapOutput output = {0};
+  const char *plan_digest;
+  char *map_digest;
+  ArchbirdStatus status;
+  archbird_engine_options_init(&options);
+  status = archbird_engine_create(&options, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_configuration_compile(
+        engine, (const uint8_t *)config, sizeof(config) - 1, 0, heap_write,
+        &plan);
+  if (status == ARCHBIRD_OK) {
+    uint8_t *terminated = (uint8_t *)realloc(plan.bytes, plan.length + 1);
+    if (!terminated)
+      status = ARCHBIRD_OUT_OF_MEMORY;
+    else {
+      plan.bytes = terminated;
+      plan.capacity = plan.length + 1;
+      plan.bytes[plan.length] = '\0';
+      plan_digest =
+          strstr((const char *)plan.bytes, "\"map_config_sha256\":\"");
+      map_digest = strstr((char *)report_map, "\"config_sha256\":\"");
+      if (!plan_digest || !map_digest)
+        status = ARCHBIRD_INVALID_SCHEMA;
+      else {
+        plan_digest += sizeof("\"map_config_sha256\":\"") - 1;
+        map_digest += sizeof("\"config_sha256\":\"") - 1;
+        memcpy(map_digest, plan_digest, 64);
+      }
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    status = archbird_constraints_evaluate(
+        engine, (const uint8_t *)config, sizeof(config) - 1, report_map,
+        report_map_length, NULL, 0, NULL, 0, 0, heap_write, &output);
+  archbird_engine_destroy(engine);
+  free(plan.bytes);
+  if (status != ARCHBIRD_OK) {
+    free(output.bytes);
+    return 0;
+  }
+  report_verification = output.bytes;
+  report_verification_length = output.length;
   return 1;
 }
 
 int main(void) {
   if (!load_fixture(ARCHBIRD_ALLOCATOR_REPORT_MAP, &report_map,
                     &report_map_length) ||
-      !load_fixture(ARCHBIRD_ALLOCATOR_VERIFICATION, &report_verification,
-                    &report_verification_length)) {
+      !generate_report_verification()) {
     fail("report-fixtures", "cannot load report allocator fixtures");
     free(report_map);
     free(report_verification);

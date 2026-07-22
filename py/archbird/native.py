@@ -27,7 +27,6 @@ from .provider_cache import MapCacheStats, ProviderCache, ProviderCacheStats
 from .providers import (
     python_ast_implementation_sha256,
     python_ast_provider_facts,
-    python_verification_fact,
 )
 
 
@@ -1086,424 +1085,6 @@ class Workspace:
         return json.loads(self.json())
 
 
-class Verification:
-    """Host-loaded evidence evaluated by the I/O-free native Verify core."""
-
-    def __init__(self, suite_json: bytes, input_json: bytes, *, path: Path) -> None:
-        self.suite_json = bytes(suite_json)
-        self.input_json = bytes(input_json)
-        self.path = path
-
-    @classmethod
-    def from_config(
-        cls,
-        suite_path: Union[str, Path],
-        *,
-        project_roots: Optional[Mapping[str, Union[str, Path]]] = None,
-        baseline: Optional[Union[str, Path]] = None,
-        jobs: int = 0,
-        cache_dir: Optional[Union[str, Path]] = None,
-        cache_max_bytes: Optional[int] = None,
-    ) -> "Verification":
-        """Load only the paths declared by a validated verification plan."""
-
-        path = Path(suite_path).resolve()
-        try:
-            suite_json = path.read_bytes()
-        except OSError as error:
-            raise ConfigError(f"cannot read verification suite: {path}: {error}") from error
-        plan = json.loads(verification_plan_json(suite_json))
-        suite = _strict_document(suite_json, "verification suite")
-        extractors = suite.get("extractors", {})
-        base = path.parent
-        overrides = {
-            str(name): Path(value).resolve()
-            for name, value in (project_roots or {}).items()
-        }
-        expected_names = {str(row["name"]) for row in plan["projects"]}
-        unknown_overrides = sorted(set(overrides) - expected_names)
-        if unknown_overrides:
-            raise ConfigError(
-                "unknown verification project root overrides: "
-                + ", ".join(unknown_overrides)
-            )
-        source_plan: dict[str, list[Mapping[str, object]]] = {}
-        for row in plan["sources"]:
-            source_plan.setdefault(str(row["project"]), []).append(row)
-
-        projects = []
-        project_inputs: dict[str, dict[str, object]] = {}
-        repository_roots: dict[str, Optional[Path]] = {}
-        source_text: dict[tuple[str, str], str] = {}
-        for row in plan["projects"]:
-            name = str(row["name"])
-            asserted_root = (
-                (base / str(row["root"])).resolve()
-                if row["root"] is not None
-                else None
-            )
-            root = overrides.get(name, asserted_root)
-            project: Optional[Project] = None
-            if row["config"] is not None:
-                config_path = (base / str(row["config"])).resolve()
-                project = Project.from_config(
-                    config_path,
-                    root=root,
-                    scan=False,
-                    jobs=jobs,
-                    cache_dir=cache_dir,
-                    cache_max_bytes=cache_max_bytes,
-                )
-                if row["provider_scan"]:
-                    project.scan(
-                        jobs=jobs,
-                        cache_dir=cache_dir,
-                        cache_max_bytes=cache_max_bytes,
-                    )
-                else:
-                    project.finalize_providers()
-                map_document = _strict_document(
-                    project.map_json(), f"project {name} map"
-                )
-                repository_root = project.root
-                available = {source.path: source.data for source in project.sources}
-            else:
-                map_path = (base / str(row["map"])).resolve()
-                try:
-                    map_bytes = map_path.read_bytes()
-                except OSError as error:
-                    raise ConfigError(
-                        f"cannot read project {name} map: {map_path}: {error}"
-                    ) from error
-                map_document = _strict_document(map_bytes, f"project {name} map")
-                repository_root = root
-                available = {}
-
-            sources = []
-            loaded_source_paths: set[str] = set()
-            for source_row in source_plan.get(name, []):
-                source_path = str(source_row["path"])
-                if source_path in loaded_source_paths:
-                    continue
-                data = available.get(source_path)
-                if data is None:
-                    if repository_root is None:
-                        raise ConfigError(
-                            f"project {name}: verification source {source_path!r} "
-                            "requires a suite root or --project-root override"
-                        )
-                    candidate = (repository_root / source_path).resolve()
-                    try:
-                        candidate.relative_to(repository_root.resolve())
-                    except ValueError as error:
-                        raise ConfigError(
-                            f"project {name}: source path escapes root: {source_path}"
-                        ) from error
-                    try:
-                        data = candidate.read_bytes()
-                    except OSError as error:
-                        raise ConfigError(
-                            f"project {name}: cannot read {source_path}: {error}"
-                        ) from error
-                try:
-                    text = data.decode("utf-8")
-                except UnicodeDecodeError as error:
-                    raise ConfigError(
-                        f"project {name}: invalid UTF-8 in {source_path}: {error}"
-                    ) from error
-                source_text[(name, source_path)] = text
-                sources.append({"path": source_path, "text": text})
-                loaded_source_paths.add(source_path)
-            # Map-backed extractors can cite configuration/build/provider paths
-            # that are intentionally absent from the public file inventory.
-            # Preserve current-byte evidence for every configured manifest
-            # input without decoding or duplicating its text in the envelope.
-            for source_path, data in sorted(available.items()):
-                if source_path in loaded_source_paths:
-                    continue
-                sources.append(
-                    {
-                        "path": source_path,
-                        "sha256": hashlib.sha256(data).hexdigest(),
-                    }
-                )
-                loaded_source_paths.add(source_path)
-            sources.sort(key=lambda source: str(source["path"]))
-            project_input = {
-                "name": name,
-                "map": map_document,
-                "sources": sources,
-            }
-            projects.append(project_input)
-            project_inputs[name] = project_input
-            repository_roots[name] = repository_root
-
-        provided_facts = []
-        for row in plan["sources"]:
-            if row["provider"] != "python-ast":
-                continue
-            name = str(row["extractor"])
-            project_name = str(row["project"])
-            source_path = str(row["path"])
-            provided_facts.append(
-                python_verification_fact(
-                    name=name,
-                    spec=extractors[name],
-                    project=project_name,
-                    path=source_path,
-                    text=source_text[(project_name, source_path)],
-                )
-            )
-
-        attestations = []
-        for row in plan["attestations"]:
-            attestation_path = (base / str(row["path"])).resolve()
-            try:
-                raw = attestation_path.read_bytes()
-            except OSError as error:
-                message = f"cannot read attestation {attestation_path}: {error}"
-                attestations.append(
-                    {
-                        "name": str(row["name"]),
-                        "path": str(row["path"]),
-                        "error": message.replace(
-                            str(attestation_path), str(row["path"])
-                        ),
-                    }
-                )
-                continue
-            try:
-                document = _strict_document(
-                    raw, f"verification attestation {row['name']}"
-                )
-            except ConfigError as error:
-                attestations.append(
-                    {
-                        "name": str(row["name"]),
-                        "path": str(row["path"]),
-                        "error": str(error).replace(
-                            str(attestation_path), str(row["path"])
-                        ),
-                    }
-                )
-                continue
-            attestations.append(
-                {
-                    "name": str(row["name"]),
-                    "path": str(row["path"]),
-                    "document": document,
-                }
-            )
-            producer = document.get("producer")
-            evidence_rows = (
-                producer.get("evidence", [])
-                if isinstance(producer, Mapping)
-                else []
-            )
-            project_name = str(row["project"])
-            repository_root = repository_roots[project_name]
-            if repository_root is None or not isinstance(evidence_rows, list):
-                continue
-            project_sources = project_inputs[project_name]["sources"]
-            assert isinstance(project_sources, list)
-            known_paths = {
-                str(source["path"])
-                for source in project_sources
-                if isinstance(source, Mapping) and "path" in source
-            }
-            for evidence in evidence_rows:
-                if not isinstance(evidence, Mapping) or not isinstance(
-                    evidence.get("path"), str
-                ):
-                    continue
-                evidence_path = str(evidence["path"])
-                if evidence_path in known_paths:
-                    continue
-                candidate = (repository_root / evidence_path).resolve()
-                try:
-                    candidate.relative_to(repository_root.resolve())
-                except ValueError:
-                    project_sources.append(
-                        {"path": evidence_path, "error": "path escapes project root"}
-                    )
-                    known_paths.add(evidence_path)
-                    continue
-                try:
-                    evidence_bytes = candidate.read_bytes()
-                except OSError as error:
-                    portable_error = str(error).replace(str(candidate), evidence_path)
-                    project_sources.append(
-                        {"path": evidence_path, "error": portable_error}
-                    )
-                else:
-                    project_sources.append(
-                        {
-                            "path": evidence_path,
-                            "sha256": hashlib.sha256(evidence_bytes).hexdigest(),
-                        }
-                    )
-                known_paths.add(evidence_path)
-            project_sources.sort(key=lambda source: str(source["path"]))
-
-        baseline_document = None
-        if baseline is not None:
-            baseline_path = Path(baseline).resolve()
-            try:
-                raw_baseline = baseline_path.read_bytes()
-            except OSError as error:
-                raise ConfigError(
-                    f"cannot read verification baseline: {baseline_path}: {error}"
-                ) from error
-            baseline_document = _strict_document(raw_baseline, "verification baseline")
-
-        input_document = {
-            "schema_version": 1,
-            "artifact": "verification-input",
-            "suite_path": path.name,
-            "projects": projects,
-            "provided_facts": provided_facts,
-            "attestations": attestations,
-            "baseline": baseline_document,
-        }
-        return cls(suite_json, _canonical(input_document), path=path)
-
-    @classmethod
-    def from_map(
-        cls,
-        suite_json: bytes,
-        map_json: bytes,
-        *,
-        resolution_json: Optional[bytes] = None,
-        path: Union[str, Path] = "recipe.verify.json",
-    ) -> "Verification":
-        """Evaluate a map-only suite without materializing temporary files."""
-
-        suite = _strict_document(suite_json, "verification suite")
-        map_document = _strict_document(map_json, "project map")
-        plan = json.loads(verification_plan_json(_canonical(suite)))
-        projects = plan.get("projects")
-        if not isinstance(projects, list) or len(projects) != 1:
-            raise ConfigError("map-only verification requires exactly one project")
-        if plan.get("sources") or plan.get("attestations"):
-            raise ConfigError(
-                "map-only verification cannot satisfy source or attestation inputs"
-            )
-        project_name = projects[0].get("name")
-        if not isinstance(project_name, str) or not project_name:
-            raise ConfigError("verification plan has an invalid project name")
-        project_input = {"name": project_name, "map": map_document, "sources": []}
-        if resolution_json is not None:
-            project_input["resolution"] = _strict_document(
-                resolution_json, "project discovery resolution"
-            )
-        input_document = {
-            "schema_version": 1,
-            "artifact": "verification-input",
-            "suite_path": Path(path).name,
-            "projects": [project_input],
-            "provided_facts": [],
-            "attestations": [],
-            "baseline": None,
-        }
-        return cls(_canonical(suite), _canonical(input_document), path=Path(path))
-
-    def result_json(self, *, pretty: bool = False) -> bytes:
-        return verification_analyze_json(
-            self.suite_json, self.input_json, pretty=pretty
-        )
-
-    def result(self) -> Mapping[str, object]:
-        return json.loads(self.result_json())
-
-    def report(
-        self,
-        format: str,
-        *,
-        full: bool = False,
-        max_findings: int = 200,
-        pretty: bool = True,
-    ) -> bytes:
-        """Render a complete machine report or bounded Markdown projection."""
-
-        if format == "json":
-            return self.result_json(pretty=pretty)
-        if max_findings < 0:
-            raise ValueError("max_findings must be nonnegative")
-        return verification_report(
-            self.suite_json,
-            self.input_json,
-            format=format,
-            max_findings=-1 if full else max_findings,
-            pretty=pretty,
-        )
-
-    def debug(
-        self,
-        view: str,
-        *,
-        check: Optional[str] = None,
-        extractor: Optional[str] = None,
-        project: Optional[str] = None,
-        component: Optional[str] = None,
-        limit: Optional[int] = None,
-        format: str = "json",
-        pretty: bool = True,
-    ) -> bytes:
-        """Explain selection completeness or unresolved verification evidence."""
-
-        request: dict[str, object] = {
-            "artifact": "verification-debug-request",
-            "schema_version": 1,
-            "view": view,
-        }
-        if check is not None:
-            request["check"] = check
-        if extractor is not None:
-            request["extractor"] = extractor
-        if project is not None:
-            request["project"] = project
-        if component is not None:
-            request["component"] = component
-        if limit is not None:
-            if limit < 0:
-                raise ValueError("limit must be nonnegative")
-            request["limit"] = limit
-        return verification_debug(
-            self.suite_json,
-            self.input_json,
-            _canonical(request),
-            format=format,
-            pretty=pretty,
-        )
-
-    def has_errors(self) -> bool:
-        return bool(self.result()["summary"]["blocking"])
-
-    def freeze(self, *, owner: str, rationale: str, pretty: bool = True) -> bytes:
-        """Render an explicit violation and coverage-ratchet baseline."""
-
-        return _native.verification_freeze(
-            self.suite_json,
-            self.input_json,
-            owner=owner,
-            rationale=rationale,
-            pretty=pretty,
-        )
-
-
-def draft_verification_suite(
-    project: Project,
-    *,
-    project_config: str,
-    pretty: bool = True,
-) -> bytes:
-    """Draft a candidate component-edge suite from one current Map."""
-
-    return _native.verification_draft(
-        project.map_json(), project_config, pretty=pretty
-    )
-
-
 def _query_request(
     *,
     focus: Sequence[str] = (),
@@ -1516,6 +1097,8 @@ def _query_request(
     search_limit: int = 8,
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
+    plan: Optional[Mapping[str, object]] = None,
+    projection_results: Sequence[Mapping[str, object]] = (),
     direction: str = "both",
     producer_policy: str = "compatible",
     depth: int = 1,
@@ -1539,7 +1122,41 @@ def _query_request(
         request["context"] = dict(context)
     if change_set is not None:
         request["change_set"] = dict(change_set)
+    if plan is not None:
+        request["plan"] = dict(plan)
+    if projection_results:
+        request["projection_results"] = [dict(row) for row in projection_results]
     return _canonical(request)
+
+
+def _query_request_with_plan(
+    map_json: bytes, request: bytes, resolution_json: bytes
+) -> bytes:
+    document = json.loads(request)
+    if "plan" in document:
+        return request
+    definition = {
+        name: value
+        for name, value in document.items()
+        if name not in {"change_set", "producer_policy"}
+    }
+    artifact = json.loads(
+        _native.query_plan_compile(
+            b"",
+            map_json,
+            "",
+            resolution_json=resolution_json,
+            overrides_json=_canonical(definition),
+            pretty=False,
+        )
+    )
+    planned = dict(artifact["request"])
+    planned["producer_policy"] = document["producer_policy"]
+    if "change_set" in document:
+        planned["change_set"] = document["change_set"]
+    planned["plan"] = artifact["plan"]
+    planned["projection_results"] = artifact["projection_results"]
+    return _canonical(planned)
 
 
 def query_map_json(
@@ -1555,10 +1172,13 @@ def query_map_json(
     search_limit: int = 8,
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
+    plan: Optional[Mapping[str, object]] = None,
+    projection_results: Sequence[Mapping[str, object]] = (),
     direction: str = "both",
     producer_policy: str = "compatible",
     depth: int = 1,
     test_depth: int = 8,
+    resolution_json: bytes = b"",
     pretty: bool = False,
 ) -> bytes:
     request = _query_request(
@@ -1567,6 +1187,8 @@ def query_map_json(
         symbols=symbols,
         components=components,
         context=context,
+        plan=plan,
+        projection_results=projection_results,
         packages=packages,
         artifacts=artifacts,
         search=search,
@@ -1577,7 +1199,11 @@ def query_map_json(
         depth=depth,
         test_depth=test_depth,
     )
-    return _native.map_query(map_json, request, pretty=pretty)
+    return _native.map_query(
+        map_json,
+        _query_request_with_plan(map_json, request, resolution_json),
+        pretty=pretty,
+    )
 
 
 def render_map_markdown(
@@ -1620,6 +1246,8 @@ def query_map_markdown(
     search_limit: int = 8,
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
+    plan: Optional[Mapping[str, object]] = None,
+    projection_results: Sequence[Mapping[str, object]] = (),
     direction: str = "both",
     producer_policy: str = "compatible",
     depth: int = 1,
@@ -1630,6 +1258,7 @@ def query_map_markdown(
     full: bool = False,
     max_chars: int = 0,
     verification_result: bytes = b"",
+    resolution_json: bytes = b"",
 ) -> bytes:
     """Project a canonical Query as focused context or a change brief."""
 
@@ -1654,6 +1283,8 @@ def query_map_markdown(
         symbols=symbols,
         components=components,
         context=context,
+        plan=plan,
+        projection_results=projection_results,
         packages=packages,
         artifacts=artifacts,
         search=search,
@@ -1666,7 +1297,7 @@ def query_map_markdown(
     )
     return _native.map_query_markdown_view(
         map_json,
-        request,
+        _query_request_with_plan(map_json, request, resolution_json),
         views[view],
         details[selected_detail],
         max_chars=max_chars,
@@ -2095,74 +1726,113 @@ def analyze_workspace_json(
     return _native.workspace_analyze(config_json, maps_json, pretty=pretty)
 
 
-def verification_plan_json(
-    suite_json: bytes, *, pretty: bool = False
+def compile_project_configuration(
+    config_json: bytes, *, pretty: bool = False
 ) -> bytes:
-    """Validate a suite and return the native host-loading plan."""
+    """Validate and normalize one schema-2 archbird.json document."""
 
-    return _native.verification_plan(suite_json, pretty=pretty)
-
-
-def verification_analyze_json(
-    suite_json: bytes, input_json: bytes, *, pretty: bool = False
-) -> bytes:
-    """Evaluate one reviewed suite over a host-built verification input."""
-
-    return _native.verification_analyze(
-        suite_json, input_json, pretty=pretty
-    )
+    return _native.project_configuration_compile(config_json, pretty=pretty)
 
 
-def verification_debug(
-    suite_json: bytes,
-    input_json: bytes,
-    request_json: bytes,
+def evaluate_projection_json(
+    map_json: bytes,
+    projection: Mapping[str, object],
     *,
-    format: str = "json",
-    pretty: bool = True,
+    resolution_json: bytes = b"",
+    pretty: bool = False,
 ) -> bytes:
-    """Render native selection or unknown-evidence debugging."""
+    """Evaluate one exhaustive typed projection over canonical Map evidence."""
 
-    return _native.verification_debug(
-        suite_json,
-        input_json,
-        request_json,
-        format=format,
+    return _native.projection_evaluate(
+        map_json,
+        _canonical(projection),
+        resolution_json=resolution_json,
         pretty=pretty,
     )
 
 
-def verification_recipe_catalog(
-    recipe: str = "", *, pretty: bool = False
-) -> bytes:
-    """Return the shared native verification recipe catalog."""
-
-    return _native.verification_recipe_catalog(recipe, pretty=pretty)
-
-
-def compile_verification_recipe(
-    request_json: bytes, *, pretty: bool = False
-) -> bytes:
-    """Compile explicit recipe arguments into an ordinary Verify suite."""
-
-    return _native.verification_recipe_compile(request_json, pretty=pretty)
-
-
-def verification_report(
-    suite_json: bytes,
-    input_json: bytes,
+def evaluate_constraints_json(
+    config_json: bytes,
+    map_json: bytes,
     *,
-    format: str,
+    constraint_ids: Sequence[str] = (),
+    baseline: Optional[Mapping[str, object]] = None,
+    maps: Optional[Mapping[str, Mapping[str, object]]] = None,
+    observations: Optional[Mapping[str, Mapping[str, object]]] = None,
+    policy_date: Optional[str] = None,
+    resolution_json: bytes = b"",
+    format: str = "json",
     max_findings: int = 200,
+    pretty: bool = False,
+) -> bytes:
+    """Evaluate all or selected schema-2 project constraints."""
+
+    request: dict[str, object] = {}
+    if constraint_ids:
+        request["ids"] = list(constraint_ids)
+    if baseline is not None:
+        request["baseline"] = dict(baseline)
+    if maps is not None:
+        request["maps"] = {name: dict(document) for name, document in maps.items()}
+    if observations is not None:
+        request["observations"] = {
+            name: dict(document) for name, document in observations.items()
+        }
+    if policy_date is not None:
+        request["policy_date"] = policy_date
+    request_json = _canonical(request) if request else b""
+    if format == "json":
+        return _native.constraints_evaluate(
+            config_json,
+            map_json,
+            resolution_json=resolution_json,
+            request_json=request_json,
+            pretty=pretty,
+        )
+    return _native.constraints_report(
+        config_json,
+        map_json,
+        format,
+        resolution_json=resolution_json,
+        request_json=request_json,
+        max_findings=max_findings,
+        pretty=pretty,
+    )
+
+
+def freeze_constraints_json(
+    config_json: bytes,
+    map_json: bytes,
+    *,
+    owner: str,
+    rationale: str,
+    baseline: Optional[Mapping[str, object]] = None,
+    maps: Optional[Mapping[str, Mapping[str, object]]] = None,
+    observations: Optional[Mapping[str, Mapping[str, object]]] = None,
+    policy_date: Optional[str] = None,
+    resolution_json: bytes = b"",
     pretty: bool = True,
 ) -> bytes:
-    """Render Markdown, SARIF, or JUnit through the shared native core."""
+    """Freeze the complete project constraint policy as a reviewed baseline."""
 
-    return _native.verification_report(
-        suite_json,
-        input_json,
-        format,
-        max_findings=max_findings,
+    request: dict[str, object] = {}
+    if baseline is not None:
+        request["baseline"] = dict(baseline)
+    if maps is not None:
+        request["maps"] = {name: dict(document) for name, document in maps.items()}
+    if observations is not None:
+        request["observations"] = {
+            name: dict(document) for name, document in observations.items()
+        }
+    if policy_date is not None:
+        request["policy_date"] = policy_date
+    return _native.constraints_freeze(
+        config_json,
+        map_json,
+        owner=owner,
+        rationale=rationale,
+        resolution_json=resolution_json,
+        request_json=_canonical(request) if request else b"",
         pretty=pretty,
     )
 
@@ -2196,7 +1866,7 @@ def change_contract(
     objective: str,
     owner: str,
     rationale: str,
-    preserve_checks: Sequence[str] = (),
+    preserve_constraints: Sequence[str] = (),
     selected_candidates: Sequence[str] = (),
     format: str = "json",
     pretty: bool = True,
@@ -2207,7 +1877,7 @@ def change_contract(
         "objective": objective,
         "owner": owner,
         "rationale": rationale,
-        "preserve_checks": list(preserve_checks),
+        "preserve_constraints": list(preserve_constraints),
         "selected_candidates": list(selected_candidates),
     }
     return _native.change_contract(
@@ -2283,7 +1953,7 @@ class ChangeProposal:
         objective: str,
         owner: str,
         rationale: str,
-        preserve_checks: Sequence[str] = (),
+        preserve_constraints: Sequence[str] = (),
         selected_candidates: Sequence[str] = (),
     ) -> "ChangeContract":
         return ChangeContract(
@@ -2293,7 +1963,7 @@ class ChangeProposal:
                 objective=objective,
                 owner=owner,
                 rationale=rationale,
-                preserve_checks=preserve_checks,
+                preserve_constraints=preserve_constraints,
                 selected_candidates=selected_candidates,
                 format="json",
                 pretty=False,
@@ -2735,18 +2405,15 @@ __all__ = [
     "PATTERN_OPTIONS",
     "PATTERN_UNICODE",
     "Source",
-    "Verification",
     "Workspace",
     "analyze_workspace_json",
     "change_contract",
     "change_proposal",
     "change_verify",
     "diff_maps_json",
+    "evaluate_constraints_json",
     "export_graph",
+    "freeze_constraints_json",
     "query_map_json",
     "resolve_discovery",
-    "verification_analyze_json",
-    "verification_debug",
-    "verification_plan_json",
-    "verification_report",
 ]

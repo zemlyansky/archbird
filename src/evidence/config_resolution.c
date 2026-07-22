@@ -7,6 +7,7 @@
 #include "manifests/autoconf_manifest.h"
 #include "manifests/pyproject_manifest.h"
 #include "path_match.h"
+#include "project_configuration.h"
 #include "render_internal.h"
 #include "sha256.h"
 #include "utf8.h"
@@ -80,29 +81,6 @@ typedef struct ResolutionState {
   /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION, 4 = configure.ac. */
   int package_identity;
 } ResolutionState;
-
-static const char default_config[] =
-    "{\"layers\":["
-    "{\"globs\":[\"**/*.c\",\"**/"
-    "*.h\"],\"language\":\"c\",\"name\":\"auto-c\",\"required\":false},"
-    "{\"globs\":[\"**/*.cc\",\"**/*.cpp\",\"**/*.cxx\",\"**/*.hh\",\"**/"
-    "*.hpp\",\"**/"
-    "*.hxx\"],\"language\":\"cpp\",\"name\":\"auto-cpp\",\"required\":false},"
-    "{\"globs\":[\"**/*.py\",\"**/*.pyi\",\"**/"
-    "*.pyw\"],\"language\":\"python\",\"name\":\"auto-python\",\"required\":"
-    "false},"
-    "{\"globs\":[\"**/*.js\",\"**/*.mjs\",\"**/*.cjs\",\"**/"
-    "*.jsx\"],\"language\":\"javascript\",\"name\":\"auto-javascript\","
-    "\"required\":false},"
-    "{\"globs\":[\"**/*.ts\",\"**/*.mts\",\"**/*.cts\",\"**/"
-    "*.tsx\"],\"language\":\"typescript\",\"name\":\"auto-typescript\","
-    "\"required\":false},"
-    "{\"globs\":[\"**/"
-    "*.vue\"],\"language\":\"vue\",\"name\":\"auto-vue\",\"required\":false},"
-    "{\"globs\":[\"**/*.R\",\"**/"
-    "*.r\",\"NAMESPACE\"],\"language\":\"r\",\"name\":\"auto-r\","
-    "\"required\":false}"
-    "],\"project\":\"repository\",\"schema_version\":1}";
 
 static int field_compare(const void *left_raw, const void *right_raw) {
   const AbObjectField *left = (const AbObjectField *)left_raw;
@@ -1389,11 +1367,21 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
                   const AbString *r_package, const AbString *r_version,
                   const AbAutoconfMetadata *autoconf, int has_make) {
   ArchbirdStatus status;
-  status = ab_json_value_decode(
-      state->engine,
-      config_length ? config_json : (const uint8_t *)default_config,
-      config_length ? config_length : sizeof(default_config) - 1,
-      &state->effective);
+  size_t default_length = 0;
+  const uint8_t *default_json =
+      ab_default_project_configuration(&default_length);
+  AbProjectConfiguration configuration = {0};
+  if (config_length) {
+    status = ab_project_configuration_decode(state->engine, config_json,
+                                             config_length, &configuration);
+    if (status == ARCHBIRD_OK)
+      status = ab_value_copy(state->engine, &state->effective,
+                             &configuration.map_definition);
+    ab_project_configuration_free(state->engine, &configuration);
+  } else {
+    status = ab_json_value_decode(state->engine, default_json, default_length,
+                                  &state->effective);
+  }
   if (status == ARCHBIRD_OK && !state->configured &&
       state->has_cpp_translation_unit && !state->has_c_translation_unit)
     status = prefer_cpp_headers(state);
@@ -2050,6 +2038,7 @@ render_resolution(ResolutionState *state, size_t max_file_bytes,
   ArchbirdSha256Context digest_context;
   uint8_t digest[32];
   char digest_hex[65];
+  size_t index;
   ArchbirdStatus status;
   if (!files || !configuration || !project || !root)
     return ARCHBIRD_INVALID_SCHEMA;
@@ -2108,6 +2097,25 @@ render_resolution(ResolutionState *state, size_t max_file_bytes,
     status = ab_buffer_literal(&body, ",\"ignore_files\":");
   if (status == ARCHBIRD_OK)
     status = render_ignore_sources(&body, state);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&body, ",\"inventory\":[");
+  for (index = 0; status == ARCHBIRD_OK && index < state->file_count; index++) {
+    if (index)
+      status = ab_buffer_literal(&body, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&body, "{\"bytes\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(&body, state->files[index].bytes);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&body, ",\"path\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(&body, state->files[index].path->data,
+                                     state->files[index].path->length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&body, "}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&body, "]");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&body, ",\"max_file_bytes\":");
   if (status == ARCHBIRD_OK)

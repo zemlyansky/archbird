@@ -52,10 +52,6 @@ try {
     path.join(repository, "examples", "minimal.archbird.json"),
     path.join(root, "archbird.json"),
   );
-  fs.copyFileSync(
-    path.join(repository, "examples", "minimal.verify.json"),
-    path.join(root, "archbird.verify.json"),
-  );
   write(
     "include/demo.h",
     "#ifndef DEMO_H\n#define DEMO_H\n" +
@@ -92,44 +88,32 @@ try {
   );
   write("Makefile", "all:\n\t@echo demo\n");
 
+  const explicitMap = run(["map", ".", "--format", "json", "--check"]);
+  assert.match(run([]), /^# demo architecture\n[\s\S]*\nMap `/);
+  assert.equal(run(["--format", "json", "--check"]), explicitMap);
+  assert.equal(run([".", "--format", "json", "--check"]), explicitMap);
   run(["map", ".", "--format", "json", "--output", ".archbird/map.json", "--check"]);
   run([
     "query", "--map", ".archbird/map.json", "--symbol", "demo_open",
     "--depth", "1", "--max-chars", "12000",
   ]);
   run([
-    "verify", ".", "--format", "json",
+    "query", "public-api-impact", "--map", ".archbird/map.json",
+    "--config", "archbird.json", "--format", "json",
+    "--output", ".archbird/public-api-impact.json",
+  ]);
+  run([
+    "verify", "--map", ".archbird/map.json", "--format", "json",
     "--output", "verification.json", "--check",
   ]);
   const verification = JSON.parse(fs.readFileSync(path.join(root, "verification.json")));
-  assert.deepEqual(verification.summary.checks, {
+  assert.deepEqual(verification.summary.constraints, {
     fail: 0,
     not_applicable: 0,
     pass: 1,
     unknown: 0,
     waived: 0,
   });
-  fs.copyFileSync(
-    path.join(root, "archbird.verify.json"),
-    path.join(root, "architecture.verify.json"),
-  );
-  let rejected = execute(["verify", ".", "--output", "ambiguous.json"]);
-  assert.equal(rejected.status, 2);
-  assert.match(rejected.stderr, /multiple suites/);
-  assert.equal(fs.existsSync(path.join(root, "ambiguous.json")), false);
-  fs.unlinkSync(path.join(root, "architecture.verify.json"));
-  fs.renameSync(
-    path.join(root, "archbird.verify.json"),
-    path.join(root, "saved.verify.json"),
-  );
-  rejected = execute(["verify", ".", "--output", "missing.json"]);
-  assert.equal(rejected.status, 2);
-  assert.match(rejected.stderr, /no verification suite found/);
-  assert.equal(fs.existsSync(path.join(root, "missing.json")), false);
-  fs.renameSync(
-    path.join(root, "saved.verify.json"),
-    path.join(root, "archbird.verify.json"),
-  );
 
   process.env.ARCHBIRD_ENGINE = "native";
   process.env.ARCHBIRD_NATIVE_ADDON = addon;

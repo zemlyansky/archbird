@@ -874,115 +874,112 @@ AB_WASM_EXPORT int ab_wasm_workspace_analyze(const uint8_t *config,
   return stateless_end(engine, status);
 }
 
-AB_WASM_EXPORT int ab_wasm_verification_plan(const uint8_t *suite,
-                                             size_t suite_length,
-                                             uint32_t flags) {
+AB_WASM_EXPORT int ab_wasm_project_configuration_compile(const uint8_t *config,
+                                                         size_t config_length,
+                                                         uint32_t flags) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(suite_length, &engine);
+  ArchbirdStatus status = stateless_begin_input(config_length, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_verification_plan(engine, suite, suite_length, flags,
-                                        output_write, &wasm_output);
-  return stateless_end(engine, status);
-}
-
-AB_WASM_EXPORT int ab_wasm_verification_recipe_catalog(const char *recipe,
-                                                       size_t recipe_length,
-                                                       uint32_t flags) {
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(recipe_length, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_recipe_catalog(
-        engine, recipe, recipe_length, flags, output_write, &wasm_output);
-  return stateless_end(engine, status);
-}
-
-AB_WASM_EXPORT int ab_wasm_verification_recipe_compile(const uint8_t *request,
-                                                       size_t request_length,
-                                                       uint32_t flags) {
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(request_length, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_recipe_compile(
-        engine, request, request_length, flags, output_write, &wasm_output);
-  return stateless_end(engine, status);
-}
-
-AB_WASM_EXPORT int ab_wasm_verification_analyze(const uint8_t *suite,
-                                                size_t suite_length,
-                                                const uint8_t *input,
-                                                size_t input_length,
-                                                uint32_t flags) {
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(suite_length, input_length), &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_analyze(engine, suite, suite_length, input,
-                                           input_length, flags, output_write,
-                                           &wasm_output);
+    status = archbird_project_configuration_compile(
+        engine, config, config_length, flags, output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 
 AB_WASM_EXPORT int
-ab_wasm_verification_debug(const uint8_t *suite, size_t suite_length,
-                           const uint8_t *input, size_t input_length,
-                           const uint8_t *request, size_t request_length,
-                           uint32_t format, uint32_t flags) {
+ab_wasm_projection_evaluate(const uint8_t *map, size_t map_length,
+                            const uint8_t *resolution, size_t resolution_length,
+                            const uint8_t *projection, size_t projection_length,
+                            uint32_t flags) {
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(larger_input(suite_length, input_length), request_length),
+      larger_input(larger_input(map_length, resolution_length),
+                   projection_length),
       &engine);
-  if (format > (uint32_t)ARCHBIRD_VERIFICATION_MARKDOWN)
-    status = ARCHBIRD_INVALID_ARGUMENT;
   if (status == ARCHBIRD_OK)
-    status = archbird_verification_debug(engine, suite, suite_length, input,
-                                         input_length, request, request_length,
-                                         (ArchbirdVerificationFormat)format,
-                                         flags, output_write, &wasm_output);
+    status = archbird_projection_evaluate(
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, projection, projection_length, flags, output_write,
+        &wasm_output);
   return stateless_end(engine, status);
 }
 
-AB_WASM_EXPORT int ab_wasm_verification_draft(const uint8_t *map,
-                                              size_t map_length,
-                                              const char *project_config,
-                                              size_t project_config_length,
-                                              uint32_t flags) {
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_saved_artifact(map_length, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_draft(engine, map, map_length,
-                                         project_config, project_config_length,
-                                         flags, output_write, &wasm_output);
-  return stateless_end(engine, status);
-}
-
-AB_WASM_EXPORT int ab_wasm_verification_freeze(
-    const uint8_t *suite, size_t suite_length, const uint8_t *input,
-    size_t input_length, const char *owner, size_t owner_length,
-    const char *rationale, size_t rationale_length, uint32_t flags) {
+AB_WASM_EXPORT int ab_wasm_query_plan_compile(
+    const uint8_t *config, size_t config_length, const uint8_t *map,
+    size_t map_length, const uint8_t *resolution, size_t resolution_length,
+    const char *query_id, size_t query_id_length, const uint8_t *overrides,
+    size_t overrides_length, uint32_t flags) {
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(suite_length, input_length), &engine);
+      larger_input(larger_input(config_length, map_length),
+                   larger_input(resolution_length, overrides_length)),
+      &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_verification_freeze(
-        engine, suite, suite_length, input, input_length, owner, owner_length,
-        rationale, rationale_length, flags, output_write, &wasm_output);
+    status = archbird_query_plan_compile(
+        engine, config, config_length, map, map_length,
+        resolution_length ? resolution : NULL, resolution_length, query_id,
+        query_id_length, overrides_length ? overrides : NULL, overrides_length,
+        flags, output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 
-AB_WASM_EXPORT int ab_wasm_verification_report(
-    const uint8_t *suite, size_t suite_length, const uint8_t *input,
-    size_t input_length, uint32_t format, size_t max_findings, uint32_t flags) {
+AB_WASM_EXPORT int ab_wasm_constraints_evaluate(
+    const uint8_t *config, size_t config_length, const uint8_t *map,
+    size_t map_length, const uint8_t *resolution, size_t resolution_length,
+    const uint8_t *request, size_t request_length, uint32_t flags) {
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(suite_length, input_length), &engine);
+      larger_input(larger_input(config_length, map_length),
+                   larger_input(resolution_length, request_length)),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_constraints_evaluate(
+        engine, config, config_length, map, map_length,
+        resolution_length ? resolution : NULL, resolution_length,
+        request_length ? request : NULL, request_length, flags, output_write,
+        &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_constraints_report(
+    const uint8_t *config, size_t config_length, const uint8_t *map,
+    size_t map_length, const uint8_t *resolution, size_t resolution_length,
+    const uint8_t *request, size_t request_length, uint32_t format,
+    size_t max_findings, uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(larger_input(config_length, map_length),
+                   larger_input(resolution_length, request_length)),
+      &engine);
   if (format == (uint32_t)ARCHBIRD_VERIFICATION_JSON ||
       format > (uint32_t)ARCHBIRD_VERIFICATION_JUNIT)
     status = ARCHBIRD_INVALID_ARGUMENT;
   if (status == ARCHBIRD_OK)
-    status = archbird_verification_analyze_report(
-        engine, suite, suite_length, input, input_length,
+    status = archbird_constraints_report(
+        engine, config, config_length, map, map_length,
+        resolution_length ? resolution : NULL, resolution_length,
+        request_length ? request : NULL, request_length,
         (ArchbirdVerificationFormat)format, max_findings, flags, output_write,
         &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_constraints_freeze(
+    const uint8_t *config, size_t config_length, const uint8_t *map,
+    size_t map_length, const uint8_t *resolution, size_t resolution_length,
+    const uint8_t *request, size_t request_length, const char *owner,
+    size_t owner_length, const char *rationale, size_t rationale_length,
+    uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(larger_input(config_length, map_length),
+                   larger_input(resolution_length, request_length)),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_constraints_freeze(
+        engine, config, config_length, map, map_length,
+        resolution_length ? resolution : NULL, resolution_length,
+        request_length ? request : NULL, request_length, owner, owner_length,
+        rationale, rationale_length, flags, output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 

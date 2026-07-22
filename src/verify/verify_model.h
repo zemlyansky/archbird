@@ -51,6 +51,8 @@ typedef struct AbVerifyFactSet {
   AbVerifyFactItem *items;
   size_t item_count;
   size_t item_capacity;
+  size_t *item_slots;
+  size_t item_slot_count;
   AbString state;
   AbString message;
   AbVerifySelection selection;
@@ -68,6 +70,11 @@ ArchbirdStatus ab_verify_fact_add_item(ArchbirdEngine *engine,
                                        AbVerifyFactSet *fact,
                                        AbVerifyFactItem *item);
 
+ArchbirdStatus ab_verify_fact_find_item(ArchbirdEngine *engine,
+                                        AbVerifyFactSet *fact,
+                                        const AbString *key,
+                                        AbVerifyFactItem **out);
+
 ArchbirdStatus ab_verify_fact_finish(ArchbirdEngine *engine,
                                      AbVerifyFactSet *fact);
 
@@ -83,6 +90,11 @@ ab_verify_fact_selection_classification(const AbVerifyFactSet *fact);
 ArchbirdStatus ab_verify_fact_render(AbBuffer *buffer,
                                      const AbVerifyFactSet *fact,
                                      int include_sha256);
+
+/* Render semantic fact content without its plan-local operand name or digest.
+ */
+ArchbirdStatus ab_verify_fact_render_content(AbBuffer *buffer,
+                                             const AbVerifyFactSet *fact);
 
 ArchbirdStatus ab_verify_fact_unknown(ArchbirdEngine *engine,
                                       AbVerifyFactSet *fact,

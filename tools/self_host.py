@@ -410,7 +410,6 @@ def check(args: argparse.Namespace) -> int:
     state_root = Path(args.state).resolve()
     root = Path(args.root).resolve()
     config = Path(args.config).resolve()
-    suite = Path(args.verify_suite).resolve()
     output = Path(args.output).resolve()
     state = load_state(state_root)
     candidate = install_slot(state_root, Path(args.wheel).resolve())
@@ -463,52 +462,42 @@ def check(args: argparse.Namespace) -> int:
     if not stability["source_evidence"]["equal"]:
         raise SelfHostError("source evidence changed while candidate tests ran")
 
-    verification: dict[str, Any] = {}
-    for label, slot, required in (
-        ("stable", stable_slot, False),
-        ("candidate", candidate_slot, True),
-    ):
-        binary = archbird_command(slot)
-        if not verify_supported(binary):
-            if required:
-                raise SelfHostError("candidate distribution has no Verify CLI")
-            if int(state["generation"]) != 0:
-                raise SelfHostError(
-                    "only bootstrap generation zero may lack stable Verify"
-                )
-            verification[label] = {"status": "unsupported"}
-            continue
-        destination = evidence / f"{label}.verification.json"
-        command = [
-            *binary,
-            "verify",
-            "--config",
-            str(suite),
-            "--project-root",
-            f"subject={root}",
-            "--jobs",
-            "1",
-            "--format",
-            "json",
-            "--check",
-            "--output",
-            str(destination),
-        ]
-        record = run_to_files(
-            command,
-            root,
-            evidence / f"{label}.verify.stdout",
-            evidence / f"{label}.verify.stderr",
+    candidate_binary = archbird_command(candidate_slot)
+    if not verify_supported(candidate_binary):
+        raise SelfHostError("candidate distribution has no Verify CLI")
+    verification_path = evidence / "candidate.verification.json"
+    verify_command = [
+        *candidate_binary,
+        "verify",
+        "--config",
+        str(config),
+        "--root",
+        str(root),
+        "--jobs",
+        "1",
+        "--format",
+        "json",
+        "--check",
+        "--output",
+        str(verification_path),
+    ]
+    verify_record = run_to_files(
+        verify_command,
+        root,
+        evidence / "candidate.verify.stdout",
+        evidence / "candidate.verify.stderr",
+    )
+    commands["candidate_verify"] = verify_record
+    if verify_record["exit_code"] != 0:
+        raise SelfHostError(
+            f"candidate self-verification failed: {verify_record['stderr_tail']}"
         )
-        commands[f"{label}_verify"] = record
-        if record["exit_code"] != 0:
-            raise SelfHostError(
-                f"{label} self-verification failed: {record['stderr_tail']}"
-            )
-        verification[label] = {
-            "result_sha256": sha256_file(destination),
+    verification = {
+        "candidate": {
+            "result_sha256": sha256_file(verification_path),
             "status": "pass",
         }
+    }
 
     source_core = core_source_digest(root)
     source_python = python_source_digest(root)
@@ -560,7 +549,9 @@ def check(args: argparse.Namespace) -> int:
                     "input_sha256"
                 ),
                 "python_implementation_sha256": source_python,
-                "suite_sha256": sha256_file(suite),
+                "constraint_policy_sha256": read_json(
+                    verification_path, "candidate verification"
+                )["policy"]["constraint_policy_sha256"],
             },
             "stable": {
                 "generation": state["generation"],
@@ -635,7 +626,6 @@ def parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--wheel", required=True)
     check_parser.add_argument("--root", required=True)
     check_parser.add_argument("--config", required=True)
-    check_parser.add_argument("--verify-suite", required=True)
     check_parser.add_argument("--output", required=True)
     check_parser.add_argument(
         "--max-file-bytes",

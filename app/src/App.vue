@@ -394,7 +394,7 @@ onMounted(async () => {
         />
       </template>
       <VerificationEditor
-        v-else-if="artifact && !error && ['verification', 'verification-suite'].includes(artifact.artifact)"
+        v-else-if="artifact && !error && ['verification', 'project-configuration'].includes(artifact.artifact)"
         :artifact="artifact"
       />
       <div v-else-if="artifact && !error" class="document-card">

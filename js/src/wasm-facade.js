@@ -474,70 +474,132 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
       oneInput(config, "_ab_wasm_workspace_plan", boolFlags(pretty)),
     workspaceAnalyze: (config, maps, pretty = false) =>
       twoInputs(config, maps, "_ab_wasm_workspace_analyze", boolFlags(pretty)),
-    verificationPlan: (suite, pretty = false) =>
-      oneInput(suite, "_ab_wasm_verification_plan", boolFlags(pretty)),
-    verificationRecipeCatalog: (recipe = "", pretty = false) =>
-      oneInput(recipe, "_ab_wasm_verification_recipe_catalog", boolFlags(pretty)),
-    verificationRecipeCompile: (request, pretty = false) =>
-      oneInput(request, "_ab_wasm_verification_recipe_compile", boolFlags(pretty)),
-    verificationAnalyze: (suite, input, pretty = false) =>
-      twoInputs(suite, input, "_ab_wasm_verification_analyze", boolFlags(pretty)),
-    verificationDebug(suite, input, request, format = "json", pretty = false) {
-      const formatNumber = formatValue(
-        format,
-        ["json", "markdown"],
-        "verification debug format",
-      );
+    projectConfigurationCompile: (config, pretty = false) =>
+      oneInput(
+        config,
+        "_ab_wasm_project_configuration_compile",
+        boolFlags(pretty),
+      ),
+    projectionEvaluate(map, resolution, projection, pretty = false) {
       return withInputs(
-        [suite, input, request],
-        ([suiteInput, inputInput, requestInput]) =>
-          result(module._ab_wasm_verification_debug(
-            suiteInput.pointer,
-            suiteInput.length,
-            inputInput.pointer,
-            inputInput.length,
-            requestInput.pointer,
-            requestInput.length,
-            formatNumber,
+        [map, resolution, projection],
+        ([mapInput, resolutionInput, projectionInput]) =>
+          result(module._ab_wasm_projection_evaluate(
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            projectionInput.pointer,
+            projectionInput.length,
             boolFlags(pretty),
           )),
       );
     },
-    verificationDraft: (map, projectConfig, pretty = false) =>
-      twoInputs(map, projectConfig, "_ab_wasm_verification_draft", boolFlags(pretty, true)),
-    verificationFreeze(suite, input, owner, rationale, pretty = false) {
+    queryPlanCompile(
+      config,
+      map,
+      resolution,
+      queryId,
+      overrides,
+      pretty = false,
+    ) {
       return withInputs(
-        [suite, input, owner, rationale],
-        ([suiteInput, inputInput, ownerInput, rationaleInput]) =>
-          result(module._ab_wasm_verification_freeze(
-            suiteInput.pointer,
-            suiteInput.length,
-            inputInput.pointer,
-            inputInput.length,
+        [config, map, resolution, queryId, overrides],
+        ([configInput, mapInput, resolutionInput, idInput, overridesInput]) =>
+          result(module._ab_wasm_query_plan_compile(
+            configInput.pointer,
+            configInput.length,
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            idInput.pointer,
+            idInput.length,
+            overridesInput.pointer,
+            overridesInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
+    constraintsEvaluate(config, map, resolution, request, pretty = false) {
+      return withInputs(
+        [config, map, resolution, request],
+        ([configInput, mapInput, resolutionInput, requestInput]) =>
+          result(module._ab_wasm_constraints_evaluate(
+            configInput.pointer,
+            configInput.length,
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            requestInput.pointer,
+            requestInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
+    constraintsReport(
+      config,
+      map,
+      resolution,
+      request,
+      format,
+      maxFindings = 200,
+      pretty = false,
+    ) {
+      const formatNumber = formatValue(
+        format,
+        ["json", "markdown", "sarif", "junit"],
+        "constraint report format",
+      );
+      if (formatNumber === 0) {
+        return facade.constraintsEvaluate(config, map, resolution, request, pretty);
+      }
+      return withInputs(
+        [config, map, resolution, request],
+        ([configInput, mapInput, resolutionInput, requestInput]) =>
+          result(module._ab_wasm_constraints_report(
+            configInput.pointer,
+            configInput.length,
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            requestInput.pointer,
+            requestInput.length,
+            formatNumber,
+            sizeValue(maxFindings, "maxFindings"),
+            boolFlags(pretty, format === "sarif"),
+          )),
+      );
+    },
+    constraintsFreeze(
+      config,
+      map,
+      resolution,
+      request,
+      owner,
+      rationale,
+      pretty = false,
+    ) {
+      return withInputs(
+        [config, map, resolution, request, owner, rationale],
+        ([configInput, mapInput, resolutionInput, requestInput, ownerInput, rationaleInput]) =>
+          result(module._ab_wasm_constraints_freeze(
+            configInput.pointer,
+            configInput.length,
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            requestInput.pointer,
+            requestInput.length,
             ownerInput.pointer,
             ownerInput.length,
             rationaleInput.pointer,
             rationaleInput.length,
             boolFlags(pretty, true),
           )),
-      );
-    },
-    verificationReport(suite, input, format, maxFindings = 200, pretty = false) {
-      const formatNumber = formatValue(
-        format,
-        ["json", "markdown", "sarif", "junit"],
-        "verification format",
-      );
-      if (formatNumber === 0) {
-        return facade.verificationAnalyze(suite, input, pretty);
-      }
-      return twoInputs(
-        suite,
-        input,
-        "_ab_wasm_verification_report",
-        formatNumber,
-        sizeValue(maxFindings, "maxFindings"),
-        boolFlags(pretty, format === "sarif"),
       );
     },
     changeProposal(verification, fingerprint, format, full, maxCandidates, pretty) {

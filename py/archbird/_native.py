@@ -651,6 +651,189 @@ def json_canonicalize(
     )
 
 
+def project_configuration_compile(
+    config: bytes, *, pretty: bool = False
+) -> bytes:
+    """Validate and normalize one schema-2 project configuration."""
+
+    return _simple_render(
+        "archbird_project_configuration_compile",
+        [_bytes(config, "project configuration")],
+        flags=_json_flags(pretty),
+    )
+
+
+def projection_evaluate(
+    map_json: bytes,
+    projection_json: bytes,
+    *,
+    resolution_json: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    """Evaluate an exhaustive typed projection over one canonical Map."""
+
+    return _simple_render(
+        "archbird_projection_evaluate",
+        [
+            _bytes(map_json, "Map"),
+            _bytes(resolution_json),
+            _bytes(projection_json, "projection definition"),
+        ],
+        flags=_json_flags(pretty),
+        saved_artifact=True,
+    )
+
+
+def query_plan_compile(
+    config: bytes,
+    map_json: bytes,
+    query_id: str,
+    *,
+    resolution_json: bytes = b"",
+    overrides_json: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    """Compile and evaluate one named QueryPlan."""
+
+    return _simple_render(
+        "archbird_query_plan_compile",
+        [
+            _bytes(config, "project configuration"),
+            _bytes(map_json, "Map"),
+            _bytes(resolution_json),
+            _bytes(query_id.encode("utf-8"), "query id"),
+            _bytes(overrides_json),
+        ],
+        flags=_json_flags(pretty),
+        saved_artifact=True,
+    )
+
+
+def constraints_evaluate(
+    config: bytes,
+    map_json: bytes,
+    *,
+    resolution_json: bytes = b"",
+    request_json: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    """Evaluate schema-2 project constraints directly over one Map."""
+
+    return _simple_render(
+        "archbird_constraints_evaluate",
+        [
+            _bytes(config, "project configuration"),
+            _bytes(map_json, "Map"),
+            _bytes(resolution_json),
+            _bytes(request_json),
+        ],
+        flags=_json_flags(pretty),
+        saved_artifact=True,
+    )
+
+
+def constraints_report(
+    config: bytes,
+    map_json: bytes,
+    format: str,
+    *,
+    resolution_json: bytes = b"",
+    request_json: bytes = b"",
+    max_findings: int = 200,
+    pretty: bool = False,
+) -> bytes:
+    """Evaluate project constraints and render Markdown, SARIF, or JUnit."""
+
+    try:
+        native_format = {"markdown": 1, "sarif": 2, "junit": 3}[format]
+    except KeyError as error:
+        raise ValueError(
+            "constraint report format must be markdown, sarif, or junit"
+        ) from error
+    return _simple_render(
+        "archbird_constraints_report",
+        [
+            _bytes(config, "project configuration"),
+            _bytes(map_json, "Map"),
+            _bytes(resolution_json),
+            _bytes(request_json),
+        ],
+        suffix_types=(ctypes.c_int, ctypes.c_size_t),
+        suffix_values=(
+            native_format,
+            _SIZE_MAX if max_findings < 0 else max_findings,
+        ),
+        flags=_json_flags(pretty, native_format == 2),
+        saved_artifact=True,
+    )
+
+
+def constraints_freeze(
+    config: bytes,
+    map_json: bytes,
+    *,
+    owner: str,
+    rationale: str,
+    resolution_json: bytes = b"",
+    request_json: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    """Freeze the complete project constraint policy as a reviewed baseline."""
+
+    config_document = _bytes(config, "project configuration")
+    map_document = _bytes(map_json, "Map")
+    resolution_document = _bytes(resolution_json)
+    request_document = _bytes(request_json)
+    owner_data = _text(owner, "baseline owner")
+    rationale_data = _text(rationale, "baseline rationale")
+    function = _declare(
+        "archbird_constraints_freeze",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _one_shot(
+        lambda engine, write: function(
+            engine,
+            config_document,
+            len(config_document),
+            map_document,
+            len(map_document),
+            resolution_document or None,
+            len(resolution_document),
+            request_document or None,
+            len(request_document),
+            owner_data,
+            len(owner_data),
+            rationale_data,
+            len(rationale_data),
+            _json_flags(pretty, True),
+            write,
+            None,
+        ),
+        input_budget=max(
+            len(config_document), len(map_document), len(resolution_document),
+            len(request_document)
+        ),
+        saved_artifact=True,
+    )
+
+
 def test_symbol_observations_validate(input: bytes) -> None:
     data = _bytes(input)
     function = _declare(
@@ -1001,184 +1184,6 @@ def workspace_analyze(config: bytes, maps: bytes, pretty=False) -> bytes:
         "archbird_workspace_analyze",
         [_bytes(config), _bytes(maps)],
         flags=_json_flags(pretty),
-        saved_artifact=True,
-    )
-
-
-def verification_plan(suite: bytes, pretty=False) -> bytes:
-    return _simple_render(
-        "archbird_verification_plan", [_bytes(suite)], flags=_json_flags(pretty)
-    )
-
-
-def verification_draft(map: bytes, project_config: str, pretty=False) -> bytes:
-    document = _bytes(map)
-    config = _text(project_config, "project config")
-    function = _declare(
-        "archbird_verification_draft",
-        [
-            _POINTER,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_uint32,
-            _WRITE,
-            _POINTER,
-        ],
-    )
-    return _one_shot(
-        lambda engine, write: function(
-            engine,
-            document,
-            len(document),
-            config,
-            len(config),
-            _json_flags(pretty, True),
-            write,
-            None,
-        ),
-        input_budget=len(document),
-        saved_artifact=True,
-    )
-
-
-def verification_recipe_catalog(recipe="", pretty=False) -> bytes:
-    name = _text(recipe, "verification recipe")
-    function = _declare(
-        "archbird_verification_recipe_catalog",
-        [
-            _POINTER,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_uint32,
-            _WRITE,
-            _POINTER,
-        ],
-    )
-    return _one_shot(
-        lambda engine, write: function(
-            engine,
-            name or None,
-            len(name),
-            _json_flags(pretty, True),
-            write,
-            None,
-        )
-    )
-
-
-def verification_recipe_compile(request: bytes, pretty=False) -> bytes:
-    return _simple_render(
-        "archbird_verification_recipe_compile",
-        [_bytes(request)],
-        flags=_json_flags(pretty, True),
-    )
-
-
-def verification_freeze(
-    suite: bytes,
-    input: bytes,
-    *,
-    owner: str,
-    rationale: str,
-    pretty=False,
-) -> bytes:
-    suite_document = _bytes(suite)
-    input_document = _bytes(input)
-    owner_data = _text(owner, "baseline owner")
-    rationale_data = _text(rationale, "baseline rationale")
-    function = _declare(
-        "archbird_verification_freeze",
-        [
-            _POINTER,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_uint32,
-            _WRITE,
-            _POINTER,
-        ],
-    )
-    return _one_shot(
-        lambda engine, write: function(
-            engine,
-            suite_document,
-            len(suite_document),
-            input_document,
-            len(input_document),
-            owner_data,
-            len(owner_data),
-            rationale_data,
-            len(rationale_data),
-            _json_flags(pretty, True),
-            write,
-            None,
-        ),
-        input_budget=max(len(suite_document), len(input_document)),
-        saved_artifact=True,
-    )
-
-
-def verification_analyze(suite: bytes, input: bytes, pretty=False) -> bytes:
-    return _simple_render(
-        "archbird_verification_analyze",
-        [_bytes(suite), _bytes(input)],
-        flags=_json_flags(pretty),
-        saved_artifact=True,
-    )
-
-
-def verification_debug(
-    suite: bytes,
-    input: bytes,
-    request: bytes,
-    format: str = "json",
-    pretty: bool = False,
-) -> bytes:
-    try:
-        native_format = {"json": 0, "markdown": 1}[format]
-    except KeyError as error:
-        raise ValueError(
-            "verification debug format must be json or markdown"
-        ) from error
-    return _simple_render(
-        "archbird_verification_debug",
-        [_bytes(suite), _bytes(input), _bytes(request)],
-        suffix_types=(ctypes.c_int,),
-        suffix_values=(native_format,),
-        flags=_json_flags(pretty),
-        saved_artifact=True,
-    )
-
-
-def verification_report(
-    suite: bytes,
-    input: bytes,
-    format: str,
-    max_findings=200,
-    pretty=False,
-) -> bytes:
-    try:
-        native_format = {"markdown": 1, "sarif": 2, "junit": 3}[format]
-    except KeyError as error:
-        raise ValueError(
-            "verification report format must be markdown, sarif, or junit"
-        ) from error
-    return _simple_render(
-        "archbird_verification_analyze_report",
-        [_bytes(suite), _bytes(input)],
-        suffix_types=(ctypes.c_int, ctypes.c_size_t),
-        suffix_values=(
-            native_format,
-            _SIZE_MAX if max_findings < 0 else max_findings,
-        ),
-        flags=_json_flags(pretty, native_format == 2),
         saved_artifact=True,
     )
 

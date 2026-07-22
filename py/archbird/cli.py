@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import platform
-import re
 import signal
 import stat
 import subprocess
@@ -26,27 +26,28 @@ from .provider_cache import (
 )
 from .native import (
     Project,
-    Verification,
     Workspace,
     audit_map_freshness,
     change_contract,
     change_proposal,
     change_verify,
     compile_test_observations,
-    compile_verification_recipe,
-    draft_verification_suite,
     diff_maps_json,
+    evaluate_constraints_json,
     export_graph,
     export_okf_bundle,
+    freeze_constraints_json,
     analyze_okf_source,
     query_map_markdown,
     query_map_json,
     render_map_markdown,
     resolve_discovery,
-    verification_plan_json,
-    verification_recipe_catalog,
 )
 from .adapters.okf.parser import okf_query_input, parse_okf_bundle
+from .project_configuration import (
+    compile_ad_hoc_query,
+    compile_named_query,
+)
 
 
 _PORTABLE_PROVIDERS = (
@@ -120,7 +121,7 @@ def _support_main(arguments: Sequence[str]) -> int:
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
-        prog="archbird",
+        prog="archbird map",
         description="Generate a deterministic architecture map.",
     )
     result.add_argument("root_path", nargs="?", help="repository root (default: .)")
@@ -129,7 +130,7 @@ def parser() -> argparse.ArgumentParser:
     source.add_argument(
         "--no-config", action="store_true", help="ignore root project configuration"
     )
-    result.add_argument("--root", dest="root_override", help="compatibility root override")
+    result.add_argument("--root", dest="root_override", help="repository root")
     _add_discovery_options(result)
     result.add_argument(
         "--jobs",
@@ -204,12 +205,17 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
         prog=f"archbird {command}",
         description="Select a deterministic neighborhood from current or saved Map evidence.",
     )
-    result.add_argument("root_path", nargs="?", help="repository root (default: .)")
+    result.add_argument(
+        "query_id", nargs="?", metavar="QUERY", help="named query from archbird.json"
+    )
     source = result.add_mutually_exclusive_group()
     source.add_argument("-c", "--config", help="project configuration JSON")
-    source.add_argument("--map", help="saved canonical Map JSON")
     source.add_argument("--no-config", action="store_true")
-    result.add_argument("--root", dest="root_override", help="compatibility root override")
+    result.add_argument("--map", help="saved canonical Map JSON")
+    result.add_argument(
+        "--resolution", help="configuration-resolution JSON paired with --map"
+    )
+    result.add_argument("--root", dest="root_override", help="repository root (default: .)")
     _add_discovery_options(result)
     result.add_argument("--jobs", type=int, default=0)
     _add_cache_options(result)
@@ -249,7 +255,7 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
     result.add_argument(
         "--search-limit",
         type=int,
-        default=8,
+        default=None,
         help="maximum candidate seeds selected by --search (default: 8)",
     )
     result.add_argument(
@@ -265,12 +271,12 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
         "--verification-result",
         metavar="PATH",
         help=(
-            "overlay exact-path-relevant checks and findings from one canonical "
+            "overlay exact-path-relevant constraints and findings from one canonical "
             "verification result onto a Markdown changes view"
         ),
     )
-    result.add_argument("--depth", type=int, default=1)
-    result.add_argument("--test-depth", type=int, default=8)
+    result.add_argument("--depth", type=int)
+    result.add_argument("--test-depth", type=int)
     result.add_argument(
         "--context-profile",
         choices=("exact", "change", "architecture", "audit"),
@@ -321,7 +327,7 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
     result.add_argument(
         "--direction",
         choices=("both", "downstream", "upstream"),
-        default=default_direction,
+        default=None,
     )
     result.add_argument(
         "--format", choices=("markdown", "json"), default="markdown"
@@ -367,7 +373,6 @@ def freshness_parser() -> argparse.ArgumentParser:
             "live repository Map."
         ),
     )
-    result.add_argument("root_path", nargs="?", help="repository root (default: .)")
     source = result.add_mutually_exclusive_group()
     source.add_argument("-c", "--config", help="live project configuration JSON")
     source.add_argument("--no-config", action="store_true")
@@ -543,7 +548,6 @@ def serve_parser() -> argparse.ArgumentParser:
             "good Map while repository changes are analyzed."
         ),
     )
-    result.add_argument("root_path", nargs="?", help="repository root (default: .)")
     source = result.add_mutually_exclusive_group()
     source.add_argument("-c", "--config", help="live project configuration JSON")
     source.add_argument("--no-config", action="store_true")
@@ -612,34 +616,24 @@ def verification_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird verify",
         description=(
-            "Evaluate a reviewed architecture suite, discovering a conventional "
-            "suite from ROOT when --config is omitted."
+            "Evaluate all or selected architecture constraints from archbird.json."
         ),
     )
     result.add_argument(
-        "root_path",
-        nargs="?",
-        metavar="ROOT",
-        help="repository containing a conventional verification suite (default: .)",
+        "constraint_ids",
+        nargs="*",
+        metavar="CONSTRAINT",
+        help="constraint IDs; omit to evaluate the complete configured policy",
     )
-    source = result.add_mutually_exclusive_group()
-    source.add_argument("-c", "--config", help="verification suite JSON")
-    source.add_argument(
-        "--init",
-        metavar="PROJECT_CONFIG",
-        help="draft a candidate component-edge suite for human review",
-    )
+    result.add_argument("-c", "--config", help="project configuration JSON")
+    result.add_argument("--map", help="saved canonical Map JSON")
     result.add_argument(
-        "--init-root",
-        help="local project root override used only while drafting --init",
+        "--resolution",
+        help="configuration-resolution JSON paired with --map",
     )
-    result.add_argument(
-        "--project-root",
-        action="append",
-        default=[],
-        metavar="NAME=PATH",
-        help="local project root override; never enters canonical evidence",
-    )
+    result.add_argument("--no-config", action="store_true")
+    result.add_argument("--root", dest="root_override", help="repository root (default: .)")
+    _add_discovery_options(result)
     result.add_argument(
         "--jobs",
         type=int,
@@ -647,9 +641,39 @@ def verification_parser() -> argparse.ArgumentParser:
         help="Python analyzer processes; 0 selects automatically",
     )
     _add_cache_options(result)
+    _add_progress_options(result)
     result.add_argument(
         "--baseline",
         help="classify findings against an explicit frozen baseline",
+    )
+    result.add_argument(
+        "--policy-date",
+        metavar="YYYY-MM-DD",
+        help=(
+            "date used to evaluate expiring waivers; defaults to the current "
+            "UTC date only when an expiring waiver is configured"
+        ),
+    )
+    result.add_argument(
+        "--observation",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply a reviewed observation artifact for a constraint operand",
+    )
+    result.add_argument(
+        "--map-input",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply an additional saved Map for a projection operand",
+    )
+    result.add_argument(
+        "--resolution-input",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply configuration resolution for an additional saved Map",
     )
     result.add_argument(
         "--freeze",
@@ -687,176 +711,6 @@ def verification_parser() -> argparse.ArgumentParser:
     return result
 
 
-def verification_debug_parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(
-        prog="archbird verify debug",
-        description=(
-            "Explain selection completeness or unresolved evidence for a "
-            "reviewed verification suite."
-        ),
-    )
-    result.add_argument(
-        "view", choices=("selection", "unknown", "component", "unassigned", "overlap")
-    )
-    result.add_argument(
-        "targets",
-        nargs="*",
-        metavar="TARGET",
-        help="component name where required, then optional repository root",
-    )
-    result.add_argument("-c", "--config", help="verification suite JSON")
-    result.add_argument(
-        "--project-root",
-        action="append",
-        default=[],
-        metavar="NAME=PATH",
-        help="local project root override; never enters canonical evidence",
-    )
-    result.add_argument("--baseline", help="optional reviewed baseline")
-    result.add_argument("--check", dest="check_id", help="exact check ID filter")
-    result.add_argument("--extractor", help="exact extractor name filter")
-    result.add_argument("--project", help="exact verification project filter")
-    result.add_argument(
-        "--limit",
-        type=int,
-        default=200,
-        help="maximum membership file witnesses to render (default: 200)",
-    )
-    result.add_argument("--jobs", type=int, default=0)
-    _add_cache_options(result)
-    result.add_argument("--format", choices=("json", "markdown"), default="markdown")
-    result.add_argument("--pretty", action="store_true", help="pretty JSON")
-    result.add_argument("-o", "--output", default="-")
-    return result
-
-
-_BYTE_SIZE_UNITS = {
-    "": 1,
-    "b": 1,
-    "k": 1024,
-    "kib": 1024,
-    "m": 1024**2,
-    "mib": 1024**2,
-    "g": 1024**3,
-    "gib": 1024**3,
-    "t": 1024**4,
-    "tib": 1024**4,
-    "kb": 1000,
-    "mb": 1000**2,
-    "gb": 1000**3,
-    "tb": 1000**4,
-}
-
-
-def _byte_size(value: str) -> int:
-    match = re.fullmatch(r"([0-9]+)([A-Za-z]*)", value)
-    if match is None or match.group(2).lower() not in _BYTE_SIZE_UNITS:
-        raise argparse.ArgumentTypeError(
-            "expected an integer byte size such as 1048576, 1MiB, or 1MB"
-        )
-    number = int(match.group(1)) * _BYTE_SIZE_UNITS[match.group(2).lower()]
-    if number > (1 << 64) - 1:
-        raise argparse.ArgumentTypeError("byte size exceeds the unsigned 64-bit limit")
-    return number
-
-
-def _add_recipe_check_options(
-    result: argparse.ArgumentParser, *, reviewed: bool
-) -> None:
-    result.add_argument("--max", required=True, type=_byte_size)
-    result.add_argument(
-        "--include",
-        action="append",
-        default=[],
-        metavar="GLOB",
-        help="select mapped repository-relative paths; repeatable",
-    )
-    result.add_argument(
-        "--exclude",
-        action="append",
-        default=[],
-        metavar="GLOB",
-        help="omit paths from recipe selection; repeatable",
-    )
-    result.add_argument(
-        "--allow-empty",
-        action="store_true",
-        help="permit an empty selection as explicit policy",
-    )
-    result.add_argument("--id", default="MAX-FILE-BYTES")
-    result.add_argument(
-        "--owner", required=reviewed, default=None if reviewed else "command-line"
-    )
-    result.add_argument(
-        "--rationale",
-        required=reviewed,
-        default=None if reviewed else "Explicit one-shot max-file-bytes policy.",
-    )
-    result.add_argument(
-        "--severity", choices=("error", "warning", "info"), default="error"
-    )
-    result.add_argument("--requirement")
-    result.add_argument("--tag", action="append", default=[])
-
-
-def verification_recipe_parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(
-        prog="archbird verify recipe",
-        description=(
-            "Inspect or run portable verification recipes backed by the normal "
-            "Verify evidence and check kernel."
-        ),
-    )
-    commands = result.add_subparsers(dest="command", required=True)
-    listing = commands.add_parser("list", help="list available recipes")
-    listing.add_argument("--pretty", action="store_true")
-    listing.add_argument("-o", "--output", default="-")
-    showing = commands.add_parser("show", help="show one recipe contract")
-    showing.add_argument("recipe")
-    showing.add_argument("--pretty", action="store_true")
-    showing.add_argument("-o", "--output", default="-")
-
-    compiling = commands.add_parser(
-        "compile", help="compile explicit recipe policy into a reviewed suite"
-    )
-    compiling.add_argument("recipe", choices=("max-file-bytes",))
-    _add_recipe_check_options(compiling, reviewed=True)
-    compiling.add_argument(
-        "--map-path",
-        default="ARCHBIRD.json",
-        help="portable Map path recorded in the generated suite",
-    )
-    compiling.add_argument("--pretty", action="store_true")
-    compiling.add_argument("--force", action="store_true")
-    compiling.add_argument("-o", "--output", default="archbird.verify.json")
-
-    running = commands.add_parser(
-        "run", help="run explicit recipe policy against a fresh repository Map"
-    )
-    running.add_argument("recipe", choices=("max-file-bytes",))
-    running.add_argument("root_path", nargs="?", metavar="ROOT")
-    source = running.add_mutually_exclusive_group()
-    source.add_argument("-c", "--config", help="project configuration JSON")
-    source.add_argument("--no-config", action="store_true")
-    running.add_argument("--root", dest="root_override")
-    running.add_argument("--project")
-    running.add_argument("--jobs", type=int, default=0)
-    _add_cache_options(running)
-    _add_progress_options(running)
-    _add_recipe_check_options(running, reviewed=False)
-    running.add_argument(
-        "--format",
-        choices=("json", "markdown", "sarif", "junit"),
-        default="markdown",
-    )
-    running.add_argument("--full", action="store_true")
-    running.add_argument("--max-findings", type=int, default=200)
-    running.add_argument("--pretty", action="store_true")
-    running.add_argument("--check", action="store_true")
-    running.add_argument("-o", "--output", default="-")
-    return result
-
-
 def plan_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird plan",
@@ -882,7 +736,9 @@ def contract_parser() -> argparse.ArgumentParser:
     result.add_argument("--owner", required=True)
     result.add_argument("--rationale", required=True)
     preserved = result.add_mutually_exclusive_group()
-    preserved.add_argument("--preserve-check", action="append", default=[])
+    preserved.add_argument(
+        "--preserve-constraint", action="append", default=[]
+    )
     preserved.add_argument("--preserve-all", action="store_true")
     result.add_argument("--select-candidate", action="append", default=[])
     result.add_argument("--format", choices=("json", "markdown"), default="json")
@@ -946,7 +802,7 @@ def export_parser() -> argparse.ArgumentParser:
 def okf_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird okf",
-        description="Validate and query OKF metadata without treating prose as checks.",
+        description="Validate and query OKF metadata without treating prose as constraints.",
     )
     commands = result.add_subparsers(dest="command", required=True)
     for name in ("validate", "index"):
@@ -1091,51 +947,21 @@ class _Progress:
             self.visible = False
 
 
-def _project_roots(values: Sequence[str]) -> dict[str, Path]:
-    result: dict[str, Path] = {}
+def _named_json_documents(
+    values: Sequence[str], *, option: str
+) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
     for value in values:
         name, separator, raw_path = value.partition("=")
         if not separator or not name or not raw_path:
-            raise ConfigError(
-                f"--project-root: expected NAME=PATH, got {value!r}"
-            )
+            raise ConfigError(f"{option}: expected ID=PATH, got {value!r}")
         if name in result:
-            raise ConfigError(f"--project-root: duplicate project {name!r}")
-        result[name] = Path(raw_path).resolve()
+            raise ConfigError(f"{option}: duplicate id {name!r}")
+        document = json.loads(Path(raw_path).read_bytes())
+        if not isinstance(document, dict):
+            raise ConfigError(f"{option}: {raw_path} must contain a JSON object")
+        result[name] = document
     return result
-
-
-_VERIFICATION_SUITE_NAMES = (
-    "archbird.verify.json",
-    ".archbird.verify.json",
-    "architecture.verify.json",
-)
-
-
-def _discover_verification_suite(root_path: Optional[str]) -> Path:
-    root = Path(root_path or ".").resolve()
-    if not root.is_dir():
-        raise ConfigError(f"verification root is not a directory: {root}")
-    candidates: list[Path] = []
-    for name in _VERIFICATION_SUITE_NAMES:
-        candidate = root / name
-        try:
-            metadata = candidate.lstat()
-        except FileNotFoundError:
-            continue
-        if stat.S_ISREG(metadata.st_mode):
-            candidates.append(candidate)
-    if len(candidates) > 1:
-        names = ", ".join(path.name for path in candidates)
-        raise ConfigError(f"verification root contains multiple suites: {names}")
-    if not candidates:
-        expected = ", ".join(_VERIFICATION_SUITE_NAMES)
-        raise ConfigError(
-            f"no verification suite found in {root}; expected one of: {expected}. "
-            "Map can discover implementation evidence, but Verify requires "
-            "reviewed architecture intent"
-        )
-    return candidates[0]
 
 
 def _has_error_diagnostics(document: object) -> bool:
@@ -1145,21 +971,22 @@ def _has_error_diagnostics(document: object) -> bool:
     )
 
 
-def _config_root(config_json: bytes) -> str:
+def _validate_project_configuration(config_json: bytes) -> None:
     try:
         document = json.loads(config_json)
     except (UnicodeDecodeError, ValueError) as error:
         raise ConfigError(f"invalid project configuration JSON: {error}") from error
     if not isinstance(document, dict):
         raise ConfigError("project configuration must be an object")
-    value = document.get("root", ".")
-    if not isinstance(value, str) or not value:
-        raise ConfigError("project configuration root must be a nonempty string")
-    return value
+    if document.get("schema_version") != 2:
+        raise ConfigError("archbird.json schema_version must equal 2")
+    if "root" in document:
+        raise ConfigError("archbird.json does not allow root; use --root")
 
 
 def _repository_inputs(args: argparse.Namespace) -> tuple[Path, bytes, Optional[Path]]:
-    positional = Path(args.root_path).resolve() if args.root_path else None
+    root_path = getattr(args, "root_path", None)
+    positional = Path(root_path).resolve() if root_path else None
     override = Path(args.root_override).resolve() if args.root_override else None
     if positional is not None and override is not None and positional != override:
         raise ConfigError("positional ROOT and --root select different directories")
@@ -1169,8 +996,6 @@ def _repository_inputs(args: argparse.Namespace) -> tuple[Path, bytes, Optional[
     if args.config:
         if args.config == "-":
             config_json = sys.stdin.buffer.read()
-            if positional is None and override is None:
-                selected = (selected / _config_root(config_json)).resolve()
         else:
             config_path = Path(args.config).resolve()
             try:
@@ -1179,25 +1004,20 @@ def _repository_inputs(args: argparse.Namespace) -> tuple[Path, bytes, Optional[
                 raise ConfigError(
                     f"cannot read configuration: {config_path}: {error}"
                 ) from error
-        if positional is None and override is None and config_path is not None:
-            selected = (config_path.parent / _config_root(config_json)).resolve()
+        _validate_project_configuration(config_json)
     elif not args.no_config:
         candidates = []
-        for candidate in (selected / "archbird.json", selected / ".archbird.json"):
+        for candidate in (selected / "archbird.json",):
             try:
                 metadata = candidate.lstat()
             except FileNotFoundError:
                 continue
             if stat.S_ISREG(metadata.st_mode):
                 candidates.append(candidate)
-        if len(candidates) > 1:
-            raise ConfigError(
-                "repository contains both archbird.json and .archbird.json"
-            )
         if candidates:
             config_path = candidates[0].resolve()
             config_json = config_path.read_bytes()
-            selected = (selected / _config_root(config_json)).resolve()
+            _validate_project_configuration(config_json)
     if not selected.is_dir():
         raise ConfigError(f"root is not a directory: {selected}")
     return selected, config_json, config_path
@@ -1428,12 +1248,10 @@ def _query_main(
     args = query_parser(command, default_direction=default_direction).parse_args(argv)
     progress = _Progress(args.progress)
     try:
+        if args.resolution and not args.map:
+            raise ValueError("--resolution requires --map")
         if args.map and (
-            args.root_path
-            or args.root_override
-            or args.config
-            or args.no_config
-            or _has_discovery_overrides(args)
+            args.root_override or args.no_config or _has_discovery_overrides(args)
         ):
             raise ValueError("--map cannot be combined with repository discovery options")
         if args.map and args.jobs:
@@ -1454,7 +1272,7 @@ def _query_main(
             raise ValueError("--max-chars must be nonnegative")
         if args.max_seed_distance is not None and args.max_seed_distance < 0:
             raise ValueError("--max-seed-distance must be nonnegative")
-        if args.search_limit < 1 or args.search_limit > 100:
+        if args.search_limit is not None and not 1 <= args.search_limit <= 100:
             raise ValueError("--search-limit must be from 1 to 100")
         if args.format == "json" and args.max_chars:
             raise ValueError("--max-chars applies only to Markdown")
@@ -1465,20 +1283,52 @@ def _query_main(
         if (args.compact or args.full) and args.detail != "standard":
             raise ValueError("--detail conflicts with --compact/--full")
         change_set = None
+        config_json = b""
         if args.map:
             map_json = Path(args.map).read_bytes()
+            resolution_json = (
+                Path(args.resolution).read_bytes() if args.resolution else b""
+            )
+            if args.config:
+                config_json = (
+                    sys.stdin.buffer.read()
+                    if args.config == "-"
+                    else Path(args.config).read_bytes()
+                )
+                _validate_project_configuration(config_json)
+            elif args.query_id:
+                candidate = Path.cwd() / "archbird.json"
+                if not candidate.is_file():
+                    raise ConfigError(
+                        "named query requires archbird.json or --config with --map"
+                    )
+                config_json = candidate.read_bytes()
+                _validate_project_configuration(config_json)
         else:
+            _, config_json, _ = _repository_inputs(args)
             if args.git_diff:
                 repository, _, _ = _repository_inputs(args)
                 change_set = _git_change_set(repository, args.git_diff)
             current = _project_from_args(args, progress)
             progress.emit({"phase": "rendering", "artifact": "canonical Map"})
             map_json = current.map_json()
+            resolution_json = current.resolution_json or b""
             _warn_map_cache_stats(current.map_cache_stats)
         map_document = json.loads(map_json)
         if args.check and _has_error_diagnostics(map_document):
             return 1
-        query_options = {
+        if args.check and args.map:
+            producer = map_document.get("tool", {}).get("implementation_sha256")
+            if producer != _native.IMPLEMENTATION_SHA256:
+                label = producer if isinstance(producer, str) else "missing"
+                print(
+                    "archbird: check failed: saved Map core "
+                    f"{label} does not match active core "
+                    f"{_native.IMPLEMENTATION_SHA256}",
+                    file=sys.stderr,
+                )
+                return 1
+        ad_hoc_options = {
             "focus": args.focus,
             "paths": args.path,
             "symbols": args.symbol,
@@ -1486,14 +1336,14 @@ def _query_main(
             "packages": args.package,
             "artifacts": args.artifact,
             "search": args.search,
-            "search_limit": args.search_limit,
+            "search_limit": args.search_limit if args.search_limit is not None else 8,
             "change_set": change_set,
-            "direction": args.direction,
+            "direction": args.direction or default_direction,
             "producer_policy": (
                 "current" if args.check and args.map else "compatible"
             ),
-            "depth": args.depth,
-            "test_depth": args.test_depth,
+            "depth": args.depth if args.depth is not None else 1,
+            "test_depth": args.test_depth if args.test_depth is not None else 8,
         }
         allowed_context_kinds = {
             "files",
@@ -1540,7 +1390,59 @@ def _query_main(
         if offsets:
             context["offsets"] = offsets
         if context:
-            query_options["context"] = context
+            ad_hoc_options["context"] = context
+        plan = None
+        if args.query_id:
+            if not config_json:
+                raise ConfigError(
+                    f"named query {args.query_id!r} requires archbird.json"
+                )
+            overrides: dict[str, object] = {}
+            for name, value in (
+                ("focus", args.focus),
+                ("paths", args.path),
+                ("symbols", args.symbol),
+                ("components", args.component),
+                ("packages", args.package),
+                ("artifacts", args.artifact),
+                ("search", args.search),
+            ):
+                if value:
+                    overrides[name] = value
+            for name, value in (
+                ("search_limit", args.search_limit),
+                ("direction", args.direction),
+                ("depth", args.depth),
+                ("test_depth", args.test_depth),
+            ):
+                if value is not None:
+                    overrides[name] = value
+            if context:
+                overrides["context"] = context
+            query_options, plan, projection_results = compile_named_query(
+                config_json,
+                args.query_id,
+                map_json,
+                overrides=overrides,
+                resolution_json=resolution_json,
+            )
+            query_options["change_set"] = change_set
+            query_options["producer_policy"] = ad_hoc_options["producer_policy"]
+            query_options["plan"] = plan
+            query_options["projection_results"] = projection_results
+        else:
+            planned_options = {
+                name: value
+                for name, value in ad_hoc_options.items()
+                if name not in {"change_set", "producer_policy"}
+            }
+            query_options, plan, projection_results = compile_ad_hoc_query(
+                map_json, planned_options, resolution_json=resolution_json
+            )
+            query_options["change_set"] = change_set
+            query_options["producer_policy"] = ad_hoc_options["producer_policy"]
+            query_options["plan"] = plan
+            query_options["projection_results"] = projection_results
         encoded = (
             query_map_json(map_json, pretty=args.pretty, **query_options)
             if args.format == "json"
@@ -1732,61 +1634,8 @@ def _workspace_main(argv: Sequence[str]) -> int:
 
 def _verify_main(argv: Sequence[str]) -> int:
     args = verification_parser().parse_args(argv)
+    progress = _Progress(args.progress)
     try:
-        if args.root_path is not None and (
-            args.config is not None or args.init is not None
-        ):
-            raise ValueError(
-                "positional ROOT applies only when --config and --init are omitted"
-            )
-        if args.init is not None:
-            if args.output == "-":
-                raise ValueError(
-                    "verify --init requires --output so relative paths stay portable"
-                )
-            if (
-                args.project_root
-                or args.baseline is not None
-                or args.freeze is not None
-                or args.freeze_owner is not None
-                or args.freeze_rationale is not None
-                or args.check
-                or args.full
-                or args.format != "json"
-                or args.max_findings != 200
-            ):
-                raise ValueError(
-                    "verify --init accepts only --init-root, --jobs, cache options, "
-                    "--pretty, and --output"
-                )
-            config_path = Path(args.init).resolve()
-            output_path = Path(args.output).resolve()
-            try:
-                relative_config = os.path.relpath(config_path, output_path.parent)
-            except ValueError as error:
-                raise ValueError(
-                    "verify --init config and output must share a filesystem"
-                ) from error
-            if Path(relative_config).is_absolute():
-                raise ValueError(
-                    "verify --init refuses an absolute project config path"
-                )
-            project = Project.from_config(
-                config_path,
-                root=args.init_root,
-                jobs=args.jobs,
-                cache_dir=_cache_dir(args),
-                cache_max_bytes=_cache_max_bytes(args),
-            )
-            encoded = draft_verification_suite(
-                project,
-                project_config=Path(relative_config).as_posix(),
-                pretty=True,
-            )
-            _write(encoded, args.output)
-            return 0
-        if args.init_root is not None:
-            raise ValueError("--init-root requires --init")
         if args.freeze is not None and (
             not args.freeze_owner or not args.freeze_rationale
         ):
@@ -1797,210 +1646,118 @@ def _verify_main(argv: Sequence[str]) -> int:
             args.freeze_owner is not None or args.freeze_rationale is not None
         ):
             raise ValueError("--freeze-owner/--freeze-rationale require --freeze")
-        suite_path = (
-            Path(args.config)
-            if args.config is not None
-            else _discover_verification_suite(args.root_path)
+        baseline = (
+            json.loads(Path(args.baseline).read_bytes()) if args.baseline else None
         )
-        baseline = args.baseline
-        if baseline is None and args.freeze is not None and Path(args.freeze).is_file():
-            baseline = args.freeze
-        verification = Verification.from_config(
-            suite_path,
-            project_roots=_project_roots(args.project_root),
+        observations = _named_json_documents(
+            args.observation, option="--observation"
+        )
+        map_documents = _named_json_documents(args.map_input, option="--map-input")
+        resolution_documents = _named_json_documents(
+            args.resolution_input, option="--resolution-input"
+        )
+        unknown_resolutions = set(resolution_documents) - set(map_documents)
+        if unknown_resolutions:
+            raise ConfigError(
+                "--resolution-input has no matching --map-input: "
+                + ", ".join(sorted(unknown_resolutions))
+            )
+        maps = {
+            name: {
+                "map": document,
+                **(
+                    {"resolution": resolution_documents[name]}
+                    if name in resolution_documents
+                    else {}
+                ),
+            }
+            for name, document in map_documents.items()
+        }
+        repository, config_json, _ = _repository_inputs(args)
+        if not config_json:
+            raise ConfigError(
+                f"no archbird.json found in {repository}; Verify requires reviewed constraints"
+            )
+        config_document = json.loads(config_json)
+        constraints = config_document.get("constraints", {})
+        constraint_rows = (
+            constraints.values()
+            if isinstance(constraints, dict)
+            else constraints
+            if isinstance(constraints, list)
+            else ()
+        )
+        has_expiring_waiver = any(
+            isinstance(constraint, dict)
+            and any(
+                isinstance(waiver, dict) and "expires_on" in waiver
+                for waiver in constraint.get("waivers", [])
+            )
+            for constraint in constraint_rows
+        )
+        policy_date = args.policy_date
+        if policy_date is None and has_expiring_waiver:
+            policy_date = datetime.now(timezone.utc).date().isoformat()
+        if args.resolution and not args.map:
+            raise ValueError("--resolution requires --map")
+        if args.map:
+            map_json = Path(args.map).read_bytes()
+            resolution_json = (
+                Path(args.resolution).read_bytes() if args.resolution else b""
+            )
+        else:
+            project = _project_from_args(args, progress)
+            map_json = project.map_json()
+            resolution_json = project.resolution_json or b""
+            _warn_map_cache_stats(project.map_cache_stats)
+        encoded = evaluate_constraints_json(
+            config_json,
+            map_json,
+            resolution_json=resolution_json,
+            constraint_ids=args.constraint_ids,
             baseline=baseline,
-            jobs=args.jobs,
-            cache_dir=_cache_dir(args),
-            cache_max_bytes=_cache_max_bytes(args),
-        )
-        encoded = verification.report(
-            args.format,
-            full=args.full,
-            max_findings=args.max_findings,
+            maps=maps,
+            observations=observations,
+            policy_date=policy_date,
+            format=args.format,
+            max_findings=-1 if args.full else args.max_findings,
             pretty=args.pretty or args.format == "sarif",
         )
         _write(encoded, args.output)
         if args.freeze is not None:
             _write(
-                verification.freeze(
+                freeze_constraints_json(
+                    config_json,
+                    map_json,
                     owner=args.freeze_owner,
                     rationale=args.freeze_rationale,
+                    baseline=baseline,
+                    maps=maps,
+                    observations=observations,
+                    policy_date=policy_date,
+                    resolution_json=resolution_json,
                     pretty=True,
                 ),
                 args.freeze,
             )
-        return int(args.check and verification.has_errors())
-    except (ConfigError, OSError, RuntimeError, ValueError) as error:
-        print(f"archbird: error: {error}", file=sys.stderr)
-        return 2
-
-
-def _verification_debug_main(argv: Sequence[str]) -> int:
-    args = verification_debug_parser().parse_args(argv)
-    try:
-        if args.view == "component":
-            if not 1 <= len(args.targets) <= 2:
-                raise ValueError(
-                    "component view requires COMPONENT and accepts one optional ROOT"
-                )
-            component = args.targets[0]
-            root_path = args.targets[1] if len(args.targets) == 2 else None
-        else:
-            if len(args.targets) > 1:
-                raise ValueError(f"{args.view} view accepts at most one ROOT")
-            component = None
-            root_path = args.targets[0] if args.targets else None
-        if root_path is not None and args.config is not None:
-            raise ValueError("positional ROOT cannot be combined with --config")
-        if args.jobs < 0:
-            raise ValueError("--jobs must be zero or positive")
-        if args.limit < 0:
-            raise ValueError("--limit must be nonnegative")
-        suite_path = (
-            Path(args.config)
-            if args.config is not None
-            else _discover_verification_suite(root_path)
-        )
-        verification = Verification.from_config(
-            suite_path,
-            project_roots=_project_roots(args.project_root),
-            baseline=args.baseline,
-            jobs=args.jobs,
-            cache_dir=_cache_dir(args),
-            cache_max_bytes=_cache_max_bytes(args),
-        )
-        _write(
-            verification.debug(
-                args.view,
-                check=args.check_id,
-                extractor=args.extractor,
-                project=args.project,
-                component=component,
-                limit=(
-                    args.limit
-                    if args.view in {"component", "unassigned", "overlap"}
-                    else None
-                ),
-                format=args.format,
-                pretty=args.pretty,
-            ),
-            args.output,
-        )
-        return 0
-    except (ConfigError, OSError, RuntimeError, ValueError) as error:
-        print(f"archbird: error: {error}", file=sys.stderr)
-        return 2
-
-
-def _recipe_request(
-    args: argparse.Namespace, *, project: Mapping[str, object]
-) -> bytes:
-    check: dict[str, object] = {
-        "id": args.id,
-        "owner": args.owner,
-        "rationale": args.rationale,
-        "severity": args.severity,
-    }
-    if args.requirement is not None:
-        check["requirement"] = args.requirement
-    if args.tag:
-        check["tags"] = args.tag
-    request = {
-        "artifact": "verification-recipe-request",
-        "schema_version": 1,
-        "recipe": args.recipe,
-        "project": dict(project),
-        "arguments": {
-            "max": args.max,
-            "include": args.include,
-            "exclude": args.exclude,
-            "allow_empty": args.allow_empty,
-        },
-        "check": check,
-    }
-    return json.dumps(
-        request,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-
-
-def _verification_recipe_main(argv: Sequence[str]) -> int:
-    args = verification_recipe_parser().parse_args(argv)
-    try:
-        if args.command in {"list", "show"}:
-            encoded = verification_recipe_catalog(
-                "" if args.command == "list" else args.recipe,
-                pretty=args.pretty,
-            )
-            _write(encoded, args.output)
-            return 0
-        if args.command == "compile":
-            encoded = compile_verification_recipe(
-                _recipe_request(args, project={"map": args.map_path}),
-                pretty=args.pretty,
-            )
-            destination = Path(args.output)
-            if args.output != "-" and os.path.lexists(destination) and not args.force:
-                raise ConfigError(
-                    f"refusing to replace existing verification suite: {destination}"
-                )
-            _write(encoded, args.output)
-            return 0
-
-        if args.jobs < 0:
-            raise ValueError("--jobs must be zero or positive")
-        if args.max_findings < 0:
-            raise ValueError("--max-findings must be nonnegative")
-        suite_json = compile_verification_recipe(
-            _recipe_request(args, project={"map": "CURRENT.json"}),
-            pretty=False,
-        )
-        plan = json.loads(verification_plan_json(suite_json))
-        if len(plan["projects"]) != 1:
-            raise RuntimeError("verification recipe must select exactly one project")
-        repository, config_json, _ = _repository_inputs(args)
-        progress = _Progress(args.progress)
-        progress.emit({"phase": "discovery", "state": "start"})
-        project = Project.from_repository(
-            repository,
-            config=config_json or None,
-            project=args.project,
-            scan=False,
-            jobs=args.jobs,
-        )
-        progress.emit({"phase": "selected", "files": len(project.sources)})
-        if plan["projects"][0]["provider_scan"]:
-            project.scan(
-                jobs=args.jobs,
-                cache_dir=_cache_dir(args),
-                cache_max_bytes=_cache_max_bytes(args),
-                progress=progress.emit,
-            )
-        else:
-            progress.emit({"phase": "joining", "state": "start"})
-            project.finalize_providers()
-            progress.emit({"phase": "joining", "state": "complete"})
-        _warn_cache_stats(project.cache_stats)
-        _warn_map_cache_stats(project.map_cache_stats)
-        verification = Verification.from_map(
-            suite_json,
-            project.map_json(),
-            resolution_json=project.resolution_json,
-            path="recipe.verify.json",
-        )
-        progress.emit({"phase": "rendering", "artifact": "verification"})
-        encoded = verification.report(
-            args.format,
-            full=args.full,
-            max_findings=args.max_findings,
-            pretty=args.pretty or args.format == "sarif",
-        )
-        _write(encoded, args.output)
         progress.finish()
-        return int(args.check and verification.has_errors())
-    except (ConfigError, OSError, RuntimeError, ValueError) as error:
+        if not args.check:
+            return 0
+        result = json.loads(
+            evaluate_constraints_json(
+                config_json,
+                map_json,
+                resolution_json=resolution_json,
+                constraint_ids=args.constraint_ids,
+                baseline=baseline,
+                maps=maps,
+                observations=observations,
+                policy_date=policy_date,
+            )
+        )
+        return int(bool(result["summary"]["blocking"]))
+    except (ConfigError, OSError, RuntimeError, ValueError, _native.Error) as error:
+        progress.clear()
         print(f"archbird: error: {error}", file=sys.stderr)
         return 2
 
@@ -2029,10 +1786,10 @@ def _contract_main(argv: Sequence[str]) -> int:
     args = contract_parser().parse_args(argv)
     try:
         proposal_json = Path(args.proposal).read_bytes()
-        preserve_checks = args.preserve_check
+        preserve_constraints = args.preserve_constraint
         if args.preserve_all:
             proposal_document = json.loads(proposal_json)
-            preserve_checks = [
+            preserve_constraints = [
                 str(row["id"])
                 for row in proposal_document["preserved_invariants"]
             ]
@@ -2041,7 +1798,7 @@ def _contract_main(argv: Sequence[str]) -> int:
             objective=args.objective,
             owner=args.owner,
             rationale=args.rationale,
-            preserve_checks=preserve_checks,
+            preserve_constraints=preserve_constraints,
             selected_candidates=args.select_candidate,
             format=args.format,
             pretty=args.pretty,
@@ -2235,10 +1992,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if arguments and arguments[0] == "workspace":
         return _workspace_main(arguments[1:])
     if arguments and arguments[0] == "verify":
-        if len(arguments) > 1 and arguments[1] == "recipe":
-            return _verification_recipe_main(arguments[2:])
-        if len(arguments) > 1 and arguments[1] == "debug":
-            return _verification_debug_main(arguments[2:])
         return _verify_main(arguments[1:])
     if arguments and arguments[0] == "plan":
         return _plan_main(arguments[1:])

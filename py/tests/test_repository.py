@@ -15,7 +15,6 @@ import shutil
 import sys
 import tempfile
 from unittest import mock
-import xml.etree.ElementTree as ET
 
 
 def load_extension(path: Path) -> None:
@@ -38,14 +37,12 @@ def main() -> int:
     load_extension(Path(sys.argv[1]).resolve())
     from archbird import _native
     from archbird.native import (
-        ChangeProposal,
         Project,
         Source,
-        Verification,
         Workspace,
         analyze_okf_source,
         diff_maps_json,
-        draft_verification_suite,
+        evaluate_constraints_json,
         export_graph,
         publish_okf_bundle,
         query_map_json,
@@ -157,13 +154,6 @@ def main() -> int:
     second = project.map_json()
     if first != second:
         raise AssertionError("repository Map output is not repeatable")
-    draft = json.loads(
-        draft_verification_suite(project, project_config="archbird.json", pretty=False)
-    )
-    if not draft["candidate"] or draft["suite"] != "map-base-architecture":
-        raise AssertionError("Python host did not produce a candidate suite")
-    if draft["projects"] != {"subject": {"config": "archbird.json"}}:
-        raise AssertionError("Python candidate suite lost its portable config")
     streamed = io.BytesIO()
     project.write_map_json(streamed.write)
     if streamed.getvalue() != first:
@@ -603,6 +593,16 @@ def main() -> int:
         shutil.copytree(zero_fixture, second_clone)
         if resolve_discovery(first_clone) != resolve_discovery(second_clone):
             raise AssertionError("checkout directory name changed resolution evidence")
+        clone_config = (first_clone / "archbird.json").read_bytes()
+        first_clone_map = Project.from_repository(
+            first_clone, config=clone_config
+        ).map_json()
+        second_clone_map = Project.from_repository(
+            second_clone,
+            config=(second_clone / "archbird.json").read_bytes(),
+        ).map_json()
+        if first_clone_map != second_clone_map:
+            raise AssertionError("checkout path changed canonical Map evidence")
     standard_map = project.map_markdown()
     if not standard_map.startswith(b"# map-base architecture\n"):
         raise AssertionError("native Python standard Map report is invalid")
@@ -1349,147 +1349,31 @@ def main() -> int:
         raise AssertionError("Python host did not load the workspace")
     if len(workspace_document["routes"]) != 2:
         raise AssertionError("Python host did not resolve workspace routes")
-    verification = Verification.from_config(
-        repository / "examples/native.verify.json",
-        project_roots={"subject": repository},
+    self_config = (repository / "archbird.json").read_bytes()
+    self_project = Project.from_repository(
+        repository, config=self_config, jobs=1
     )
-    first_verification = verification.result_json()
-    if first_verification != verification.result_json():
-        raise AssertionError("Python verification result is not repeatable")
+    self_map = self_project.map_json()
+    first_verification = evaluate_constraints_json(
+        self_config,
+        self_map,
+        resolution_json=self_project.resolution_json or b"",
+    )
+    if first_verification != evaluate_constraints_json(
+        self_config,
+        self_map,
+        resolution_json=self_project.resolution_json or b"",
+    ):
+        raise AssertionError("Python constraint result is not repeatable")
     verification_document = json.loads(first_verification)
     if verification_document["artifact"] != "verification":
         raise AssertionError("Python host did not return verification evidence")
     if verification_document["summary"]["blocking"]:
-        raise AssertionError(verification_document["checks"])
-    self_check_statuses = {
-        row["id"]: row["status"] for row in verification_document["checks"]
-    }
-    if self_check_statuses != {
-        "NATIVE-COMPONENT-EDGES": "pass",
-        "NATIVE-COMPONENT-ACYCLIC": "pass",
-        "NATIVE-COMPONENT-COVERAGE": "pass",
-        "NATIVE-JSON-TEST-ROUTE": "pass",
-    }:
-        raise AssertionError("reviewed self verification did not pass")
-    behavioral_verification = Verification.from_config(
-        repository / "test/fixtures/verification/verification.json"
-    )
-    behavioral = behavioral_verification.result()
-    if [(row["name"], row["state"]) for row in behavioral["attestations"]] != [
-        ("reference.behavior", "current"),
-        ("subject.behavior", "current"),
-    ]:
-        raise AssertionError("Python host did not bind current attestation evidence")
-    behavior_check = next(
-        row for row in behavioral["checks"] if row["id"] == "PORT-BEHAVIOR"
-    )
-    if behavior_check["status"] != "fail" or not any(
-        finding["key"] == "permute.valid@browser"
-        for finding in behavior_check["findings"]
+        raise AssertionError(verification_document["constraints"])
+    if any(
+        row["status"] != "pass" for row in verification_document["constraints"]
     ):
-        raise AssertionError("Python host lost the browser behavior mismatch")
-    markdown = behavioral_verification.report("markdown")
-    if not markdown.startswith(b"# Architecture verification: portable-verification"):
-        raise AssertionError("native Markdown verification report is invalid")
-    sarif_document = json.loads(behavioral_verification.report("sarif"))
-    if sarif_document["version"] != "2.1.0" or not sarif_document["runs"][0]["results"]:
-        raise AssertionError("native SARIF verification report is invalid")
-    junit = behavioral_verification.report("junit")
-    if ET.fromstring(junit).tag != "testsuite":
-        raise AssertionError("native JUnit verification report is invalid")
-    provider_verification = Verification.from_config(
-        repository / "test/fixtures/act/provider/provider.verify.json"
-    )
-    provider_json = provider_verification.result_json()
-    provider_document = json.loads(provider_json)
-    provider_finding = next(
-        finding
-        for check in provider_document["checks"]
-        if check["id"] == "PROVIDER-RENAME"
-        for finding in check["findings"]
-        if finding["key"] == "core_sum"
-    )
-    frozen = json.loads(
-        provider_verification.freeze(
-            owner="architecture",
-            rationale="Review current provider fixture debt.",
-            pretty=False,
-        )
-    )
-    if frozen["artifact"] != "verification-baseline" or len(frozen["active"]) != 1:
-        raise AssertionError("Python host did not freeze current findings")
-    if frozen["coverage"]["PROVIDER-TEST-ROUTES"] != [
-        "route:js/runtime.js",
-        "route:py/api.py",
-        "route:src/core.c",
-    ]:
-        raise AssertionError("Python baseline lost its coverage ratchet")
-    previous = json.loads(json.dumps(frozen))
-    retired_fingerprint = "f" * 64
-    previous["active"].append(
-        {
-            "check": "RETIRED-CHECK",
-            "comparison": "extra",
-            "fingerprint": retired_fingerprint,
-            "key": "retired-edge",
-        }
-    )
-    previous["coverage"]["RETIRED-CHECK"] = ["route:retired"]
-    repeated_input = json.loads(provider_verification.input_json)
-    repeated_input["baseline"] = previous
-    repeated = json.loads(
-        _native.verification_freeze(
-            provider_verification.suite_json,
-            json.dumps(
-                repeated_input,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8"),
-            owner="architecture",
-            rationale="Carry the reviewed baseline forward.",
-        )
-    )
-    if retired_fingerprint not in repeated["resolved"]:
-        raise AssertionError("Python baseline lost resolved finding history")
-    if repeated["coverage"]["RETIRED-CHECK"] != ["route:retired"]:
-        raise AssertionError("Python baseline lost retired-check coverage")
-    proposal = ChangeProposal.compile(
-        provider_json, str(provider_finding["fingerprint"])
-    )
-    proposal_document = proposal.data()
-    if len(proposal_document["candidates"]) != 7:
-        raise AssertionError("Python Act proposal lost cross-language closure")
-    contract = proposal.review(
-        objective="Rename core_add to core_sum across configured surfaces.",
-        owner="bindings",
-        rationale="Exercise the native Python Act frontend.",
-        preserve_checks=("PROVIDER-TEST-ROUTES",),
-        selected_candidates=tuple(
-            str(row["id"]) for row in proposal_document["candidates"]
-        ),
-    )
-    unchanged_change = json.loads(
-        contract.verify(provider_json, provider_json, pretty=False)
-    )
-    if unchanged_change["status"] != "missing":
-        raise AssertionError("Python Act frontend accepted an unchanged provider")
-    if not contract.verify(provider_json, provider_json, format="markdown").startswith(
-        b"# Architecture change result"
-    ):
-        raise AssertionError("Python Act Markdown report is invalid")
-    if (
-        json.loads(contract.verify(provider_json, provider_json, format="sarif"))[
-            "version"
-        ]
-        != "2.1.0"
-    ):
-        raise AssertionError("Python Act SARIF report is invalid")
-    if (
-        ET.fromstring(contract.verify(provider_json, provider_json, format="junit")).tag
-        != "testsuite"
-    ):
-        raise AssertionError("Python Act JUnit report is invalid")
+        raise AssertionError("reviewed self constraints did not pass")
     from archbird.cli import main as cli_main
 
     with tempfile.TemporaryDirectory(dir=repository / "build") as directory:
@@ -1810,6 +1694,7 @@ def main() -> int:
         status = cli_main(
             [
                 "query",
+                "--root",
                 str(observation_fixture),
                 "--config",
                 str(observation_fixture / "archbird.json"),
@@ -2012,146 +1897,63 @@ def main() -> int:
         if status:
             raise AssertionError("native Python OKF replacement CLI failed")
         output = Path(directory) / "verification.json"
-        candidate_output = Path(directory) / "candidate.verify.json"
         status = cli_main(
             [
                 "verify",
-                "--init",
+                "PYTHON-ENTRY",
+                "--config",
                 str(fixture / "archbird.json"),
-                "--init-root",
+                "--root",
                 str(fixture),
-                "--no-cache",
-                "--output",
-                str(candidate_output),
-            ]
-        )
-        candidate_document = json.loads(candidate_output.read_bytes())
-        if status or not candidate_document["candidate"]:
-            raise AssertionError("native Python verify --init failed")
-        discovered_suite = Path(directory) / "archbird.verify.json"
-        discovered_suite.write_text(
-            json.dumps(
-                {
-                    "checks": [
-                        {
-                            "actual": "actual",
-                            "assert": "set_equal",
-                            "expected": "expected",
-                            "id": "DISCOVERED-SUITE",
-                            "owner": "architecture",
-                            "rationale": "Exercise reviewed suite discovery.",
-                            "severity": "error",
-                        }
-                    ],
-                    "extractors": {
-                        "actual": {"kind": "literal_set", "values": ["ok"]},
-                        "expected": {"kind": "literal_set", "values": ["ok"]},
-                    },
-                    "projects": {"subject": {"map": "map.json"}},
-                    "schema_version": 1,
-                    "suite": "discovered-suite",
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-            encoding="utf-8",
-        )
-        discovered_output = Path(directory) / "discovered-verification.json"
-        status = cli_main(
-            [
-                "verify",
-                str(directory),
-                "--check",
-                "--output",
-                str(discovered_output),
-            ]
-        )
-        if (
-            status
-            or json.loads(discovered_output.read_bytes())["summary"]["checks"][
-                "pass"
-            ]
-            != 1
-        ):
-            raise AssertionError("native Python verification discovery failed")
-        ambiguous_suite = Path(directory) / "architecture.verify.json"
-        ambiguous_suite.write_bytes(discovered_suite.read_bytes())
-        ambiguous_output = Path(directory) / "ambiguous-verification.json"
-        with mock.patch("sys.stderr", io.StringIO()):
-            status = cli_main(
-                [
-                    "verify",
-                    str(directory),
-                    "--output",
-                    str(ambiguous_output),
-                ]
-            )
-        if status != 2 or ambiguous_output.exists():
-            raise AssertionError("ambiguous verification suites were not rejected")
-        ambiguous_suite.unlink()
-        missing_suite_root = Path(directory) / "no-verification-suite"
-        missing_suite_root.mkdir()
-        missing_output = Path(directory) / "missing-verification.json"
-        with mock.patch("sys.stderr", io.StringIO()):
-            status = cli_main(
-                [
-                    "verify",
-                    str(missing_suite_root),
-                    "--output",
-                    str(missing_output),
-                ]
-            )
-        if status != 2 or missing_output.exists():
-            raise AssertionError("missing verification suite was not rejected")
-        baseline_output = Path(directory) / "provider.baseline.json"
-        provider_report = Path(directory) / "provider.freeze-result.json"
-        status = cli_main(
-            [
-                "verify",
-                "--config",
-                str(repository / "test/fixtures/act/provider/provider.verify.json"),
-                "--freeze",
-                str(baseline_output),
-                "--freeze-owner",
-                "architecture",
-                "--freeze-rationale",
-                "Review current provider fixture debt.",
-                "--no-cache",
-                "--output",
-                str(provider_report),
-            ]
-        )
-        if (
-            status
-            or json.loads(baseline_output.read_bytes())["artifact"]
-            != "verification-baseline"
-        ):
-            raise AssertionError("native Python verify --freeze failed")
-        status = cli_main(
-            [
-                "verify",
-                "--config",
-                str(repository / "examples/native.verify.json"),
-                "--project-root",
-                f"subject={repository}",
                 "--check",
                 "--output",
                 str(output),
             ]
         )
+        output_document = json.loads(output.read_bytes())
+        if (
+            status != 1
+            or output_document["artifact"] != "verification"
+            or output_document["policy"]["requested_ids"] != ["PYTHON-ENTRY"]
+            or output_document["constraints"][0]["status"] != "fail"
+        ):
+            raise AssertionError("native Python named constraint CLI failed")
+        baseline_output = Path(directory) / "constraints.baseline.json"
+        freeze_report = Path(directory) / "constraints.freeze-result.json"
+        status = cli_main(
+            [
+                "verify",
+                "--config",
+                str(fixture / "archbird.json"),
+                "--root",
+                str(fixture),
+                "--freeze",
+                str(baseline_output),
+                "--freeze-owner",
+                "architecture",
+                "--freeze-rationale",
+                "Review current fixture constraint debt.",
+                "--no-cache",
+                "--output",
+                str(freeze_report),
+            ]
+        )
         if (
             status
-            or json.loads(output.read_text(encoding="utf-8"))["artifact"]
-            != "verification"
+            or json.loads(baseline_output.read_bytes())["artifact"]
+            != "constraint-baseline"
         ):
-            raise AssertionError("native Python verification CLI failed")
+            raise AssertionError("native Python verify --freeze failed")
         for report_format in ("markdown", "sarif", "junit"):
             report_output = Path(directory) / f"verification.{report_format}"
             status = cli_main(
                 [
                     "verify",
+                    "PYTHON-ENTRY",
                     "--config",
-                    str(repository / "test/fixtures/verification/verification.json"),
+                    str(fixture / "archbird.json"),
+                    "--root",
+                    str(fixture),
                     "--format",
                     report_format,
                     "--output",
@@ -2162,68 +1964,6 @@ def main() -> int:
                 raise AssertionError(
                     f"native Python {report_format} verification CLI failed"
                 )
-        before = Path(directory) / "provider.verify-result.json"
-        before.write_bytes(provider_json)
-        proposal_path = Path(directory) / "provider.change-proposal.json"
-        status = cli_main(
-            [
-                "plan",
-                "--verification",
-                str(before),
-                "--finding",
-                str(provider_finding["fingerprint"]),
-                "--output",
-                str(proposal_path),
-            ]
-        )
-        if (
-            status
-            or json.loads(proposal_path.read_bytes())["artifact"] != "change-proposal"
-        ):
-            raise AssertionError("native Python plan CLI failed")
-        contract_path = Path(directory) / "provider.change-contract.json"
-        status = cli_main(
-            [
-                "contract",
-                "--proposal",
-                str(proposal_path),
-                "--objective",
-                "Rename the provider.",
-                "--owner",
-                "bindings",
-                "--rationale",
-                "Exercise the native CLI.",
-                "--preserve-check",
-                "PROVIDER-TEST-ROUTES",
-                "--output",
-                str(contract_path),
-            ]
-        )
-        if (
-            status
-            or json.loads(contract_path.read_bytes())["artifact"] != "change-contract"
-        ):
-            raise AssertionError("native Python contract CLI failed")
-        status = cli_main(
-            [
-                "verify-plan",
-                "--proposal",
-                str(proposal_path),
-                "--contract",
-                str(contract_path),
-                "--before-verification",
-                str(before),
-                "--after-verification",
-                str(before),
-                "--format",
-                "junit",
-                "--output",
-                str(Path(directory) / "provider.change-result.xml"),
-                "--check",
-            ]
-        )
-        if status != 1:
-            raise AssertionError("native Python verify-plan CLI lost blocking status")
     print("native Python repository host passed")
     return 0
 

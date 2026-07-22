@@ -284,6 +284,10 @@ static ArchbirdStatus key_parts(AbBuffer *buffer, const AbString **parts,
   return status;
 }
 
+static ArchbirdStatus projection_value(DiffContext *context, const AbValue *row,
+                                       const char *const *fields,
+                                       size_t field_count, AbBuffer *out);
+
 static ArchbirdStatus simple_rows(DiffContext *context, const AbValue *map,
                                   const char *section, const char *key_field,
                                   const char *value_field, DiffIndex *out) {
@@ -301,6 +305,50 @@ static ArchbirdStatus simple_rows(DiffContext *context, const AbValue *map,
       return ARCHBIRD_INVALID_SCHEMA;
     status = index_add(context, out, key->as.text.data, key->as.text.length,
                        value->as.text.data, value->as.text.length);
+  }
+  return status == ARCHBIRD_OK ? index_finish(context, out) : status;
+}
+
+static ArchbirdStatus fact_index(DiffContext *context, const AbValue *map,
+                                 DiffIndex *out) {
+  static const char *const value_fields[] = {"attributes", "claim", "name"};
+  const AbValue *rows = optional_array(map, "facts");
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (rows->kind != AB_VALUE_ARRAY)
+    return diff_error(context, "diff map field 'facts' has the wrong type");
+  for (index = 0; status == ARCHBIRD_OK && index < rows->as.array.count;
+       index++) {
+    const AbValue *row = &rows->as.array.items[index];
+    const AbValue *attributes =
+        required_member(context, row, "attributes", AB_VALUE_OBJECT);
+    const AbValue *claim =
+        required_member(context, row, "claim", AB_VALUE_STRING);
+    const AbValue *domain =
+        required_member(context, row, "domain", AB_VALUE_STRING);
+    const AbValue *id = required_member(context, row, "id", AB_VALUE_STRING);
+    const AbValue *key = required_member(context, row, "key", AB_VALUE_STRING);
+    const AbValue *kind =
+        required_member(context, row, "kind", AB_VALUE_STRING);
+    const AbValue *path =
+        required_member(context, row, "path", AB_VALUE_STRING);
+    const AbValue *provider =
+        required_member(context, row, "provider", AB_VALUE_OBJECT);
+    const AbValue *span =
+        required_member(context, row, "span", AB_VALUE_OBJECT);
+    const AbValue *name = ab_value_member(row, "name");
+    AbBuffer value;
+    if (!attributes || !claim || !domain || !id || !key || !kind || !path ||
+        !provider || !span || (name && name->kind != AB_VALUE_STRING))
+      return ARCHBIRD_INVALID_SCHEMA;
+    ab_buffer_init(&value, context->engine);
+    status = projection_value(
+        context, row, value_fields,
+        name ? sizeof(value_fields) / sizeof(value_fields[0]) : 2, &value);
+    if (status == ARCHBIRD_OK)
+      status = index_add(context, out, id->as.text.data, id->as.text.length,
+                         (const char *)value.data, value.length);
+    ab_buffer_free(&value);
   }
   return status == ARCHBIRD_OK ? index_finish(context, out) : status;
 }
@@ -1216,7 +1264,9 @@ enum {
   DIFF_COMPONENT_ROUTES,
   DIFF_EDGES,
   DIFF_ENTRYPOINTS,
+  DIFF_FACTS,
   DIFF_FILES,
+  DIFF_INPUTS,
   DIFF_PACKAGE_DEPENDENCIES,
   DIFF_PACKAGE_ENTRYPOINT_SURFACES,
   DIFF_PACKAGE_EXPORT_ORIGINS,
@@ -1242,7 +1292,9 @@ static void sections_init(DiffSection sections[DIFF_SECTION_COUNT]) {
       "component_routes",
       "edges",
       "entrypoints",
+      "facts",
       "files",
+      "inputs",
       "package_dependencies",
       "package_entrypoint_surfaces",
       "package_export_origins",
@@ -1290,8 +1342,18 @@ static ArchbirdStatus build_indexes(DiffContext *context, const AbValue *map,
   if (status == ARCHBIRD_OK)
     status = component_index(context, map, INDEX_AT(DIFF_COMPONENT_ROUTES));
   if (status == ARCHBIRD_OK)
+    status = fact_index(context, map, INDEX_AT(DIFF_FACTS));
+  if (status == ARCHBIRD_OK)
     status = simple_rows(context, map, "files", "path", "sha256",
                          INDEX_AT(DIFF_FILES));
+  if (status == ARCHBIRD_OK) {
+    const AbValue *inputs = ab_value_member(map, "inputs");
+    if (inputs)
+      status = simple_rows(context, map, "inputs", "path", "sha256",
+                           INDEX_AT(DIFF_INPUTS));
+    else
+      status = index_finish(context, INDEX_AT(DIFF_INPUTS));
+  }
   if (status == ARCHBIRD_OK)
     status = package_indexes(context, map, INDEX_AT(DIFF_PACKAGE_EXPORTS),
                              INDEX_AT(DIFF_PACKAGE_EXPORT_ORIGINS),
@@ -1460,6 +1522,8 @@ static ArchbirdStatus validate_map(DiffContext *context, const AbValue *map) {
                                "schema " ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT);
   if (!required_member(context, map, "project", AB_VALUE_STRING) ||
       !required_member(context, map, "evidence", AB_VALUE_OBJECT))
+    return ARCHBIRD_INVALID_SCHEMA;
+  if (version >= 8 && !required_member(context, map, "facts", AB_VALUE_ARRAY))
     return ARCHBIRD_INVALID_SCHEMA;
   return ARCHBIRD_OK;
 }

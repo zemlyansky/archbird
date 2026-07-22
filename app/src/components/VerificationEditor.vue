@@ -2,44 +2,59 @@
 import { computed, ref, watch } from "vue";
 import type { ParsedArtifact } from "../artifacts/model";
 import {
-  candidateSuite,
+  reviewedProjectConfiguration,
   verificationFindings,
   waiverCandidate,
 } from "../artifacts/verification";
 
 const props = defineProps<{ artifact: ParsedArtifact }>();
 const message = ref("");
-const suite = ref<Record<string, unknown>>(structuredClone(props.artifact.document));
+const projectConfiguration = ref<Record<string, unknown>>(editableDocument(props.artifact));
 const selectedFinding = ref(0);
 const owner = ref("");
 const rationale = ref("");
 const expiresOn = ref("");
 
 watch(() => props.artifact, (value) => {
-  suite.value = structuredClone(value.document);
+  projectConfiguration.value = editableDocument(value);
   selectedFinding.value = 0;
   message.value = "";
 });
 
-const checks = computed(() => Array.isArray(suite.value.checks)
-  ? suite.value.checks as Record<string, unknown>[]
+const constraints = computed(() => Array.isArray(projectConfiguration.value.constraints)
+  ? projectConfiguration.value.constraints as Record<string, unknown>[]
   : []);
 const findings = computed(() => verificationFindings(props.artifact.document));
 
-function requirements(check: Record<string, unknown>): string {
-  return Array.isArray(check.requirements) ? check.requirements.join(", ") : "";
+function editableDocument(artifact: ParsedArtifact): Record<string, unknown> {
+  const result = structuredClone(artifact.document);
+  if (artifact.artifact === "project-configuration" &&
+      result.constraints && !Array.isArray(result.constraints) &&
+      typeof result.constraints === "object") {
+    result.constraints = Object.entries(result.constraints as Record<string, unknown>)
+      .map(([id, definition]) => ({
+        id,
+        ...(definition as Record<string, unknown>),
+      }));
+  }
+  return result;
 }
 
-function updateRequirements(check: Record<string, unknown>, value: string) {
-  check.requirements = [...new Set(value.split(",").map((row) => row.trim()).filter(Boolean))].sort();
+function requirements(constraint: Record<string, unknown>): string {
+  if (Array.isArray(constraint.requirement)) return constraint.requirement.join(", ");
+  return typeof constraint.requirement === "string" ? constraint.requirement : "";
 }
 
-function requirementsInput(check: Record<string, unknown>, event: Event) {
-  updateRequirements(check, (event.target as HTMLInputElement).value);
+function updateRequirements(constraint: Record<string, unknown>, value: string) {
+  constraint.requirement = [...new Set(value.split(",").map((row) => row.trim()).filter(Boolean))].sort();
 }
 
-function textInput(check: Record<string, unknown>, field: string, event: Event) {
-  check[field] = (event.target as HTMLInputElement | HTMLTextAreaElement).value;
+function requirementsInput(constraint: Record<string, unknown>, event: Event) {
+  updateRequirements(constraint, (event.target as HTMLInputElement).value);
+}
+
+function textInput(constraint: Record<string, unknown>, field: string, event: Event) {
+  constraint[field] = (event.target as HTMLInputElement | HTMLTextAreaElement).value;
 }
 
 function downloadJson(payload: Record<string, unknown>, name: string) {
@@ -61,11 +76,11 @@ function documentElement(tag: string): HTMLAnchorElement {
   return document.createElement(tag) as HTMLAnchorElement;
 }
 
-function saveSuite() {
+function saveProjectConfiguration() {
   try {
-    const candidate = candidateSuite(suite.value);
-    downloadJson(candidate, `${String(candidate.suite)}.candidate.verify.json`);
-    message.value = "Saved an unreviewed candidate. Remove candidate=true only after review.";
+    const configuration = reviewedProjectConfiguration(projectConfiguration.value);
+    downloadJson(configuration, "archbird.json");
+    message.value = "Saved the schema-2 project configuration for review.";
   } catch (error) {
     message.value = (error as Error).message;
   }
@@ -81,7 +96,7 @@ function saveWaiver() {
       expiresOn: expiresOn.value,
     });
     downloadJson(waiver, `${String(waiver.id).toLowerCase()}.waiver.json`);
-    message.value = "Saved a waiver candidate. Add it to suite.waivers and review it.";
+    message.value = `Saved a waiver entry. Review it under constraints.${finding.constraint}.waivers.`;
   } catch (error) {
     message.value = (error as Error).message;
   }
@@ -90,33 +105,33 @@ function saveWaiver() {
 
 <template>
   <section class="contract-editor">
-    <template v-if="artifact.artifact === 'verification-suite'">
-      <p class="eyebrow">Asserted architecture contract</p>
-      <h1>{{ suite.suite }}</h1>
+    <template v-if="artifact.artifact === 'project-configuration'">
+      <p class="eyebrow">Project architecture policy</p>
+      <h1>{{ projectConfiguration.project }}</h1>
       <p>
-        Edit reviewed IDs and rationale here. Every download is forced back to
-        <code>candidate=true</code>; Archbird will refuse to run it until review.
+        Edit constraint ownership, requirements, and rationale in the same
+        project configuration used by Map, Query, and Verify.
       </p>
-      <article v-for="(check, index) in checks" :key="String(check.id || index)" class="check-editor">
-        <label>Check ID
-          <input :value="String(check.id || '')" @input="textInput(check, 'id', $event)" />
+      <article v-for="(constraint, index) in constraints" :key="String(constraint.id || index)" class="check-editor">
+        <label>Constraint ID
+          <input :value="String(constraint.id || '')" @input="textInput(constraint, 'id', $event)" />
         </label>
         <label>Owner
-          <input :value="String(check.owner || '')" @input="textInput(check, 'owner', $event)" />
+          <input :value="String(constraint.owner || '')" @input="textInput(constraint, 'owner', $event)" />
         </label>
         <label>Requirement IDs
-          <input :value="requirements(check)" @input="requirementsInput(check, $event)" />
+          <input :value="requirements(constraint)" @input="requirementsInput(constraint, $event)" />
         </label>
         <label>Rationale
-          <textarea :value="String(check.rationale || '')" @input="textInput(check, 'rationale', $event)"></textarea>
+          <textarea :value="String(constraint.rationale || '')" @input="textInput(constraint, 'rationale', $event)"></textarea>
         </label>
-        <code>{{ check.assert }}</code>
+        <code>{{ constraint.kind || constraint.assert }}</code>
       </article>
-      <button type="button" @click="saveSuite">Save candidate suite</button>
+      <button type="button" @click="saveProjectConfiguration">Save project configuration</button>
     </template>
     <template v-else-if="artifact.artifact === 'verification'">
       <p class="eyebrow">Derived findings</p>
-      <h1>{{ artifact.document.suite && (artifact.document.suite as Record<string, unknown>).name }}</h1>
+      <h1>{{ artifact.document.policy && (artifact.document.policy as Record<string, unknown>).project }}</h1>
       <p>
         Findings are derived and cannot be edited. Create an explicit, expiring
         waiver candidate for review instead.
@@ -124,7 +139,7 @@ function saveWaiver() {
       <label>Finding
         <select v-model.number="selectedFinding">
           <option v-for="(finding, index) in findings" :key="finding.fingerprint" :value="index">
-            {{ finding.check }} · {{ finding.comparison }} · {{ finding.key }}
+            {{ finding.constraint }} · {{ finding.comparison }} · {{ finding.key }}
           </option>
         </select>
       </label>
@@ -139,7 +154,7 @@ function saveWaiver() {
     <p v-if="message" class="editor-message">{{ message }}</p>
     <details>
       <summary>Canonical input</summary>
-      <pre>{{ JSON.stringify(artifact.document, null, 2) }}</pre>
+      <pre>{{ JSON.stringify(projectConfiguration, null, 2) }}</pre>
     </details>
   </section>
 </template>

@@ -63,13 +63,10 @@ assert.deepEqual(support.providers.precision, {
   typescript: "typescript-compiler+tree-sitter+lexical",
   vue: "lexical",
 });
-const recipeCatalog = JSON.parse(run(["verify", "recipe", "list"]));
-assert.deepEqual(recipeCatalog.recipes.map((row) => row.name), ["max-file-bytes"]);
-
 const fixture = path.join(repository, "test/fixtures/map_base");
 const mergeLedgerPath = path.join(work, `${engine}.merge-conflicts.json`);
 const map = JSON.parse(run([
-  "--config", path.join(fixture, "archbird.json"),
+  "map", "--config", path.join(fixture, "archbird.json"),
   "--root", fixture,
   "--merge-ledger", mergeLedgerPath,
   "--format", "json",
@@ -90,14 +87,14 @@ assert.equal(zeroMap.packages[0].identity, "@archbird/zero-fixture");
 assert.equal(zeroMap.tests.length, 1);
 assert.equal(zeroMap.tests[0].inventory_state, "candidate");
 assert.equal(zeroMap.tests[0].cases[0].selector, "test_main");
-const recipeVerification = JSON.parse(run([
-  "verify", "recipe", "run", "max-file-bytes", zeroFixture,
-  "--no-config", "--max", "1MiB", "--format", "json", "--check",
-  "--progress", "never",
+const selectedVerification = JSON.parse(run([
+  "verify", "PYTHON-ENTRY", "--config", path.join(fixture, "archbird.json"),
+  "--root", fixture, "--format", "json", "--progress", "never",
 ]));
-assert.equal(recipeVerification.artifact, "verification");
-assert.equal(recipeVerification.checks[0].status, "pass");
-assert.equal(recipeVerification.projects[0].capabilities.length, 0);
+assert.equal(selectedVerification.artifact, "verification");
+assert.equal(selectedVerification.policy.kind, "selected");
+assert.deepEqual(selectedVerification.policy.requested_ids, ["PYTHON-ENTRY"]);
+assert.equal(selectedVerification.constraints[0].status, "fail");
 const configuredMap = JSON.parse(run([
   "map", zeroFixture, "--project", "cli-fixture", "--format", "json",
 ]));
@@ -117,6 +114,18 @@ run([
 ], { expected: 2 });
 const mapPath = path.join(work, `${engine}.map.json`);
 fs.writeFileSync(mapPath, JSON.stringify(map));
+const savedMapVerification = JSON.parse(run([
+  "verify", "JAVASCRIPT-ENTRY",
+  "--config", path.join(fixture, "archbird.json"),
+  "--map", mapPath, "--format", "json", "--progress", "never",
+]));
+assert.equal(savedMapVerification.policy.kind, "selected");
+assert.deepEqual(savedMapVerification.policy.requested_ids, ["JAVASCRIPT-ENTRY"]);
+assert.equal(savedMapVerification.constraints[0].status, "fail");
+assert.deepEqual(
+  savedMapVerification.constraints[0].findings.map((row) => row.key),
+  ["twice"],
+);
 const freshness = JSON.parse(run([
   "freshness", fixture,
   "--config", path.join(fixture, "archbird.json"),
@@ -187,7 +196,7 @@ const observation = {
 const observationPath = path.join(work, `${engine}.test-symbol-observations.json`);
 fs.writeFileSync(observationPath, JSON.stringify(observation));
 const observedQuery = JSON.parse(run([
-  "query", observationFixture,
+  "query", "--root", observationFixture,
   "--config", path.join(observationFixture, "archbird.json"),
   "--test-symbol-observations", observationPath,
   "--symbol", "csrc/callbacks.c:alpha_callback",
@@ -199,26 +208,26 @@ const observedMatch = observedQuery.test_matches.find((row) =>
   row.selector === "sched.2d_e2e");
 assert.equal(observedMatch.classification, "observed");
 
-const providerSuite = path.join(
-  repository,
-  "test/fixtures/act/provider/provider.verify.json",
-);
-const providerDebug = JSON.parse(run([
-  "verify", "debug", "selection", "--config", providerSuite,
-  "--check", "PROVIDER-RENAME", "--format", "json",
+const providerRoot = path.join(repository, "test/fixtures/act/provider");
+const providerReference = path.join(providerRoot, "reference");
+const providerSubject = path.join(providerRoot, "subject");
+const providerReferenceMap = path.join(work, `${engine}.provider-reference.map.json`);
+fs.writeFileSync(providerReferenceMap, run([
+  "map", "--config", path.join(providerReference, "archbird.json"),
+  "--root", providerReference, "--format", "json", "--check",
 ]));
-assert.equal(providerDebug.artifact, "verification-debug");
-assert.deepEqual(
-  providerDebug.checks.map((row) => row.id),
-  ["PROVIDER-RENAME"],
-);
-const verificationBytes = run(["verify", "--config", providerSuite, "--format", "json"]);
+const verificationBytes = run([
+  "verify", "--config", path.join(providerSubject, "archbird.json"),
+  "--root", providerSubject,
+  "--map-input", `reference=${providerReferenceMap}`,
+  "--format", "json",
+]);
 const verification = JSON.parse(verificationBytes);
-const finding = verification.checks
+const finding = verification.constraints
   .find((row) => row.id === "PROVIDER-RENAME")
   .findings.find((row) => row.key === "core_sum");
 assert.ok(finding.fingerprint);
-const verificationPath = path.join(work, `${engine}.verify.json`);
+const verificationPath = path.join(work, `${engine}.verification.json`);
 const proposalPath = path.join(work, `${engine}.proposal.json`);
 const contractPath = path.join(work, `${engine}.contract.json`);
 fs.writeFileSync(verificationPath, verificationBytes);
@@ -241,4 +250,4 @@ const result = JSON.parse(run([
 ]));
 assert.equal(result.artifact, "change-result");
 assert.equal(result.status, "missing");
-console.log(`packaged Node CLI Map/Verify/Act/recipe/debug passed through ${engine}`);
+console.log(`packaged Node CLI Map/Query/Verify/Act passed through ${engine}`);

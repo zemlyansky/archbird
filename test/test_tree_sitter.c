@@ -157,7 +157,7 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
 static void test_syntax_diagnostics(ArchbirdEngine *engine) {
   static const char source[] = "int broken( { return 0; }\n";
   static const char config[] =
-      "{\"schema_version\":1,\"project\":\"syntax-test\",\"layers\":[{"
+      "{\"schema_version\":2,\"project\":\"syntax-test\",\"layers\":[{"
       "\"name\":\"core\",\"language\":\"c\",\"globs\":[\"src/**\"]}]}";
   ArchbirdProject *project =
       create_project(engine, source, "src/broken.c", "c");

@@ -1401,51 +1401,74 @@ def introduced_test_identities(value: object) -> tuple[list[str], str | None]:
     return identities, None
 
 
-def verification_test_suite(
-    case_id: str, identities: Sequence[str]
+def verification_test_configuration(
+    base: Mapping[str, Any], case_id: str, identities: Sequence[str]
 ) -> Mapping[str, Any]:
     paths = sorted(
         {identity.split("::", 1)[0] for identity in identities}, key=str.encode
     )
-    return {
-        "schema_version": 1,
-        "suite": f"historical-{case_id}-introduced-tests",
-        "projects": {"subject": {"map": "map.json"}},
-        "extractors": {
-            "expected.tests": {
-                "kind": "literal_set",
-                "values": list(identities),
-            },
-            "subject.tests": {
-                "kind": "test_selectors",
-                "project": "subject",
-                "paths": paths,
-            },
-        },
-        "checks": [
-            {
-                "id": "HISTORICAL-INTRODUCED-TESTS",
-                "assert": "required_subset",
-                "expected": "expected.tests",
-                "actual": "subject.tests",
-                "owner": "historical-evaluation",
-                "rationale": (
-                    "Reviewed after-only test identities must be absent before "
-                    "and present after the historical change; this does not "
-                    "claim that the tests execute or cover the behavior."
-                ),
-            }
-        ],
+    configuration = json.loads(json.dumps(base))
+
+    def keyed(collection: str) -> dict[str, Any]:
+        current = configuration.get(collection, {})
+        if isinstance(current, dict):
+            return dict(current)
+        if isinstance(current, list):
+            result: dict[str, Any] = {}
+            for row in current:
+                if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                    raise EvaluationError(
+                        f"project configuration {collection} is not a named collection"
+                    )
+                value = dict(row)
+                identity = str(value.pop("id"))
+                if identity in result:
+                    raise EvaluationError(
+                        f"project configuration {collection} contains duplicate IDs"
+                    )
+                result[identity] = value
+            return result
+        raise EvaluationError(
+            f"project configuration {collection} is not an object or array"
+        )
+
+    projections = keyed("projections")
+    constraints = keyed("constraints")
+    if "introduced-tests" in projections:
+        raise EvaluationError(
+            f"historical evaluation projection collides in case {case_id}"
+        )
+    if "HISTORICAL-INTRODUCED-TESTS" in constraints:
+        raise EvaluationError(
+            f"historical evaluation constraint collides in case {case_id}"
+        )
+    projections["introduced-tests"] = {
+        "select": "test_selectors",
+        "paths": paths,
     }
+    constraints["HISTORICAL-INTRODUCED-TESTS"] = {
+        "assert": "required_subset",
+        "expected": {"literal": list(identities)},
+        "actual": {"projection": "introduced-tests"},
+        "owner": "historical-evaluation",
+        "rationale": (
+            "Reviewed after-only test identities must be absent before and "
+            "present after the historical change; this does not claim that "
+            "the tests execute or cover the behavior."
+        ),
+    }
+    configuration["projections"] = projections
+    configuration["constraints"] = constraints
+    return configuration
 
 
 def finding_by_key(
     document: Mapping[str, Any], key: str
 ) -> Mapping[str, Any] | None:
-    for check in document.get("checks", []):
-        if not isinstance(check, dict):
+    for constraint in document.get("constraints", []):
+        if not isinstance(constraint, dict):
             continue
-        for finding in check.get("findings", []):
+        for finding in constraint.get("findings", []):
             if (
                 isinstance(finding, dict)
                 and finding.get("key") == key
@@ -1462,6 +1485,7 @@ def run_historical_verification(
     case_output: Path,
     before_map: Path,
     after_map: Path,
+    project_configuration: Mapping[str, Any],
 ) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
     identities, reason = introduced_test_identities(introduced)
     if reason is not None:
@@ -1474,7 +1498,9 @@ def run_historical_verification(
             {},
             {},
         )
-    suite = verification_test_suite(case_id, identities)
+    configuration = verification_test_configuration(
+        project_configuration, case_id, identities
+    )
     verification_root = case_output / "verification"
     documents: dict[str, Mapping[str, Any]] = {}
     observations: dict[str, Mapping[str, Any]] = {}
@@ -1483,16 +1509,18 @@ def run_historical_verification(
         directory = verification_root / state
         directory.mkdir(parents=True, exist_ok=True)
         map_path = directory / "map.json"
-        suite_path = directory / "suite.json"
+        config_path = directory / "archbird.json"
         result_path = directory / "result.json"
         shutil.copyfile(source_map, map_path)
-        write_json(suite_path, suite)
+        write_json(config_path, configuration)
         observation = run_process(
             [
                 str(archbird),
                 "verify",
                 "--config",
-                str(suite_path),
+                str(config_path),
+                "--map",
+                str(map_path),
                 "--format",
                 "json",
                 "--output",
@@ -1524,9 +1552,9 @@ def run_historical_verification(
         }
     before_findings = {
         finding["key"]
-        for check in documents["before"].get("checks", [])
-        if isinstance(check, dict)
-        for finding in check.get("findings", [])
+        for constraint in documents["before"].get("constraints", [])
+        if isinstance(constraint, dict)
+        for finding in constraint.get("findings", [])
         if isinstance(finding, dict)
         and isinstance(finding.get("key"), str)
         and finding.get("comparison") == "missing"
@@ -1534,37 +1562,37 @@ def run_historical_verification(
     }
     after_findings = {
         finding["key"]
-        for check in documents["after"].get("checks", [])
-        if isinstance(check, dict)
-        for finding in check.get("findings", [])
+        for constraint in documents["after"].get("constraints", [])
+        if isinstance(constraint, dict)
+        for finding in constraint.get("findings", [])
         if isinstance(finding, dict)
         and isinstance(finding.get("key"), str)
         and finding.get("comparison") == "missing"
         and finding.get("evidence_state") == "current"
     }
     truth = set(identities)
-    before_check_states = {
-        str(check.get("status"))
-        for check in documents["before"].get("checks", [])
-        if isinstance(check, dict)
+    before_constraint_states = {
+        str(constraint.get("status"))
+        for constraint in documents["before"].get("constraints", [])
+        if isinstance(constraint, dict)
     }
-    after_check_states = {
-        str(check.get("status"))
-        for check in documents["after"].get("checks", [])
-        if isinstance(check, dict)
+    after_constraint_states = {
+        str(constraint.get("status"))
+        for constraint in documents["after"].get("constraints", [])
+        if isinstance(constraint, dict)
     }
-    evidence_current = before_check_states == {"fail"} and after_check_states == {
-        "pass"
-    }
+    evidence_current = before_constraint_states == {"fail"} and (
+        after_constraint_states == {"pass"}
+    )
     metrics: dict[str, Any] = {
         "verification_after_presence_recall": (
             len(truth - after_findings) / len(truth)
-            if after_check_states == {"pass"}
+            if after_constraint_states == {"pass"}
             else None
         ),
         "verification_before_missing_recall": (
             len(truth.intersection(before_findings)) / len(truth)
-            if before_check_states == {"fail"}
+            if before_constraint_states == {"fail"}
             else None
         ),
         "verification_false_findings": len(before_findings - truth)
@@ -1736,11 +1764,11 @@ def run_historical_verification(
             "after_missing": sorted(
                 truth.intersection(after_findings), key=str.encode
             ),
-            "after_status": sorted(after_check_states, key=str.encode),
+            "after_status": sorted(after_constraint_states, key=str.encode),
             "before_missing": sorted(
                 truth.intersection(before_findings), key=str.encode
             ),
-            "before_status": sorted(before_check_states, key=str.encode),
+            "before_status": sorted(before_constraint_states, key=str.encode),
         },
     }
     artifacts = {
@@ -1776,12 +1804,36 @@ def run_case(
         map_path = case_output / "map.json"
         map_command = [str(archbird), "map", str(worktree)]
         config = case["analysis"].get("config")
+        config_path = case_output / "archbird.json"
         if config is None:
-            map_command.append("--no-config")
+            config_observation = run_process(
+                [
+                    str(archbird),
+                    "config",
+                    "init",
+                    str(worktree),
+                    "--no-config",
+                    "--output",
+                    str(config_path),
+                ],
+                worktree,
+                case_output / "config.stdout",
+                case_output / "config.stderr",
+            )
+            if config_observation["returncode"] != 0 or not config_path.is_file():
+                return {
+                    "case_sha256": entry["case_sha256"],
+                    "config": config_observation,
+                    "error": "project configuration initialization failed",
+                    "id": case_id,
+                    "review_status": entry["review_status"],
+                    "split": entry["split"],
+                    "status": "error",
+                }
+            config = read_json(config_path, "generated project configuration")
         else:
-            config_path = case_output / "config.json"
             write_json(config_path, config)
-            map_command.extend(("--config", str(config_path)))
+        map_command.extend(("--config", str(config_path)))
         map_command.extend(("--format", "json", "--output", str(map_path)))
         map_observation = run_process(
             map_command,
@@ -1992,10 +2044,7 @@ def run_case(
         checkout(repository, worktree, str(repository_info["after_revision"]))
         after_map_path = case_output / "after-map.json"
         after_map_command = [str(archbird), "map", str(worktree)]
-        if config is None:
-            after_map_command.append("--no-config")
-        else:
-            after_map_command.extend(("--config", str(config_path)))
+        after_map_command.extend(("--config", str(config_path)))
         after_map_command.extend(
             ("--format", "json", "--output", str(after_map_path))
         )
@@ -2028,6 +2077,7 @@ def run_case(
                 case_output,
                 map_path,
                 after_map_path,
+                config,
             )
         )
         metrics.update(verification_metrics)

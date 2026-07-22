@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "provider-reference",
   "description": "Reference side of a cross-language provider rename.",
-  "root": ".",
   "layers": [
     {"name": "core", "role": "core", "language": "c", "globs": ["src/*.c", "src/*.h"], "public_headers": ["src/core.h"]},
     {"name": "python", "role": "frontend", "language": "python", "globs": ["py/*.py"]},

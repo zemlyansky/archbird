@@ -9,21 +9,16 @@ function configBytes(root, configured) {
   if (workerData.configJson) return Buffer.from(workerData.configJson);
   if (workerData.noConfig) return null;
   if (configured) return fs.readFileSync(path.resolve(configured));
-  const candidates = ["archbird.json", ".archbird.json"]
-    .map((name) => path.join(root, name))
-    .filter((candidate) => {
-      try {
-        const metadata = fs.lstatSync(candidate);
-        return metadata.isFile() && !metadata.isSymbolicLink();
-      } catch (error) {
-        if (error && error.code === "ENOENT") return false;
-        throw error;
-      }
-    });
-  if (candidates.length > 1) {
-    throw new Error("repository contains both archbird.json and .archbird.json");
+  const candidate = path.join(root, "archbird.json");
+  try {
+    const metadata = fs.lstatSync(candidate);
+    return metadata.isFile() && !metadata.isSymbolicLink()
+      ? fs.readFileSync(candidate)
+      : null;
+  } catch (error) {
+    if (error && error.code === "ENOENT") return null;
+    throw error;
   }
-  return candidates.length ? fs.readFileSync(candidates[0]) : null;
 }
 
 function main() {

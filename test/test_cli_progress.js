@@ -109,7 +109,10 @@ try {
   const missingProducerBlocked = runQuery(missingProducerMapPath, true);
   assert.equal(missingProducerBlocked.status, 1, missingProducerBlocked.stderr);
   assert.equal(missingProducerBlocked.stdout, "");
-  assert.match(missingProducerBlocked.stderr, /digest is missing or invalid/);
+  assert.match(
+    missingProducerBlocked.stderr,
+    /saved Map core missing does not match active core/,
+  );
   const crossVersion = runQuery(mismatchedMapPath, false);
   assert.equal(crossVersion.status, 0, crossVersion.stderr);
   const crossVersionDocument = JSON.parse(crossVersion.stdout);

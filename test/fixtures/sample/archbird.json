@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "sample",
   "description": "Integration fixture.",
-  "root": ".",
   "layers": [
     {"name": "core", "role": "core", "language": "c", "globs": ["src/**/*.c", "src/**/*.h"], "public_headers": ["src/core.h"]},
     {"name": "python", "role": "frontend", "language": "python", "globs": ["py/sample/**/*.py"], "import_roots": ["py"]},
@@ -86,44 +85,153 @@
       "enforce": true
     }
   ],
-  "checks": {
-    "files": ["src/core.c", "src/core.h", "py/sample/api.py", "js/runtime.js", "ui/Widget.vue"],
-    "symbols": [
-      {"layer": "core", "name": "core_add"},
-      {"layer": "python", "name": "Ops.add"},
-      {"layer": "javascript", "name": "ops.nested.mul"}
-    ],
-    "edges": [
-      {"kind": "import", "from": "js/main.js", "to": "js/worker.js", "name": "./worker.js"},
-      {"kind": "bridge:python-abi", "from": "py/**", "to": "src/core.c", "name": "core_add"}
-    ],
-    "bridges": ["python-abi", "js-abi", "js-binding", "worker"],
-    "entrypoints": [
-      {"package": "npm", "route": "main", "target": "js/index.js"}
-    ],
-    "test_routes": [
-      {"group": "c", "to": "src/core.c"},
-      {"group": "python", "to": "py/**"}
-    ],
-    "surfaces": [
-      {
-        "bridge": "js-abi",
-        "declared": ["core_add", "core_mul", "core_unused"],
-        "forbid_unregistered": true,
-        "forbid_unresolved": true,
-        "forbid_ambiguous": true
-      },
-      {
-        "bridge": "js-binding",
-        "declared": ["core_add", "core_mul"],
-        "forbid_unregistered": true,
-        "forbid_unresolved": true,
-        "forbid_ambiguous": true
-      }
-    ],
-    "forbid_paths": ["js/legacy*.js"],
-    "forbid_symbols": [
-      {"layer": "core", "name": "legacy_core"}
-    ]
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "src/core.c",
+        "src/core.h",
+        "py/sample/api.py",
+        "js/runtime.js",
+        "ui/Widget.vue"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    },
+    "REQUIRED-SYMBOLS-CORE": {
+      "kind": "required_symbols",
+      "layer": "core",
+      "symbols": [
+        "core_add"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed core symbols remain present."
+    },
+    "REQUIRED-SYMBOLS-PYTHON": {
+      "kind": "required_symbols",
+      "layer": "python",
+      "symbols": [
+        "Ops.add"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed python symbols remain present."
+    },
+    "REQUIRED-SYMBOLS-JAVASCRIPT": {
+      "kind": "required_symbols",
+      "layer": "javascript",
+      "symbols": [
+        "ops.nested.mul"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed javascript symbols remain present."
+    },
+    "REQUIRED-FILE-EDGE-001": {
+      "kind": "required_file_edge",
+      "edge_kind": "import",
+      "source": "js/main.js",
+      "target": "js/worker.js",
+      "owner": "architecture",
+      "rationale": "The reviewed file dependency remains present.",
+      "name": "./worker.js"
+    },
+    "REQUIRED-FILE-EDGE-002": {
+      "kind": "required_file_edge",
+      "edge_kind": "bridge:python-abi",
+      "source": "py/**",
+      "target": "src/core.c",
+      "owner": "architecture",
+      "rationale": "The reviewed file dependency remains present.",
+      "name": "core_add"
+    },
+    "REQUIRED-BRIDGE-PYTHON-ABI": {
+      "kind": "required_bridge",
+      "bridge": "python-abi",
+      "owner": "architecture",
+      "rationale": "The reviewed bridge remains connected."
+    },
+    "REQUIRED-BRIDGE-JS-ABI": {
+      "kind": "required_bridge",
+      "bridge": "js-abi",
+      "owner": "architecture",
+      "rationale": "The reviewed bridge remains connected."
+    },
+    "REQUIRED-BRIDGE-JS-BINDING": {
+      "kind": "required_bridge",
+      "bridge": "js-binding",
+      "owner": "architecture",
+      "rationale": "The reviewed bridge remains connected."
+    },
+    "REQUIRED-BRIDGE-WORKER": {
+      "kind": "required_bridge",
+      "bridge": "worker",
+      "owner": "architecture",
+      "rationale": "The reviewed bridge remains connected."
+    },
+    "REQUIRED-ENTRYPOINT-001": {
+      "kind": "required_package_entrypoint",
+      "package": "npm",
+      "route": "main",
+      "owner": "architecture",
+      "rationale": "The reviewed package entrypoint remains present.",
+      "target": "js/index.js"
+    },
+    "REQUIRED-TEST-ROUTE-001": {
+      "kind": "required_test_route",
+      "group": "c",
+      "target": "src/core.c",
+      "owner": "architecture",
+      "rationale": "The reviewed static test route remains present."
+    },
+    "REQUIRED-TEST-ROUTE-002": {
+      "kind": "required_test_route",
+      "group": "python",
+      "target": "py/**",
+      "owner": "architecture",
+      "rationale": "The reviewed static test route remains present."
+    },
+    "PROVIDER-SURFACE-JS-ABI": {
+      "declared": [
+        "core_add",
+        "core_mul",
+        "core_unused"
+      ],
+      "forbid_unregistered": true,
+      "forbid_unresolved": true,
+      "forbid_ambiguous": true,
+      "kind": "provider_surface",
+      "surface": "js-abi",
+      "owner": "architecture",
+      "rationale": "The reviewed provider surface remains declared and resolvable."
+    },
+    "PROVIDER-SURFACE-JS-BINDING": {
+      "declared": [
+        "core_add",
+        "core_mul"
+      ],
+      "forbid_unregistered": true,
+      "forbid_unresolved": true,
+      "forbid_ambiguous": true,
+      "kind": "provider_surface",
+      "surface": "js-binding",
+      "owner": "architecture",
+      "rationale": "The reviewed provider surface remains declared and resolvable."
+    },
+    "FORBIDDEN-REPOSITORY-PATHS": {
+      "kind": "forbidden_paths",
+      "paths": [
+        "js/legacy*.js"
+      ],
+      "owner": "architecture",
+      "rationale": "Deprecated repository paths remain absent."
+    },
+    "FORBIDDEN-SYMBOLS-CORE": {
+      "kind": "forbidden_symbols",
+      "layer": "core",
+      "symbols": [
+        "legacy_core"
+      ],
+      "owner": "architecture",
+      "rationale": "Forbidden core symbols remain absent."
+    }
   }
 }

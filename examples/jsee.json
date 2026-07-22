@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "jsee",
   "description": "Schema-driven JavaScript/browser runtime with a parallel Python server/runtime and Vue templates.",
-  "root": ".",
   "exclude": ["dist/**", "apps/**", "load/**"],
   "layers": [
     {"name": "runtime_js", "role": "core", "language": "javascript", "globs": ["src/**/*.js"]},
@@ -31,5 +30,19 @@
     {"name": "cli", "paths": ["src/cli.js", "src/browser-bundle-node.js"], "description": "CLI, serving, packaging, and one-shot execution"},
     {"name": "python-runtime", "paths": ["py/jsee/**/*.py"], "description": "Python schema generation and serving"}
   ],
-  "checks": {"files": ["src/main.js", "src/worker.js", "src/app.js", "src/cli.js", "py/jsee/jsee.py", "templates/minimal-app.vue"]}
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "src/main.js",
+        "src/worker.js",
+        "src/app.js",
+        "src/cli.js",
+        "py/jsee/jsee.py",
+        "templates/minimal-app.vue"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    }
+  }
 }

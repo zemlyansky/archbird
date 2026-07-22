@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "dependency",
   "description": "Workspace dependency fixture.",
-  "root": ".",
   "layers": [
     {"name": "javascript", "role": "core", "language": "javascript", "globs": ["js/**/*.js"]}
   ],
@@ -12,9 +11,31 @@
   "components": [
     {"name": "api", "paths": ["js/index.js"]}
   ],
-  "checks": {
-    "files": ["js/index.js"],
-    "symbols": [{"layer": "javascript", "name": "dep"}],
-    "entrypoints": [{"package": "npm", "route": "main", "target": "js/index.js"}]
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "js/index.js"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    },
+    "REQUIRED-SYMBOLS-JAVASCRIPT": {
+      "kind": "required_symbols",
+      "layer": "javascript",
+      "symbols": [
+        "dep"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed javascript symbols remain present."
+    },
+    "REQUIRED-ENTRYPOINT-001": {
+      "kind": "required_package_entrypoint",
+      "package": "npm",
+      "route": "main",
+      "owner": "architecture",
+      "rationale": "The reviewed package entrypoint remains present.",
+      "target": "js/index.js"
+    }
   }
 }

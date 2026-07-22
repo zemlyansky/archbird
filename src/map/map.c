@@ -1920,6 +1920,59 @@ static ArchbirdStatus flush_compact_map(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus render_selected_inputs(AbBuffer *buffer,
+                                             const AbSourceManifest *manifest) {
+  size_t file_index;
+  ArchbirdStatus status = ab_buffer_literal(buffer, "[");
+  for (file_index = 0;
+       status == ARCHBIRD_OK && file_index < manifest->file_count;
+       file_index++) {
+    const AbManifestFile *file = &manifest->files[file_index];
+    char sha256[65];
+    size_t role_index;
+    archbird_sha256_hex(file->sha256, sha256);
+    if (file_index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "{\"bytes\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, (uint64_t)file->byte_length);
+    if (status == ARCHBIRD_OK && file->has_language) {
+      status = ab_buffer_literal(buffer, ",\"language\":");
+      if (status == ARCHBIRD_OK)
+        status = json_string(buffer, &file->language);
+    }
+    if (status == ARCHBIRD_OK && file->has_layer) {
+      status = ab_buffer_literal(buffer, ",\"layer\":");
+      if (status == ARCHBIRD_OK)
+        status = json_string(buffer, &file->layer);
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"path\":");
+    if (status == ARCHBIRD_OK)
+      status = json_string(buffer, &file->path);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"roles\":[");
+    for (role_index = 0;
+         status == ARCHBIRD_OK && role_index < file->roles.count;
+         role_index++) {
+      if (role_index)
+        status = ab_buffer_literal(buffer, ",");
+      if (status == ARCHBIRD_OK)
+        status = json_string(buffer, &file->roles.items[role_index]);
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "],\"sha256\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, sha256, 64);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "]");
+  return status;
+}
+
 ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
                                            const ArchbirdProject *project,
                                            uint32_t json_flags,
@@ -1964,7 +2017,7 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
   MAP_TRY(ab_map_analyze_tests(&state));
   MAP_TRY(ab_map_analyze_named_entries(&state));
   MAP_TRY(ab_map_analyze_parity(&state));
-  MAP_TRY(ab_map_run_legacy_checks(&state));
+  MAP_TRY(ab_map_run_diagnostics(&state));
   MAP_TRY(add_provider_diagnostics(&state));
   ab_map_diagnostics_sort_unique(&state);
   MAP_TRY(ab_buffer_literal(&buffer, "{\"artifact\":\"map\",\"artifacts\":"));
@@ -2033,7 +2086,10 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
     MAP_TRY(ab_buffer_literal(&buffer, ",\"resolution_sha256\":"));
     MAP_TRY(ab_buffer_json_string(&buffer, resolution_digest, 64));
   }
-  MAP_TRY(ab_buffer_literal(&buffer, "},\"files\":["));
+  MAP_TRY(ab_buffer_literal(&buffer, "},\"facts\":"));
+  MAP_TRY(ab_map_render_facts(&buffer, project));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
+  MAP_TRY(ab_buffer_literal(&buffer, ",\"files\":["));
   MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   for (index = 0; index < manifest->file_count; index++) {
     if (!manifest->files[index].has_layer)
@@ -2048,6 +2104,9 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
   }
   MAP_TRY(ab_buffer_literal(&buffer, "],\"indexes\":"));
   MAP_TRY(ab_map_render_indexes(&buffer, &state));
+  MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
+  MAP_TRY(ab_buffer_literal(&buffer, ",\"inputs\":"));
+  MAP_TRY(render_selected_inputs(&buffer, manifest));
   MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"layers\":"));
   MAP_TRY(render_layers(&buffer, engine, project, config, manifest));

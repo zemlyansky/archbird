@@ -15,13 +15,13 @@
     "owner",
     "rationale",
     "postconditions",
-    "preserved_checks",
+    "preserved_constraints",
     "selected_candidates",
     "acknowledged_unknowns",
     "sha256"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "artifact": {"const": "change-contract"},
     "provenance": {"const": "asserted"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -29,9 +29,9 @@
     "origin": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["check", "fingerprint"],
+      "required": ["constraint", "fingerprint"],
       "properties": {
-        "check": {"$ref": "#/$defs/id"},
+        "constraint": {"$ref": "#/$defs/id"},
         "fingerprint": {"$ref": "#/$defs/sha256"}
       }
     },
@@ -39,9 +39,9 @@
     "owner": {"type": "string", "minLength": 1},
     "rationale": {"type": "string", "minLength": 1},
     "postconditions": {"$ref": "#/$defs/strings"},
-    "preserved_checks": {
+    "preserved_constraints": {
       "type": "array",
-      "items": {"$ref": "#/$defs/preservedCheck"}
+      "items": {"$ref": "#/$defs/preservedConstraint"}
     },
     "selected_candidates": {"$ref": "#/$defs/strings"},
     "acknowledged_unknowns": {"$ref": "#/$defs/strings"},
@@ -71,7 +71,7 @@
         "implementation_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
-    "preservedCheck": {
+    "preservedConstraint": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "status", "sha256"],

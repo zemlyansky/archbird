@@ -45,25 +45,17 @@ static const uint8_t fuzz_workspace_json[] =
 static const uint8_t fuzz_workspace_maps_json[] =
     "[" ARCHBIRD_FUZZ_MAP_JSON "]";
 
-static const uint8_t fuzz_suite_json[] =
-    "{\"schema_version\":1,\"suite\":\"fuzz\",\"projects\":{"
-    "\"subject\":{\"map\":\"subject.json\"}},\"extractors\":{"
-    "\"expected\":{\"kind\":\"literal_set\",\"values\":[\"A\"]},"
-    "\"actual\":{\"kind\":\"literal_set\",\"values\":[\"B\"]}},"
-    "\"checks\":[{\"id\":\"FUZZ-SET\",\"assert\":\"set_equal\","
-    "\"expected\":\"expected\",\"actual\":\"actual\","
+static const uint8_t fuzz_project_configuration_json[] =
+    "{\"schema_version\":2,\"project\":\"fuzz\",\"constraints\":{"
+    "\"FUZZ-SET\":{\"assert\":\"set_equal\","
+    "\"expected\":{\"literal\":[\"A\"]},"
+    "\"actual\":{\"literal\":[\"B\"]},"
     "\"owner\":\"fuzz\",\"rationale\":"
-    "\"Exercise native verification.\"}]}";
-
-static const uint8_t fuzz_verification_input_json[] =
-    "{\"schema_version\":1,\"artifact\":\"verification-input\","
-    "\"suite_path\":\"fuzz.verify.json\",\"projects\":[{\"name\":"
-    "\"subject\",\"map\":" ARCHBIRD_FUZZ_MAP_JSON ",\"sources\":[]}],"
-    "\"provided_facts\":[],\"attestations\":[],\"baseline\":null}";
+    "\"Exercise native verification.\"}}}";
 
 static const uint8_t fuzz_review_json[] =
     "{\"objective\":\"Exercise one reviewed transition.\",\"owner\":"
-    "\"fuzz\",\"preserve_checks\":[],\"rationale\":"
+    "\"fuzz\",\"preserve_constraints\":[],\"rationale\":"
     "\"Exercise native Act artifact boundaries.\","
     "\"selected_candidates\":[]}";
 
@@ -169,10 +161,11 @@ static int fuzz_build_act_chain(ArchbirdEngine *engine, FuzzActChain *chain) {
   if (!engine || !chain)
     return 0;
   memset(chain, 0, sizeof(*chain));
-  status = archbird_verification_analyze(
-      engine, fuzz_suite_json, sizeof(fuzz_suite_json) - 1,
-      fuzz_verification_input_json, sizeof(fuzz_verification_input_json) - 1, 0,
-      fuzz_buffer_write, &chain->verification);
+  status = archbird_constraints_evaluate(
+      engine, fuzz_project_configuration_json,
+      sizeof(fuzz_project_configuration_json) - 1, fuzz_map_json,
+      sizeof(fuzz_map_json) - 1, NULL, 0, NULL, 0, 0, fuzz_buffer_write,
+      &chain->verification);
   if (status == ARCHBIRD_OK &&
       !fuzz_first_fingerprint(&chain->verification, chain->fingerprint))
     status = ARCHBIRD_CONFLICT;

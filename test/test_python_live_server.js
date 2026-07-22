@@ -85,7 +85,7 @@ async function main() {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
   fs.mkdirSync(temporaryRoot, { recursive: true });
   fs.cpSync(fixtureRoot, repositoryRoot, { recursive: true });
-  const childArguments = ["-m", "archbird", "serve", repositoryRoot, "--port", "0"];
+  const childArguments = ["-m", "archbird", "serve", "--root", repositoryRoot, "--port", "0"];
   if (!packagedApp) childArguments.push("--app", appRoot);
   const child = spawn(python, childArguments, { stdio: ["ignore", "pipe", "pipe"] });
   let stderr = "";

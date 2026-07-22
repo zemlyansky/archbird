@@ -770,300 +770,6 @@ class Workspace {
   }
 }
 
-class Verification {
-  constructor(suiteJson, inputJson, { configPath }) {
-    this.suiteJson = Buffer.from(suiteJson);
-    this.inputJson = Buffer.from(inputJson);
-    this.configPath = configPath;
-  }
-
-  static fromMap(
-    suiteJson,
-    mapJson,
-    { resolutionJson = null, configPath = "recipe.verify.json" } = {},
-  ) {
-    const suite = strictDocument(suiteJson, "verification suite");
-    const mapDocument = strictDocument(mapJson, "project map");
-    const plan = JSON.parse(
-      verificationPlan(Buffer.from(JSON.stringify(canonicalForDigest(suite))))
-        .toString("utf8"),
-    );
-    if (!Array.isArray(plan.projects) || plan.projects.length !== 1) {
-      throw new Error("map-only verification requires exactly one project");
-    }
-    if (plan.sources.length || plan.attestations.length) {
-      throw new Error(
-        "map-only verification cannot satisfy source or attestation inputs",
-      );
-    }
-    const projectName = plan.projects[0].name;
-    if (typeof projectName !== "string" || !projectName) {
-      throw new Error("verification plan has an invalid project name");
-    }
-    const project = { name: projectName, map: mapDocument, sources: [] };
-    if (resolutionJson !== null) {
-      project.resolution = strictDocument(
-        resolutionJson,
-        "project discovery resolution",
-      );
-    }
-    const input = canonicalForDigest({
-      schema_version: 1,
-      artifact: "verification-input",
-      suite_path: path.basename(configPath),
-      projects: [project],
-      provided_facts: [],
-      attestations: [],
-      baseline: null,
-    });
-    return new Verification(
-      Buffer.from(JSON.stringify(canonicalForDigest(suite))),
-      Buffer.from(JSON.stringify(input)),
-      { configPath },
-    );
-  }
-
-  static fromConfig(
-    configPath,
-    {
-      projectRoots = {},
-      baseline = null,
-      providedFacts = [],
-      typescript = true,
-      cacheDir = null,
-      cacheMaxBytes = null,
-    } = {},
-  ) {
-    const resolved = path.resolve(configPath);
-    const base = path.dirname(resolved);
-    const suiteJson = fs.readFileSync(resolved);
-    const plan = JSON.parse(verificationPlan(suiteJson).toString("utf8"));
-    const suite = strictDocument(suiteJson, "verification suite");
-    const expectedNames = new Set(plan.projects.map((row) => row.name));
-    const overrides = Object.fromEntries(
-      Object.entries(projectRoots).map(([name, value]) => [name, path.resolve(value)]),
-    );
-    const unknownOverrides = Object.keys(overrides)
-      .filter((name) => !expectedNames.has(name))
-      .sort(utf8Compare);
-    if (unknownOverrides.length) {
-      throw new Error(
-        `unknown verification project root overrides: ${unknownOverrides.join(", ")}`,
-      );
-    }
-    const sourcePlan = new Map();
-    for (const row of plan.sources) {
-      if (!sourcePlan.has(row.project)) sourcePlan.set(row.project, []);
-      sourcePlan.get(row.project).push(row);
-    }
-    const sourceText = new Map();
-    const projectInputs = new Map();
-    const repositoryRoots = new Map();
-    const projects = plan.projects.map((row) => {
-      const assertedRoot = row.root === null ? null : path.resolve(base, row.root);
-      const root = overrides[row.name] || assertedRoot;
-      let project = null;
-      let mapDocument;
-      let repositoryRoot;
-      let available = new Map();
-      if (row.config !== null) {
-        const projectConfig = path.resolve(base, row.config);
-        project = Project.fromConfig(projectConfig, {
-          root,
-          scan: false,
-          typescript,
-          cacheDir,
-          cacheMaxBytes,
-        });
-        if (row.provider_scan) {
-          project.scan("primary", { typescript, cacheDir, cacheMaxBytes });
-        } else {
-          project.finalizeProviders();
-        }
-        mapDocument = strictDocument(project.mapJson(), `project ${row.name} map`);
-        repositoryRoot = project.root;
-        available = new Map(project.sources.map((source) => [source.path, source.data]));
-      } else {
-        mapDocument = strictDocument(
-          fs.readFileSync(path.resolve(base, row.map)),
-          `project ${row.name} map`,
-        );
-        repositoryRoot = root;
-      }
-      const plannedSources = [];
-      const plannedPaths = new Set();
-      for (const sourceRow of sourcePlan.get(row.name) || []) {
-        if (plannedPaths.has(sourceRow.path)) continue;
-        plannedPaths.add(sourceRow.path);
-        plannedSources.push(sourceRow);
-      }
-      const sources = plannedSources.map((sourceRow) => {
-        let data = available.get(sourceRow.path);
-        if (!data) {
-          if (!repositoryRoot) {
-            throw new Error(
-              `project ${row.name}: verification source ${JSON.stringify(sourceRow.path)} ` +
-                "requires a suite root or projectRoots override",
-            );
-          }
-          const candidate = path.resolve(repositoryRoot, sourceRow.path);
-          const relative = path.relative(path.resolve(repositoryRoot), candidate);
-          if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
-            throw new Error(`project ${row.name}: source path escapes root: ${sourceRow.path}`);
-          }
-          data = fs.readFileSync(candidate);
-        }
-        const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
-        sourceText.set(`${row.name}\0${sourceRow.path}`, text);
-        return { path: sourceRow.path, text };
-      });
-      for (const [sourcePath, data] of [...available.entries()].sort((left, right) => utf8Compare(left[0], right[0]))) {
-        if (plannedPaths.has(sourcePath)) continue;
-        sources.push({ path: sourcePath, sha256: sha256(data) });
-        plannedPaths.add(sourcePath);
-      }
-      sources.sort((left, right) => utf8Compare(left.path, right.path));
-      const input = { name: row.name, map: mapDocument, sources };
-      projectInputs.set(row.name, input);
-      repositoryRoots.set(row.name, repositoryRoot);
-      return input;
-    });
-
-    const attestationRows = [];
-    for (const row of plan.attestations) {
-      const resolvedAttestation = path.resolve(base, row.path);
-      let raw;
-      try {
-        raw = fs.readFileSync(resolvedAttestation);
-      } catch (error) {
-        attestationRows.push({
-          name: row.name,
-          path: row.path,
-          error: `cannot read attestation ${row.path}: ${String(error.message).replaceAll(resolvedAttestation, row.path)}`,
-        });
-        continue;
-      }
-      let document;
-      try {
-        document = strictDocument(raw, `verification attestation ${row.name}`);
-      } catch (error) {
-        attestationRows.push({
-          name: row.name,
-          path: row.path,
-          error: String(error.message).replaceAll(resolvedAttestation, row.path),
-        });
-        continue;
-      }
-      attestationRows.push({ name: row.name, path: row.path, document });
-      const repositoryRoot = repositoryRoots.get(row.project);
-      const evidenceRows = document.producer && Array.isArray(document.producer.evidence)
-        ? document.producer.evidence
-        : [];
-      if (!repositoryRoot) continue;
-      const projectSources = projectInputs.get(row.project).sources;
-      const knownPaths = new Set(projectSources.map((source) => source.path));
-      for (const evidence of evidenceRows) {
-        if (!evidence || typeof evidence.path !== "string" || knownPaths.has(evidence.path)) {
-          continue;
-        }
-        const candidate = path.resolve(repositoryRoot, evidence.path);
-        const relative = path.relative(path.resolve(repositoryRoot), candidate);
-        if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
-          projectSources.push({ path: evidence.path, error: "path escapes project root" });
-          knownPaths.add(evidence.path);
-          continue;
-        }
-        try {
-          projectSources.push({ path: evidence.path, sha256: sha256(fs.readFileSync(candidate)) });
-        } catch (error) {
-          projectSources.push({
-            path: evidence.path,
-            error: String(error.message).replaceAll(candidate, evidence.path),
-          });
-        }
-        knownPaths.add(evidence.path);
-      }
-      projectSources.sort((left, right) => utf8Compare(left.path, right.path));
-    }
-    const baselineDocument = baseline === null
-      ? null
-      : strictDocument(fs.readFileSync(path.resolve(baseline)), "verification baseline");
-    const input = canonicalForDigest({
-      schema_version: 1,
-      artifact: "verification-input",
-      suite_path: path.basename(resolved),
-      projects,
-      provided_facts: [...providedFacts],
-      attestations: attestationRows,
-      baseline: baselineDocument,
-    });
-    return new Verification(suiteJson, Buffer.from(JSON.stringify(input)), {
-      configPath: resolved,
-    });
-  }
-
-  resultJson({ pretty = false } = {}) {
-    return verificationAnalyze(this.suiteJson, this.inputJson, { pretty });
-  }
-
-  result() {
-    return JSON.parse(this.resultJson().toString("utf8"));
-  }
-
-  report({ format, full = false, maxFindings = 200, pretty = true } = {}) {
-    if (format === "json") return this.resultJson({ pretty });
-    return verificationReport(this.suiteJson, this.inputJson, {
-      format,
-      maxFindings: full ? 0xffffffff : maxFindings,
-      pretty,
-    });
-  }
-
-  debug(view, {
-    check = null,
-    extractor = null,
-    project = null,
-    component = null,
-    limit = null,
-    format = "json",
-    pretty = true,
-  } = {}) {
-    const request = {
-      artifact: "verification-debug-request",
-      schema_version: 1,
-      view,
-    };
-    if (check !== null) request.check = check;
-    if (extractor !== null) request.extractor = extractor;
-    if (project !== null) request.project = project;
-    if (component !== null) request.component = component;
-    if (limit !== null) {
-      if (!Number.isSafeInteger(limit) || limit < 0) {
-        throw new Error("limit must be a nonnegative safe integer");
-      }
-      request.limit = limit;
-    }
-    return verificationDebug(
-      this.suiteJson,
-      this.inputJson,
-      Buffer.from(JSON.stringify(canonicalForDigest(request))),
-      { format, pretty },
-    );
-  }
-
-  hasErrors() {
-    return Boolean(this.result().summary.blocking);
-  }
-
-  freeze({ owner, rationale, pretty = true } = {}) {
-    return verificationFreeze(this.suiteJson, this.inputJson, {
-      owner,
-      rationale,
-      pretty,
-    });
-  }
-}
-
 function inventoryState(
   configJson,
   root,
@@ -1411,6 +1117,8 @@ function queryRequest(
     searchLimit = 8,
     changeSet = null,
     context = null,
+    plan = null,
+    projectionResults = [],
     direction = "both",
     producerPolicy = "compatible",
     depth = 1,
@@ -1433,16 +1141,50 @@ function queryRequest(
   };
   if (changeSet !== null) request.change_set = changeSet;
   if (context !== null) request.context = context;
+  if (plan !== null) request.plan = plan;
+  if (projectionResults.length) request.projection_results = projectionResults;
   return canonicalForDigest(request);
 }
 
 function queryMap(mapJson, options = {}) {
-  const request = queryRequest(options);
+  const effective = queryOptionsWithPlan(mapJson, options);
+  const request = queryRequest(effective);
   return native.mapQuery(
     Buffer.from(mapJson),
     Buffer.from(JSON.stringify(request)),
     options.pretty ?? false,
   );
+}
+
+function queryOptionsWithPlan(mapJson, options) {
+  if (options.plan !== undefined && options.plan !== null) return options;
+  const definition = { ...queryRequest(options) };
+  delete definition.change_set;
+  delete definition.producer_policy;
+  const artifact = JSON.parse(compileQueryPlan(
+    Buffer.alloc(0),
+    mapJson,
+    "",
+    { overridesJson: Buffer.from(JSON.stringify(definition)) },
+  ).toString("utf8"));
+  const request = artifact.request;
+  return {
+    ...options,
+    artifacts: request.artifacts,
+    components: request.components,
+    context: request.context,
+    depth: request.depth,
+    direction: request.direction,
+    focus: request.focus,
+    packages: request.packages,
+    paths: request.paths,
+    plan: artifact.plan,
+    projectionResults: artifact.projection_results,
+    search: request.search,
+    searchLimit: request.search_limit,
+    symbols: request.symbols,
+    testDepth: request.test_depth,
+  };
 }
 
 function renderMapMarkdown(
@@ -1477,7 +1219,8 @@ function renderMapMarkdown(
 }
 
 function queryMapMarkdown(mapJson, options = {}) {
-  const request = queryRequest(options);
+  const effective = queryOptionsWithPlan(mapJson, options);
+  const request = queryRequest(effective);
   const views = { focused: 0, changes: 1 };
   const details = { compact: 0, standard: 1, full: 2 };
   const view = options.view ?? "focused";
@@ -1539,62 +1282,96 @@ function analyzeWorkspace(configJson, maps, { pretty = false } = {}) {
   );
 }
 
-function verificationPlan(suiteJson, { pretty = false } = {}) {
-  return native.verificationPlan(Buffer.from(suiteJson), pretty);
+function compileProjectConfiguration(configJson, { pretty = false } = {}) {
+  return native.projectConfigurationCompile(Buffer.from(configJson), pretty);
 }
 
-function verificationRecipeCatalog(recipe = "", { pretty = false } = {}) {
-  return native.verificationRecipeCatalog(recipe, pretty);
-}
-
-function compileVerificationRecipe(requestJson, { pretty = false } = {}) {
-  return native.verificationRecipeCompile(Buffer.from(requestJson), pretty);
-}
-
-function verificationAnalyze(suiteJson, inputJson, { pretty = false } = {}) {
-  return native.verificationAnalyze(
-    Buffer.from(suiteJson),
-    Buffer.from(inputJson),
+function evaluateProjection(
+  mapJson,
+  projectionJson,
+  { resolutionJson = Buffer.alloc(0), pretty = false } = {},
+) {
+  return native.projectionEvaluate(
+    Buffer.from(mapJson),
+    Buffer.from(resolutionJson),
+    Buffer.from(projectionJson),
     pretty,
   );
 }
 
-function verificationDebug(
-  suiteJson,
-  inputJson,
-  requestJson,
-  { format = "json", pretty = true } = {},
+function compileQueryPlan(
+  configJson,
+  mapJson,
+  queryId,
+  {
+    resolutionJson = Buffer.alloc(0),
+    overridesJson = Buffer.alloc(0),
+    pretty = false,
+  } = {},
 ) {
-  if (format !== "json" && format !== "markdown") {
-    throw new RangeError("verification debug format must be json or markdown");
+  return native.queryPlanCompile(
+    Buffer.from(configJson),
+    Buffer.from(mapJson),
+    Buffer.from(resolutionJson),
+    queryId,
+    Buffer.from(overridesJson),
+    pretty,
+  );
+}
+
+function evaluateConstraints(
+  configJson,
+  mapJson,
+  {
+    resolutionJson = Buffer.alloc(0),
+    requestJson = Buffer.alloc(0),
+    pretty = false,
+  } = {},
+) {
+  return native.constraintsEvaluate(
+    Buffer.from(configJson),
+    Buffer.from(mapJson),
+    Buffer.from(resolutionJson),
+    Buffer.from(requestJson),
+    pretty,
+  );
+}
+
+function reportConstraints(
+  configJson,
+  mapJson,
+  {
+    resolutionJson = Buffer.alloc(0),
+    requestJson = Buffer.alloc(0),
+    format = "markdown",
+    maxFindings = 200,
+    pretty = false,
+  } = {},
+) {
+  if (!Number.isInteger(maxFindings) || maxFindings < 0 || maxFindings > 0xffffffff) {
+    throw new RangeError("maxFindings must be an integer in [0, 2^32-1]");
   }
-  return native.verificationDebug(
-    Buffer.from(suiteJson),
-    Buffer.from(inputJson),
+  return native.constraintsReport(
+    Buffer.from(configJson),
+    Buffer.from(mapJson),
+    Buffer.from(resolutionJson),
     Buffer.from(requestJson),
     format,
+    maxFindings,
     pretty,
   );
 }
 
-function draftVerificationSuite(
+function freezeConstraints(
+  configJson,
   mapJson,
-  { projectConfig, pretty = true } = {},
-) {
-  if (typeof projectConfig !== "string" || !projectConfig.length) {
-    throw new TypeError("projectConfig must be a non-empty portable path");
-  }
-  return native.verificationDraft(
-    Buffer.from(mapJson),
-    projectConfig,
-    pretty,
-  );
-}
-
-function verificationFreeze(
-  suiteJson,
-  inputJson,
-  { owner, rationale, pretty = true } = {},
+  {
+    resolutionJson = Buffer.alloc(0),
+    requestJson = Buffer.alloc(0),
+    owner,
+    rationale,
+    pretty = true,
+  } = {},
 ) {
   if (typeof owner !== "string" || !owner.trim()) {
     throw new TypeError("baseline owner must be non-empty");
@@ -1602,28 +1379,13 @@ function verificationFreeze(
   if (typeof rationale !== "string" || !rationale.trim()) {
     throw new TypeError("baseline rationale must be non-empty");
   }
-  return native.verificationFreeze(
-    Buffer.from(suiteJson),
-    Buffer.from(inputJson),
+  return native.constraintsFreeze(
+    Buffer.from(configJson),
+    Buffer.from(mapJson),
+    Buffer.from(resolutionJson),
+    Buffer.from(requestJson),
     owner,
     rationale,
-    pretty,
-  );
-}
-
-function verificationReport(
-  suiteJson,
-  inputJson,
-  { format, maxFindings = 200, pretty = true } = {},
-) {
-  if (!Number.isInteger(maxFindings) || maxFindings < 0 || maxFindings > 0xffffffff) {
-    throw new RangeError("maxFindings must be an integer in [0, 2^32-1]");
-  }
-  return native.verificationReport(
-    Buffer.from(suiteJson),
-    Buffer.from(inputJson),
-    format,
-    maxFindings,
     pretty,
   );
 }
@@ -1657,7 +1419,7 @@ function createChangeContract(
     objective,
     owner,
     rationale,
-    preserveChecks = [],
+    preserveConstraints = [],
     selectedCandidates = [],
     format = "json",
     pretty = true,
@@ -1667,7 +1429,7 @@ function createChangeContract(
     objective,
     owner,
     rationale,
-    preserve_checks: [...preserveChecks],
+    preserve_constraints: [...preserveConstraints],
     selected_candidates: [...selectedCandidates],
   });
   return native.changeContract(
@@ -1838,32 +1600,29 @@ module.exports = {
   VERSION: native.VERSION,
   Project,
   Source,
-  Verification,
   Workspace,
   auditMapFreshness,
   analyzeOkfSource,
   publishOkfBundle,
   analyzeWorkspace,
+  compileProjectConfiguration,
+  compileQueryPlan,
   compileChangeProposal,
   compileTestObservations,
-  compileVerificationRecipe,
   createChangeContract,
   defaultProviderCacheDir,
   defaultProviderCacheMaxBytes,
   discoveryPlan,
   resolveDiscovery,
   diffMaps,
-  draftVerificationSuite,
+  evaluateConstraints,
+  evaluateProjection,
   exportGraph,
   queryMap,
   queryMapMarkdown,
+  reportConstraints,
   renderMapMarkdown,
-  verificationAnalyze,
-  verificationDebug,
-  verificationFreeze,
-  verificationPlan,
-  verificationRecipeCatalog,
-  verificationReport,
+  freezeConstraints,
   verifyChangeContract,
   jsonCanonicalize: native.jsonCanonicalize,
 };

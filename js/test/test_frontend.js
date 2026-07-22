@@ -16,9 +16,10 @@ const {
   ChangeProposal,
   auditMapFreshness,
   analyzeOkfSource,
-  compileVerificationRecipe,
+  compileProjectConfiguration,
+  evaluateConstraints,
   exportGraph,
-  draftVerificationSuite,
+  freezeConstraints,
   IMPLEMENTATION_SHA256,
   Project,
   publishOkfBundle,
@@ -26,8 +27,8 @@ const {
   queryMapMarkdown,
   renderMapMarkdown,
   resolveDiscovery,
+  reportConstraints,
   Source,
-  Verification,
   Workspace,
   jsonCanonicalize,
   NATIVE_ABI_VERSION,
@@ -36,9 +37,6 @@ const {
   PATTERN_ENGINE,
   PATTERN_OPTIONS,
   PATTERN_UNICODE,
-  verificationAnalyze,
-  verificationDebug,
-  verificationRecipeCatalog,
 } = require(path.resolve(process.argv[3], "js/src/index.js"));
 
 assert.equal(NATIVE_ABI_VERSION, 0);
@@ -92,111 +90,17 @@ const freshnessStale = JSON.parse(
 assert.equal(freshnessStale.status, "stale");
 assert.deepEqual(freshnessStale.files.changed.map((row) => row.path), ["src/a.js"]);
 
-const verificationSuite = {
-  schema_version: 1,
-  suite: "node-binding",
-  projects: { subject: { map: "subject.json" } },
-  extractors: {
-    expected: { kind: "literal_set", values: ["A"] },
-    actual: { kind: "literal_set", values: ["A"] },
-  },
-  checks: [
-    {
-      id: "NODE-BINDING",
-      assert: "set_equal",
-      expected: "expected",
-      actual: "actual",
-      owner: "test",
-      rationale: "Exercise the public Node verification binding.",
-    },
-  ],
-};
-const verificationInput = {
-  schema_version: 1,
-  artifact: "verification-input",
-  suite_path: "binding.verify.json",
-  projects: [
-    {
-      name: "subject",
-      map: {
-        artifact: "map",
-        schema_version: 6,
-        project: "node-binding",
-        evidence: {
-          config_sha256: "1".repeat(64),
-          input_sha256: "2".repeat(64),
-        },
-        tool: {
-          name: "archbird",
-          version: "fixture",
-          implementation_sha256: "3".repeat(64),
-        },
-        diagnostics: [],
-      },
-      sources: [],
-    },
-  ],
-  provided_facts: [],
-  attestations: [],
-  baseline: null,
-};
-const verificationResult = JSON.parse(
-  verificationAnalyze(
-    Buffer.from(JSON.stringify(verificationSuite)),
-    Buffer.from(JSON.stringify(verificationInput)),
-  ),
-);
-assert.equal(verificationResult.artifact, "verification");
-assert.equal(verificationResult.checks[0].status, "pass");
-const verificationDebugResult = JSON.parse(verificationDebug(
-  Buffer.from(JSON.stringify(verificationSuite)),
-  Buffer.from(JSON.stringify(verificationInput)),
-  Buffer.from(JSON.stringify({
-    artifact: "verification-debug-request",
-    schema_version: 1,
-    view: "selection",
-    check: "NODE-BINDING",
-  })),
-));
-assert.equal(verificationDebugResult.artifact, "verification-debug");
-assert.deepEqual(
-  verificationDebugResult.selections.map((row) => row.extractor),
-  ["actual", "expected"],
-);
-assert.deepEqual(
-  verificationDebugResult.selections.map((row) => row.classification),
-  ["complete", "complete"],
-);
-
-const recipeCatalog = JSON.parse(verificationRecipeCatalog());
-assert.deepEqual(recipeCatalog.recipes.map((row) => row.name), ["max-file-bytes"]);
-const recipeSuite = JSON.parse(compileVerificationRecipe(Buffer.from(JSON.stringify({
-  artifact: "verification-recipe-request",
-  schema_version: 1,
-  recipe: "max-file-bytes",
-  project: { map: "ARCHBIRD.json" },
-  arguments: { max: 1048576, include: ["src/**"] },
-  check: {
-    id: "MAX-FILE-BYTES",
-    owner: "test",
-    rationale: "Exercise the shared recipe compiler.",
-  },
-}))));
-assert.equal(recipeSuite.extractors["recipe.file-bytes"].kind, "file_metrics");
-assert.equal(recipeSuite.checks[0].assert, "numeric_bounds");
-assert.equal(recipeSuite.checks[0].max, 1048576);
-
 const metricFixture = path.resolve(
   process.argv[3],
-  "build/test-verify-recipe-node",
+  "build/test-constraints-node",
 );
 fs.rmSync(metricFixture, { force: true, recursive: true });
 fs.mkdirSync(path.join(metricFixture, "src"), { recursive: true });
 fs.writeFileSync(path.join(metricFixture, "src/small.js"), "x=1;\n");
 fs.writeFileSync(path.join(metricFixture, "src/large.js"), "x".repeat(20));
-fs.writeFileSync(path.join(metricFixture, "archbird.json"), JSON.stringify({
-  schema_version: 1,
-  project: "recipe-configured-node",
+const constraintConfiguration = {
+  schema_version: 2,
+  project: "constraints-node",
   limits: { max_file_bytes: 100 },
   layers: [{
     name: "javascript",
@@ -208,142 +112,101 @@ fs.writeFileSync(path.join(metricFixture, "archbird.json"), JSON.stringify({
     { name: "primary", paths: ["src/small.js"] },
     { name: "shared", paths: ["src/small.js"] },
   ],
-}));
-const configuredRecipeSuite = compileVerificationRecipe(Buffer.from(JSON.stringify({
-  artifact: "verification-recipe-request",
-  schema_version: 1,
-  recipe: "max-file-bytes",
-  project: { config: "archbird.json" },
-  arguments: { max: 10, include: ["src/**"] },
-  check: {
-    id: "MAX-FILE-BYTES",
-    owner: "test",
-    rationale: "Exercise inventory-only configured verification.",
+  constraints: {
+    "MAX-FILE-BYTES": {
+      kind: "max_file_bytes",
+      max: 10,
+      include: ["src/**"],
+      owner: "test",
+      rationale: "Every selected source remains within the reviewed size bound.",
+    },
+    "COMPONENT-MEMBERSHIP": {
+      kind: "component_membership",
+      min: 1,
+      owner: "test",
+      rationale: "Every mapped source belongs to a component.",
+    },
+    "STABLE-LITERAL": {
+      assert: "set_equal",
+      actual: { literal: ["stable"] },
+      expected: { literal: ["stable"] },
+      owner: "test",
+      rationale: "A passing sibling constraint can be preserved by Act.",
+    },
   },
-})));
-const metricSuitePath = path.join(metricFixture, "archbird.verify.json");
-fs.writeFileSync(metricSuitePath, configuredRecipeSuite);
-const metricVerification = Verification.fromConfig(metricSuitePath);
-const metricResult = metricVerification.result();
-assert.equal(metricResult.checks[0].status, "fail");
-assert.deepEqual(
-  metricResult.checks[0].findings.map((row) => row.key),
-  ["src/large.js"],
-);
-assert.deepEqual(metricResult.projects[0].capabilities, []);
-const metricDebug = JSON.parse(metricVerification.debug("selection", {
-  check: "MAX-FILE-BYTES",
-}));
-assert.deepEqual(metricDebug.selections[0].counts, {
-  evaluated: 2,
-  excluded: 0,
-  selected: 2,
-  universe: 2,
-  unknown: 0,
-  unsupported: 0,
+};
+const constraintConfig = Buffer.from(JSON.stringify(constraintConfiguration));
+fs.writeFileSync(path.join(metricFixture, "archbird.json"), constraintConfig);
+const compiledConfiguration = JSON.parse(compileProjectConfiguration(constraintConfig));
+assert.equal(compiledConfiguration.map_definition.schema_version, 2);
+assert.equal(compiledConfiguration.constraint_policy_sha256.length, 64);
+const metricProject = Project.fromRepository(metricFixture, {
+  config: constraintConfig,
+  scan: false,
 });
-assert.equal(metricDebug.selections[0].classification, "complete");
-const metricProject = Project.fromRepository(metricFixture, { scan: false });
 metricProject.finalizeProviders();
-const mappedMetricVerification = Verification.fromMap(
-  configuredRecipeSuite,
-  metricProject.mapJson(),
-  { resolutionJson: metricProject.resolutionJson },
-);
+const metricMap = metricProject.mapJson();
+const metricVerification = evaluateConstraints(constraintConfig, metricMap, {
+  resolutionJson: metricProject.resolutionJson,
+});
+const metricResult = JSON.parse(metricVerification);
+assert.equal(metricResult.artifact, "verification");
+assert.equal(metricResult.schema_version, 2);
+assert.equal(metricResult.constraints[0].id, "COMPONENT-MEMBERSHIP");
+assert.equal(metricResult.constraints[0].status, "fail");
+assert.equal(metricResult.constraints[1].id, "MAX-FILE-BYTES");
+assert.equal(metricResult.constraints[1].status, "fail");
 assert.deepEqual(
-  mappedMetricVerification.result().checks[0].findings.map((row) => row.key),
+  metricResult.constraints[1].findings.map((row) => row.key),
   ["src/large.js"],
+);
+assert.equal(metricResult.constraints[2].id, "STABLE-LITERAL");
+assert.equal(metricResult.constraints[2].status, "pass");
+const markdownConstraints = reportConstraints(constraintConfig, metricMap, {
+  resolutionJson: metricProject.resolutionJson,
+  format: "markdown",
+});
+assert.match(markdownConstraints.toString("utf8"), /src\/large\.js/);
+const frozenConstraints = JSON.parse(freezeConstraints(constraintConfig, metricMap, {
+  resolutionJson: metricProject.resolutionJson,
+  owner: "architecture",
+  rationale: "Review the current constraint debt.",
+}));
+assert.equal(frozenConstraints.artifact, "constraint-baseline");
+const metricFinding = metricResult.constraints
+  .find((row) => row.id === "MAX-FILE-BYTES").findings[0];
+const metricProposal = ChangeProposal.compile(
+  metricVerification,
+  metricFinding.fingerprint,
+);
+assert.equal(metricProposal.data().origin.constraint, "MAX-FILE-BYTES");
+const metricContract = metricProposal.review({
+  objective: "Reduce the oversized selected source.",
+  owner: "test",
+  rationale: "Exercise the native Node constraint lifecycle.",
+  preserveConstraints: ["STABLE-LITERAL"],
+  selectedCandidates: metricProposal.data().candidates.map((row) => row.id),
+});
+assert.deepEqual(
+  metricContract.data().preserved_constraints.map((row) => row.id),
+  ["STABLE-LITERAL"],
+);
+assert.equal(
+  JSON.parse(metricContract.verify(metricVerification, metricVerification)).status,
+  "missing",
 );
 metricProject.dispose();
 
-const recipeCli = path.resolve(process.argv[3], "js/src/cli.js");
+const constraintCli = path.resolve(process.argv[3], "js/src/cli.js");
 const cliFailure = spawnSync(process.execPath, [
-  recipeCli,
-  "verify", "recipe", "run", "max-file-bytes", metricFixture,
-  "--max", "10B", "--format", "json", "--check", "--progress", "never",
+  constraintCli,
+  "verify", "MAX-FILE-BYTES", "--root", metricFixture,
+  "--format", "json", "--check", "--progress", "never",
 ], { encoding: "utf8", env: process.env });
 assert.equal(cliFailure.status, 1, cliFailure.stderr);
 assert.deepEqual(
-  JSON.parse(cliFailure.stdout).checks[0].findings.map((row) => row.key),
+  JSON.parse(cliFailure.stdout).constraints[0].findings.map((row) => row.key),
   ["src/large.js"],
-);
-const cliCompile = spawnSync(process.execPath, [
-  recipeCli,
-  "verify", "recipe", "compile", "max-file-bytes",
-  "--max", "18446744073709551615B",
-  "--owner", "test", "--rationale", "Exercise exact uint64 parsing.",
-  "--output", "-",
-], { encoding: "utf8", env: process.env });
-assert.equal(cliCompile.status, 0, cliCompile.stderr);
-assert.match(cliCompile.stdout, /"max":18446744073709551615/);
-const cliDebug = spawnSync(process.execPath, [
-  recipeCli,
-  "verify", "debug", "selection", metricFixture,
-  "--check", "MAX-FILE-BYTES", "--format", "json",
-], { encoding: "utf8", env: process.env });
-assert.equal(cliDebug.status, 0, cliDebug.stderr);
-assert.deepEqual(
-  JSON.parse(cliDebug.stdout).selections.map((row) => row.extractor),
-  ["recipe.file-bytes"],
-);
-const membershipSuitePath = path.join(metricFixture, "membership.verify.json");
-fs.writeFileSync(membershipSuitePath, JSON.stringify({
-  schema_version: 1,
-  suite: "node-membership",
-  projects: { subject: { config: "archbird.json" } },
-  extractors: {
-    membership: { kind: "component_membership", project: "subject" },
-  },
-  checks: [{
-    id: "ASSIGNED",
-    assert: "numeric_bounds",
-    actual: "membership",
-    min: 1,
-    owner: "test",
-    rationale: "Every mapped source belongs to a component.",
-  }],
-}));
-const membershipVerification = Verification.fromConfig(membershipSuitePath);
-assert.deepEqual(
-  membershipVerification.result().checks[0].findings.map((row) => row.key),
-  ["src/large.js"],
-);
-const componentDebug = JSON.parse(membershipVerification.debug("component", {
-  component: "primary",
-}));
-assert.deepEqual(
-  componentDebug.memberships[0].files.map((row) => row.path),
-  ["src/small.js"],
-);
-const boundedComponentDebug = JSON.parse(membershipVerification.debug("component", {
-  component: "primary",
-  limit: 0,
-}));
-assert.deepEqual(boundedComponentDebug.memberships[0].files, []);
-assert.deepEqual(boundedComponentDebug.memberships[0].selection, {
-  matched: 1,
-  rendered: 0,
-  truncated: true,
-});
-assert.deepEqual(
-  JSON.parse(membershipVerification.debug("unassigned"))
-    .memberships[0].files.map((row) => row.path),
-  ["src/large.js"],
-);
-assert.deepEqual(
-  JSON.parse(membershipVerification.debug("overlap"))
-    .memberships[0].files.map((row) => row.path),
-  ["src/small.js"],
-);
-const membershipCli = spawnSync(process.execPath, [
-  recipeCli,
-  "verify", "debug", "component", "primary",
-  "--config", membershipSuitePath, "--format", "json", "--limit", "0",
-], { encoding: "utf8", env: process.env });
-assert.equal(membershipCli.status, 0, membershipCli.stderr);
-assert.deepEqual(
-  JSON.parse(membershipCli.stdout).memberships[0].selection,
-  { matched: 1, rendered: 0, truncated: true },
 );
 fs.rmSync(metricFixture, { force: true, recursive: true });
 
@@ -514,7 +377,7 @@ let semanticProject = new Project("typescript-test", [
 ]);
 semanticProject.setConfig(
   JSON.stringify({
-    schema_version: 1,
+    schema_version: 2,
     project: "typescript-test",
     layers: [
       {
@@ -600,7 +463,7 @@ function createScipProject(positionEncoding) {
     ),
   ]);
   current.setConfig(JSON.stringify({
-    schema_version: 1,
+    schema_version: 2,
     project: "scip-node",
     layers: [
       {
@@ -693,7 +556,7 @@ let invalidTypescript = new Project("invalid-typescript", [
 ]);
 invalidTypescript.setConfig(
   JSON.stringify({
-    schema_version: 1,
+    schema_version: 2,
     project: "invalid-typescript",
     layers: [
       {
@@ -726,12 +589,6 @@ assert.deepEqual(
 assert.equal(repositoryProject.map().project, "map-base");
 assert.deepEqual(repositoryProject.mapJson(), repositoryProject.mapJson());
 const repositoryMapJson = repositoryProject.mapJson();
-const candidateSuite = JSON.parse(draftVerificationSuite(repositoryMapJson, {
-  projectConfig: "archbird.json",
-}));
-assert.equal(candidateSuite.candidate, true);
-assert.equal(candidateSuite.suite, "map-base-architecture");
-assert.deepEqual(candidateSuite.projects, { subject: { config: "archbird.json" } });
 const currentProducerQuery = JSON.parse(queryMap(repositoryMapJson, {
   paths: ["py/pkg"],
   depth: 0,
@@ -1286,131 +1143,6 @@ let workspace = Workspace.fromConfig(
 const workspaceDocument = workspace.data();
 assert.equal(workspaceDocument.workspace, "fixture-workspace");
 assert.equal(workspaceDocument.routes.length, 2);
-const selfVerification = Verification.fromConfig(
-  path.resolve(process.argv[3], "examples/native.verify.json"),
-  { projectRoots: { subject: path.resolve(process.argv[3]) } },
-);
-assert.deepEqual(selfVerification.resultJson(), selfVerification.resultJson());
-assert.deepEqual(
-  selfVerification.result().checks.map((row) => row.status),
-  ["pass", "pass", "pass", "pass"],
-);
-assert.equal(selfVerification.hasErrors(), false);
-assert.deepEqual(
-  selfVerification.result().diagnostics.map((row) => row.code),
-  [],
-);
-const nodeVerification = Verification.fromConfig(
-  path.resolve(process.argv[3], "test/fixtures/verification/node.verify.json"),
-);
-assert.deepEqual(nodeVerification.resultJson(), nodeVerification.resultJson());
-assert.equal(nodeVerification.hasErrors(), false);
-assert.deepEqual(
-  nodeVerification.result().checks.map((row) => row.status),
-  ["pass"],
-);
-const behavioralVerification = Verification.fromConfig(
-  path.resolve(process.argv[3], "test/fixtures/verification/verification.json"),
-);
-const behavioralResult = behavioralVerification.result();
-assert.deepEqual(
-  behavioralResult.attestations.map((row) => [row.name, row.state]),
-  [
-    ["reference.behavior", "current"],
-    ["subject.behavior", "current"],
-  ],
-);
-const behaviorCheck = behavioralResult.checks.find(
-  (row) => row.id === "PORT-BEHAVIOR",
-);
-assert.equal(behaviorCheck.status, "fail");
-assert.equal(
-  behaviorCheck.findings.some(
-    (finding) => finding.key === "permute.valid@browser",
-  ),
-  true,
-);
-assert.equal(
-  behavioralVerification
-    .report({ format: "markdown" })
-    .toString("utf8")
-    .startsWith("# Architecture verification: portable-verification"),
-  true,
-);
-const sarifReport = JSON.parse(
-  behavioralVerification.report({ format: "sarif" }).toString("utf8"),
-);
-assert.equal(sarifReport.version, "2.1.0");
-assert.equal(sarifReport.runs[0].results.length > 0, true);
-assert.equal(
-  behavioralVerification
-    .report({ format: "junit" })
-    .toString("utf8")
-    .startsWith("<testsuite"),
-  true,
-);
-const providerVerification = Verification.fromConfig(
-  path.resolve(
-    process.argv[3],
-    "test/fixtures/act/provider/provider.verify.json",
-  ),
-);
-const providerJson = providerVerification.resultJson();
-const providerDocument = JSON.parse(providerJson.toString("utf8"));
-const providerFinding = providerDocument.checks
-  .find((row) => row.id === "PROVIDER-RENAME")
-  .findings.find((row) => row.key === "core_sum");
-const frozenBaseline = JSON.parse(providerVerification.freeze({
-  owner: "architecture",
-  rationale: "Review current provider fixture debt.",
-}));
-assert.equal(frozenBaseline.artifact, "verification-baseline");
-assert.equal(frozenBaseline.active.length, 1);
-assert.deepEqual(frozenBaseline.coverage["PROVIDER-TEST-ROUTES"], [
-  "route:js/runtime.js",
-  "route:py/api.py",
-  "route:src/core.c",
-]);
-const changeProposal = ChangeProposal.compile(
-  providerJson,
-  providerFinding.fingerprint,
-);
-// The npm host now uses the portable Python lexical provider. It sees the same
-// seven configured C/build/JavaScript/Python witnesses as the PyPI host, while
-// retaining bounded rather than CPython-syntax coverage for the Python sites.
-assert.equal(changeProposal.data().candidates.length, 7);
-const changeContract = changeProposal.review({
-  objective: "Rename core_add to core_sum across configured surfaces.",
-  owner: "bindings",
-  rationale: "Exercise the native Node Act frontend.",
-  preserveChecks: ["PROVIDER-TEST-ROUTES"],
-  selectedCandidates: changeProposal.data().candidates.map((row) => row.id),
-});
-assert.equal(
-  JSON.parse(changeContract.verify(providerJson, providerJson).toString("utf8"))
-    .status,
-  "missing",
-);
-assert.equal(
-  changeContract
-    .verify(providerJson, providerJson, { format: "markdown" })
-    .toString("utf8")
-    .startsWith("# Architecture change result"),
-  true,
-);
-assert.equal(
-  JSON.parse(
-    changeContract.verify(providerJson, providerJson, { format: "sarif" }),
-  ).version,
-  "2.1.0",
-);
-assert.equal(
-  changeContract
-    .verify(providerJson, providerJson, { format: "junit" })
-    .toString("utf8")
-    .startsWith("<?xml"),
-  true,
-);
 repositoryProject.dispose();
 repositoryProject.dispose();
 repositoryProject = null;

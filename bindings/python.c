@@ -1301,269 +1301,273 @@ static PyObject *py_workspace_analyze(PyObject *self, PyObject *args,
   return result;
 }
 
-static PyObject *py_verification_plan(PyObject *self, PyObject *args,
-                                      PyObject *kwargs) {
-  static char *keywords[] = {"suite", "pretty", NULL};
-  const char *suite;
-  Py_ssize_t suite_length;
+static PyObject *py_project_configuration_compile(PyObject *self,
+                                                  PyObject *args,
+                                                  PyObject *kwargs) {
+  static char *keywords[] = {"config", "pretty", NULL};
+  const char *config;
+  Py_ssize_t config_length;
   int pretty = 0;
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
   PyOutput output = {0};
-  PyObject *result;
-  (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|p:verification_plan",
-                                   keywords, &suite, &suite_length, &pretty))
-    return NULL;
-  status = input_engine((size_t)suite_length, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_plan(
-        engine, (const uint8_t *)suite, (size_t)suite_length,
-        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
-  result = render_result(engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
-static PyObject *py_verification_analyze(PyObject *self, PyObject *args,
-                                         PyObject *kwargs) {
-  static char *keywords[] = {"suite", "input", "pretty", NULL};
-  const char *suite;
-  const char *input;
-  Py_ssize_t suite_length;
-  Py_ssize_t input_length;
-  int pretty = 0;
-  ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
-  PyOutput output = {0};
-  PyObject *result;
-  (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|p:verification_analyze",
-                                   keywords, &suite, &suite_length, &input,
-                                   &input_length, &pretty))
-    return NULL;
-  status = saved_artifact_engine(
-      larger_input((size_t)suite_length, (size_t)input_length), &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_analyze(
-        engine, (const uint8_t *)suite, (size_t)suite_length,
-        (const uint8_t *)input, (size_t)input_length,
-        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
-  result = render_result(engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
-static PyObject *py_verification_debug(PyObject *self, PyObject *args,
-                                       PyObject *kwargs) {
-  static char *keywords[] = {"suite",  "input",  "request",
-                             "format", "pretty", NULL};
-  const char *suite;
-  const char *input;
-  const char *request;
-  const char *format = "json";
-  Py_ssize_t suite_length;
-  Py_ssize_t input_length;
-  Py_ssize_t request_length;
-  int pretty = 0;
-  ArchbirdVerificationFormat native_format;
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
-  PyOutput output = {0};
-  PyObject *result;
-  (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#y#|sp:verification_debug",
-                                   keywords, &suite, &suite_length, &input,
-                                   &input_length, &request, &request_length,
-                                   &format, &pretty))
-    return NULL;
-  if (!strcmp(format, "json"))
-    native_format = ARCHBIRD_VERIFICATION_JSON;
-  else if (!strcmp(format, "markdown"))
-    native_format = ARCHBIRD_VERIFICATION_MARKDOWN;
-  else {
-    PyErr_SetString(PyExc_ValueError,
-                    "verification debug format must be json or markdown");
-    return NULL;
-  }
-  status = saved_artifact_engine(
-      larger_input(larger_input((size_t)suite_length, (size_t)input_length),
-                   (size_t)request_length),
-      &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_debug(
-        engine, (const uint8_t *)suite, (size_t)suite_length,
-        (const uint8_t *)input, (size_t)input_length, (const uint8_t *)request,
-        (size_t)request_length, native_format,
-        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
-  result = render_result(engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
-static PyObject *py_verification_draft(PyObject *self, PyObject *args,
-                                       PyObject *kwargs) {
-  static char *keywords[] = {"map", "project_config", "pretty", NULL};
-  const char *map;
-  const char *project_config;
-  Py_ssize_t map_length;
-  Py_ssize_t project_config_length;
-  int pretty = 0;
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
-  PyOutput output = {0};
-  PyObject *result;
-  (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#s#|p:verification_draft",
-                                   keywords, &map, &map_length, &project_config,
-                                   &project_config_length, &pretty))
-    return NULL;
-  status = saved_artifact_engine((size_t)map_length, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_draft(
-        engine, (const uint8_t *)map, (size_t)map_length, project_config,
-        (size_t)project_config_length,
-        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
-        output_write, &output);
-  result = render_result(engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
-static PyObject *py_verification_recipe_catalog(PyObject *self, PyObject *args,
-                                                PyObject *kwargs) {
-  static char *keywords[] = {"recipe", "pretty", NULL};
-  const char *recipe = "";
-  Py_ssize_t recipe_length = 0;
-  int pretty = 0;
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
-  PyOutput output = {0};
   PyObject *result;
   (void)self;
   if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-                                   "|s#p:verification_recipe_catalog", keywords,
-                                   &recipe, &recipe_length, &pretty))
+                                   "y#|p:project_configuration_compile",
+                                   keywords, &config, &config_length, &pretty))
     return NULL;
-  status = input_engine((size_t)recipe_length, &engine);
+  status = input_engine((size_t)config_length, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_verification_recipe_catalog(
-        engine, recipe, (size_t)recipe_length,
-        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
-        output_write, &output);
+    status = archbird_project_configuration_compile(
+        engine, (const uint8_t *)config, (size_t)config_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);
   return result;
 }
 
-static PyObject *py_verification_recipe_compile(PyObject *self, PyObject *args,
-                                                PyObject *kwargs) {
-  static char *keywords[] = {"request", "pretty", NULL};
-  const char *request;
-  Py_ssize_t request_length;
-  int pretty = 0;
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
-  PyOutput output = {0};
-  PyObject *result;
-  (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-                                   "y#|p:verification_recipe_compile", keywords,
-                                   &request, &request_length, &pretty))
-    return NULL;
-  status = input_engine((size_t)request_length, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_verification_recipe_compile(
-        engine, (const uint8_t *)request, (size_t)request_length,
-        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
-        output_write, &output);
-  result = render_result(engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
-static PyObject *py_verification_freeze(PyObject *self, PyObject *args,
+static PyObject *py_projection_evaluate(PyObject *self, PyObject *args,
                                         PyObject *kwargs) {
-  static char *keywords[] = {"suite",     "input",  "owner",
-                             "rationale", "pretty", NULL};
-  const char *suite;
-  const char *input;
-  const char *owner;
-  const char *rationale;
-  Py_ssize_t suite_length;
-  Py_ssize_t input_length;
-  Py_ssize_t owner_length;
-  Py_ssize_t rationale_length;
+  static char *keywords[] = {"map_json", "projection_json", "resolution_json",
+                             "pretty", NULL};
+  const char *map;
+  const char *projection;
+  const char *resolution = "";
+  Py_ssize_t map_length;
+  Py_ssize_t projection_length;
+  Py_ssize_t resolution_length = 0;
   int pretty = 0;
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
   PyOutput output = {0};
+  ArchbirdStatus status;
   PyObject *result;
+  size_t budget;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|y#p:projection_evaluate",
+                                   keywords, &map, &map_length, &projection,
+                                   &projection_length, &resolution,
+                                   &resolution_length, &pretty))
+    return NULL;
+  budget =
+      larger_input(larger_input((size_t)map_length, (size_t)resolution_length),
+                   (size_t)projection_length);
+  status = saved_artifact_engine(budget, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projection_evaluate(
+        engine, (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, (const uint8_t *)projection,
+        (size_t)projection_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
+        output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_query_plan_compile(PyObject *self, PyObject *args,
+                                       PyObject *kwargs) {
+  static char *keywords[] = {
+      "config",         "map_json", "query_id", "resolution_json",
+      "overrides_json", "pretty",   NULL};
+  const char *config;
+  const char *map;
+  const char *query_id;
+  const char *resolution = "";
+  const char *overrides = "";
+  Py_ssize_t config_length;
+  Py_ssize_t map_length;
+  Py_ssize_t query_id_length;
+  Py_ssize_t resolution_length = 0;
+  Py_ssize_t overrides_length = 0;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  PyOutput output = {0};
+  ArchbirdStatus status;
+  PyObject *result;
+  size_t budget;
   (void)self;
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#y#s#s#|p:verification_freeze", keywords, &suite,
-          &suite_length, &input, &input_length, &owner, &owner_length,
-          &rationale, &rationale_length, &pretty))
+          args, kwargs, "y#y#s#|y#y#p:query_plan_compile", keywords, &config,
+          &config_length, &map, &map_length, &query_id, &query_id_length,
+          &resolution, &resolution_length, &overrides, &overrides_length,
+          &pretty))
     return NULL;
-  status = saved_artifact_engine(
-      larger_input((size_t)suite_length, (size_t)input_length), &engine);
+  budget = larger_input(
+      larger_input((size_t)config_length, (size_t)map_length),
+      larger_input((size_t)resolution_length, (size_t)overrides_length));
+  status = saved_artifact_engine(budget, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_verification_freeze(
-        engine, (const uint8_t *)suite, (size_t)suite_length,
-        (const uint8_t *)input, (size_t)input_length, owner,
-        (size_t)owner_length, rationale, (size_t)rationale_length,
-        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
+    status = archbird_query_plan_compile(
+        engine, (const uint8_t *)config, (size_t)config_length,
+        (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, query_id, (size_t)query_id_length,
+        overrides_length ? (const uint8_t *)overrides : NULL,
+        (size_t)overrides_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
         output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);
   return result;
 }
 
-static PyObject *py_verification_report(PyObject *self, PyObject *args,
-                                        PyObject *kwargs) {
-  static char *keywords[] = {"suite",        "input",  "format",
-                             "max_findings", "pretty", NULL};
-  const char *suite;
-  const char *input;
+static PyObject *py_constraints_evaluate(PyObject *self, PyObject *args,
+                                         PyObject *kwargs) {
+  static char *keywords[] = {"config",       "map_json", "resolution_json",
+                             "request_json", "pretty",   NULL};
+  const char *config;
+  const char *map;
+  const char *resolution = "";
+  const char *request = "";
+  Py_ssize_t config_length;
+  Py_ssize_t map_length;
+  Py_ssize_t resolution_length = 0;
+  Py_ssize_t request_length = 0;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  PyOutput output = {0};
+  ArchbirdStatus status;
+  PyObject *result;
+  size_t budget;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#|y#y#p:constraints_evaluate", keywords, &config,
+          &config_length, &map, &map_length, &resolution, &resolution_length,
+          &request, &request_length, &pretty))
+    return NULL;
+  budget = larger_input(
+      larger_input((size_t)config_length, (size_t)map_length),
+      larger_input((size_t)resolution_length, (size_t)request_length));
+  status = saved_artifact_engine(budget, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_constraints_evaluate(
+        engine, (const uint8_t *)config, (size_t)config_length,
+        (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length,
+        request_length ? (const uint8_t *)request : NULL,
+        (size_t)request_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
+        &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static int constraint_format(const char *format,
+                             ArchbirdVerificationFormat *out) {
+  if (!strcmp(format, "markdown"))
+    *out = ARCHBIRD_VERIFICATION_MARKDOWN;
+  else if (!strcmp(format, "sarif"))
+    *out = ARCHBIRD_VERIFICATION_SARIF;
+  else if (!strcmp(format, "junit"))
+    *out = ARCHBIRD_VERIFICATION_JUNIT;
+  else
+    return 0;
+  return 1;
+}
+
+static PyObject *py_constraints_report(PyObject *self, PyObject *args,
+                                       PyObject *kwargs) {
+  static char *keywords[] = {
+      "config",       "map_json",     "format", "resolution_json",
+      "request_json", "max_findings", "pretty", NULL};
+  const char *config;
+  const char *map;
   const char *format;
-  Py_ssize_t suite_length;
-  Py_ssize_t input_length;
+  const char *resolution = "";
+  const char *request = "";
+  Py_ssize_t config_length;
+  Py_ssize_t map_length;
+  Py_ssize_t resolution_length = 0;
+  Py_ssize_t request_length = 0;
   Py_ssize_t max_findings = 200;
   int pretty = 0;
   ArchbirdVerificationFormat native_format;
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
   PyOutput output = {0};
+  ArchbirdStatus status;
   PyObject *result;
+  size_t budget;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#s|np:verification_report",
-                                   keywords, &suite, &suite_length, &input,
-                                   &input_length, &format, &max_findings,
-                                   &pretty))
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#s|y#y#np:constraints_report", keywords, &config,
+          &config_length, &map, &map_length, &format, &resolution,
+          &resolution_length, &request, &request_length, &max_findings,
+          &pretty))
     return NULL;
-  if (!strcmp(format, "markdown"))
-    native_format = ARCHBIRD_VERIFICATION_MARKDOWN;
-  else if (!strcmp(format, "sarif"))
-    native_format = ARCHBIRD_VERIFICATION_SARIF;
-  else if (!strcmp(format, "junit"))
-    native_format = ARCHBIRD_VERIFICATION_JUNIT;
-  else {
+  if (!constraint_format(format, &native_format)) {
     PyErr_SetString(PyExc_ValueError,
-                    "verification report format must be markdown, sarif, or "
+                    "constraint report format must be markdown, sarif, or "
                     "junit");
     return NULL;
   }
-  status = saved_artifact_engine(
-      larger_input((size_t)suite_length, (size_t)input_length), &engine);
+  budget = larger_input(
+      larger_input((size_t)config_length, (size_t)map_length),
+      larger_input((size_t)resolution_length, (size_t)request_length));
+  status = saved_artifact_engine(budget, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_verification_analyze_report(
-        engine, (const uint8_t *)suite, (size_t)suite_length,
-        (const uint8_t *)input, (size_t)input_length, native_format,
+    status = archbird_constraints_report(
+        engine, (const uint8_t *)config, (size_t)config_length,
+        (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length,
+        request_length ? (const uint8_t *)request : NULL,
+        (size_t)request_length, native_format,
         max_findings < 0 ? SIZE_MAX : (size_t)max_findings,
         (pretty ? ARCHBIRD_JSON_PRETTY : 0) |
             (native_format == ARCHBIRD_VERIFICATION_SARIF
                  ? ARCHBIRD_JSON_TRAILING_NEWLINE
                  : 0),
+        output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_constraints_freeze(PyObject *self, PyObject *args,
+                                       PyObject *kwargs) {
+  static char *keywords[] = {
+      "config",          "map_json",     "owner",  "rationale",
+      "resolution_json", "request_json", "pretty", NULL};
+  const char *config;
+  const char *map;
+  const char *owner;
+  const char *rationale;
+  const char *resolution = "";
+  const char *request = "";
+  Py_ssize_t config_length;
+  Py_ssize_t map_length;
+  Py_ssize_t owner_length;
+  Py_ssize_t rationale_length;
+  Py_ssize_t resolution_length = 0;
+  Py_ssize_t request_length = 0;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  PyOutput output = {0};
+  ArchbirdStatus status;
+  PyObject *result;
+  size_t budget;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#s#s#|y#y#p:constraints_freeze", keywords, &config,
+          &config_length, &map, &map_length, &owner, &owner_length, &rationale,
+          &rationale_length, &resolution, &resolution_length, &request,
+          &request_length, &pretty))
+    return NULL;
+  budget = larger_input(
+      larger_input((size_t)config_length, (size_t)map_length),
+      larger_input((size_t)resolution_length, (size_t)request_length));
+  status = saved_artifact_engine(budget, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_constraints_freeze(
+        engine, (const uint8_t *)config, (size_t)config_length,
+        (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length,
+        request_length ? (const uint8_t *)request : NULL,
+        (size_t)request_length, owner, (size_t)owner_length, rationale,
+        (size_t)rationale_length,
+        (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
         output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);
@@ -1733,30 +1737,21 @@ static PyMethodDef archbird_methods[] = {
     {"change_proposal", (PyCFunction)py_change_proposal,
      METH_VARARGS | METH_KEYWORDS,
      "Compile one derived change proposal from a verification finding."},
-    {"verification_report", (PyCFunction)py_verification_report,
+    {"constraints_freeze", (PyCFunction)py_constraints_freeze,
      METH_VARARGS | METH_KEYWORDS,
-     "Render Markdown, SARIF, or JUnit from native verification evidence."},
-    {"verification_freeze", (PyCFunction)py_verification_freeze,
+     "Freeze a reviewed schema-2 constraint baseline."},
+    {"constraints_report", (PyCFunction)py_constraints_report,
+     METH_VARARGS | METH_KEYWORDS, "Render schema-2 constraint results."},
+    {"constraints_evaluate", (PyCFunction)py_constraints_evaluate,
+     METH_VARARGS | METH_KEYWORDS, "Evaluate schema-2 project constraints."},
+    {"query_plan_compile", (PyCFunction)py_query_plan_compile,
+     METH_VARARGS | METH_KEYWORDS, "Compile one named schema-2 query."},
+    {"projection_evaluate", (PyCFunction)py_projection_evaluate,
+     METH_VARARGS | METH_KEYWORDS, "Evaluate one exhaustive projection."},
+    {"project_configuration_compile",
+     (PyCFunction)py_project_configuration_compile,
      METH_VARARGS | METH_KEYWORDS,
-     "Render an explicit violation and coverage baseline."},
-    {"verification_draft", (PyCFunction)py_verification_draft,
-     METH_VARARGS | METH_KEYWORDS,
-     "Draft a candidate-only component dependency suite."},
-    {"verification_recipe_catalog", (PyCFunction)py_verification_recipe_catalog,
-     METH_VARARGS | METH_KEYWORDS,
-     "List portable built-in verification recipes."},
-    {"verification_recipe_compile", (PyCFunction)py_verification_recipe_compile,
-     METH_VARARGS | METH_KEYWORDS,
-     "Compile explicit recipe arguments into a verification suite."},
-    {"verification_analyze", (PyCFunction)py_verification_analyze,
-     METH_VARARGS | METH_KEYWORDS,
-     "Evaluate a verification suite over host-supplied evidence."},
-    {"verification_debug", (PyCFunction)py_verification_debug,
-     METH_VARARGS | METH_KEYWORDS,
-     "Explain selection completeness or unresolved verification evidence."},
-    {"verification_plan", (PyCFunction)py_verification_plan,
-     METH_VARARGS | METH_KEYWORDS,
-     "Validate a verification suite and expose its host-loading plan."},
+     "Validate and normalize schema-2 project configuration."},
     {"workspace_analyze", (PyCFunction)py_workspace_analyze,
      METH_VARARGS | METH_KEYWORDS,
      "Join canonical project maps into a workspace artifact."},

@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "wlearn-rf",
   "description": "Random-forest C11 core with Python and JavaScript/WASM estimator surfaces.",
-  "root": ".",
   "exclude": ["**/csrc/**", "js/wasm/**", "references/**"],
   "layers": [
     {"name": "core", "role": "core", "language": "c", "globs": ["src/**/*.c", "src/**/*.h"], "public_headers": ["src/rf.h"]},
@@ -43,5 +42,17 @@
       "enforce": false
     }
   ],
-  "checks": {"files": ["src/rf.c", "src/rf.h", "py/wlearn_rf/__init__.py", "js/src/index.js"]}
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "src/rf.c",
+        "src/rf.h",
+        "py/wlearn_rf/__init__.py",
+        "js/src/index.js"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    }
+  }
 }

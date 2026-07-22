@@ -8,6 +8,11 @@ from pathlib import Path
 import sys
 
 import archbird
+from archbird.native import (
+    evaluate_constraints_json,
+    evaluate_projection_json,
+    freeze_constraints_json,
+)
 
 
 def main() -> int:
@@ -15,6 +20,7 @@ def main() -> int:
         raise SystemExit("usage: release_python_smoke.py CONFIG ROOT")
     config = Path(sys.argv[1]).resolve()
     root = Path(sys.argv[2]).resolve()
+    config_json = config.read_bytes()
     if archbird.__version__ != "0.0.1":
         raise AssertionError(f"unexpected version: {archbird.__version__}")
     if archbird.PATTERN_CONTRACT_VERSION != 1:
@@ -47,6 +53,43 @@ def main() -> int:
     query = project.query(paths=["py/pkg"], depth=0)
     if query["artifact"] != "query" or len(query["files"]) != 2:
         raise AssertionError("installed Python query failed")
+    projection = json.loads(
+        evaluate_projection_json(
+            first,
+            {
+                "id": "release-symbols",
+                "select": "symbols",
+                "paths": ["js/index.js"],
+            },
+        )
+    )
+    if (
+        projection["artifact"] != "projection-result"
+        or not projection["completeness"]["exhaustive"]
+        or [item["key"] for item in projection["fact"]["items"]]
+        != ["add", "twice"]
+    ):
+        raise AssertionError("installed Python projection failed")
+    verification = json.loads(evaluate_constraints_json(config_json, first))
+    if verification["artifact"] != "verification" or len(
+        verification["constraints"]
+    ) != 3:
+        raise AssertionError("installed Python constraint evaluation failed")
+    sarif = json.loads(
+        evaluate_constraints_json(config_json, first, format="sarif")
+    )
+    if sarif["version"] != "2.1.0" or len(sarif["runs"]) != 1:
+        raise AssertionError("installed Python constraint report failed")
+    baseline = json.loads(
+        freeze_constraints_json(
+            config_json,
+            first,
+            owner="release",
+            rationale="Exercise the installed extension boundary.",
+        )
+    )
+    if baseline["artifact"] != "constraint-baseline":
+        raise AssertionError("installed Python constraint freeze failed")
     graph = json.loads(project.graph_view_json())
     symbols = json.loads(
         project.graph_view_json(

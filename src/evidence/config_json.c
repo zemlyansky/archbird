@@ -1,22 +1,12 @@
 #include "config.h"
 
+#include "project_configuration.h"
+
 #include "json_internal.h"
 #include "pattern.h"
-#include "sha256.h"
 
 #include <stdlib.h>
 #include <string.h>
-
-typedef struct DigestWriter {
-  ArchbirdSha256Context context;
-  ArchbirdStatus status;
-} DigestWriter;
-
-static int digest_write(void *user_data, const uint8_t *bytes, size_t length) {
-  DigestWriter *writer = (DigestWriter *)user_data;
-  writer->status = archbird_sha256_update(&writer->context, bytes, length);
-  return writer->status == ARCHBIRD_OK ? 0 : 1;
-}
 
 static ArchbirdStatus config_error(ArchbirdEngine *engine,
                                    const char *message) {
@@ -661,52 +651,6 @@ static void parity_free(ArchbirdEngine *engine, AbConfigParity *parity) {
   memset(parity, 0, sizeof(*parity));
 }
 
-static void symbol_checks_free(ArchbirdEngine *engine,
-                               AbConfigSymbolCheck *checks, size_t count) {
-  size_t index;
-  for (index = 0; checks && index < count; index++) {
-    ab_string_free(engine, &checks[index].layer);
-    ab_string_free(engine, &checks[index].name);
-  }
-  ab_free(engine, checks);
-}
-
-static void checks_free(ArchbirdEngine *engine, AbConfigChecks *checks) {
-  size_t index;
-  string_array_free(engine, &checks->files);
-  symbol_checks_free(engine, checks->symbols, checks->symbol_count);
-  for (index = 0; checks->edges && index < checks->edge_count; index++) {
-    ab_string_free(engine, &checks->edges[index].kind);
-    ab_string_free(engine, &checks->edges[index].source);
-    ab_string_free(engine, &checks->edges[index].target);
-    ab_string_free(engine, &checks->edges[index].name);
-  }
-  ab_free(engine, checks->edges);
-  string_array_free(engine, &checks->bridges);
-  for (index = 0; checks->entrypoints && index < checks->entrypoint_count;
-       index++) {
-    ab_string_free(engine, &checks->entrypoints[index].package);
-    ab_string_free(engine, &checks->entrypoints[index].route);
-    ab_string_free(engine, &checks->entrypoints[index].target);
-  }
-  ab_free(engine, checks->entrypoints);
-  for (index = 0; checks->test_routes && index < checks->test_route_count;
-       index++) {
-    ab_string_free(engine, &checks->test_routes[index].group);
-    ab_string_free(engine, &checks->test_routes[index].target);
-  }
-  ab_free(engine, checks->test_routes);
-  for (index = 0; checks->surfaces && index < checks->surface_count; index++) {
-    ab_string_free(engine, &checks->surfaces[index].bridge);
-    string_array_free(engine, &checks->surfaces[index].declared);
-  }
-  ab_free(engine, checks->surfaces);
-  string_array_free(engine, &checks->forbid_paths);
-  symbol_checks_free(engine, checks->forbid_symbols,
-                     checks->forbid_symbol_count);
-  memset(checks, 0, sizeof(*checks));
-}
-
 void ab_map_config_free(ArchbirdEngine *engine, AbMapConfig *config) {
   size_t index;
   if (!config)
@@ -747,7 +691,6 @@ void ab_map_config_free(ArchbirdEngine *engine, AbMapConfig *config) {
   for (index = 0; config->parity && index < config->parity_count; index++)
     parity_free(engine, &config->parity[index]);
   ab_free(engine, config->parity);
-  checks_free(engine, &config->checks);
   memset(config, 0, sizeof(*config));
 }
 
@@ -1596,158 +1539,6 @@ static ArchbirdStatus parse_parity(ArchbirdEngine *engine, yyjson_val *value,
   return status;
 }
 
-static ArchbirdStatus parse_symbol_check(ArchbirdEngine *engine,
-                                         yyjson_val *value, void *out_raw) {
-  static const char *const fields[] = {"layer", "name"};
-  AbConfigSymbolCheck *out = (AbConfigSymbolCheck *)out_raw;
-  ArchbirdStatus status =
-      object_shape(engine, value, "checks.symbols[]", fields, 2, fields, 2);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "layer"),
-                         "checks.symbols[].layer", 0, &out->layer);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "name"), "checks.symbols[].name",
-                         0, &out->name);
-  return status;
-}
-
-static ArchbirdStatus parse_edge_check(ArchbirdEngine *engine,
-                                       yyjson_val *value, void *out_raw) {
-  static const char *const fields[] = {"from", "kind", "name", "to"};
-  static const char *const required[] = {"from", "to"};
-  AbConfigEdgeCheck *out = (AbConfigEdgeCheck *)out_raw;
-  ArchbirdStatus status =
-      object_shape(engine, value, "checks.edges[]", fields, 4, required, 2);
-  if (status == ARCHBIRD_OK)
-    status = copy_default_string(engine, member(value, "kind"), "*",
-                                 "checks.edges[].kind", 0, &out->kind);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "from"), "checks.edges[].from",
-                         0, &out->source);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "to"), "checks.edges[].to", 0,
-                         &out->target);
-  if (status == ARCHBIRD_OK)
-    status = copy_default_string(engine, member(value, "name"), "",
-                                 "checks.edges[].name", 1, &out->name);
-  return status;
-}
-
-static ArchbirdStatus parse_entrypoint_check(ArchbirdEngine *engine,
-                                             yyjson_val *value, void *out_raw) {
-  static const char *const fields[] = {"package", "route", "target"};
-  static const char *const required[] = {"package", "route"};
-  AbConfigEntrypointCheck *out = (AbConfigEntrypointCheck *)out_raw;
-  ArchbirdStatus status = object_shape(engine, value, "checks.entrypoints[]",
-                                       fields, 3, required, 2);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "package"),
-                         "checks.entrypoints[].package", 0, &out->package);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "route"),
-                         "checks.entrypoints[].route", 0, &out->route);
-  if (status == ARCHBIRD_OK)
-    status =
-        copy_default_string(engine, member(value, "target"), "",
-                            "checks.entrypoints[].target", 1, &out->target);
-  return status;
-}
-
-static ArchbirdStatus parse_test_route_check(ArchbirdEngine *engine,
-                                             yyjson_val *value, void *out_raw) {
-  static const char *const fields[] = {"group", "to"};
-  AbConfigTestRouteCheck *out = (AbConfigTestRouteCheck *)out_raw;
-  ArchbirdStatus status =
-      object_shape(engine, value, "checks.test_routes[]", fields, 2, fields, 2);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "group"),
-                         "checks.test_routes[].group", 0, &out->group);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "to"), "checks.test_routes[].to",
-                         0, &out->target);
-  return status;
-}
-
-static ArchbirdStatus parse_surface_check(ArchbirdEngine *engine,
-                                          yyjson_val *value, void *out_raw) {
-  static const char *const fields[] = {"bridge", "declared", "forbid_ambiguous",
-                                       "forbid_unregistered",
-                                       "forbid_unresolved"};
-  static const char *const required[] = {"bridge"};
-  AbConfigSurfaceCheck *out = (AbConfigSurfaceCheck *)out_raw;
-  ArchbirdStatus status =
-      object_shape(engine, value, "checks.surfaces[]", fields, 5, required, 1);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(value, "bridge"),
-                         "checks.surfaces[].bridge", 0, &out->bridge);
-  if (status == ARCHBIRD_OK)
-    status = copy_strings(engine, member(value, "declared"),
-                          "checks.surfaces[].declared", 0, &out->declared);
-  if (status == ARCHBIRD_OK)
-    status = boolean_value(engine, member(value, "forbid_unregistered"),
-                           "checks.surfaces[].forbid_unregistered", 0,
-                           &out->forbid_unregistered);
-  if (status == ARCHBIRD_OK)
-    status = boolean_value(engine, member(value, "forbid_unresolved"),
-                           "checks.surfaces[].forbid_unresolved", 0,
-                           &out->forbid_unresolved);
-  if (status == ARCHBIRD_OK)
-    status = boolean_value(engine, member(value, "forbid_ambiguous"),
-                           "checks.surfaces[].forbid_ambiguous", 0,
-                           &out->forbid_ambiguous);
-  return status;
-}
-
-static ArchbirdStatus parse_checks(ArchbirdEngine *engine, yyjson_val *value,
-                                   AbConfigChecks *out) {
-  static const char *const fields[] = {
-      "bridges",        "edges",    "entrypoints", "files",      "forbid_paths",
-      "forbid_symbols", "surfaces", "symbols",     "test_routes"};
-  ArchbirdStatus status = ARCHBIRD_OK;
-  if (!value)
-    return ARCHBIRD_OK;
-  status = object_shape(engine, value, "checks", fields, 9, NULL, 0);
-  if (status == ARCHBIRD_OK)
-    status = copy_strings(engine, member(value, "files"), "checks.files", 0,
-                          &out->files);
-  if (status == ARCHBIRD_OK)
-    status =
-        parse_item_array(engine, member(value, "symbols"), "checks.symbols",
-                         sizeof(*out->symbols), parse_symbol_check,
-                         (void **)&out->symbols, &out->symbol_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(engine, member(value, "edges"), "checks.edges",
-                              sizeof(*out->edges), parse_edge_check,
-                              (void **)&out->edges, &out->edge_count);
-  if (status == ARCHBIRD_OK)
-    status = copy_strings(engine, member(value, "bridges"), "checks.bridges", 0,
-                          &out->bridges);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(
-        engine, member(value, "entrypoints"), "checks.entrypoints",
-        sizeof(*out->entrypoints), parse_entrypoint_check,
-        (void **)&out->entrypoints, &out->entrypoint_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(
-        engine, member(value, "test_routes"), "checks.test_routes",
-        sizeof(*out->test_routes), parse_test_route_check,
-        (void **)&out->test_routes, &out->test_route_count);
-  if (status == ARCHBIRD_OK)
-    status =
-        parse_item_array(engine, member(value, "surfaces"), "checks.surfaces",
-                         sizeof(*out->surfaces), parse_surface_check,
-                         (void **)&out->surfaces, &out->surface_count);
-  if (status == ARCHBIRD_OK)
-    status = copy_strings(engine, member(value, "forbid_paths"),
-                          "checks.forbid_paths", 0, &out->forbid_paths);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(
-        engine, member(value, "forbid_symbols"), "checks.forbid_symbols",
-        sizeof(*out->forbid_symbols), parse_symbol_check,
-        (void **)&out->forbid_symbols, &out->forbid_symbol_count);
-  return status;
-}
-
 static ArchbirdStatus validate_optional_sections(ArchbirdEngine *engine,
                                                  yyjson_val *root) {
   static const char *const arrays[] = {"artifacts",  "bridges", "builds",
@@ -1761,8 +1552,6 @@ static ArchbirdStatus validate_optional_sections(ArchbirdEngine *engine,
                                 ARCHBIRD_NO_OFFSET,
                                 "configuration section must be an array");
   }
-  if (member(root, "checks") && !yyjson_is_obj(member(root, "checks")))
-    return config_error(engine, "checks must be an object");
   if (member(root, "limits") && !yyjson_is_obj(member(root, "limits")))
     return config_error(engine, "limits must be an object");
   return ARCHBIRD_OK;
@@ -1907,11 +1696,6 @@ static int bridge_exists(const AbMapConfig *config, const AbString *name,
   return 0;
 }
 
-static int test_exists(const AbMapConfig *config, const AbString *name) {
-  return name_exists(config->tests, config->test_count, sizeof(*config->tests),
-                     offsetof(AbConfigTest, name), name);
-}
-
 static int build_path_exists(const AbMapConfig *config, const AbString *path) {
   size_t index;
   for (index = 0; index < config->build_count; index++) {
@@ -1968,186 +1752,165 @@ static ArchbirdStatus validate_references(ArchbirdEngine *engine,
                             "parity member refers to an unknown bridge");
     }
   }
-  for (index = 0; index < config->checks.symbol_count; index++) {
-    if (!layer_exists(config, &config->checks.symbols[index].layer))
-      return config_error(engine, "symbol check refers to an unknown layer");
-  }
-  for (index = 0; index < config->checks.forbid_symbol_count; index++) {
-    if (!layer_exists(config, &config->checks.forbid_symbols[index].layer))
-      return config_error(engine,
-                          "forbidden-symbol check refers to an unknown layer");
-  }
-  for (index = 0; index < config->checks.bridges.count; index++) {
-    if (!bridge_exists(config, &config->checks.bridges.items[index], 0))
-      return config_error(engine, "bridge check refers to an unknown bridge");
-  }
-  for (index = 0; index < config->checks.surface_count; index++) {
-    if (!bridge_exists(config, &config->checks.surfaces[index].bridge, 1))
-      return config_error(engine,
-                          "surface check refers to a non-surface bridge");
-  }
-  for (index = 0; index < config->checks.entrypoint_count; index++) {
-    if (!package_exists(config, &config->checks.entrypoints[index].package))
-      return config_error(engine,
-                          "entrypoint check refers to an unknown package");
-  }
-  for (index = 0; index < config->checks.test_route_count; index++) {
-    if (!test_exists(config, &config->checks.test_routes[index].group))
-      return config_error(engine,
-                          "test-route check refers to an unknown test group");
-  }
   return ARCHBIRD_OK;
-}
-
-static ArchbirdStatus digest_config(ArchbirdEngine *engine, const uint8_t *json,
-                                    size_t json_length, AbMapConfig *out) {
-  DigestWriter writer;
-  ArchbirdStatus status;
-  archbird_sha256_init(&writer.context);
-  writer.status = ARCHBIRD_OK;
-  status = archbird_json_canonicalize(engine, json, json_length, 0,
-                                      digest_write, &writer);
-  if (status == ARCHBIRD_OK)
-    status = writer.status;
-  if (status == ARCHBIRD_OK) {
-    archbird_sha256_final(&writer.context, out->sha256);
-    archbird_sha256_hex(out->sha256, out->sha256_hex);
-  }
-  return status;
 }
 
 ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
                                     size_t json_length, AbMapConfig *out) {
-  static const char *const fields[] = {
-      "artifacts",   "bridges",        "builds",   "checks",  "components",
-      "description", "discovery",      "exclude",  "indexes", "layers",
-      "limits",      "named_entries",  "packages", "parity",  "project",
-      "root",        "schema_version", "tests"};
-  static const char *const required[] = {"layers", "project", "schema_version"};
-  yyjson_doc *document = NULL;
-  yyjson_val *root;
-  yyjson_val *layers;
-  yyjson_val *components;
-  yyjson_arr_iter iterator;
-  yyjson_val *item;
-  size_t index;
-  uint64_t schema_version = 0;
-  ArchbirdStatus status;
+  AbProjectConfiguration project_configuration = {0};
   if (!engine || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
-  memset(out, 0, sizeof(*out));
-  status =
-      archbird_json_parse_document(engine, json, json_length, &document, 1);
-  if (status != ARCHBIRD_OK)
-    return status;
-  root = yyjson_doc_get_root(document);
-  status = object_shape(engine, root, "config", fields, 18, required, 3);
-  if (status == ARCHBIRD_OK &&
-      (!unsigned_value(member(root, "schema_version"), &schema_version) ||
-       schema_version != 1))
-    status = config_error(engine, "schema_version must equal 1");
-  if (status == ARCHBIRD_OK)
-    status = validate_optional_sections(engine, root);
-  if (status == ARCHBIRD_OK)
-    status = copy_string(engine, member(root, "project"), "project", 0,
-                         &out->project);
-  if (status == ARCHBIRD_OK)
-    status = copy_default_string(engine, member(root, "description"), "",
-                                 "description", 1, &out->description);
-  if (status == ARCHBIRD_OK)
-    status = copy_default_string(engine, member(root, "root"), ".", "root", 0,
-                                 &out->root);
-  if (status == ARCHBIRD_OK)
-    status = parse_discovery_options(engine, member(root, "discovery"), out);
-  if (status == ARCHBIRD_OK)
-    status = copy_excludes(engine, member(root, "exclude"),
-                           out->default_excludes, &out->exclude);
-  layers = member(root, "layers");
-  if (status == ARCHBIRD_OK &&
-      (!yyjson_is_arr(layers) || yyjson_arr_size(layers) == 0))
-    status = config_error(engine, "layers must be a nonempty array");
-  if (status == ARCHBIRD_OK) {
-    out->layer_count = yyjson_arr_size(layers);
-    out->layers = (AbConfigLayer *)ab_calloc(engine, out->layer_count,
-                                             sizeof(*out->layers));
-    if (!out->layers)
+  {
+    static const char *const fields[] = {
+        "artifacts",   "bridges",        "builds",    "components",
+        "constraints", "description",    "discovery", "exclude",
+        "indexes",     "layers",         "limits",    "named_entries",
+        "packages",    "parity",         "project",   "projections",
+        "queries",     "schema_version", "tests"};
+    static const char *const required[] = {"layers", "project",
+                                           "schema_version"};
+    yyjson_doc *document = NULL;
+    yyjson_val *root;
+    yyjson_val *layers;
+    yyjson_val *components;
+    yyjson_arr_iter iterator;
+    yyjson_val *item;
+    size_t index;
+    uint64_t schema_version = 0;
+    ArchbirdStatus status;
+    if (!engine || !out)
+      return ARCHBIRD_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    status = ab_project_configuration_decode(engine, json, json_length,
+                                             &project_configuration);
+    if (status == ARCHBIRD_OK)
       status =
-          archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
-                             "out of memory decoding configuration");
-  }
-  if (status == ARCHBIRD_OK) {
-    yyjson_arr_iter_init(layers, &iterator);
-    index = 0;
-    while (status == ARCHBIRD_OK &&
-           (item = yyjson_arr_iter_next(&iterator)) != NULL)
-      status = parse_layer(engine, item, &out->layers[index++]);
-  }
-  components = member(root, "components");
-  if (status == ARCHBIRD_OK && components) {
-    out->component_count = yyjson_arr_size(components);
-    if (out->component_count) {
-      out->components = (AbConfigComponent *)ab_calloc(
-          engine, out->component_count, sizeof(*out->components));
-      if (!out->components)
+          archbird_json_parse_document(engine, json, json_length, &document, 1);
+    if (status != ARCHBIRD_OK)
+      goto done;
+    root = yyjson_doc_get_root(document);
+    status = object_shape(engine, root, "project configuration", fields, 19,
+                          required, 3);
+    if (status == ARCHBIRD_OK &&
+        (!unsigned_value(member(root, "schema_version"), &schema_version) ||
+         schema_version != 2))
+      status = config_error(engine, "schema_version must equal 2");
+    if (status == ARCHBIRD_OK)
+      status = validate_optional_sections(engine, root);
+    if (status == ARCHBIRD_OK)
+      status = copy_string(engine, member(root, "project"), "project", 0,
+                           &out->project);
+    if (status == ARCHBIRD_OK)
+      status = copy_default_string(engine, member(root, "description"), "",
+                                   "description", 1, &out->description);
+    if (status == ARCHBIRD_OK)
+      status = copy_default_string(engine, NULL, ".", "root", 0, &out->root);
+    if (status == ARCHBIRD_OK)
+      status = parse_discovery_options(engine, member(root, "discovery"), out);
+    if (status == ARCHBIRD_OK)
+      status = copy_excludes(engine, member(root, "exclude"),
+                             out->default_excludes, &out->exclude);
+    layers = member(root, "layers");
+    if (status == ARCHBIRD_OK &&
+        (!yyjson_is_arr(layers) || yyjson_arr_size(layers) == 0))
+      status = config_error(engine, "layers must be a nonempty array");
+    if (status == ARCHBIRD_OK) {
+      out->layer_count = yyjson_arr_size(layers);
+      out->layers = (AbConfigLayer *)ab_calloc(engine, out->layer_count,
+                                               sizeof(*out->layers));
+      if (!out->layers)
         status = archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                                     ARCHBIRD_NO_OFFSET,
                                     "out of memory decoding configuration");
     }
+    if (status == ARCHBIRD_OK) {
+      yyjson_arr_iter_init(layers, &iterator);
+      index = 0;
+      while (status == ARCHBIRD_OK &&
+             (item = yyjson_arr_iter_next(&iterator)) != NULL)
+        status = parse_layer(engine, item, &out->layers[index++]);
+    }
+    components = member(root, "components");
+    if (status == ARCHBIRD_OK && components) {
+      out->component_count = yyjson_arr_size(components);
+      if (out->component_count) {
+        out->components = (AbConfigComponent *)ab_calloc(
+            engine, out->component_count, sizeof(*out->components));
+        if (!out->components)
+          status = archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                      ARCHBIRD_NO_OFFSET,
+                                      "out of memory decoding configuration");
+      }
+    }
+    if (status == ARCHBIRD_OK && components) {
+      yyjson_arr_iter_init(components, &iterator);
+      index = 0;
+      while (status == ARCHBIRD_OK &&
+             (item = yyjson_arr_iter_next(&iterator)) != NULL)
+        status = parse_component(engine, item, &out->components[index++]);
+    }
+    if (status == ARCHBIRD_OK)
+      status = parse_item_array(engine, member(root, "packages"), "packages",
+                                sizeof(*out->packages), parse_package,
+                                (void **)&out->packages, &out->package_count);
+    if (status == ARCHBIRD_OK)
+      status = parse_item_array(engine, member(root, "builds"), "builds",
+                                sizeof(*out->builds), parse_build,
+                                (void **)&out->builds, &out->build_count);
+    if (status == ARCHBIRD_OK)
+      status = parse_item_array(engine, member(root, "indexes"), "indexes",
+                                sizeof(*out->indexes), parse_index,
+                                (void **)&out->indexes, &out->index_count);
+    if (status == ARCHBIRD_OK)
+      status = parse_item_array(engine, member(root, "artifacts"), "artifacts",
+                                sizeof(*out->artifacts), parse_artifact,
+                                (void **)&out->artifacts, &out->artifact_count);
+    if (status == ARCHBIRD_OK)
+      status = parse_item_array(engine, member(root, "bridges"), "bridges",
+                                sizeof(*out->bridges), parse_bridge,
+                                (void **)&out->bridges, &out->bridge_count);
+    if (status == ARCHBIRD_OK)
+      status = parse_item_array(engine, member(root, "tests"), "tests",
+                                sizeof(*out->tests), parse_test,
+                                (void **)&out->tests, &out->test_count);
+    if (status == ARCHBIRD_OK)
+      status = parse_item_array(engine, member(root, "named_entries"),
+                                "named_entries", sizeof(*out->named_entries),
+                                parse_named_entry, (void **)&out->named_entries,
+                                &out->named_entry_count);
+    if (status == ARCHBIRD_OK)
+      status = parse_item_array(engine, member(root, "parity"), "parity",
+                                sizeof(*out->parity), parse_parity,
+                                (void **)&out->parity, &out->parity_count);
+    if (status == ARCHBIRD_OK)
+      status = parse_limits(engine, member(root, "limits"), out);
+    if (status == ARCHBIRD_OK)
+      status = ensure_unique_names(engine, out);
+    if (status == ARCHBIRD_OK)
+      status = validate_references(engine, out);
+    if (status == ARCHBIRD_OK) {
+      size_t digest_index;
+      for (digest_index = 0; digest_index < 32; digest_index++) {
+        const char high =
+            project_configuration.map_config_sha256[digest_index * 2];
+        const char low =
+            project_configuration.map_config_sha256[digest_index * 2 + 1];
+        const uint8_t high_value =
+            (uint8_t)(high <= '9' ? high - '0' : high - 'a' + 10);
+        const uint8_t low_value =
+            (uint8_t)(low <= '9' ? low - '0' : low - 'a' + 10);
+        out->sha256[digest_index] = (uint8_t)((high_value << 4) | low_value);
+      }
+      if (status == ARCHBIRD_OK)
+        memcpy(out->sha256_hex, project_configuration.map_config_sha256, 65);
+    }
+  done:
+    yyjson_doc_free(document);
+    ab_project_configuration_free(engine, &project_configuration);
+    if (status != ARCHBIRD_OK)
+      ab_map_config_free(engine, out);
+    return status;
   }
-  if (status == ARCHBIRD_OK && components) {
-    yyjson_arr_iter_init(components, &iterator);
-    index = 0;
-    while (status == ARCHBIRD_OK &&
-           (item = yyjson_arr_iter_next(&iterator)) != NULL)
-      status = parse_component(engine, item, &out->components[index++]);
-  }
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(engine, member(root, "packages"), "packages",
-                              sizeof(*out->packages), parse_package,
-                              (void **)&out->packages, &out->package_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(engine, member(root, "builds"), "builds",
-                              sizeof(*out->builds), parse_build,
-                              (void **)&out->builds, &out->build_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(engine, member(root, "indexes"), "indexes",
-                              sizeof(*out->indexes), parse_index,
-                              (void **)&out->indexes, &out->index_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(engine, member(root, "artifacts"), "artifacts",
-                              sizeof(*out->artifacts), parse_artifact,
-                              (void **)&out->artifacts, &out->artifact_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(engine, member(root, "bridges"), "bridges",
-                              sizeof(*out->bridges), parse_bridge,
-                              (void **)&out->bridges, &out->bridge_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(engine, member(root, "tests"), "tests",
-                              sizeof(*out->tests), parse_test,
-                              (void **)&out->tests, &out->test_count);
-  if (status == ARCHBIRD_OK)
-    status =
-        parse_item_array(engine, member(root, "named_entries"), "named_entries",
-                         sizeof(*out->named_entries), parse_named_entry,
-                         (void **)&out->named_entries, &out->named_entry_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_item_array(engine, member(root, "parity"), "parity",
-                              sizeof(*out->parity), parse_parity,
-                              (void **)&out->parity, &out->parity_count);
-  if (status == ARCHBIRD_OK)
-    status = parse_checks(engine, member(root, "checks"), &out->checks);
-  if (status == ARCHBIRD_OK)
-    status = parse_limits(engine, member(root, "limits"), out);
-  if (status == ARCHBIRD_OK)
-    status = ensure_unique_names(engine, out);
-  if (status == ARCHBIRD_OK)
-    status = validate_references(engine, out);
-  if (status == ARCHBIRD_OK)
-    status = digest_config(engine, json, json_length, out);
-  yyjson_doc_free(document);
-  if (status != ARCHBIRD_OK)
-    ab_map_config_free(engine, out);
-  return status;
 }
 
 const AbConfigLayer *ab_map_config_layer(const AbMapConfig *config,

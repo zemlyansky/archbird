@@ -148,7 +148,7 @@ int main(void) {
       "\"ignore_files\":[],\"schema_version\":1}";
   static const char configured[] =
       "{\"layers\":[{\"globs\":[\"**/*.py\"],\"language\":\"python\","
-      "\"name\":\"configured\"}],\"project\":\"base\",\"schema_version\":1}";
+      "\"name\":\"configured\"}],\"project\":\"base\",\"schema_version\":2}";
   static const char override_request[] =
       "{\"artifact\":\"archbird-map-request\",\"default_excludes\":true,"
       "\"exclude\":[],\"ignore\":false,\"only\":[\"src/**\"],"
@@ -158,7 +158,7 @@ int main(void) {
       "\"path\":\"semantic.scip\"}],\"layers\":[{\"globs\":[\"src/**\"],"
       "\"language\":\"python\",\"name\":\"source\"}],\"limits\":{"
       "\"max_file_bytes\":100,\"max_index_bytes\":1000},\"project\":"
-      "\"bounded\",\"schema_version\":1}";
+      "\"bounded\",\"schema_version\":2}";
   static const char index_inventory[] =
       "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
       "\"files\":[{\"bytes\":500,\"path\":\"semantic.scip\"},{\"bytes\":"
@@ -171,7 +171,7 @@ int main(void) {
   static const char vendor_config[] =
       "{\"layers\":[{\"globs\":[\"deps/*.c\"],\"language\":\"c\","
       "\"name\":\"dependencies\",\"role\":\"vendor\"}],\"project\":"
-      "\"roles\",\"schema_version\":1}";
+      "\"roles\",\"schema_version\":2}";
   static const char vendor_inventory[] =
       "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
       "\"files\":[{\"bytes\":12,\"path\":\"deps/library.c\"}],"
@@ -242,15 +242,17 @@ int main(void) {
       !contains(&first, "discovery-file-oversized") ||
       !contains(&first, "\"path\":\"huge.py\",\"severity\":\"warning\"") ||
       !contains(&first, "\"unsupported_known\":1") ||
-      contains(&first, "\"path\":\"ignored.py\"") ||
-      contains(&first, "\"path\":\"build/leak.py\"")) {
+      contains(&first, "\"layer\":\"auto-python\",\"path\":\"ignored.py\"") ||
+      contains(&first, "\"layer\":\"auto-python\",\"path\":"
+                       "\"build/leak.py\"")) {
     fprintf(stderr, "config-free selection evidence is incorrect\n");
     failed = 1;
   }
   if (!resolve(engine, configured, override_request, inventory, &override) ||
       !contains(&override, "\"project\":\"cli\"") ||
       !contains(&override, "\"path\":\"src/main.py\"") ||
-      contains(&override, "\"path\":\"tests/test_main.py\"")) {
+      contains(&override, "\"layer\":\"configured\",\"path\":"
+                          "\"tests/test_main.py\"")) {
     fprintf(stderr, "CLI/config/discovery precedence is incorrect\n");
     failed = 1;
   }
@@ -289,9 +291,14 @@ int main(void) {
     failed = 1;
   }
   if (!resolve(engine, "", request, venv_inventory, &venv) ||
-      contains(&venv, "\"path\":\"venv/bin/activate.py\"") ||
-      !contains(&venv, "\"path\":\"Lib/venv/__init__.py\"") ||
-      contains(&venv, "\"path\":\"Lib/.venv/hidden.py\"")) {
+      !contains(&venv, "\"selected\":1") ||
+      !contains(&venv, "\"files\":[{\"language\":\"python\","
+                       "\"layer\":\"auto-python\",\"path\":"
+                       "\"Lib/venv/__init__.py\"") ||
+      contains(&venv, "\"layer\":\"auto-python\",\"path\":"
+                      "\"venv/bin/activate.py\"") ||
+      contains(&venv, "\"layer\":\"auto-python\",\"path\":"
+                      "\"Lib/.venv/hidden.py\"")) {
     fprintf(stderr, "ambiguous nested venv discovery is incorrect\n");
     failed = 1;
   }
@@ -337,8 +344,9 @@ int main(void) {
                &compiler_scoped) ||
       !contains(&compiler_scoped, "\"builds\":[]") ||
       !contains(&compiler_scoped, "\"indexes\":[]") ||
-      contains(&compiler_scoped, "compile_commands.json") ||
-      contains(&compiler_scoped, "index.scip")) {
+      !contains(&compiler_scoped, "\"selected\":1") ||
+      contains(&compiler_scoped, "\"roles\":[\"build\",\"index\"]") ||
+      contains(&compiler_scoped, "\"roles\":[\"index\"]")) {
     fprintf(stderr, "selected discovery scope retained compiler evidence\n");
     failed = 1;
   }

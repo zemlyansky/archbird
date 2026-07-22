@@ -402,20 +402,19 @@ static const AbValue *find_mapping(const AbVerificationContext *context,
   const AbValue *name = ab_value_member(check, "mapping");
   size_t low = 0;
   size_t high;
-  if (!name || !context->suite.mappings)
+  if (!name || !context->mappings)
     return NULL;
-  high = context->suite.mappings->as.object.count;
+  high = context->mappings->as.object.count;
   while (low < high) {
     size_t middle = low + (high - low) / 2;
     int compared = ab_string_compare(
-        &context->suite.mappings->as.object.fields[middle].name,
-        &name->as.text);
+        &context->mappings->as.object.fields[middle].name, &name->as.text);
     if (compared < 0)
       low = middle + 1;
     else if (compared > 0)
       high = middle;
     else
-      return &context->suite.mappings->as.object.fields[middle].value;
+      return &context->mappings->as.object.fields[middle].value;
   }
   return NULL;
 }
@@ -438,7 +437,7 @@ static ArchbirdStatus unavailable_finding(ArchbirdEngine *engine,
   if (!*unavailable)
     return ARCHBIRD_OK;
   ab_buffer_init(&message, engine);
-  status = ab_buffer_literal(&message, "extractor:");
+  status = ab_buffer_literal(&message, "projection:");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_append(&message, fact->name.data, fact->name.length);
   key.data = (char *)message.data;
@@ -450,7 +449,7 @@ static ArchbirdStatus unavailable_finding(ArchbirdEngine *engine,
       status =
           ab_buffer_append(&detail, fact->message.data, fact->message.length);
     else {
-      status = ab_buffer_literal(&detail, "extractor ");
+      status = ab_buffer_literal(&detail, "projection ");
       if (status == ARCHBIRD_OK)
         status = ab_buffer_append(&detail, fact->name.data, fact->name.length);
       if (status == ARCHBIRD_OK)
@@ -577,6 +576,13 @@ static ArchbirdStatus result_set_status(ArchbirdEngine *engine,
   if (!strcmp(status, "not_applicable") && result->coverage.count)
     status = "pass";
   return copy_literal(engine, &result->status, status);
+}
+
+ArchbirdStatus ab_verify_check_refresh_status(ArchbirdEngine *engine,
+                                              AbVerifyCheckResult *result) {
+  if (!engine || !result)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  return result_set_status(engine, result);
 }
 
 static ArchbirdStatus
@@ -1057,6 +1063,191 @@ static ArchbirdStatus relation_check(ArchbirdEngine *engine,
           status = result_add_finding(engine, result, &finding);
         finding_free(engine, &finding);
       }
+    }
+  }
+  if (status == ARCHBIRD_OK && result->finding_count > 1)
+    qsort(result->findings, result->finding_count, sizeof(*result->findings),
+          finding_compare_key);
+  if (status == ARCHBIRD_OK)
+    status = result_set_status(engine, result);
+  return status;
+}
+
+static ArchbirdStatus disjoint_check(ArchbirdEngine *engine,
+                                     const AbValue *check,
+                                     const AbVerifyFactSet *expected,
+                                     const AbVerifyFactSet *actual,
+                                     AbVerifyCheckResult *result) {
+  size_t index;
+  ArchbirdStatus status = result_init(engine, result, check, expected, actual);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (string_literal(&expected->state, "current") &&
+      string_literal(&actual->state, "current") &&
+      (!(string_literal(&expected->shape, "set") ||
+         string_literal(&expected->shape, "values")) ||
+       !(string_literal(&actual->shape, "set") ||
+         string_literal(&actual->shape, "values")))) {
+    AbVerifyFinding finding = {0};
+    status =
+        shape_finding(engine, check, "disjoint requires set or values facts; ",
+                      expected, actual, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_add_finding(engine, result, &finding);
+    finding_free(engine, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_set_status(engine, result);
+    return status;
+  }
+  {
+    const AbVerifyFactSet *facts[2] = {expected, actual};
+    for (index = 0; status == ARCHBIRD_OK && index < 2; index++) {
+      AbVerifyFinding finding = {0};
+      int unavailable = 0;
+      status = unavailable_finding(engine, check, facts[index], &finding,
+                                   &unavailable);
+      if (status == ARCHBIRD_OK && unavailable)
+        status = result_add_finding(engine, result, &finding);
+      finding_free(engine, &finding);
+    }
+    if (status != ARCHBIRD_OK || result->finding_count) {
+      if (status == ARCHBIRD_OK)
+        status = result_set_status(engine, result);
+      return status;
+    }
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < actual->item_count;
+       index++) {
+    const AbVerifyFactItem *item = &actual->items[index];
+    if (fact_item_find(expected, &item->key)) {
+      AbVerifyFinding finding = {0};
+      status = message_finding(engine, check, "overlap", &item->key,
+                               "fact must be disjoint: ", &item->label, item,
+                               &finding);
+      if (status == ARCHBIRD_OK)
+        status = result_add_finding(engine, result, &finding);
+      finding_free(engine, &finding);
+    } else {
+      status = coverage_add(engine, result, &item->key);
+    }
+  }
+  if (status == ARCHBIRD_OK && result->finding_count > 1)
+    qsort(result->findings, result->finding_count, sizeof(*result->findings),
+          finding_compare_full);
+  if (status == ARCHBIRD_OK)
+    status = result_set_status(engine, result);
+  return status;
+}
+
+static int boolean_option(const AbValue *check, const char *name) {
+  const AbValue *value = ab_value_member(check, name);
+  return value && value->kind == AB_VALUE_BOOL && value->as.boolean;
+}
+
+static ArchbirdStatus provider_surface_check(ArchbirdEngine *engine,
+                                             const AbValue *check,
+                                             const AbVerifyFactSet *actual,
+                                             AbVerifyCheckResult *result) {
+  static const char declared_text[] = "declared";
+  static const char unresolved_text[] = "unresolved";
+  static const char ambiguous_text[] = "ambiguous";
+  static const char true_text[] = "true";
+  const AbValue *required = ab_value_member(check, "declared");
+  size_t index;
+  ArchbirdStatus status = result_init(engine, result, check, actual, NULL);
+  if (status != ARCHBIRD_OK)
+    return status;
+  {
+    AbVerifyFinding finding = {0};
+    int unavailable = 0;
+    status = unavailable_finding(engine, check, actual, &finding, &unavailable);
+    if (status == ARCHBIRD_OK && unavailable)
+      status = result_add_finding(engine, result, &finding);
+    finding_free(engine, &finding);
+    if (status != ARCHBIRD_OK || unavailable) {
+      if (status == ARCHBIRD_OK)
+        status = result_set_status(engine, result);
+      return status;
+    }
+  }
+  if (!string_literal(&actual->shape, "values")) {
+    AbVerifyFinding finding = {0};
+    status =
+        shape_finding(engine, check, "provider_surface requires values facts; ",
+                      actual, NULL, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_add_finding(engine, result, &finding);
+    finding_free(engine, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_set_status(engine, result);
+    return status;
+  }
+  if (required)
+    for (index = 0; status == ARCHBIRD_OK && index < required->as.array.count;
+         index++) {
+      const AbString *name = &required->as.array.items[index].as.text;
+      const AbVerifyFactItem *item = fact_item_find(actual, name);
+      const AbString *declaration =
+          item ? item_attribute(item, "declaration") : NULL;
+      if (declaration && string_literal(declaration, declared_text)) {
+        status = coverage_add(engine, result, name);
+      } else {
+        AbVerifyFinding finding = {0};
+        if (item)
+          status = message_finding(engine, check, "missing", name,
+                                   "provider does not declare ", name, item,
+                                   &finding);
+        else {
+          status = finding_init_literal(
+              engine, &finding, check, "missing", name,
+              "required provider capability is absent", "current");
+          if (status == ARCHBIRD_OK)
+            status = finding_add_fact_summary(engine, &finding, actual);
+        }
+        if (status == ARCHBIRD_OK)
+          status = result_add_finding(engine, result, &finding);
+        finding_free(engine, &finding);
+      }
+    }
+  for (index = 0; status == ARCHBIRD_OK && index < actual->item_count;
+       index++) {
+    const AbVerifyFactItem *item = &actual->items[index];
+    const AbString *declaration = item_attribute(item, "declaration");
+    const AbString *resolution = item_attribute(item, "resolution");
+    const AbString *used = item_attribute(item, "used");
+    const char *comparison = NULL;
+    const char *prefix = NULL;
+    if (!string_literal(&item->state, "current")) {
+      AbVerifyFinding finding = {0};
+      status = item_unknown_finding(engine, check, item, &finding);
+      if (status == ARCHBIRD_OK)
+        status = result_add_finding(engine, result, &finding);
+      finding_free(engine, &finding);
+      continue;
+    }
+    if (boolean_option(check, "forbid_unregistered") && declaration && used &&
+        !string_literal(declaration, declared_text) &&
+        string_literal(used, true_text)) {
+      comparison = "unregistered";
+      prefix = "used provider capability is not declared: ";
+    } else if (boolean_option(check, "forbid_unresolved") && resolution &&
+               string_literal(resolution, unresolved_text)) {
+      comparison = "unresolved";
+      prefix = "provider capability is unresolved: ";
+    } else if (boolean_option(check, "forbid_ambiguous") && resolution &&
+               string_literal(resolution, ambiguous_text)) {
+      comparison = "ambiguous";
+      prefix = "provider capability is ambiguous: ";
+    }
+    if (comparison) {
+      AbVerifyFinding finding = {0};
+      status = message_finding(engine, check, comparison, &item->key, prefix,
+                               &item->label, item, &finding);
+      if (status == ARCHBIRD_OK)
+        status = result_add_finding(engine, result, &finding);
+      finding_free(engine, &finding);
+    } else {
+      status = coverage_add(engine, result, &item->key);
     }
   }
   if (status == ARCHBIRD_OK && result->finding_count > 1)
@@ -1762,27 +1953,27 @@ static ArchbirdStatus min_test_routes_check(ArchbirdEngine *engine,
   return status;
 }
 
-static const AbVerifyAttestationCaseView *
-attestation_case_find(const AbVerifyAttestationDataView *attestation,
+static const AbVerifyObservationCase *
+observation_case_find(const AbVerifyObservationDocument *observation,
                       const AbString *id) {
   size_t low = 0;
-  size_t high = attestation ? attestation->case_count : 0;
+  size_t high = observation ? observation->case_count : 0;
   while (low < high) {
     size_t middle = low + (high - low) / 2;
-    int compared = ab_string_compare(attestation->cases[middle].id, id);
+    int compared = ab_string_compare(observation->cases[middle].id, id);
     if (compared < 0)
       low = middle + 1;
     else if (compared > 0)
       high = middle;
     else
-      return &attestation->cases[middle];
+      return &observation->cases[middle];
   }
   return NULL;
 }
 
 static const AbVerifyObservationView *
-attestation_observation_find(const AbVerifyAttestationCaseView *case_view,
-                             const AbString *route) {
+case_observation_find(const AbVerifyObservationCase *case_view,
+                      const AbString *route) {
   size_t low = 0;
   size_t high = case_view ? case_view->observation_count : 0;
   while (low < high) {
@@ -1855,7 +2046,7 @@ static int equality_policy_equal(const AbVerifyEqualityPolicy *left,
          left->signed_zero_equal == right->signed_zero_equal;
 }
 
-static ArchbirdStatus finding_add_attestation_witnesses(
+static ArchbirdStatus finding_add_observation_witnesses(
     ArchbirdEngine *engine, AbVerifyFinding *finding,
     const AbVerifyEvidence *witnesses, size_t witness_count) {
   size_t index;
@@ -1866,7 +2057,7 @@ static ArchbirdStatus finding_add_attestation_witnesses(
 }
 
 static ArchbirdStatus
-attestation_finding_n(ArchbirdEngine *engine, const AbValue *check,
+observation_finding_n(ArchbirdEngine *engine, const AbValue *check,
                       const char *comparison, const AbString *key,
                       const char *message, size_t message_length,
                       const char *evidence_state, const char *applicability,
@@ -1879,25 +2070,25 @@ attestation_finding_n(ArchbirdEngine *engine, const AbValue *check,
     status = copy_literal(engine, &out->applicability, applicability);
   }
   if (status == ARCHBIRD_OK)
-    status = finding_add_attestation_witnesses(engine, out, result->witnesses,
+    status = finding_add_observation_witnesses(engine, out, result->witnesses,
                                                result->witness_count);
   return status;
 }
 
 static ArchbirdStatus
-attestation_finding(ArchbirdEngine *engine, const AbValue *check,
+observation_finding(ArchbirdEngine *engine, const AbValue *check,
                     const char *comparison, const AbString *key,
                     const char *message, const char *evidence_state,
                     const char *applicability,
                     const AbVerifyCheckResult *result, AbVerifyFinding *out) {
-  return attestation_finding_n(engine, check, comparison, key, message,
+  return observation_finding_n(engine, check, comparison, key, message,
                                strlen(message), evidence_state, applicability,
                                result, out);
 }
 
 static ArchbirdStatus
-attestation_unavailable_finding(ArchbirdEngine *engine, const AbValue *check,
-                                const AbVerifyAttestationState *state,
+observation_unavailable_finding(ArchbirdEngine *engine, const AbValue *check,
+                                const AbVerifyObservationState *state,
                                 const AbVerifyCheckResult *result,
                                 AbVerifyFinding *out) {
   AbBuffer key;
@@ -1906,7 +2097,7 @@ attestation_unavailable_finding(ArchbirdEngine *engine, const AbValue *check,
   ArchbirdStatus status;
   ab_buffer_init(&key, engine);
   ab_buffer_init(&message, engine);
-  status = ab_buffer_literal(&key, "attestation:");
+  status = ab_buffer_literal(&key, "observation:");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_append(&key, state->name.data, state->name.length);
   key_view.data = (char *)key.data;
@@ -1915,7 +2106,7 @@ attestation_unavailable_finding(ArchbirdEngine *engine, const AbValue *check,
     status =
         ab_buffer_append(&message, state->message.data, state->message.length);
   else if (status == ARCHBIRD_OK) {
-    status = ab_buffer_literal(&message, "attestation ");
+    status = ab_buffer_literal(&message, "observation ");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_append(&message, state->name.data, state->name.length);
     if (status == ARCHBIRD_OK)
@@ -1930,7 +2121,7 @@ attestation_unavailable_finding(ArchbirdEngine *engine, const AbValue *check,
                             (const char *)message.data, message.length,
                             state->state.data);
   if (status == ARCHBIRD_OK)
-    status = finding_add_attestation_witnesses(engine, out, state->witnesses,
+    status = finding_add_observation_witnesses(engine, out, state->witnesses,
                                                state->witness_count);
   ab_buffer_free(&key);
   ab_buffer_free(&message);
@@ -1939,16 +2130,16 @@ attestation_unavailable_finding(ArchbirdEngine *engine, const AbValue *check,
 
 static const AbVerifyObservationView *
 reference_observation(const AbValue *check,
-                      const AbVerifyAttestationCaseView *case_view,
+                      const AbVerifyObservationCase *case_view,
                       const AbString **route) {
   const AbValue *configured = ab_value_member(check, "reference_route");
   static AbString reference = {(char *)"reference", 9};
   const AbVerifyObservationView *result;
   if (configured) {
     *route = &configured->as.text;
-    return attestation_observation_find(case_view, *route);
+    return case_observation_find(case_view, *route);
   }
-  result = attestation_observation_find(case_view, &reference);
+  result = case_observation_find(case_view, &reference);
   if (result) {
     *route = &reference;
     return result;
@@ -1999,8 +2190,8 @@ static ArchbirdStatus append_sorted_names(ArchbirdEngine *engine,
 
 static ArchbirdStatus
 requirement_links_finding(ArchbirdEngine *engine, const AbValue *check,
-                          const AbVerifyAttestationCaseView *reference_case,
-                          const AbVerifyAttestationCaseView *actual_case,
+                          const AbVerifyObservationCase *reference_case,
+                          const AbVerifyObservationCase *actual_case,
                           int missing, const AbVerifyCheckResult *result,
                           AbVerifyFinding *out) {
   AbBuffer key;
@@ -2027,7 +2218,7 @@ requirement_links_finding(ArchbirdEngine *engine, const AbValue *check,
         missing ? reference_case->requirements : actual_case->requirements,
         missing ? actual_case->requirements : reference_case->requirements, 1);
   if (status == ARCHBIRD_OK)
-    status = attestation_finding_n(engine, check,
+    status = observation_finding_n(engine, check,
                                    missing ? "missing" : "different", &key_view,
                                    (const char *)message.data, message.length,
                                    "current", "applicable", result, out);
@@ -2036,7 +2227,7 @@ requirement_links_finding(ArchbirdEngine *engine, const AbValue *check,
   return status;
 }
 
-static int attestation_finding_compare(const void *left_raw,
+static int observation_finding_compare(const void *left_raw,
                                        const void *right_raw) {
   const AbVerifyFinding *left = (const AbVerifyFinding *)left_raw;
   const AbVerifyFinding *right = (const AbVerifyFinding *)right_raw;
@@ -2048,7 +2239,7 @@ static int attestation_finding_compare(const void *left_raw,
   return compared;
 }
 
-static ArchbirdStatus attestation_coverage_add(ArchbirdEngine *engine,
+static ArchbirdStatus observation_coverage_add(ArchbirdEngine *engine,
                                                AbVerifyCheckResult *result,
                                                const AbString *requirement,
                                                const AbString *case_id,
@@ -2078,11 +2269,10 @@ static ArchbirdStatus attestation_coverage_add(ArchbirdEngine *engine,
   return status;
 }
 
-static ArchbirdStatus
-attestation_equal_check(AbVerificationContext *context, const AbValue *check,
-                        const AbVerifyAttestationState *expected,
-                        const AbVerifyAttestationState *actual,
-                        AbVerifyCheckResult *result) {
+static ArchbirdStatus observation_equal_constraint(
+    AbVerificationContext *context, const AbValue *check,
+    const AbVerifyObservationState *expected,
+    const AbVerifyObservationState *actual, AbVerifyCheckResult *result) {
   ArchbirdEngine *engine = context->engine;
   const AbValue *requested = ab_value_member(check, "requirement");
   const AbValue *required_routes = ab_value_member(check, "required_routes");
@@ -2105,10 +2295,10 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
     return status;
   evidence_sort_unique(engine, result->witnesses, &result->witness_count);
   for (index = 0; index < 2; index++) {
-    const AbVerifyAttestationState *state = index ? actual : expected;
+    const AbVerifyObservationState *state = index ? actual : expected;
     if (!string_literal(&state->state, "current") || !state->has_data) {
       AbVerifyFinding finding = {0};
-      status = attestation_unavailable_finding(context->engine, check, state,
+      status = observation_unavailable_finding(context->engine, check, state,
                                                result, &finding);
       if (status == ARCHBIRD_OK)
         status = result_add_finding(context->engine, result, &finding);
@@ -2126,15 +2316,15 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
     if (!declared)
       return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
-                                "out of memory tracking attestation "
+                                "out of memory tracking observation "
                                 "requirements");
   }
   for (case_index = 0;
        status == ARCHBIRD_OK && case_index < expected->data.case_count;
        case_index++) {
-    const AbVerifyAttestationCaseView *reference_case =
+    const AbVerifyObservationCase *reference_case =
         &expected->data.cases[case_index];
-    const AbVerifyAttestationCaseView *actual_case;
+    const AbVerifyObservationCase *actual_case;
     const AbVerifyObservationView *reference;
     const AbString *reference_route;
     const AbString **relevant = NULL;
@@ -2148,7 +2338,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
       if (!relevant) {
         status = archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
                                     ARCHBIRD_NO_OFFSET,
-                                    "out of memory selecting attestation "
+                                    "out of memory selecting observation "
                                     "requirements");
         break;
       }
@@ -2175,10 +2365,10 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
     if (relevant_count > 1)
       qsort(relevant, relevant_count, sizeof(*relevant),
             string_pointer_compare);
-    if (!ab_verify_attestation_case_applicable(reference_case,
-                                               &expected->data)) {
+    if (!ab_constraints_observation_case_applicable(reference_case,
+                                                    &expected->data)) {
       AbVerifyFinding finding = {0};
-      status = attestation_finding(
+      status = observation_finding(
           context->engine, check, "equal", reference_case->id,
           "reference case is not applicable to its profile", "current",
           "not_applicable", result, &finding);
@@ -2188,9 +2378,10 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
       ab_free(engine, relevant);
       continue;
     }
-    if (!ab_verify_attestation_case_applicable(reference_case, &actual->data)) {
+    if (!ab_constraints_observation_case_applicable(reference_case,
+                                                    &actual->data)) {
       AbVerifyFinding finding = {0};
-      status = attestation_finding(
+      status = observation_finding(
           context->engine, check, "equal", reference_case->id,
           "reference case is not applicable to the subject profile", "current",
           "not_applicable", result, &finding);
@@ -2200,18 +2391,18 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
       ab_free(engine, relevant);
       continue;
     }
-    actual_case = attestation_case_find(&actual->data, reference_case->id);
+    actual_case = observation_case_find(&actual->data, reference_case->id);
     if (!actual_case) {
       AbBuffer message;
       AbVerifyFinding finding = {0};
       ab_buffer_init(&message, context->engine);
       status =
-          ab_buffer_literal(&message, "subject attestation is missing case ");
+          ab_buffer_literal(&message, "subject observation is missing case ");
       if (status == ARCHBIRD_OK)
         status = ab_buffer_append(&message, reference_case->id->data,
                                   reference_case->id->length);
       if (status == ARCHBIRD_OK)
-        status = attestation_finding_n(
+        status = observation_finding_n(
             context->engine, check, "missing", reference_case->id,
             (const char *)message.data, message.length, "current", "applicable",
             result, &finding);
@@ -2269,7 +2460,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
       key_view.data = (char *)key.data;
       key_view.length = key.length;
       if (status == ARCHBIRD_OK)
-        status = attestation_finding(
+        status = observation_finding(
             context->engine, check, "different", &key_view,
             "subject case applicability contract differs from the reference",
             "current", "applicable", result, &finding);
@@ -2293,7 +2484,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
       key_view.data = (char *)key.data;
       key_view.length = key.length;
       if (status == ARCHBIRD_OK)
-        status = attestation_finding(
+        status = observation_finding(
             context->engine, check, "different", &key_view,
             "subject case equality policy differs from the reference",
             "current", "applicable", result, &finding);
@@ -2306,7 +2497,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
     if (status == ARCHBIRD_OK &&
         !ab_value_equal(reference_case->input, actual_case->input)) {
       AbVerifyFinding finding = {0};
-      status = attestation_finding(context->engine, check, "different",
+      status = observation_finding(context->engine, check, "different",
                                    reference_case->id,
                                    "reference and subject case inputs differ",
                                    "current", "applicable", result, &finding);
@@ -2319,7 +2510,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
     reference = reference_observation(check, reference_case, &reference_route);
     if (!reference) {
       AbVerifyFinding finding = {0};
-      status = attestation_finding(context->engine, check, "different",
+      status = observation_finding(context->engine, check, "different",
                                    reference_case->id,
                                    "reference route is ambiguous or absent",
                                    "unknown", "applicable", result, &finding);
@@ -2340,7 +2531,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
               ? &required_routes->as.array.items[route_index].as.text
               : actual_case->observations[route_index].route;
       const AbVerifyObservationView *observation =
-          attestation_observation_find(actual_case, route);
+          case_observation_find(actual_case, route);
       AbBuffer key;
       AbString key_view;
       ab_buffer_init(&key, context->engine);
@@ -2362,7 +2553,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
         if (status == ARCHBIRD_OK)
           status = ab_buffer_literal(&message, "' is absent");
         if (status == ARCHBIRD_OK)
-          status = attestation_finding_n(context->engine, check, "missing",
+          status = observation_finding_n(context->engine, check, "missing",
                                          &key_view, (const char *)message.data,
                                          message.length, "current",
                                          "applicable", result, &finding);
@@ -2371,7 +2562,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
         finding_free(engine, &finding);
         ab_buffer_free(&message);
       } else if (status == ARCHBIRD_OK &&
-                 !ab_verify_attestation_observations_equal(
+                 !ab_constraints_observation_values_equal(
                      reference, observation, &reference_case->comparison)) {
         AbBuffer message;
         AbVerifyFinding finding = {0};
@@ -2384,7 +2575,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
         if (status == ARCHBIRD_OK)
           status = ab_buffer_literal(&message, "'");
         if (status == ARCHBIRD_OK)
-          status = attestation_finding_n(context->engine, check, "different",
+          status = observation_finding_n(context->engine, check, "different",
                                          &key_view, (const char *)message.data,
                                          message.length, "current",
                                          "applicable", result, &finding);
@@ -2396,11 +2587,11 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
         if (relevant_count) {
           for (index = 0; status == ARCHBIRD_OK && index < relevant_count;
                index++)
-            status = attestation_coverage_add(context->engine, result,
+            status = observation_coverage_add(context->engine, result,
                                               relevant[index],
                                               reference_case->id, route);
         } else {
-          status = attestation_coverage_add(context->engine, result, NULL,
+          status = observation_coverage_add(context->engine, result, NULL,
                                             reference_case->id, route);
         }
       }
@@ -2429,12 +2620,12 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
         if (status == ARCHBIRD_OK)
           status = ab_buffer_literal(
               &message,
-              "reference attestation has no case linked to requirement ");
+              "reference observation has no case linked to requirement ");
         if (status == ARCHBIRD_OK)
           status = ab_buffer_append(&message, requirement->data,
                                     requirement->length);
         if (status == ARCHBIRD_OK)
-          status = attestation_finding_n(context->engine, check, "missing",
+          status = observation_finding_n(context->engine, check, "missing",
                                          &key_view, (const char *)message.data,
                                          message.length, "current",
                                          "applicable", result, &finding);
@@ -2447,7 +2638,7 @@ attestation_equal_check(AbVerificationContext *context, const AbValue *check,
   ab_free(engine, declared);
   if (status == ARCHBIRD_OK && result->finding_count > 1)
     qsort(result->findings, result->finding_count, sizeof(*result->findings),
-          attestation_finding_compare);
+          observation_finding_compare);
   if (status == ARCHBIRD_OK)
     status = result_set_status(context->engine, result);
   return status;
@@ -2459,17 +2650,17 @@ ArchbirdStatus ab_verify_evaluate_check(AbVerificationContext *context,
   const AbValue *assertion = ab_value_member(check, "assert");
   const AbValue *expected_name = ab_value_member(check, "expected");
   const AbValue *actual_name = ab_value_member(check, "actual");
-  if (ab_value_string_is(assertion, "attestation_equal")) {
-    const AbVerifyAttestationState *expected_attestation =
-        ab_verify_attestation_find(context, &expected_name->as.text);
-    const AbVerifyAttestationState *actual_attestation =
-        ab_verify_attestation_find(context, &actual_name->as.text);
-    if (!expected_attestation || !actual_attestation)
+  if (ab_value_string_is(assertion, "observations_equal")) {
+    const AbVerifyObservationState *expected_observation =
+        ab_constraints_observation_find(context, &expected_name->as.text);
+    const AbVerifyObservationState *actual_observation =
+        ab_constraints_observation_find(context, &actual_name->as.text);
+    if (!expected_observation || !actual_observation)
       return archbird_error_set(context->engine, ARCHBIRD_CONFLICT,
                                 ARCHBIRD_NO_OFFSET,
-                                "validated attestation operand is unavailable");
-    return attestation_equal_check(context, check, expected_attestation,
-                                   actual_attestation, result);
+                                "validated observation operand is unavailable");
+    return observation_equal_constraint(context, check, expected_observation,
+                                        actual_observation, result);
   }
   const AbVerifyFactSet *expected =
       expected_name ? find_fact(context, &expected_name->as.text) : NULL;
@@ -2496,6 +2687,10 @@ ArchbirdStatus ab_verify_evaluate_check(AbVerificationContext *context,
   if (ab_value_string_is(assertion, "required_values"))
     return compare_facts(context->engine, check, expected, actual, mapping, 1,
                          0, 1, result);
+  if (ab_value_string_is(assertion, "disjoint"))
+    return disjoint_check(context->engine, check, expected, actual, result);
+  if (ab_value_string_is(assertion, "provider_surface"))
+    return provider_surface_check(context->engine, check, actual, result);
   if (ab_value_string_is(assertion, "required_edges") ||
       ab_value_string_is(assertion, "forbidden_edges") ||
       ab_value_string_is(assertion, "allowed_edges"))
@@ -2517,10 +2712,10 @@ ArchbirdStatus ab_verify_evaluate_checks(AbVerificationContext *context) {
   ArchbirdEngine *engine;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!context || !context->engine || !context->suite.checks)
+  if (!context || !context->engine || !context->constraint_plans)
     return ARCHBIRD_INVALID_ARGUMENT;
   engine = context->engine;
-  context->check_count = context->suite.checks->as.array.count;
+  context->check_count = context->constraint_plans->as.array.count;
   if (context->check_count > SIZE_MAX / sizeof(*context->checks))
     return archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                               ARCHBIRD_NO_OFFSET,
@@ -2535,224 +2730,9 @@ ArchbirdStatus ab_verify_evaluate_checks(AbVerificationContext *context) {
   }
   for (index = 0; status == ARCHBIRD_OK && index < context->check_count;
        index++) {
-    const AbValue *check = &context->suite.checks->as.array.items[index];
+    const AbValue *check = &context->constraint_plans->as.array.items[index];
     status = ab_verify_evaluate_check(context, check, &context->checks[index]);
   }
-  return status;
-}
-
-ArchbirdStatus ab_verify_apply_waivers(AbVerificationContext *context) {
-  ArchbirdEngine *engine;
-  const AbValue *waivers;
-  unsigned char *used = NULL;
-  unsigned char *invalid_reported = NULL;
-  size_t check_index;
-  size_t waiver_count;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  if (!context || !context->engine)
-    return ARCHBIRD_INVALID_ARGUMENT;
-  engine = context->engine;
-  waivers = context->suite.waivers;
-  waiver_count = waivers ? waivers->as.array.count : 0;
-  if (waiver_count) {
-    used = (unsigned char *)ab_calloc(engine, waiver_count, 1);
-    invalid_reported = (unsigned char *)ab_calloc(engine, waiver_count, 1);
-    if (!used || !invalid_reported) {
-      ab_free(engine, used);
-      ab_free(engine, invalid_reported);
-      return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
-                                ARCHBIRD_NO_OFFSET,
-                                "out of memory applying verification waivers");
-    }
-  }
-  for (check_index = 0;
-       status == ARCHBIRD_OK && check_index < context->check_count;
-       check_index++) {
-    AbVerifyCheckResult *result = &context->checks[check_index];
-    const AbValue *check_id = ab_value_member(result->spec, "id");
-    size_t finding_index;
-    for (finding_index = 0;
-         status == ARCHBIRD_OK && finding_index < result->finding_count;
-         finding_index++) {
-      AbVerifyFinding *finding = &result->findings[finding_index];
-      size_t waiver_index;
-      size_t first_match = 0;
-      size_t match_count = 0;
-      for (waiver_index = 0; waiver_index < waiver_count; waiver_index++) {
-        const AbValue *waiver = &waivers->as.array.items[waiver_index];
-        const AbValue *fingerprint = ab_value_member(waiver, "fingerprint");
-        int matches = 0;
-        if (fingerprint)
-          matches =
-              ab_string_equal(&fingerprint->as.text, &finding->fingerprint);
-        else {
-          const AbValue *waiver_check = ab_value_member(waiver, "check");
-          const AbValue *comparison = ab_value_member(waiver, "comparison");
-          const AbValue *key = ab_value_member(waiver, "key");
-          matches =
-              waiver_check && check_id && comparison && key &&
-              ab_string_equal(&waiver_check->as.text, &check_id->as.text) &&
-              ab_string_equal(&comparison->as.text, &finding->comparison) &&
-              ab_string_equal(&key->as.text, &finding->key);
-        }
-        if (matches) {
-          if (!match_count)
-            first_match = waiver_index;
-          match_count++;
-        }
-      }
-      if (match_count > 1) {
-        AbBuffer message;
-        size_t emitted = 0;
-        ab_buffer_init(&message, context->engine);
-        status = ab_buffer_literal(&message, "finding ");
-        if (status == ARCHBIRD_OK)
-          status = ab_buffer_append(&message, finding->fingerprint.data,
-                                    finding->fingerprint.length);
-        if (status == ARCHBIRD_OK)
-          status = ab_buffer_literal(&message, " matches: ");
-        for (waiver_index = 0;
-             status == ARCHBIRD_OK && waiver_index < waiver_count;
-             waiver_index++) {
-          const AbValue *waiver = &waivers->as.array.items[waiver_index];
-          const AbValue *fingerprint = ab_value_member(waiver, "fingerprint");
-          const AbValue *waiver_check = ab_value_member(waiver, "check");
-          const AbValue *comparison = ab_value_member(waiver, "comparison");
-          const AbValue *key = ab_value_member(waiver, "key");
-          int matches = fingerprint
-                            ? ab_string_equal(&fingerprint->as.text,
-                                              &finding->fingerprint)
-                            : waiver_check && check_id && comparison && key &&
-                                  ab_string_equal(&waiver_check->as.text,
-                                                  &check_id->as.text) &&
-                                  ab_string_equal(&comparison->as.text,
-                                                  &finding->comparison) &&
-                                  ab_string_equal(&key->as.text, &finding->key);
-          if (matches) {
-            const AbValue *id = ab_value_member(waiver, "id");
-            if (emitted++)
-              status = ab_buffer_literal(&message, ", ");
-            if (status == ARCHBIRD_OK)
-              status = ab_buffer_append(&message, id->as.text.data,
-                                        id->as.text.length);
-          }
-        }
-        if (status == ARCHBIRD_OK)
-          status = ab_verify_add_diagnostic(
-              context, "error", "ambiguous-waiver", (const char *)message.data,
-              message.length, "", 0);
-        ab_buffer_free(&message);
-        continue;
-      }
-      if (match_count == 1) {
-        const AbValue *waiver = &waivers->as.array.items[first_match];
-        const AbValue *id = ab_value_member(waiver, "id");
-        const AbValue *expires = ab_value_member(waiver, "expires_on");
-        const AbValue *until_inputs = ab_value_member(waiver, "until_inputs");
-        AbBuffer note;
-        int active = 1;
-        used[first_match] = 1;
-        ab_buffer_init(&note, context->engine);
-        if (expires && context->suite.policy_date &&
-            memcmp(context->suite.policy_date->as.text.data,
-                   expires->as.text.data, 10) > 0) {
-          active = 0;
-          status = ab_buffer_literal(&note, "expired on ");
-          if (status == ARCHBIRD_OK)
-            status = ab_buffer_append(&note, expires->as.text.data,
-                                      expires->as.text.length);
-          if (status == ARCHBIRD_OK)
-            status = ab_buffer_literal(&note, " at policy date ");
-          if (status == ARCHBIRD_OK)
-            status = ab_buffer_append(
-                &note, context->suite.policy_date->as.text.data,
-                context->suite.policy_date->as.text.length);
-        }
-        if (status == ARCHBIRD_OK && active && until_inputs) {
-          for (waiver_index = 0;
-               active && waiver_index < until_inputs->as.object.count;
-               waiver_index++) {
-            const AbObjectField *boundary =
-                &until_inputs->as.object.fields[waiver_index];
-            const AbValue *project =
-                ab_verify_input_project(&context->input, &boundary->name);
-            const AbValue *map =
-                project ? ab_value_member(project, "map") : NULL;
-            const AbValue *evidence =
-                map ? ab_value_member(map, "evidence") : NULL;
-            const AbValue *digest =
-                evidence ? ab_value_member(evidence, "input_sha256") : NULL;
-            if (!digest ||
-                !ab_string_equal(&digest->as.text, &boundary->value.as.text)) {
-              active = 0;
-              status = ab_buffer_literal(
-                  &note, "review boundary changed for project ");
-              if (status == ARCHBIRD_OK)
-                status = ab_buffer_append(&note, boundary->name.data,
-                                          boundary->name.length);
-            }
-          }
-        }
-        if (status == ARCHBIRD_OK) {
-          ab_string_free(engine, &finding->waiver);
-          status = copy_string(context->engine, &finding->waiver, &id->as.text);
-        }
-        if (status == ARCHBIRD_OK && active) {
-          ab_string_free(engine, &finding->disposition);
-          status =
-              copy_literal(context->engine, &finding->disposition, "waived");
-        } else if (status == ARCHBIRD_OK) {
-          ab_string_free(engine, &finding->waiver_note);
-          status = ab_string_copy(context->engine, &finding->waiver_note,
-                                  (const char *)note.data, note.length);
-          if (status == ARCHBIRD_OK && !invalid_reported[first_match]) {
-            AbBuffer message;
-            ab_buffer_init(&message, context->engine);
-            status = ab_buffer_literal(&message, "waiver ");
-            if (status == ARCHBIRD_OK)
-              status = ab_buffer_append(&message, id->as.text.data,
-                                        id->as.text.length);
-            if (status == ARCHBIRD_OK)
-              status = ab_buffer_literal(&message, ": ");
-            if (status == ARCHBIRD_OK)
-              status = ab_buffer_append(&message, note.data, note.length);
-            if (status == ARCHBIRD_OK)
-              status = ab_verify_add_diagnostic(
-                  context, "warning", "waiver-expired",
-                  (const char *)message.data, message.length, "", 0);
-            ab_buffer_free(&message);
-            if (status == ARCHBIRD_OK)
-              invalid_reported[first_match] = 1;
-          }
-        }
-        ab_buffer_free(&note);
-      }
-    }
-    if (status == ARCHBIRD_OK)
-      status = result_set_status(context->engine, result);
-  }
-  for (check_index = 0; status == ARCHBIRD_OK && check_index < waiver_count;
-       check_index++) {
-    if (!used[check_index]) {
-      const AbValue *waiver = &waivers->as.array.items[check_index];
-      const AbValue *id = ab_value_member(waiver, "id");
-      AbBuffer message;
-      ab_buffer_init(&message, context->engine);
-      status = ab_buffer_literal(&message, "waiver ");
-      if (status == ARCHBIRD_OK)
-        status =
-            ab_buffer_append(&message, id->as.text.data, id->as.text.length);
-      if (status == ARCHBIRD_OK)
-        status = ab_buffer_literal(&message, " matches no current finding");
-      if (status == ARCHBIRD_OK)
-        status = ab_verify_add_diagnostic(context, "warning", "unused-waiver",
-                                          (const char *)message.data,
-                                          message.length, "", 0);
-      ab_buffer_free(&message);
-    }
-  }
-  ab_free(engine, used);
-  ab_free(engine, invalid_reported);
   return status;
 }
 

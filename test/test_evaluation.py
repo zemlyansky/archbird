@@ -101,7 +101,13 @@ command = sys.argv[1]
 variant = os.environ.get('ARCHBIRD_EVAL_TEST_VARIANT')
 out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 out.parent.mkdir(parents=True, exist_ok=True)
-if command == 'map':
+if command == 'config':
+  value = {
+    'schema_version':2,
+    'project':'fixture',
+    'layers':[{'globs':['**/*.py'],'language':'python','name':'python'}],
+  }
+elif command == 'map':
   if variant == 'fail':
     raise SystemExit(3)
   value = {'artifact':'map','schema_version':7,'project':'fixture','files':[],
@@ -133,7 +139,8 @@ elif command == 'verify':
       'fingerprint':'5'*64,
       'key':'tests/test_unrelated.py::test_unrelated',
     })
-  value = {'artifact':'verification','schema_version':1,'checks':[{
+  value = {'artifact':'verification','schema_version':2,'constraints':[
+    {
     'findings':findings,
     'id':'HISTORICAL-INTRODUCED-TESTS',
     'status':'fail' if before else 'pass',

@@ -11,12 +11,14 @@ typedef struct AbActVerification {
   AbValue root;
   char sha256[65];
   const AbValue *tool;
-  const AbValue *suite;
-  const AbValue *projects;
-  const AbValue *contract;
-  const AbValue *facts;
-  const AbValue *attestations;
-  const AbValue *checks;
+  const AbValue *policy;
+  const AbValue *evaluations;
+  const AbValue *evaluation;
+  const AbValue *mappings;
+  const AbValue *observations;
+  const AbValue *operand_definitions;
+  const AbValue *operands;
+  const AbValue *constraints;
   AbVerifyFactSet *decoded_facts;
   size_t fact_count;
 } AbActVerification;
@@ -65,7 +67,7 @@ typedef struct AbActUnknown {
 } AbActUnknown;
 
 typedef struct AbActPreserved {
-  const AbValue *check;
+  const AbValue *constraint;
   char sha256[65];
 } AbActPreserved;
 
@@ -73,7 +75,7 @@ typedef struct AbActPostcondition {
   const char *id;
   const char *strength;
   const char *assertion;
-  AbString check_id;
+  AbString constraint_id;
   AbString rationale;
   AbString expected;
   AbString actual;
@@ -89,9 +91,9 @@ typedef struct AbActPostcondition {
 
 typedef struct AbActProposalData {
   AbActVerification *verification;
-  const AbValue *origin_check;
+  const AbValue *origin_constraint;
   const AbValue *origin_finding;
-  char origin_check_sha256[65];
+  char origin_constraint_sha256[65];
   char origin_finding_sha256[65];
   AbString fingerprint;
   AbString actual_name;
@@ -187,20 +189,21 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
                                         const uint8_t *json, size_t json_length,
                                         AbActVerification *out);
 void ab_act_verification_free(AbActVerification *artifact);
-const AbValue *ab_act_verification_check(const AbActVerification *artifact,
-                                         const AbString *id);
+const AbValue *ab_act_verification_constraint(const AbActVerification *artifact,
+                                              const AbString *id);
 const AbValue *ab_act_verification_finding(const AbActVerification *artifact,
                                            const AbString *fingerprint,
                                            const AbValue **out_check);
 const AbValue *ab_act_verification_fact_value(const AbActVerification *artifact,
                                               const AbString *name,
                                               const AbVerifyFactSet **out_fact);
-const AbValue *ab_act_verification_extractor(const AbActVerification *artifact,
-                                             const AbString *name);
+const AbValue *
+ab_act_verification_operand_definition(const AbActVerification *artifact,
+                                       const AbString *name);
 const AbValue *ab_act_verification_mapping(const AbActVerification *artifact,
                                            const AbString *name);
 const AbValue *
-ab_act_verification_attestation(const AbActVerification *artifact,
+ab_act_verification_observation(const AbActVerification *artifact,
                                 const AbString *name);
 
 ArchbirdStatus ab_act_evidence_list_add(ArchbirdEngine *engine,

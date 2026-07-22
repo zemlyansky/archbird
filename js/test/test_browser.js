@@ -60,8 +60,11 @@ const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js
   assert.match(changeBrief, /## Affected code/);
   assert.match(changeBrief, /## Routes, tests, and delivery/);
   assert.match(changeBrief, /## Evidence limits/);
-  const overlay = fs.readFileSync(
-    path.join(fixture, "query_overlay.verification.json"),
+  const overlay = archbird.core.constraintsEvaluate(
+    config,
+    first,
+    Buffer.alloc(0),
+    Buffer.alloc(0),
   );
   const overlayBrief = project.queryMarkdown({
     paths: ["js/index.js"],
@@ -69,7 +72,7 @@ const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js
     view: "changes",
     verificationResult: overlay,
   }).toString("utf8");
-  assert.match(overlayBrief, /## Architecture checks/);
+  assert.match(overlayBrief, /## Architecture constraints/);
   assert.match(overlayBrief, /fail error JAVASCRIPT-ENTRY/);
   assert.match(project.mapMarkdown().toString("utf8"), /^# map-base/);
   const componentGraphJson = project.graphViewJson();
@@ -87,7 +90,7 @@ const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js
   );
   project.dispose();
   const scipConfig = {
-    schema_version: 1,
+    schema_version: 2,
     project: "scip-browser",
     layers: [
       {

@@ -3288,11 +3288,9 @@ static ArchbirdStatus map_render_explore(AbBuffer *out) {
   MAP_REPORT_TRY(ab_report_literal_line(out, "## Explore"));
   MAP_REPORT_TRY(ab_report_blank(out));
   MAP_REPORT_TRY(ab_report_literal_line(out, "```bash"));
-  MAP_REPORT_TRY(
-      ab_report_literal_line(out, "archbird query . --symbol <name>"));
-  MAP_REPORT_TRY(
-      ab_report_literal_line(out, "archbird impact . --path <path>"));
-  MAP_REPORT_TRY(ab_report_literal_line(out, "archbird serve ."));
+  MAP_REPORT_TRY(ab_report_literal_line(out, "archbird query --symbol <name>"));
+  MAP_REPORT_TRY(ab_report_literal_line(out, "archbird impact --path <path>"));
+  MAP_REPORT_TRY(ab_report_literal_line(out, "archbird serve"));
   return ab_report_literal_line(out, "```");
 }
 

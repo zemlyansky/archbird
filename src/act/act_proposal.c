@@ -217,25 +217,27 @@ static ArchbirdStatus coverage_init(ArchbirdEngine *engine,
                                     const AbString *fact_name,
                                     const AbVerifyFactSet *fact,
                                     AbActCoverage *coverage) {
-  const AbValue *extractor =
-      fact ? ab_act_verification_extractor(verification, fact_name) : NULL;
-  const AbValue *kind = extractor ? ab_value_member(extractor, "kind") : NULL;
+  const AbValue *definition =
+      fact ? ab_act_verification_operand_definition(verification, fact_name)
+           : NULL;
+  const AbValue *kind = definition ? ab_value_member(definition, "kind") : NULL;
   const char *unknown = "unmodeled_evidence_frontier";
   ArchbirdStatus status;
   memset(coverage, 0, sizeof(*coverage));
   if (!fact) {
     coverage->classification = "partial";
     status = formatted_string(engine, &coverage->domain,
-                              "attestation:", fact_name, "");
+                              "observation:", fact_name, "");
     if (status == ARCHBIRD_OK)
-      status = copy_literal(engine, &coverage->provider, "verification-check");
+      status =
+          copy_literal(engine, &coverage->provider, "constraint-observation");
     coverage->unknown = "semantic_repair";
     return status;
   }
   status = formatted_string(engine, &coverage->domain, "fact:", fact_name, "");
   if (status == ARCHBIRD_OK)
     status = formatted_string(
-        engine, &coverage->provider, "extractor:",
+        engine, &coverage->provider, "operand:",
         kind && kind->kind == AB_VALUE_STRING ? &kind->as.text : NULL,
         kind && kind->kind == AB_VALUE_STRING ? "" : "unknown");
   if (status != ARCHBIRD_OK)
@@ -608,19 +610,19 @@ static ArchbirdStatus finish_slice(ArchbirdEngine *engine,
 static int preserved_compare(const void *left_raw, const void *right_raw) {
   const AbActPreserved *left = (const AbActPreserved *)left_raw;
   const AbActPreserved *right = (const AbActPreserved *)right_raw;
-  return ab_string_compare(&ab_value_member(left->check, "id")->as.text,
-                           &ab_value_member(right->check, "id")->as.text);
+  return ab_string_compare(&ab_value_member(left->constraint, "id")->as.text,
+                           &ab_value_member(right->constraint, "id")->as.text);
 }
 
 static ArchbirdStatus collect_preserved(ArchbirdEngine *engine,
                                         AbActProposalData *proposal) {
   size_t index;
   const AbString *origin =
-      &ab_value_member(proposal->origin_check, "id")->as.text;
-  for (index = 0; index < proposal->verification->checks->as.array.count;
+      &ab_value_member(proposal->origin_constraint, "id")->as.text;
+  for (index = 0; index < proposal->verification->constraints->as.array.count;
        index++) {
     const AbValue *check =
-        &proposal->verification->checks->as.array.items[index];
+        &proposal->verification->constraints->as.array.items[index];
     const AbValue *id = ab_value_member(check, "id");
     const AbValue *severity = ab_value_member(check, "severity");
     const AbValue *status_value = ab_value_member(check, "status");
@@ -635,16 +637,16 @@ static ArchbirdStatus collect_preserved(ArchbirdEngine *engine,
     if (proposal->preserved_count == SIZE_MAX / sizeof(*resized))
       return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
                                 ARCHBIRD_NO_OFFSET,
-                                "too many preserved Act checks");
+                                "too many preserved Act constraints");
     resized = (AbActPreserved *)ab_realloc(engine, proposal->preserved,
                                            (proposal->preserved_count + 1) *
                                                sizeof(*proposal->preserved));
     if (!resized)
-      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                                ARCHBIRD_NO_OFFSET,
-                                "out of memory storing preserved Act checks");
+      return archbird_error_set(
+          engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+          "out of memory storing preserved Act constraints");
     proposal->preserved = resized;
-    proposal->preserved[proposal->preserved_count].check = check;
+    proposal->preserved[proposal->preserved_count].constraint = check;
     status = ab_act_value_digest(
         engine, check, proposal->preserved[proposal->preserved_count].sha256);
     if (status != ARCHBIRD_OK)
@@ -663,25 +665,26 @@ static ArchbirdStatus build_slice(ArchbirdEngine *engine,
       ab_value_member(proposal->verification->tool, "name");
   const AbValue *tool_digest =
       ab_value_member(proposal->verification->tool, "implementation_sha256");
-  const AbValue *suite_name =
-      ab_value_member(proposal->verification->suite, "name");
-  const AbValue *suite_digest =
-      ab_value_member(proposal->verification->suite, "sha256");
-  const AbValue *expected = operand(proposal->origin_check, "expected");
-  const AbValue *actual = operand(proposal->origin_check, "actual");
-  const AbValue *mapping = operand(proposal->origin_check, "mapping");
+  const AbValue *policy_project =
+      ab_value_member(proposal->verification->policy, "project");
+  const AbValue *policy_digest = ab_value_member(proposal->verification->policy,
+                                                 "constraint_policy_sha256");
+  const AbValue *expected = operand(proposal->origin_constraint, "expected");
+  const AbValue *actual = operand(proposal->origin_constraint, "actual");
+  const AbValue *mapping = operand(proposal->origin_constraint, "mapping");
   const AbValue *names[2] = {expected, actual};
   size_t index;
   ArchbirdStatus status =
       add_slice(engine, proposal, "verification_tool", &tool_name->as.text,
                 tool_digest->as.text.data);
   if (status == ARCHBIRD_OK)
-    status = add_slice(engine, proposal, "suite", &suite_name->as.text,
-                       suite_digest->as.text.data);
+    status = add_slice(engine, proposal, "policy", &policy_project->as.text,
+                       policy_digest->as.text.data);
   if (status == ARCHBIRD_OK)
-    status = add_slice(engine, proposal, "check",
-                       &ab_value_member(proposal->origin_check, "id")->as.text,
-                       proposal->origin_check_sha256);
+    status =
+        add_slice(engine, proposal, "constraint",
+                  &ab_value_member(proposal->origin_constraint, "id")->as.text,
+                  proposal->origin_constraint_sha256);
   if (status == ARCHBIRD_OK)
     status = add_slice(engine, proposal, "finding", &proposal->fingerprint,
                        proposal->origin_finding_sha256);
@@ -689,7 +692,7 @@ static ArchbirdStatus build_slice(ArchbirdEngine *engine,
     const AbValue *name = names[index];
     const AbVerifyFactSet *fact = NULL;
     const AbValue *fact_value;
-    const AbValue *attestation;
+    const AbValue *observation;
     char digest[65];
     if (!name || name->kind != AB_VALUE_STRING || !name->as.text.length ||
         (index == 1 && expected && expected->kind == AB_VALUE_STRING &&
@@ -702,13 +705,13 @@ static ArchbirdStatus build_slice(ArchbirdEngine *engine,
           add_slice(engine, proposal, "fact", &name->as.text, fact->sha256);
       continue;
     }
-    attestation =
-        ab_act_verification_attestation(proposal->verification, &name->as.text);
-    if (attestation) {
-      status = ab_act_value_digest(engine, attestation, digest);
+    observation =
+        ab_act_verification_observation(proposal->verification, &name->as.text);
+    if (observation) {
+      status = ab_act_value_digest(engine, observation, digest);
       if (status == ARCHBIRD_OK)
         status =
-            add_slice(engine, proposal, "attestation", &name->as.text, digest);
+            add_slice(engine, proposal, "observation", &name->as.text, digest);
     }
   }
   if (status == ARCHBIRD_OK && mapping && mapping->kind == AB_VALUE_STRING &&
@@ -734,7 +737,7 @@ initialize_postcondition(ArchbirdEngine *engine, AbActProposalData *proposal,
                          const char *id, const char *strength,
                          const char *assertion, const AbString *expected,
                          const AbString *actual) {
-  const AbValue *origin_id = ab_value_member(proposal->origin_check, "id");
+  const AbValue *origin_id = ab_value_member(proposal->origin_constraint, "id");
   AbBuffer id_buffer;
   ArchbirdStatus status;
   proposal->has_postcondition = 1;
@@ -742,16 +745,16 @@ initialize_postcondition(ArchbirdEngine *engine, AbActProposalData *proposal,
   proposal->postcondition.strength = strength;
   proposal->postcondition.assertion = assertion;
   proposal->postcondition.owner =
-      ab_value_member(proposal->origin_check, "owner");
+      ab_value_member(proposal->origin_constraint, "owner");
   proposal->postcondition.requirements =
-      ab_value_member(proposal->origin_check, "requirements");
+      ab_value_member(proposal->origin_constraint, "requirements");
   proposal->postcondition.tags =
-      ab_value_member(proposal->origin_check, "tags");
-  proposal->postcondition.minimum = operand(proposal->origin_check, "min");
-  proposal->postcondition.maximum = operand(proposal->origin_check, "max");
-  proposal->postcondition.exact = operand(proposal->origin_check, "exact");
+      ab_value_member(proposal->origin_constraint, "tags");
+  proposal->postcondition.minimum = operand(proposal->origin_constraint, "min");
+  proposal->postcondition.maximum = operand(proposal->origin_constraint, "max");
+  proposal->postcondition.exact = operand(proposal->origin_constraint, "exact");
   proposal->postcondition.required_routes =
-      operand(proposal->origin_check, "required_routes");
+      operand(proposal->origin_constraint, "required_routes");
   ab_buffer_init(&id_buffer, engine);
   status = ab_buffer_literal(&id_buffer, "ACT-");
   if (status == ARCHBIRD_OK)
@@ -762,7 +765,7 @@ initialize_postcondition(ArchbirdEngine *engine, AbActProposalData *proposal,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_append(&id_buffer, proposal->fingerprint.data, 12);
   if (status == ARCHBIRD_OK)
-    status = ab_string_copy(engine, &proposal->postcondition.check_id,
+    status = ab_string_copy(engine, &proposal->postcondition.constraint_id,
                             (const char *)id_buffer.data, id_buffer.length);
   ab_buffer_free(&id_buffer);
   if (status == ARCHBIRD_OK)
@@ -839,6 +842,10 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
   int strength = 0; /* 0 oracle-only, 1 exact, 2 constrained */
   if (!engine || !verification || !fingerprint || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
+  if (!ab_value_string_is(ab_value_member(verification->policy, "kind"), "all"))
+    return archbird_error_set(
+        engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+        "Act preservation requires a complete constraint-policy evaluation");
   memset(out, 0, sizeof(*out));
   out->verification = verification;
   if (fingerprint_length != 64)
@@ -887,9 +894,9 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
         "before deriving a change proposal");
     goto fail;
   }
-  out->origin_check = check;
+  out->origin_constraint = check;
   out->origin_finding = finding;
-  status = ab_act_value_digest(engine, check, out->origin_check_sha256);
+  status = ab_act_value_digest(engine, check, out->origin_constraint_sha256);
   if (status == ARCHBIRD_OK)
     status = ab_act_value_digest(engine, finding, out->origin_finding_sha256);
   assertion = ab_value_member(check, "assert");
@@ -1082,7 +1089,7 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
              actual) {
     AbString empty = {0};
     status = initialize_postcondition(
-        engine, out, "origin-check-transition", "constrained_choice",
+        engine, out, "origin-constraint-transition", "constrained_choice",
         assertion->as.text.data, &empty, &actual_value->as.text);
     if (status == ARCHBIRD_OK)
       status =
@@ -1214,7 +1221,7 @@ void ab_act_proposal_data_free(AbActProposalData *proposal) {
   ab_verify_fact_free(engine, &proposal->literal_fact);
   ab_string_free(engine, &proposal->projection.name);
   ab_string_free(engine, &proposal->projection.source);
-  ab_string_free(engine, &proposal->postcondition.check_id);
+  ab_string_free(engine, &proposal->postcondition.constraint_id);
   ab_string_free(engine, &proposal->postcondition.rationale);
   ab_string_free(engine, &proposal->postcondition.expected);
   ab_string_free(engine, &proposal->postcondition.actual);
@@ -1267,48 +1274,6 @@ static ArchbirdStatus render_candidates(AbBuffer *buffer,
     ACT_TRY(ab_buffer_literal(buffer, "}"));
   }
   return ab_buffer_literal(buffer, "]");
-}
-
-static int value_pointer_name_compare(const void *left_raw,
-                                      const void *right_raw) {
-  const AbValue *const *left = (const AbValue *const *)left_raw;
-  const AbValue *const *right = (const AbValue *const *)right_raw;
-  return ab_string_compare(&ab_value_member(*left, "name")->as.text,
-                           &ab_value_member(*right, "name")->as.text);
-}
-
-static ArchbirdStatus render_projects(AbBuffer *buffer,
-                                      const AbActVerification *verification) {
-  const AbValue **rows = NULL;
-  size_t count = verification->projects->as.array.count;
-  size_t index;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  if (count > SIZE_MAX / sizeof(*rows))
-    return archbird_error_set(buffer->engine, ARCHBIRD_LIMIT_EXCEEDED,
-                              ARCHBIRD_NO_OFFSET,
-                              "too many Act source projects");
-  if (count) {
-    rows = (const AbValue **)ab_malloc(buffer->engine, count * sizeof(*rows));
-    if (!rows)
-      return archbird_error_set(buffer->engine, ARCHBIRD_OUT_OF_MEMORY,
-                                ARCHBIRD_NO_OFFSET,
-                                "out of memory sorting Act source projects");
-  }
-  for (index = 0; index < count; index++)
-    rows[index] = &verification->projects->as.array.items[index];
-  if (count > 1)
-    qsort(rows, count, sizeof(*rows), value_pointer_name_compare);
-  status = ab_buffer_literal(buffer, "[");
-  for (index = 0; status == ARCHBIRD_OK && index < count; index++) {
-    if (index)
-      status = ab_buffer_literal(buffer, ",");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(buffer, rows[index]);
-  }
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(buffer, "]");
-  ab_free(buffer->engine, rows);
-  return status;
 }
 
 static ArchbirdStatus render_tags(AbBuffer *buffer, const AbValue *tags) {
@@ -1377,8 +1342,8 @@ render_postcondition_check(AbBuffer *buffer,
   ACT_TRY(ab_buffer_json_string(buffer, postcondition->expected.data,
                                 postcondition->expected.length));
   ACT_TRY(ab_buffer_literal(buffer, ",\"id\":"));
-  ACT_TRY(ab_buffer_json_string(buffer, postcondition->check_id.data,
-                                postcondition->check_id.length));
+  ACT_TRY(ab_buffer_json_string(buffer, postcondition->constraint_id.data,
+                                postcondition->constraint_id.length));
   ACT_TRY(ab_buffer_literal(buffer, ",\"mapping\":\"\",\"max\":"));
   ACT_TRY(render_nullable(buffer, postcondition->maximum));
   ACT_TRY(ab_buffer_literal(buffer, ",\"min\":"));
@@ -1405,7 +1370,7 @@ static ArchbirdStatus render_postconditions(AbBuffer *buffer,
   ACT_TRY(ab_buffer_literal(buffer, "["));
   if (proposal->has_postcondition) {
     const AbActPostcondition *row = &proposal->postcondition;
-    ACT_TRY(ab_buffer_literal(buffer, "{\"check\":"));
+    ACT_TRY(ab_buffer_literal(buffer, "{\"constraint\":"));
     ACT_TRY(render_postcondition_check(buffer, row));
     ACT_TRY(ab_buffer_literal(buffer, ",\"coverage\":"));
     ACT_TRY(coverage_render(buffer, &proposal->coverage));
@@ -1430,11 +1395,12 @@ static ArchbirdStatus render_preserved(AbBuffer *buffer,
     if (index)
       ACT_TRY(ab_buffer_literal(buffer, ","));
     ACT_TRY(ab_buffer_literal(buffer, "{\"id\":"));
-    ACT_TRY(ab_value_render(buffer, ab_value_member(row->check, "id")));
+    ACT_TRY(ab_value_render(buffer, ab_value_member(row->constraint, "id")));
     ACT_TRY(ab_buffer_literal(buffer, ",\"sha256\":"));
     ACT_TRY(ab_buffer_json_string(buffer, row->sha256, 64));
     ACT_TRY(ab_buffer_literal(buffer, ",\"status\":"));
-    ACT_TRY(ab_value_render(buffer, ab_value_member(row->check, "status")));
+    ACT_TRY(
+        ab_value_render(buffer, ab_value_member(row->constraint, "status")));
     ACT_TRY(ab_buffer_literal(buffer, "}"));
   }
   return ab_buffer_literal(buffer, "]");
@@ -1485,14 +1451,16 @@ static ArchbirdStatus render_unknowns(AbBuffer *buffer,
 static ArchbirdStatus
 render_proposal_document(AbBuffer *buffer, const AbActProposalData *proposal,
                          int include_sha256, const char sha256[65]) {
-  const AbValue *check_id = ab_value_member(proposal->origin_check, "id");
-  const AbValue *assertion = ab_value_member(proposal->origin_check, "assert");
+  const AbValue *constraint_id =
+      ab_value_member(proposal->origin_constraint, "id");
+  const AbValue *assertion =
+      ab_value_member(proposal->origin_constraint, "assert");
   const AbValue *tool_impl =
       ab_value_member(proposal->verification->tool, "implementation_sha256");
-  const AbValue *suite_name =
-      ab_value_member(proposal->verification->suite, "name");
-  const AbValue *suite_sha =
-      ab_value_member(proposal->verification->suite, "sha256");
+  const AbValue *policy_project =
+      ab_value_member(proposal->verification->policy, "project");
+  const AbValue *policy_sha = ab_value_member(proposal->verification->policy,
+                                              "constraint_policy_sha256");
   ACT_TRY(ab_buffer_literal(
       buffer, "{\"artifact\":\"change-proposal\",\"candidates\":"));
   ACT_TRY(render_candidates(buffer, proposal));
@@ -1514,10 +1482,11 @@ render_proposal_document(AbBuffer *buffer, const AbActProposalData *proposal,
                                 proposal->actual_name.length));
   ACT_TRY(ab_buffer_literal(buffer, ",\"assert\":"));
   ACT_TRY(ab_value_render(buffer, assertion));
-  ACT_TRY(ab_buffer_literal(buffer, ",\"check\":"));
-  ACT_TRY(ab_value_render(buffer, check_id));
-  ACT_TRY(ab_buffer_literal(buffer, ",\"check_sha256\":"));
-  ACT_TRY(ab_buffer_json_string(buffer, proposal->origin_check_sha256, 64));
+  ACT_TRY(ab_buffer_literal(buffer, ",\"constraint\":"));
+  ACT_TRY(ab_value_render(buffer, constraint_id));
+  ACT_TRY(ab_buffer_literal(buffer, ",\"constraint_sha256\":"));
+  ACT_TRY(
+      ab_buffer_json_string(buffer, proposal->origin_constraint_sha256, 64));
   ACT_TRY(ab_buffer_literal(buffer, ",\"finding\":"));
   ACT_TRY(ab_value_render(buffer, proposal->origin_finding));
   ACT_TRY(ab_buffer_literal(buffer, ",\"finding_sha256\":"));
@@ -1529,17 +1498,17 @@ render_proposal_document(AbBuffer *buffer, const AbActProposalData *proposal,
   ACT_TRY(ab_buffer_literal(buffer, ",\"projections\":"));
   ACT_TRY(render_projection(buffer, proposal));
   ACT_TRY(ab_buffer_literal(
-      buffer, ",\"provenance\":\"derived\",\"schema_version\":1"));
+      buffer, ",\"provenance\":\"derived\",\"schema_version\":2"));
   if (include_sha256) {
     ACT_TRY(ab_buffer_literal(buffer, ",\"sha256\":"));
     ACT_TRY(ab_buffer_json_string(buffer, sha256, 64));
   }
-  ACT_TRY(ab_buffer_literal(buffer, ",\"source\":{\"projects\":"));
-  ACT_TRY(render_projects(buffer, proposal->verification));
-  ACT_TRY(ab_buffer_literal(buffer, ",\"suite\":{\"name\":"));
-  ACT_TRY(ab_value_render(buffer, suite_name));
+  ACT_TRY(ab_buffer_literal(buffer, ",\"source\":{\"evaluation\":"));
+  ACT_TRY(ab_value_render(buffer, proposal->verification->evaluation));
+  ACT_TRY(ab_buffer_literal(buffer, ",\"policy\":{\"project\":"));
+  ACT_TRY(ab_value_render(buffer, policy_project));
   ACT_TRY(ab_buffer_literal(buffer, ",\"sha256\":"));
-  ACT_TRY(ab_value_render(buffer, suite_sha));
+  ACT_TRY(ab_value_render(buffer, policy_sha));
   ACT_TRY(ab_buffer_literal(buffer, "},\"verification_sha256\":"));
   ACT_TRY(ab_buffer_json_string(buffer, proposal->verification->sha256, 64));
   ACT_TRY(ab_buffer_literal(buffer,

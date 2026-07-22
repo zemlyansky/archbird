@@ -71,12 +71,13 @@ ArchbirdStatus
 ab_act_proposal_render_markdown(AbBuffer *buffer,
                                 const AbActProposalView *proposal, int full,
                                 size_t max_candidates) {
-  const AbValue *origin_check = ab_value_member(proposal->origin, "check");
+  const AbValue *origin_constraint =
+      ab_value_member(proposal->origin, "constraint");
   const AbValue *origin_assert = ab_value_member(proposal->origin, "assert");
   const AbValue *finding = ab_value_member(proposal->origin, "finding");
   const AbValue *fingerprint = ab_value_member(finding, "fingerprint");
-  const AbValue *source_suite = ab_value_member(proposal->source, "suite");
-  const AbValue *suite_sha = ab_value_member(source_suite, "sha256");
+  const AbValue *source_policy = ab_value_member(proposal->source, "policy");
+  const AbValue *policy_sha = ab_value_member(source_policy, "sha256");
   const AbValue *sha = ab_value_member(&proposal->root, "sha256");
   size_t candidate_count = proposal->candidates->as.array.count;
   size_t shown_candidates = full || max_candidates > candidate_count
@@ -84,22 +85,22 @@ ab_act_proposal_render_markdown(AbBuffer *buffer,
                                 : max_candidates;
   size_t index;
   REPORT_TRY(ab_buffer_literal(buffer, "# Architecture change proposal: "));
-  REPORT_TRY(ab_buffer_append(buffer, origin_check->as.text.data,
-                              origin_check->as.text.length));
+  REPORT_TRY(ab_buffer_append(buffer, origin_constraint->as.text.data,
+                              origin_constraint->as.text.length));
   REPORT_TRY(ab_buffer_literal(buffer, "\n\nDerived proposal `"));
   REPORT_TRY(append_prefix(buffer, sha, 16));
   REPORT_TRY(ab_buffer_literal(buffer, "` from finding `"));
   REPORT_TRY(append_prefix(buffer, fingerprint, 16));
-  REPORT_TRY(ab_buffer_literal(buffer, "` in suite `"));
-  REPORT_TRY(append_prefix(buffer, suite_sha, 16));
+  REPORT_TRY(ab_buffer_literal(buffer, "` under constraint policy `"));
+  REPORT_TRY(append_prefix(buffer, policy_sha, 16));
   REPORT_TRY(ab_buffer_literal(
       buffer,
       "`.\n\nThis artifact is derived evidence, not authorization. A reviewed "
       "change contract must reference its full digest.\n\n## "
       "Origin\n\n```text\n"
-      "check="));
-  REPORT_TRY(ab_buffer_append(buffer, origin_check->as.text.data,
-                              origin_check->as.text.length));
+      "constraint="));
+  REPORT_TRY(ab_buffer_append(buffer, origin_constraint->as.text.data,
+                              origin_constraint->as.text.length));
   REPORT_TRY(ab_buffer_literal(buffer, " assert="));
   REPORT_TRY(ab_buffer_append(buffer, origin_assert->as.text.data,
                               origin_assert->as.text.length));
@@ -128,23 +129,23 @@ ab_act_proposal_render_markdown(AbBuffer *buffer,
     for (index = 0; index < proposal->postconditions->as.array.count; index++) {
       const AbValue *row = &proposal->postconditions->as.array.items[index];
       const AbValue *id = ab_value_member(row, "id");
-      const AbValue *check = ab_value_member(row, "check");
+      const AbValue *constraint = ab_value_member(row, "constraint");
       const AbValue *coverage = ab_value_member(row, "coverage");
       REPORT_TRY(ab_buffer_literal(buffer, "### "));
       REPORT_TRY(
           ab_buffer_append(buffer, id->as.text.data, id->as.text.length));
       REPORT_TRY(ab_buffer_literal(buffer, "\n\n`"));
       REPORT_TRY(ab_buffer_append(
-          buffer, ab_value_member(check, "assert")->as.text.data,
-          ab_value_member(check, "assert")->as.text.length));
+          buffer, ab_value_member(constraint, "assert")->as.text.data,
+          ab_value_member(constraint, "assert")->as.text.length));
       REPORT_TRY(ab_buffer_literal(buffer, "` over `"));
       REPORT_TRY(ab_buffer_append(
-          buffer, ab_value_member(check, "expected")->as.text.data,
-          ab_value_member(check, "expected")->as.text.length));
+          buffer, ab_value_member(constraint, "expected")->as.text.data,
+          ab_value_member(constraint, "expected")->as.text.length));
       REPORT_TRY(ab_buffer_literal(buffer, "` → `"));
       REPORT_TRY(ab_buffer_append(
-          buffer, ab_value_member(check, "actual")->as.text.data,
-          ab_value_member(check, "actual")->as.text.length));
+          buffer, ab_value_member(constraint, "actual")->as.text.data,
+          ab_value_member(constraint, "actual")->as.text.length));
       REPORT_TRY(ab_buffer_literal(buffer, "`; derivation `"));
       REPORT_TRY(ab_buffer_append(
           buffer, ab_value_member(row, "derivation_strength")->as.text.data,
@@ -226,7 +227,8 @@ ab_act_proposal_render_markdown(AbBuffer *buffer,
   } else {
     REPORT_TRY(ab_buffer_literal(buffer, "- none\n"));
   }
-  REPORT_TRY(ab_buffer_literal(buffer, "\n## Suggested preserved checks\n\n"));
+  REPORT_TRY(
+      ab_buffer_literal(buffer, "\n## Suggested preserved constraints\n\n"));
   if (proposal->preserved->as.array.count) {
     for (index = 0; index < proposal->preserved->as.array.count; index++) {
       const AbValue *row = &proposal->preserved->as.array.items[index];
@@ -285,15 +287,16 @@ static ArchbirdStatus render_id_list(AbBuffer *buffer, const AbValue *rows,
 ArchbirdStatus
 ab_act_contract_render_markdown(AbBuffer *buffer,
                                 const AbActContractView *contract) {
-  const AbValue *origin_check = ab_value_member(contract->origin, "check");
+  const AbValue *origin_constraint =
+      ab_value_member(contract->origin, "constraint");
   const AbValue *sha = ab_value_member(&contract->root, "sha256");
   const AbValue *proposal_sha =
       ab_value_member(&contract->root, "proposal_sha256");
   size_t index;
   REPORT_TRY(
       ab_buffer_literal(buffer, "# Reviewed architecture change contract: "));
-  REPORT_TRY(ab_buffer_append(buffer, origin_check->as.text.data,
-                              origin_check->as.text.length));
+  REPORT_TRY(ab_buffer_append(buffer, origin_constraint->as.text.data,
+                              origin_constraint->as.text.length));
   REPORT_TRY(ab_buffer_literal(buffer, "\n\nContract `"));
   REPORT_TRY(append_prefix(buffer, sha, 16));
   REPORT_TRY(ab_buffer_literal(buffer, "` asserts review of proposal `"));
@@ -312,7 +315,7 @@ ab_act_contract_render_markdown(AbBuffer *buffer,
       ab_value_member(&contract->root, "rationale")->as.text.length));
   REPORT_TRY(ab_buffer_literal(buffer, "\n\n## Approved postconditions\n\n"));
   REPORT_TRY(render_id_list(buffer, contract->postconditions, 0, "- none\n"));
-  REPORT_TRY(ab_buffer_literal(buffer, "\n## Preserved checks\n\n"));
+  REPORT_TRY(ab_buffer_literal(buffer, "\n## Preserved constraints\n\n"));
   if (contract->preserved->as.array.count) {
     for (index = 0; index < contract->preserved->as.array.count; index++) {
       const AbValue *row = &contract->preserved->as.array.items[index];

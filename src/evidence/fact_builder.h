@@ -80,6 +80,9 @@ ArchbirdStatus ab_fact_add_string_attribute(ArchbirdEngine *engine,
 ArchbirdStatus ab_fact_add_u64_attribute(ArchbirdEngine *engine, AbFact *fact,
                                          const char *name, uint64_t value);
 
+ArchbirdStatus ab_fact_add_i64_attribute(ArchbirdEngine *engine, AbFact *fact,
+                                         const char *name, int64_t value);
+
 ArchbirdStatus
 ab_bundle_builder_add_diagnostic(AbBundleBuilder *builder, const char *severity,
                                  const char *code, const char *message,

@@ -274,8 +274,12 @@ endif()
 set(ARCHBIRD_INTERNAL_INCLUDE_DIRS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/api"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/base"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/configuration"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/evidence"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/map"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/projection"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/query"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/constraints"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/verify"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/act"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/graph"
@@ -620,12 +624,6 @@ if(ARCHBIRD_ENABLE_FUZZERS)
   archbird_add_fuzzer(archbird_fuzz_schemas test/fuzz/fuzz_schemas.c)
   archbird_add_fuzzer(archbird_fuzz_pattern test/fuzz/fuzz_pattern.c)
   archbird_add_fuzzer(archbird_fuzz_okf test/fuzz/fuzz_okf.c)
-  archbird_add_fuzzer(archbird_fuzz_verify test/fuzz/fuzz_verify.c)
-  archbird_add_fuzzer(archbird_fuzz_verification_input
-                      test/fuzz/fuzz_verify.c)
-  target_compile_definitions(archbird_fuzz_verification_input PRIVATE
-    ARCHBIRD_FUZZ_VERIFICATION_INPUT=1)
-
   archbird_add_fuzzer(archbird_fuzz_map test/fuzz/fuzz_map.c)
   archbird_add_fuzzer(archbird_fuzz_query_input test/fuzz/fuzz_map.c)
   target_compile_definitions(archbird_fuzz_query_input PRIVATE
@@ -685,10 +683,6 @@ if(ARCHBIRD_ENABLE_FUZZERS)
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/pattern
     COMMAND archbird_fuzz_okf ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/okf
-    COMMAND archbird_fuzz_verify ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
-            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/verify
-    COMMAND archbird_fuzz_verification_input ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
-            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/verification-input
     COMMAND archbird_fuzz_map ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/map
     COMMAND archbird_fuzz_query_input ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
@@ -721,8 +715,7 @@ if(ARCHBIRD_ENABLE_FUZZERS)
     COMMAND archbird_fuzz_lex_r ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/lex-r
     DEPENDS archbird_fuzz_json archbird_fuzz_schemas archbird_fuzz_pattern
-            archbird_fuzz_okf archbird_fuzz_verify
-            archbird_fuzz_verification_input archbird_fuzz_map
+            archbird_fuzz_okf archbird_fuzz_map
             archbird_fuzz_query_input archbird_fuzz_workspace
             archbird_fuzz_workspace_maps archbird_fuzz_scip
             ${ARCHBIRD_FUZZ_SYNTAX_DEPENDENCY}
@@ -811,13 +804,21 @@ if(BUILD_TESTING)
   target_compile_features(archbird_native_config_resolution_test PRIVATE c_std_11)
   set_target_properties(archbird_native_config_resolution_test PROPERTIES C_EXTENSIONS OFF)
 
+  add_executable(archbird_native_project_configuration_test
+    test/test_project_configuration.c)
+  target_link_libraries(archbird_native_project_configuration_test PRIVATE
+    archbird_native)
+  target_compile_features(archbird_native_project_configuration_test PRIVATE
+    c_std_11)
+  set_target_properties(archbird_native_project_configuration_test PROPERTIES
+    C_EXTENSIONS OFF)
+
   add_executable(archbird_native_allocator_test test/test_allocator.c)
   target_link_libraries(archbird_native_allocator_test PRIVATE archbird_native)
   target_include_directories(archbird_native_allocator_test PRIVATE
     src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
   target_compile_definitions(archbird_native_allocator_test PRIVATE
-    "ARCHBIRD_ALLOCATOR_REPORT_MAP=\"${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/report_map.json\""
-    "ARCHBIRD_ALLOCATOR_VERIFICATION=\"${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/map_base/query_overlay.verification.json\"")
+    "ARCHBIRD_ALLOCATOR_REPORT_MAP=\"${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/report_map.json\"")
   target_compile_features(archbird_native_allocator_test PRIVATE c_std_11)
   set_target_properties(archbird_native_allocator_test PROPERTIES
     C_EXTENSIONS OFF)
@@ -864,19 +865,6 @@ if(BUILD_TESTING)
   target_compile_features(archbird_native_scanner PRIVATE c_std_11)
   set_target_properties(archbird_native_scanner PROPERTIES C_EXTENSIONS OFF)
 
-  add_executable(archbird_native_verify test/verify_cli.c)
-  target_link_libraries(archbird_native_verify PRIVATE archbird_native)
-  target_include_directories(archbird_native_verify PRIVATE src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
-  target_compile_features(archbird_native_verify PRIVATE c_std_11)
-  set_target_properties(archbird_native_verify PROPERTIES C_EXTENSIONS OFF)
-
-  add_executable(archbird_native_verify_result test/verify_result_cli.c)
-  target_link_libraries(archbird_native_verify_result PRIVATE archbird_native)
-  target_include_directories(archbird_native_verify_result PRIVATE src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
-  target_compile_features(archbird_native_verify_result PRIVATE c_std_11)
-  set_target_properties(archbird_native_verify_result PROPERTIES
-                        C_EXTENSIONS OFF)
-
   add_executable(archbird_native_act test/act_cli.c)
   target_link_libraries(archbird_native_act PRIVATE archbird_native)
   target_include_directories(archbird_native_act PRIVATE src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
@@ -906,6 +894,7 @@ if(BUILD_TESTING)
                    archbird_native_pattern_test
                    archbird_native_gitignore_test
                    archbird_native_config_resolution_test
+                   archbird_native_project_configuration_test
                    archbird_native_allocator_test
                    archbird_native_path_match_test
                    archbird_native_build_identity_test
@@ -913,8 +902,6 @@ if(BUILD_TESTING)
                    archbird_native_pattern
                    archbird_native_lex
                    archbird_native_scanner
-                   archbird_native_verify
-                   archbird_native_verify_result
                    archbird_native_act
                    archbird_native_graph
                    archbird_native_okf
@@ -944,6 +931,8 @@ if(BUILD_TESTING)
   add_test(NAME archbird_native_pattern COMMAND archbird_native_pattern_test)
   add_test(NAME archbird_native_gitignore COMMAND archbird_native_gitignore_test)
   add_test(NAME archbird_native_config_resolution COMMAND archbird_native_config_resolution_test)
+  add_test(NAME archbird_native_project_configuration
+           COMMAND archbird_native_project_configuration_test)
   add_test(NAME archbird_native_allocator COMMAND archbird_native_allocator_test)
   add_test(NAME archbird_native_path_match COMMAND archbird_native_path_match_test)
   add_test(NAME archbird_native_build_identity
@@ -951,6 +940,13 @@ if(BUILD_TESTING)
   add_test(NAME archbird_native_builds COMMAND archbird_native_builds_test)
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
+    add_test(
+      NAME archbird_project_configuration_differential
+      COMMAND ${CMAKE_COMMAND} -E env
+              "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/py"
+              ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_project_configuration.py
+    )
     add_test(
       NAME archbird_native_evidence
       COMMAND ${Python3_EXECUTABLE}
@@ -1017,16 +1013,6 @@ if(BUILD_TESTING)
               $<TARGET_FILE:archbird_native_scanner>
     )
     if(ARCHBIRD_REFERENCE_ROOT)
-      add_test(
-        NAME archbird_native_okf_publish_reference
-        COMMAND ${CMAKE_COMMAND} -E env
-                PYTHONPATH=${ARCHBIRD_REFERENCE_ROOT}
-                ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_okf_publish_reference.py
-                $<TARGET_FILE:archbird_native_okf_publish>
-                ${ARCHBIRD_REFERENCE_ROOT}
-                ${CMAKE_CURRENT_BINARY_DIR}
-      )
       add_test(
         NAME archbird_native_lex_reference
         COMMAND ${CMAKE_COMMAND} -E env
@@ -1165,33 +1151,6 @@ if(Python3_Development.Module_FOUND)
               ${CMAKE_CURRENT_SOURCE_DIR}
     )
     add_test(
-      NAME archbird_native_verify_recipes
-      COMMAND ${CMAKE_COMMAND} -E env
-              ${ARCHBIRD_REPOSITORY_TEST_ENV}
-              ${Python3_EXECUTABLE}
-              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_recipes.py
-              $<TARGET_FILE:archbird_python>
-              ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-    add_test(
-      NAME archbird_native_verify_debug
-      COMMAND ${CMAKE_COMMAND} -E env
-              ${ARCHBIRD_REPOSITORY_TEST_ENV}
-              ${Python3_EXECUTABLE}
-              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_debug.py
-              $<TARGET_FILE:archbird_python>
-              ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-    add_test(
-      NAME archbird_native_verify_membership
-      COMMAND ${CMAKE_COMMAND} -E env
-              ${ARCHBIRD_REPOSITORY_TEST_ENV}
-              ${Python3_EXECUTABLE}
-              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_membership.py
-              $<TARGET_FILE:archbird_python>
-              ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-    add_test(
       NAME archbird_native_scip_python_host
       COMMAND ${CMAKE_COMMAND} -E env
               ${ARCHBIRD_REPOSITORY_TEST_ENV}
@@ -1237,14 +1196,6 @@ if(Python3_Development.Module_FOUND)
       )
     endif()
     add_test(
-      NAME archbird_native_verify_source_lock
-      COMMAND ${CMAKE_COMMAND} -E env
-              ${ARCHBIRD_REPOSITORY_TEST_ENV}
-              ${Python3_EXECUTABLE}
-              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_source_lock.py
-              $<TARGET_FILE:archbird_python>
-    )
-    add_test(
       NAME archbird_native_freshness
       COMMAND ${CMAKE_COMMAND} -E env
               ${ARCHBIRD_REPOSITORY_TEST_ENV}
@@ -1288,26 +1239,6 @@ if(Python3_Development.Module_FOUND)
                 ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/map_packages
       )
       add_test(
-        NAME archbird_native_config_reference
-        COMMAND ${CMAKE_COMMAND} -E env
-                ${ARCHBIRD_PY_TEST_ENV}
-                ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_config_reference.py
-                $<TARGET_FILE:archbird_python>
-                ${CMAKE_CURRENT_SOURCE_DIR}
-                ${CMAKE_CURRENT_BINARY_DIR}/config-reference.json
-      )
-      add_test(
-        NAME archbird_native_discovery_reference
-        COMMAND ${CMAKE_COMMAND} -E env
-                ${ARCHBIRD_PY_TEST_ENV}
-                ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_discovery.py
-                $<TARGET_FILE:archbird_python>
-                ${ARCHBIRD_REFERENCE_ROOT}/tests/fixtures/sample/archbird.json
-                ${ARCHBIRD_REFERENCE_ROOT}/tests/fixtures/sample
-      )
-      add_test(
         NAME archbird_native_query_base
         COMMAND ${CMAKE_COMMAND} -E env
                 ${ARCHBIRD_PY_TEST_ENV}
@@ -1342,46 +1273,6 @@ if(Python3_Development.Module_FOUND)
                 ${CMAKE_CURRENT_SOURCE_DIR}/test/test_workspace.py
                 $<TARGET_FILE:archbird_python>
                 ${ARCHBIRD_REFERENCE_ROOT}/tests/fixtures/workspace.json
-      )
-      add_test(
-        NAME archbird_native_verify_config
-        COMMAND ${CMAKE_COMMAND} -E env
-                ${ARCHBIRD_PY_TEST_ENV}
-                ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_config.py
-                $<TARGET_FILE:archbird_python>
-                ${CMAKE_CURRENT_SOURCE_DIR}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verification/verification.json
-      )
-      add_test(
-        NAME archbird_native_verify_facts
-        COMMAND ${CMAKE_COMMAND} -E env
-                PYTHONPATH=${ARCHBIRD_REFERENCE_ROOT}
-                ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_facts.py
-                $<TARGET_FILE:archbird_native_verify>
-                ${CMAKE_CURRENT_SOURCE_DIR}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verification
-      )
-      add_test(
-        NAME archbird_native_verify_results
-        COMMAND ${CMAKE_COMMAND} -E env
-                PYTHONPATH=${ARCHBIRD_REFERENCE_ROOT}
-                ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_verify_results.py
-                $<TARGET_FILE:archbird_native_verify_result>
-                ${CMAKE_CURRENT_SOURCE_DIR}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verification
-      )
-      add_test(
-        NAME archbird_native_act_results
-        COMMAND ${CMAKE_COMMAND} -E env
-                PYTHONPATH=${ARCHBIRD_REFERENCE_ROOT}
-                ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/test_act_results.py
-                $<TARGET_FILE:archbird_native_act>
-                ${CMAKE_CURRENT_SOURCE_DIR}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verification
       )
       add_test(
         NAME archbird_native_graph_exports

@@ -1034,7 +1034,7 @@ int main(int argc, char **argv) {
       "\"name\":\"fixture-host\",\"version\":\"1\"},\"project\":\"sample\","
       "\"schema_version\":1}";
   static const char config[] =
-      "{\"schema_version\":1,\"project\":\"sample\",\"description\":"
+      "{\"schema_version\":2,\"project\":\"sample\",\"description\":"
       "\"Native map\",\"layers\":[{\"name\":\"core\",\"role\":\"core\","
       "\"language\":\"text\",\"globs\":[\"src/**\"]}],\"components\":[{"
       "\"name\":\"core\",\"paths\":[\"src/**\"]}],\"limits\":{"
@@ -1088,7 +1088,7 @@ int main(int argc, char **argv) {
   if (!archbird_project_config_sha256(project) ||
       strcmp(
           archbird_project_config_sha256(project),
-          "8e7a6d73c1c622964b58a76b932e95f5053f331878a6af4444d4e47dd48e04b9") !=
+          "b509691387b5a34c287e523cd32e3864221325f60a295963530b4a83a6804d34") !=
           0) {
     fputs("FAIL configuration digest\n", stderr);
     failures++;

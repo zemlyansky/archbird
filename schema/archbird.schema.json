@@ -1,15 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/archbird.schema.json",
-  "title": "Archbird repository topology",
+  "title": "Archbird project configuration",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "project", "layers"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "project": {"type": "string", "minLength": 1},
     "description": {"type": "string"},
-    "root": {"type": "string", "minLength": 1, "default": "."},
     "exclude": {"$ref": "#/$defs/strings"},
     "discovery": {
       "type": "object",
@@ -59,10 +58,217 @@
       "type": "array",
       "items": {"$ref": "#/$defs/parity"}
     },
-    "checks": {"$ref": "#/$defs/checks"},
-    "limits": {"$ref": "#/$defs/limits"}
+    "limits": {"$ref": "#/$defs/limits"},
+    "projections": {"$ref": "#/$defs/projection_collection"},
+    "queries": {"$ref": "#/$defs/query_collection"},
+    "constraints": {"$ref": "#/$defs/constraint_collection"}
   },
   "$defs": {
+    "stable_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "projection": {
+      "type": "object",
+      "required": ["select"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "select": {
+          "enum": ["artifact_routes", "symbols", "file_edges", "file_metrics", "inventory_paths", "mapped_paths", "component_membership", "component_edges", "package_entrypoints", "package_exports", "test_routes", "test_selectors", "provider_surface", "constant_values", "constant_memberships", "macro_members"]
+        },
+        "include": {"$ref": "#/$defs/collection_patterns"},
+        "exclude": {"$ref": "#/$defs/collection_patterns"},
+        "paths": {"$ref": "#/$defs/collection_patterns"},
+        "from_paths": {"$ref": "#/$defs/collection_patterns"},
+        "to_paths": {"$ref": "#/$defs/collection_patterns"},
+        "kinds": {"$ref": "#/$defs/strings"},
+        "kind_patterns": {"$ref": "#/$defs/strings"},
+        "name_patterns": {"$ref": "#/$defs/strings"},
+        "names": {"$ref": "#/$defs/strings"},
+        "artifacts": {"$ref": "#/$defs/strings"},
+        "components": {"$ref": "#/$defs/strings"},
+        "target_paths": {"$ref": "#/$defs/collection_patterns"},
+        "packages": {"$ref": "#/$defs/strings"},
+        "routes": {"$ref": "#/$defs/strings"},
+        "selectors": {"$ref": "#/$defs/strings"},
+        "layer": {"type": "string", "minLength": 1},
+        "group": {"type": "string", "minLength": 1},
+        "metric": {"const": "bytes"},
+        "name": {"type": "string", "minLength": 1},
+        "container": {"type": "string", "minLength": 1},
+        "call": {"type": "string", "minLength": 1},
+        "selector": {"type": "string", "minLength": 1},
+        "selector_argument": {"type": "integer", "minimum": 0, "maximum": 31},
+        "values_from_argument": {"type": "integer", "minimum": 0, "maximum": 31},
+        "configured_only": {"type": "boolean"},
+        "public_only": {"type": "boolean"},
+        "strip_prefix": {"type": "string"},
+        "strip_suffix": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "projection_collection": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/projection"}},
+        {"type": "array", "items": {"allOf": [{"$ref": "#/$defs/projection"}, {"required": ["id"]}]}}
+      ]
+    },
+    "projection_reference": {
+      "oneOf": [
+        {"$ref": "#/$defs/stable_id"},
+        {"$ref": "#/$defs/projection"}
+      ]
+    },
+    "query": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "description": {"type": "string"},
+        "projection": {
+          "oneOf": [
+            {"$ref": "#/$defs/projection_reference"},
+            {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/projection_reference"}}
+          ]
+        },
+        "focus": {"$ref": "#/$defs/strings"},
+        "paths": {"$ref": "#/$defs/collection_patterns"},
+        "symbols": {"$ref": "#/$defs/strings"},
+        "components": {"$ref": "#/$defs/strings"},
+        "packages": {"$ref": "#/$defs/strings"},
+        "artifacts": {"$ref": "#/$defs/strings"},
+        "search": {"$ref": "#/$defs/strings"},
+        "search_limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "direction": {"enum": ["upstream", "downstream", "both"]},
+        "depth": {"type": "integer", "minimum": 0},
+        "test_depth": {"type": "integer", "minimum": 0},
+        "context": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "query_collection": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/query"}},
+        {"type": "array", "items": {"allOf": [{"$ref": "#/$defs/query"}, {"required": ["id"]}]}}
+      ]
+    },
+    "constraint_operand": {
+      "oneOf": [
+        {"type": "object", "required": ["projection"], "properties": {"projection": {"$ref": "#/$defs/projection_reference"}, "map": {"$ref": "#/$defs/stable_id"}, "source_lock": {"type": "object", "minProperties": 1, "propertyNames": {"pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\]*(?:[^/\\\\])$"}, "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}, "additionalProperties": false},
+        {"type": "object", "required": ["literal"], "properties": {"literal": {}}, "additionalProperties": false},
+        {"type": "object", "required": ["observation"], "properties": {"observation": {"$ref": "#/$defs/stable_id"}}, "additionalProperties": false}
+      ]
+    },
+    "constraint_waiver": {
+      "type": "object",
+      "required": ["id", "owner", "rationale"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "comparison": {"$ref": "#/$defs/stable_id"},
+        "key": {"type": "string"},
+        "owner": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 1},
+        "expires_on": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "until_inputs": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/stable_id"},
+          "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      },
+      "oneOf": [
+        {"required": ["fingerprint"], "not": {"anyOf": [{"required": ["comparison"]}, {"required": ["key"]}]}},
+        {"required": ["comparison", "key"], "not": {"required": ["fingerprint"]}}
+      ],
+      "anyOf": [
+        {"required": ["expires_on"]},
+        {"required": ["until_inputs"]}
+      ],
+      "additionalProperties": false
+    },
+    "constraint": {
+      "type": "object",
+      "required": ["owner", "rationale"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "kind": {"enum": ["allowed_component_edges", "allowed_file_edges", "component_cycles", "component_membership", "forbidden_component_edges", "forbidden_file_edges", "forbidden_paths", "forbidden_symbols", "max_file_bytes", "provider_surface", "required_bridge", "required_component_edges", "required_file_edge", "required_file_edges", "required_package_entrypoint", "required_paths", "required_symbols", "required_test_route", "symbol_cardinality", "test_routes"]},
+        "assert": {"enum": ["acyclic", "allowed_edges", "cardinality", "disjoint", "forbidden_edges", "mapped_set_equal", "mapped_values_equal", "min_test_routes", "numeric_bounds", "observations_equal", "required_edges", "required_subset", "required_values", "set_equal", "subset", "values_equal"]},
+        "actual": {"$ref": "#/$defs/constraint_operand"},
+        "expected": {"$ref": "#/$defs/constraint_operand"},
+        "owner": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 1},
+        "requirement": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/strings"}]},
+        "severity": {"enum": ["error", "warning", "note"]},
+        "tags": {"$ref": "#/$defs/strings"},
+        "min": {"type": "integer", "minimum": 0},
+        "max": {"type": "integer", "minimum": 0},
+        "exact": {"type": "integer", "minimum": 0},
+        "allow_empty": {"type": "boolean"},
+        "include": {"$ref": "#/$defs/collection_patterns"},
+        "exclude": {"$ref": "#/$defs/collection_patterns"},
+        "paths": {"$ref": "#/$defs/collection_patterns"},
+        "symbols": {"$ref": "#/$defs/strings"},
+        "from_paths": {"$ref": "#/$defs/collection_patterns"},
+        "to_paths": {"$ref": "#/$defs/collection_patterns"},
+        "kinds": {"$ref": "#/$defs/strings"},
+        "kind_patterns": {"$ref": "#/$defs/strings"},
+        "name_patterns": {"$ref": "#/$defs/strings"},
+        "target_paths": {"$ref": "#/$defs/collection_patterns"},
+        "selectors": {"$ref": "#/$defs/strings"},
+        "layer": {"type": "string", "minLength": 1},
+        "group": {"type": "string", "minLength": 1},
+        "public_only": {"type": "boolean"},
+        "configured_only": {"type": "boolean"},
+        "strip_prefix": {"type": "string"},
+        "strip_suffix": {"type": "string"},
+        "edges": {"type": "array", "items": {"$ref": "#/$defs/relation_row"}},
+        "values": {},
+        "required_routes": {"$ref": "#/$defs/strings"},
+        "reference_route": {"type": "string", "minLength": 1},
+        "mapping": {"type": "object"},
+        "edge_kind": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "target": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "bridge": {"type": "string", "minLength": 1},
+        "package": {"type": "string", "minLength": 1},
+        "route": {"type": "string", "minLength": 1},
+        "surface": {"type": "string", "minLength": 1},
+        "declared": {"$ref": "#/$defs/strings"},
+        "forbid_unregistered": {"type": "boolean"},
+        "forbid_unresolved": {"type": "boolean"},
+        "forbid_ambiguous": {"type": "boolean"},
+        "waivers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/constraint_waiver"}
+        }
+      },
+      "oneOf": [
+        {"required": ["kind"], "not": {"required": ["assert"]}},
+        {"required": ["assert"], "not": {"required": ["kind"]}}
+      ],
+      "additionalProperties": false
+    },
+    "constraint_collection": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/constraint"}},
+        {"type": "array", "items": {"allOf": [{"$ref": "#/$defs/constraint"}, {"required": ["id"]}]}}
+      ]
+    },
+    "relation_row": {
+      "type": "object",
+      "properties": {
+        "source": {"type": "string", "minLength": 1},
+        "target": {"type": "string", "minLength": 1},
+        "from": {"type": "string", "minLength": 1},
+        "to": {"type": "string", "minLength": 1},
+        "kind": {"type": "string"},
+        "name": {"type": "string"}
+      },
+      "anyOf": [{"required": ["source", "target"]}, {"required": ["from", "to"]}],
+      "additionalProperties": false
+    },
     "strings": {
       "type": "array",
       "items": {"type": "string", "minLength": 1}
@@ -385,93 +591,6 @@
         },
         "ignore": {"$ref": "#/$defs/strings"},
         "enforce": {"type": "boolean", "default": false}
-      }
-    },
-    "checks": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "files": {"$ref": "#/$defs/strings"},
-        "symbols": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["layer", "name"],
-            "properties": {
-              "layer": {"type": "string", "minLength": 1},
-              "name": {"type": "string", "minLength": 1}
-            }
-          }
-        },
-        "edges": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["from", "to"],
-            "properties": {
-              "kind": {"type": "string", "minLength": 1, "default": "*"},
-              "from": {"type": "string", "minLength": 1},
-              "to": {"type": "string", "minLength": 1},
-              "name": {"type": "string"}
-            }
-          }
-        },
-        "bridges": {"$ref": "#/$defs/strings"},
-        "entrypoints": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["package", "route"],
-            "properties": {
-              "package": {"type": "string", "minLength": 1},
-              "route": {"type": "string", "minLength": 1},
-              "target": {"type": "string"}
-            }
-          }
-        },
-        "test_routes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["group", "to"],
-            "properties": {
-              "group": {"type": "string", "minLength": 1},
-              "to": {"type": "string", "minLength": 1}
-            }
-          }
-        },
-        "surfaces": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["bridge"],
-            "properties": {
-              "bridge": {"type": "string", "minLength": 1},
-              "declared": {"$ref": "#/$defs/strings"},
-              "forbid_unregistered": {"type": "boolean", "default": false},
-              "forbid_unresolved": {"type": "boolean", "default": false},
-              "forbid_ambiguous": {"type": "boolean", "default": false}
-            }
-          }
-        },
-        "forbid_paths": {"$ref": "#/$defs/collection_patterns"},
-        "forbid_symbols": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["layer", "name"],
-            "properties": {
-              "layer": {"type": "string", "minLength": 1},
-              "name": {"type": "string", "minLength": 1}
-            }
-          }
-        }
       }
     },
     "limits": {

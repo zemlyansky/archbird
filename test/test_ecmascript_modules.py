@@ -236,7 +236,7 @@ test('constructs PPO', () => { new PPO(); });
         "schema_version": 1,
     }
     config = {
-        "schema_version": 1,
+        "schema_version": 2,
         "project": "ecmascript-modules",
         "layers": [
             {

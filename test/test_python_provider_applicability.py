@@ -27,6 +27,30 @@ def canonical(value: object) -> bytes:
 
 
 def main() -> int:
+    inherited_enum = json.loads(
+        provider.python_ast_provider_facts(
+            project="provider-applicability",
+            path="pkg/inherited_enum.py",
+            source_bytes=(
+                "from enum import IntEnum as BaseIntEnum, auto\n"
+                "class FastEnum(BaseIntEnum):\n"
+                "    pass\n"
+                "class Ops(FastEnum):\n"
+                "    ADD = auto()\n"
+                "    MUL = auto()\n"
+            ).encode(),
+        )
+    )
+    inherited_members = {
+        row["name"]: row["attributes"]["value"]
+        for row in inherited_enum["facts"]
+        if row["domain"] == "constant-values"
+        and row["kind"] == "enum-member"
+        and row["attributes"]["container"] == "Ops"
+    }
+    if inherited_members != {"ADD": 1, "MUL": 2}:
+        raise AssertionError(inherited_members)
+
     import_source = "import a, b.c as d\nfrom .x import (y,\n z as q,)\n"
     import_raw = import_source.encode("utf-8")
     import_tree = ast.parse(import_source)
@@ -294,8 +318,7 @@ def main() -> int:
                     }
                 ],
                 "project": "provider-applicability",
-                "root": ".",
-                "schema_version": 1,
+                "schema_version": 2,
             }
         ),
     )

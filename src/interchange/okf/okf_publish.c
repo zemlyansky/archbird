@@ -136,41 +136,31 @@ static int text_equal(const AbString *left, const AbString *right) {
   return left && right && ab_string_equal(left, right);
 }
 
-static int verification_matches_map(const AbValue *project,
+static int verification_matches_map(const AbValue *evaluation,
                                     const AbOkfPublication *pub) {
   const AbValue *map_evidence = ab_value_member(&pub->map, "evidence");
   const AbValue *map_tool = ab_value_member(&pub->map, "tool");
-  const AbValue *producer = ab_value_member(project, "producer");
-  return text_equal(ab_okf_pub_text(project, "project"),
+  return text_equal(ab_okf_pub_text(evaluation, "project"),
                     ab_okf_pub_text(&pub->map, "project")) &&
-         text_equal(ab_okf_pub_text(project, "input_sha256"),
+         text_equal(ab_okf_pub_text(evaluation, "map_input_sha256"),
                     ab_okf_pub_text(map_evidence, "input_sha256")) &&
-         text_equal(ab_okf_pub_text(project, "config_sha256"),
+         text_equal(ab_okf_pub_text(evaluation, "map_config_sha256"),
                     ab_okf_pub_text(map_evidence, "config_sha256")) &&
-         text_equal(ab_okf_pub_text(producer, "name"),
-                    ab_okf_pub_text(map_tool, "name")) &&
-         text_equal(ab_okf_pub_text(producer, "version"),
-                    ab_okf_pub_text(map_tool, "version")) &&
-         text_equal(ab_okf_pub_text(producer, "implementation_sha256"),
-                    ab_okf_pub_text(map_tool, "implementation_sha256"));
+         text_equal(
+             ab_okf_pub_text(evaluation, "map_producer_implementation_sha256"),
+             ab_okf_pub_text(map_tool, "implementation_sha256"));
 }
 
 static ArchbirdStatus load_verification(AbOkfPublication *pub,
                                         const uint8_t *json, size_t length) {
   const AbString *digest;
-  size_t index;
-  int matched = 0;
   ArchbirdStatus status =
       ab_act_verification_load(pub->engine, json, length, &pub->verification);
   if (status != ARCHBIRD_OK)
     return status;
-  for (index = 0; index < pub->verification.projects->as.array.count; index++)
-    if (verification_matches_map(
-            &pub->verification.projects->as.array.items[index], pub))
-      matched = 1;
-  if (!matched)
+  if (!verification_matches_map(pub->verification.evaluation, pub))
     return invalid(pub,
-                   "OKF verification has no project matching Map identity");
+                   "OKF verification evaluation does not match Map identity");
   digest = &(AbString){pub->verification.sha256, 64};
   status = source_init(pub, &pub->verification_source, "verification",
                        &pub->verification.root, json, length, digest);
@@ -202,8 +192,8 @@ static ArchbirdStatus load_proposal(AbOkfPublication *pub, const uint8_t *json,
   return status;
 }
 
-static const AbString *proposal_check(const AbActProposalView *proposal) {
-  return ab_okf_pub_text(proposal->origin, "check");
+static const AbString *proposal_constraint(const AbActProposalView *proposal) {
+  return ab_okf_pub_text(proposal->origin, "constraint");
 }
 
 static const AbString *proposal_fingerprint(const AbActProposalView *proposal) {
@@ -215,7 +205,7 @@ static const AbString *proposal_fingerprint(const AbActProposalView *proposal) {
 static ArchbirdStatus load_contract(AbOkfPublication *pub, const uint8_t *json,
                                     size_t length) {
   const AbString *proposal_sha;
-  const AbString *origin_check;
+  const AbString *origin_constraint;
   const AbString *origin_fingerprint;
   AbString digest;
   ArchbirdStatus status;
@@ -225,11 +215,11 @@ static ArchbirdStatus load_contract(AbOkfPublication *pub, const uint8_t *json,
   if (status != ARCHBIRD_OK)
     return status;
   proposal_sha = ab_okf_pub_text(&pub->contract.root, "proposal_sha256");
-  origin_check = ab_okf_pub_text(pub->contract.origin, "check");
+  origin_constraint = ab_okf_pub_text(pub->contract.origin, "constraint");
   origin_fingerprint = ab_okf_pub_text(pub->contract.origin, "fingerprint");
   if (!proposal_sha || proposal_sha->length != 64 ||
       memcmp(proposal_sha->data, pub->proposal.sha256, 64) ||
-      !text_equal(origin_check, proposal_check(&pub->proposal)) ||
+      !text_equal(origin_constraint, proposal_constraint(&pub->proposal)) ||
       !text_equal(origin_fingerprint, proposal_fingerprint(&pub->proposal)))
     return invalid(pub, "OKF contract does not match proposal");
   digest = (AbString){pub->contract.sha256, 64};
@@ -271,6 +261,7 @@ static ArchbirdStatus load_result(AbOkfPublication *pub, const uint8_t *json,
   char digest_hex[65];
   AbString digest;
   size_t index;
+  uint64_t schema_version;
   ArchbirdStatus status;
   if (!pub->has_verification || !pub->has_proposal || !pub->has_contract)
     return invalid(pub,
@@ -286,6 +277,9 @@ static ArchbirdStatus load_result(AbOkfPublication *pub, const uint8_t *json,
   freshness = ab_okf_pub_text(&pub->result, "freshness");
   if (!ab_value_string_is(ab_value_member(&pub->result, "artifact"),
                           "change-result") ||
+      !ab_value_u64(ab_value_member(&pub->result, "schema_version"),
+                    &schema_version) ||
+      schema_version != 2 ||
       !ab_value_string_is(ab_value_member(&pub->result, "provenance"),
                           "derived") ||
       !tool_valid(ab_value_member(&pub->result, "tool")) || !outcomes ||

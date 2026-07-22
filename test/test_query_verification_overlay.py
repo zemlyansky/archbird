@@ -11,7 +11,12 @@ import subprocess
 import sys
 
 from archbird import _native
-from archbird.native import Project, query_map_json, query_map_markdown
+from archbird.native import (
+    Project,
+    evaluate_constraints_json,
+    query_map_json,
+    query_map_markdown,
+)
 
 
 def run(arguments: list[str], cwd: Path, env: dict[str, str]) -> bytes:
@@ -39,11 +44,11 @@ def main() -> None:
     node = sys.argv[2]
     addon = Path(sys.argv[3]).resolve()
     fixture = repository / "test/fixtures/map_base"
+    config_bytes = (fixture / "archbird.json").read_bytes()
     project = Project.from_config(fixture / "archbird.json", root=fixture)
     map_bytes = project.map_json()
     query = json.loads(query_map_json(map_bytes, paths=["js/index.js"]))
-    result = json.loads((fixture / "query_overlay.verification.json").read_bytes())
-    result["tool"] = query["tool"]
+    result = json.loads(evaluate_constraints_json(config_bytes, map_bytes))
     result_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
 
     markdown = query_map_markdown(
@@ -53,19 +58,19 @@ def main() -> None:
         verification_result=result_bytes,
     ).decode()
     for wanted in (
-        "## Architecture checks",
-        "Verification `query-overlay`; evidence=current; producer=current; relevant=1/3 checks; findings=1",
+        "## Architecture constraints",
+        "Verification `map-base`; evidence=current; producer=current; relevant=1/3 constraints; findings=1",
         "fail error JAVASCRIPT-ENTRY owner=architecture requirements=ARCH-JS-001 findings=1 paths=js/index.js",
         "extra twice [open,current,applicable]: unexpected actual fact twice @ js/index.js:5",
     ):
         if wanted not in markdown:
             raise AssertionError(f"overlay omitted {wanted!r}\n{markdown}")
-    if "REFERENCE-ONLY" in markdown or "PYTHON-ENTRY" in markdown:
-        raise AssertionError("overlay leaked a different project or unrelated path")
+    if "OTHER-ENTRY" in markdown or "PYTHON-ENTRY" in markdown:
+        raise AssertionError("overlay leaked a constraint from an unrelated path")
 
     stale = copy.deepcopy(result)
-    subject = next(row for row in stale["projects"] if row["name"] == "subject")
-    subject["input_sha256"] = "3" * 64
+    current = next(row for row in stale["evaluations"] if row["id"] == "current")
+    current["map_input_sha256"] = "3" * 64
     stale_markdown = query_map_markdown(
         map_bytes,
         paths=["js/index.js"],
@@ -76,28 +81,23 @@ def main() -> None:
         raise AssertionError("overlay hid stale verification inputs")
 
     ambiguous = copy.deepcopy(stale)
-    duplicate_subject = copy.deepcopy(
-        next(row for row in ambiguous["projects"] if row["name"] == "subject")
-    )
-    duplicate_subject["name"] = "other-subject"
-    duplicate_subject["config_sha256"] = "4" * 64
-    ambiguous["projects"].append(duplicate_subject)
-    ambiguous_markdown = query_map_markdown(
-        map_bytes,
-        paths=["js/index.js"],
-        view="changes",
-        verification_result=json.dumps(
-            ambiguous, sort_keys=True, separators=(",", ":")
-        ).encode(),
-    ).decode()
-    if (
-        "evidence=unknown" not in ambiguous_markdown
-        or "relevant=0/3" not in ambiguous_markdown
-    ):
-        raise AssertionError("overlay guessed between ambiguous stale project aliases")
+    ambiguous["evaluations"].append(copy.deepcopy(current))
+    try:
+        query_map_markdown(
+            map_bytes,
+            paths=["js/index.js"],
+            view="changes",
+            verification_result=json.dumps(
+                ambiguous, sort_keys=True, separators=(",", ":")
+            ).encode(),
+        )
+    except (_native.Error, ValueError):
+        pass
+    else:
+        raise AssertionError("overlay accepted duplicate current Map evaluations")
 
     malformed = copy.deepcopy(result)
-    del malformed["projects"][0]["input_sha256"]
+    del malformed["evaluations"][0]["map_input_sha256"]
     try:
         query_map_markdown(
             map_bytes,

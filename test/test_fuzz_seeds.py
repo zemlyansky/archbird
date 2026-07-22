@@ -42,6 +42,7 @@ def main() -> int:
     root = Path(sys.argv[2]).resolve()
 
     map_json = required_bytes(root / "map" / "minimal.json")
+    act_map_json = required_bytes(root / "act-map" / "map.json")
     query_json = required_bytes(root / "query" / "request.json")
     workspace_json = required_bytes(root / "workspace" / "config.json")
     workspace_maps = required_bytes(root / "workspace-maps" / "maps.json")
@@ -76,7 +77,7 @@ def main() -> int:
     artifact(native.workspace_analyze(workspace_json, workspace_maps), "workspace")
 
     verification_document = artifact(verification, "verification")
-    fingerprint = verification_document["checks"][0]["findings"][0][
+    fingerprint = verification_document["constraints"][0]["findings"][0][
         "fingerprint"
     ]
     artifact(
@@ -129,7 +130,7 @@ def main() -> int:
     for verification_value, proposal_value, contract_value, result_value in okf_stages:
         artifact(
             native.okf_publish(
-                map_json,
+                act_map_json,
                 verification_value,
                 proposal_value,
                 contract_value,

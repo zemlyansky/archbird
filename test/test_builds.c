@@ -77,7 +77,7 @@ static int test_autoconf_routes(ArchbirdEngine *engine) {
       "{\"builds\":[{\"kind\":\"autoconf\",\"name\":\"autoconf\","
       "\"path\":\"configure.ac\"}],\"layers\":[{\"globs\":["
       "\"configure.ac\"],\"language\":\"c\",\"name\":\"build\"}],"
-      "\"project\":\"demo\",\"schema_version\":1}";
+      "\"project\":\"demo\",\"schema_version\":2}";
   static const char implementation[] =
       "1111111111111111111111111111111111111111111111111111111111111111";
   uint8_t digest[32];

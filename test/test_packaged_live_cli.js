@@ -43,7 +43,7 @@ async function main() {
   fs.rmSync(temporary, { recursive: true, force: true });
   fs.mkdirSync(temporary, { recursive: true });
   fs.cpSync(fixture, repository, { recursive: true });
-  const child = spawn(cli, ["serve", repository, "--port", "0"], {
+  const child = spawn(cli, ["serve", "--root", repository, "--port", "0"], {
     env: { ...process.env, ARCHBIRD_ENGINE: "native" },
     stdio: ["ignore", "pipe", "pipe"],
   });

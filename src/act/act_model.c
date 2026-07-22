@@ -287,26 +287,54 @@ static int named_rows_unique(const AbValue *rows, const char *field,
   return 1;
 }
 
+static const AbValue *named_row(const AbValue *rows, const char *field,
+                                const AbString *name);
+
 ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
                                         const uint8_t *json, size_t json_length,
                                         AbActVerification *out) {
   static const char *const root_allowed[] = {
-      "artifact",       "attestations", "baseline", "checks",
-      "contract",       "diagnostics",  "facts",    "projects",
-      "schema_version", "suite",        "summary",  "tool",
+      "artifact",
+      "constraints",
+      "diagnostics",
+      "evaluations",
+      "mappings",
+      "observations",
+      "operands",
+      "operand_definitions",
+      "policy",
+      "schema_version",
+      "summary",
+      "tool",
+      "verification_result_sha256",
   };
-  static const char *const suite_allowed[] = {
-      "description",
-      "name",
-      "policy_date",
-      "sha256",
+  static const char *const evaluation_allowed[] = {
+      "id",
+      "map_config_sha256",
+      "map_input_sha256",
+      "map_producer_implementation_sha256",
+      "project",
+      "resolution_sha256",
   };
-  static const char *const contract_allowed[] = {
-      "attestations", "candidate", "extractors", "mappings", "waivers",
+  static const char *const policy_allowed[] = {
+      "configured_count",
+      "constraint_policy_sha256",
+      "constraints",
+      "evaluated_count",
+      "kind",
+      "omitted_count",
+      "project",
+      "project_configuration_sha256",
+      "requested_ids",
   };
   const AbValue *schema;
+  const AbValue *identities;
+  const AbValue *diagnostics;
+  const AbValue *summary;
+  const AbValue *result_sha;
   uint64_t schema_version;
   size_t index;
+  static const AbString current = {(char *)"current", 7};
   ArchbirdStatus status;
   if (!engine || (!json && json_length) || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
@@ -317,52 +345,96 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
     return status;
   schema = ab_value_member(&out->root, "schema_version");
   out->tool = ab_value_member(&out->root, "tool");
-  out->suite = ab_value_member(&out->root, "suite");
-  out->projects = ab_value_member(&out->root, "projects");
-  out->contract = ab_value_member(&out->root, "contract");
-  out->facts = ab_value_member(&out->root, "facts");
-  out->attestations = ab_value_member(&out->root, "attestations");
-  out->checks = ab_value_member(&out->root, "checks");
+  out->policy = ab_value_member(&out->root, "policy");
+  out->evaluations = ab_value_member(&out->root, "evaluations");
+  out->mappings = ab_value_member(&out->root, "mappings");
+  out->observations = ab_value_member(&out->root, "observations");
+  out->operand_definitions = ab_value_member(&out->root, "operand_definitions");
+  out->operands = ab_value_member(&out->root, "operands");
+  out->constraints = ab_value_member(&out->root, "constraints");
+  identities = out->policy ? ab_value_member(out->policy, "constraints") : NULL;
+  diagnostics = ab_value_member(&out->root, "diagnostics");
+  summary = ab_value_member(&out->root, "summary");
+  result_sha = ab_value_member(&out->root, "verification_result_sha256");
   if (!ab_act_object_fields_allowed(&out->root, root_allowed,
                                     sizeof(root_allowed) /
                                         sizeof(root_allowed[0])) ||
-      !ab_value_u64(schema, &schema_version) || schema_version != 1 ||
+      !ab_value_u64(schema, &schema_version) || schema_version != 2 ||
       !ab_value_string_is(ab_value_member(&out->root, "artifact"),
                           "verification") ||
-      !validate_tool(out->tool) ||
-      !ab_act_object_fields_allowed(out->suite, suite_allowed,
-                                    sizeof(suite_allowed) /
-                                        sizeof(suite_allowed[0])) ||
-      !ab_act_identifier(ab_value_member(out->suite, "name")) ||
-      !ab_act_lowercase_sha256(ab_value_member(out->suite, "sha256")) ||
-      !out->projects || out->projects->kind != AB_VALUE_ARRAY ||
-      !named_rows_unique(out->projects, "name", 1) ||
-      !ab_act_object_fields_allowed(out->contract, contract_allowed,
-                                    sizeof(contract_allowed) /
-                                        sizeof(contract_allowed[0])) ||
-      !out->facts || out->facts->kind != AB_VALUE_ARRAY ||
-      !named_rows_unique(out->facts, "name", 1) || !out->attestations ||
-      out->attestations->kind != AB_VALUE_ARRAY ||
-      !named_rows_unique(out->attestations, "name", 1) || !out->checks ||
-      out->checks->kind != AB_VALUE_ARRAY ||
-      !named_rows_unique(out->checks, "id", 1) ||
-      !ab_value_member(&out->root, "summary") ||
-      ab_value_member(&out->root, "summary")->kind != AB_VALUE_OBJECT ||
-      !ab_value_member(&out->root, "baseline") ||
-      ab_value_member(&out->root, "baseline")->kind != AB_VALUE_OBJECT ||
-      !ab_value_member(&out->root, "diagnostics") ||
-      ab_value_member(&out->root, "diagnostics")->kind != AB_VALUE_ARRAY) {
+      !validate_tool(out->tool) || !out->evaluations ||
+      out->evaluations->kind != AB_VALUE_ARRAY ||
+      !named_rows_unique(out->evaluations, "id", 1) ||
+      !(out->evaluation = named_row(out->evaluations, "id", &current)) ||
+      !ab_act_object_fields_allowed(out->evaluation, evaluation_allowed,
+                                    sizeof(evaluation_allowed) /
+                                        sizeof(evaluation_allowed[0])) ||
+      !ab_act_lowercase_sha256(
+          ab_value_member(out->evaluation, "map_config_sha256")) ||
+      !ab_act_lowercase_sha256(
+          ab_value_member(out->evaluation, "map_input_sha256")) ||
+      !ab_act_lowercase_sha256(ab_value_member(
+          out->evaluation, "map_producer_implementation_sha256")) ||
+      !string_nonblank(ab_value_member(out->evaluation, "project")) ||
+      !ab_act_object_fields_allowed(out->policy, policy_allowed,
+                                    sizeof(policy_allowed) /
+                                        sizeof(policy_allowed[0])) ||
+      !ab_act_lowercase_sha256(
+          ab_value_member(out->policy, "constraint_policy_sha256")) ||
+      !ab_act_lowercase_sha256(
+          ab_value_member(out->policy, "project_configuration_sha256")) ||
+      !string_nonblank(ab_value_member(out->policy, "project")) ||
+      !identities || identities->kind != AB_VALUE_ARRAY || !out->operands ||
+      out->operands->kind != AB_VALUE_ARRAY ||
+      !named_rows_unique(out->operands, "name", 1) || !out->mappings ||
+      out->mappings->kind != AB_VALUE_OBJECT || !out->observations ||
+      out->observations->kind != AB_VALUE_ARRAY ||
+      !named_rows_unique(out->observations, "id", 1) ||
+      !out->operand_definitions ||
+      out->operand_definitions->kind != AB_VALUE_OBJECT || !out->constraints ||
+      out->constraints->kind != AB_VALUE_ARRAY ||
+      !named_rows_unique(out->constraints, "id", 1) || !summary ||
+      summary->kind != AB_VALUE_OBJECT || !diagnostics ||
+      diagnostics->kind != AB_VALUE_ARRAY ||
+      !ab_act_lowercase_sha256(result_sha)) {
     status = invalid(engine, "invalid canonical verification artifact");
     goto fail;
   }
-  if (!named_rows_unique(ab_value_member(out->contract, "extractors"), "name",
-                         1) ||
-      !named_rows_unique(ab_value_member(out->contract, "mappings"), "name",
-                         1)) {
-    status = invalid(engine, "invalid verification contract inventory");
-    goto fail;
+  for (index = 0; index < out->evaluations->as.array.count; index++) {
+    const AbValue *evaluation = &out->evaluations->as.array.items[index];
+    const AbValue *resolution =
+        ab_value_member(evaluation, "resolution_sha256");
+    if (!ab_act_object_fields_allowed(evaluation, evaluation_allowed,
+                                      sizeof(evaluation_allowed) /
+                                          sizeof(evaluation_allowed[0])) ||
+        !ab_act_identifier(ab_value_member(evaluation, "id")) ||
+        !ab_act_lowercase_sha256(
+            ab_value_member(evaluation, "map_config_sha256")) ||
+        !ab_act_lowercase_sha256(
+            ab_value_member(evaluation, "map_input_sha256")) ||
+        !ab_act_lowercase_sha256(ab_value_member(
+            evaluation, "map_producer_implementation_sha256")) ||
+        !string_nonblank(ab_value_member(evaluation, "project")) ||
+        (resolution && resolution->kind != AB_VALUE_NULL &&
+         !ab_act_lowercase_sha256(resolution))) {
+      status = invalid(engine, "invalid constraint Map evaluation");
+      goto fail;
+    }
   }
-  out->fact_count = out->facts->as.array.count;
+  for (index = 0; index < identities->as.array.count; index++) {
+    const AbValue *identity = &identities->as.array.items[index];
+    if (!ab_act_identifier(ab_value_member(identity, "id")) ||
+        !ab_act_lowercase_sha256(
+            ab_value_member(identity, "constraint_definition_sha256")) ||
+        !ab_act_lowercase_sha256(
+            ab_value_member(identity, "constraint_plan_sha256")) ||
+        !ab_act_lowercase_sha256(
+            ab_value_member(identity, "constraint_result_sha256"))) {
+      status = invalid(engine, "invalid constraint result identity");
+      goto fail;
+    }
+  }
+  out->fact_count = out->operands->as.array.count;
   if (out->fact_count > SIZE_MAX / sizeof(*out->decoded_facts)) {
     status =
         archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
@@ -381,12 +453,13 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
   }
   for (index = 0; index < out->fact_count; index++) {
     status = ab_verify_fact_decode_artifact(
-        engine, &out->facts->as.array.items[index], &out->decoded_facts[index]);
+        engine, &out->operands->as.array.items[index],
+        &out->decoded_facts[index]);
     if (status != ARCHBIRD_OK)
       goto fail;
   }
-  for (index = 0; index < out->checks->as.array.count; index++) {
-    status = validate_check(engine, &out->checks->as.array.items[index]);
+  for (index = 0; index < out->constraints->as.array.count; index++) {
+    status = validate_check(engine, &out->constraints->as.array.items[index]);
     if (status != ARCHBIRD_OK)
       goto fail;
   }
@@ -429,9 +502,20 @@ static const AbValue *named_row(const AbValue *rows, const char *field,
   return NULL;
 }
 
-const AbValue *ab_act_verification_check(const AbActVerification *artifact,
-                                         const AbString *id) {
-  return named_row(artifact ? artifact->checks : NULL, "id", id);
+static const AbValue *named_object_value(const AbValue *object,
+                                         const AbString *name) {
+  size_t index;
+  if (!object || object->kind != AB_VALUE_OBJECT || !name)
+    return NULL;
+  for (index = 0; index < object->as.object.count; index++)
+    if (ab_string_equal(&object->as.object.fields[index].name, name))
+      return &object->as.object.fields[index].value;
+  return NULL;
+}
+
+const AbValue *ab_act_verification_constraint(const AbActVerification *artifact,
+                                              const AbString *id) {
+  return named_row(artifact ? artifact->constraints : NULL, "id", id);
 }
 
 const AbValue *ab_act_verification_finding(const AbActVerification *artifact,
@@ -444,9 +528,9 @@ const AbValue *ab_act_verification_finding(const AbActVerification *artifact,
     *out_check = NULL;
   if (!artifact || !fingerprint)
     return NULL;
-  for (check_index = 0; check_index < artifact->checks->as.array.count;
+  for (check_index = 0; check_index < artifact->constraints->as.array.count;
        check_index++) {
-    const AbValue *check = &artifact->checks->as.array.items[check_index];
+    const AbValue *check = &artifact->constraints->as.array.items[check_index];
     const AbValue *findings = ab_value_member(check, "findings");
     size_t finding_index;
     for (finding_index = 0; finding_index < findings->as.array.count;
@@ -477,32 +561,28 @@ ab_act_verification_fact_value(const AbActVerification *artifact,
     if (ab_string_equal(&artifact->decoded_facts[index].name, name)) {
       if (out_fact)
         *out_fact = &artifact->decoded_facts[index];
-      return &artifact->facts->as.array.items[index];
+      return &artifact->operands->as.array.items[index];
     }
   }
   return NULL;
 }
 
-const AbValue *ab_act_verification_extractor(const AbActVerification *artifact,
-                                             const AbString *name) {
-  const AbValue *rows = artifact && artifact->contract
-                            ? ab_value_member(artifact->contract, "extractors")
-                            : NULL;
-  return named_row(rows, "name", name);
-}
-
 const AbValue *ab_act_verification_mapping(const AbActVerification *artifact,
                                            const AbString *name) {
-  const AbValue *rows = artifact && artifact->contract
-                            ? ab_value_member(artifact->contract, "mappings")
-                            : NULL;
-  return named_row(rows, "name", name);
+  return named_object_value(artifact ? artifact->mappings : NULL, name);
 }
 
 const AbValue *
-ab_act_verification_attestation(const AbActVerification *artifact,
+ab_act_verification_operand_definition(const AbActVerification *artifact,
+                                       const AbString *name) {
+  return named_object_value(artifact ? artifact->operand_definitions : NULL,
+                            name);
+}
+
+const AbValue *
+ab_act_verification_observation(const AbActVerification *artifact,
                                 const AbString *name) {
-  return named_row(artifact ? artifact->attestations : NULL, "name", name);
+  return named_row(artifact ? artifact->observations : NULL, "id", name);
 }
 
 ArchbirdStatus ab_act_evidence_list_add(ArchbirdEngine *engine,

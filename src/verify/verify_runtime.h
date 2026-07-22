@@ -3,16 +3,6 @@
 
 #include "verify_model.h"
 
-typedef struct AbVerifyInputView {
-  ArchbirdEngine *engine;
-  const AbValue *root;
-  const AbValue *suite_path;
-  const AbValue *projects;
-  const AbValue *provided_facts;
-  const AbValue *attestations;
-  const AbValue *baseline;
-} AbVerifyInputView;
-
 typedef struct AbVerifyDiagnostic {
   AbString severity;
   AbString code;
@@ -36,11 +26,11 @@ typedef struct AbVerifyBaselineState {
   size_t coverage_regression_count;
 } AbVerifyBaselineState;
 
-typedef struct AbVerifyAttestationEvidenceView {
+typedef struct AbVerifyObservationEvidence {
   AbString role;
   AbString path;
   AbString sha256;
-} AbVerifyAttestationEvidenceView;
+} AbVerifyObservationEvidence;
 
 typedef struct AbVerifyEqualityPolicy {
   const AbValue *source;
@@ -61,7 +51,7 @@ typedef struct AbVerifyObservationView {
   const AbValue *value;
 } AbVerifyObservationView;
 
-typedef struct AbVerifyAttestationCaseView {
+typedef struct AbVerifyObservationCase {
   const AbString *id;
   const AbValue *requirements;
   const AbValue *input;
@@ -70,42 +60,53 @@ typedef struct AbVerifyAttestationCaseView {
   AbVerifyEqualityPolicy comparison;
   AbVerifyObservationView *observations;
   size_t observation_count;
-} AbVerifyAttestationCaseView;
+} AbVerifyObservationCase;
 
-typedef struct AbVerifyAttestationDataView {
+typedef struct AbVerifyObservationDocument {
   const AbValue *root;
-  const AbString *suite;
+  const AbString *id;
   const AbString *project;
   const AbString *revision;
   const AbString *map_input_sha256;
-  AbVerifyAttestationEvidenceView *evidence;
+  AbVerifyObservationEvidence *evidence;
   size_t evidence_count;
   const AbString *evidence_slice_sha256;
   const AbString *profile;
   const AbValue *capabilities;
   const AbValue *parameters;
-  AbVerifyAttestationCaseView *cases;
+  AbVerifyObservationCase *cases;
   size_t case_count;
   char sha256[65];
-} AbVerifyAttestationDataView;
+} AbVerifyObservationDocument;
 
-typedef struct AbVerifyAttestationState {
+typedef struct AbVerifyObservationState {
   AbString name;
   AbString project;
   AbString state;
   AbString message;
   int whole_map_matches;
   int has_data;
-  AbVerifyAttestationDataView data;
+  AbVerifyObservationDocument data;
   AbVerifyEvidence *witnesses;
   size_t witness_count;
   size_t witness_capacity;
-} AbVerifyAttestationState;
+} AbVerifyObservationState;
 
 typedef struct AbVerificationContext {
   ArchbirdEngine *engine;
-  AbVerifySuiteView suite;
-  AbVerifyInputView input;
+  const AbValue *project_configuration;
+  const AbValue *project;
+  const AbValue *description;
+  const AbValue *operand_definitions;
+  const AbValue *mappings;
+  const AbValue *constraint_plans;
+  const AbValue *constraint_policy;
+  const AbValue *policy_date;
+  const AbValue *baseline_input;
+  const AbValue *additional_maps;
+  const AbValue *current_map;
+  const AbValue *current_resolution;
+  char constraint_policy_sha256[65];
   AbVerifyFactSet *facts;
   size_t fact_count;
   struct AbVerifyCheckResult *checks;
@@ -114,41 +115,17 @@ typedef struct AbVerificationContext {
   size_t diagnostic_count;
   size_t diagnostic_capacity;
   AbVerifyBaselineState baseline;
-  AbVerifyAttestationState *attestations;
-  size_t attestation_count;
+  AbVerifyObservationState *observations;
+  size_t observation_count;
 } AbVerificationContext;
-
-typedef enum AbVerifySourceLockState {
-  AB_VERIFY_SOURCE_LOCK_NOT_DECLARED = 0,
-  AB_VERIFY_SOURCE_LOCK_CURRENT = 1,
-  AB_VERIFY_SOURCE_LOCK_MISMATCH = 2,
-  AB_VERIFY_SOURCE_LOCK_UNAVAILABLE = 3
-} AbVerifySourceLockState;
-
-AbVerifySourceLockState
-ab_verify_source_lock_state(const AbVerificationContext *context,
-                            const AbString *project);
-const char *ab_verify_source_lock_state_name(AbVerifySourceLockState state);
-int ab_verify_source_lock_observed_sha256(const AbVerificationContext *context,
-                                          const AbString *project,
-                                          const AbString *path,
-                                          char output[65]);
-
-ArchbirdStatus ab_verify_input_validate(ArchbirdEngine *engine,
-                                        const AbVerifySuiteView *suite,
-                                        const AbValue *root,
-                                        AbVerifyInputView *out);
-
-const AbValue *ab_verify_input_project(const AbVerifyInputView *input,
-                                       const AbString *name);
-const AbValue *ab_verify_input_source(const AbValue *project,
-                                      const AbString *path);
-const AbValue *ab_verify_input_provided_fact(const AbVerifyInputView *input,
-                                             const AbString *name);
-const AbValue *ab_verify_input_attestation(const AbVerifyInputView *input,
-                                           const AbString *name);
-
-ArchbirdStatus ab_verify_extract_all(AbVerificationContext *context);
+ArchbirdStatus ab_projection_extract_map(ArchbirdEngine *engine,
+                                         const AbValue *map,
+                                         const AbValue *resolution,
+                                         const AbObjectField *projection,
+                                         AbVerifyFactSet *out);
+ArchbirdStatus ab_projection_extract_literal(ArchbirdEngine *engine,
+                                             const AbObjectField *operand,
+                                             AbVerifyFactSet *out);
 /* Decode one canonical verification-result fact and verify its content hash. */
 ArchbirdStatus ab_verify_fact_decode_artifact(ArchbirdEngine *engine,
                                               const AbValue *value,
@@ -156,22 +133,13 @@ ArchbirdStatus ab_verify_fact_decode_artifact(ArchbirdEngine *engine,
 ArchbirdStatus ab_verify_evidence_decode_artifact(ArchbirdEngine *engine,
                                                   const AbValue *value,
                                                   AbVerifyEvidence *out);
-ArchbirdStatus ab_verify_extract_c(AbVerificationContext *context,
-                                   const AbObjectField *extractor,
-                                   AbVerifyFactSet *fact);
-ArchbirdStatus ab_verify_render_result(AbVerificationContext *context,
-                                       AbBuffer *buffer);
-ArchbirdStatus ab_verification_context_analyze(
-    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
-    const uint8_t *verification_input_json, size_t verification_input_length,
-    AbValue *suite_document, AbValue *input_document,
-    AbVerificationContext *context);
-ArchbirdStatus ab_verification_context_prepare(
-    ArchbirdEngine *engine, const uint8_t *suite_json, size_t suite_length,
-    const uint8_t *verification_input_json, size_t verification_input_length,
-    AbValue *suite_document, AbValue *input_document,
-    AbVerificationContext *context);
-ArchbirdStatus ab_verification_context_evaluate(AbVerificationContext *context);
+ArchbirdStatus ab_constraints_render_summary(AbVerificationContext *context,
+                                             AbBuffer *buffer);
+ArchbirdStatus ab_verify_render_diagnostics(AbVerificationContext *context,
+                                            AbBuffer *buffer);
+ArchbirdStatus ab_constraints_render_baseline(
+    AbVerificationContext *context, const char *owner, size_t owner_length,
+    const char *rationale, size_t rationale_length, AbBuffer *buffer);
 ArchbirdStatus ab_verify_add_diagnostic(AbVerificationContext *context,
                                         const char *severity, const char *code,
                                         const char *message,
@@ -181,20 +149,22 @@ ArchbirdStatus
 ab_verify_collect_project_diagnostics(AbVerificationContext *context);
 void ab_verify_diagnostics_finish(AbVerificationContext *context);
 void ab_verify_diagnostics_free(AbVerificationContext *context);
-ArchbirdStatus ab_verify_apply_baseline(AbVerificationContext *context);
+ArchbirdStatus ab_constraints_apply_baseline(AbVerificationContext *context);
 void ab_verify_baseline_free(ArchbirdEngine *engine,
                              AbVerifyBaselineState *baseline);
-ArchbirdStatus ab_verify_attestations_load(AbVerificationContext *context);
-void ab_verify_attestations_free(AbVerificationContext *context);
-ArchbirdStatus ab_verify_attestations_render(AbVerificationContext *context,
-                                             AbBuffer *buffer);
-const AbVerifyAttestationState *
-ab_verify_attestation_find(const AbVerificationContext *context,
-                           const AbString *name);
-int ab_verify_attestation_case_applicable(
-    const AbVerifyAttestationCaseView *case_view,
-    const AbVerifyAttestationDataView *attestation);
-int ab_verify_attestation_observations_equal(
+ArchbirdStatus ab_constraints_observations_load(AbVerificationContext *context,
+                                                const AbValue *observations);
+void ab_constraints_observations_free(AbVerificationContext *context);
+ArchbirdStatus
+ab_constraints_observations_render(AbVerificationContext *context,
+                                   AbBuffer *buffer);
+const AbVerifyObservationState *
+ab_constraints_observation_find(const AbVerificationContext *context,
+                                const AbString *name);
+int ab_constraints_observation_case_applicable(
+    const AbVerifyObservationCase *case_view,
+    const AbVerifyObservationDocument *observation);
+int ab_constraints_observation_values_equal(
     const AbVerifyObservationView *expected,
     const AbVerifyObservationView *actual,
     const AbVerifyEqualityPolicy *policy);

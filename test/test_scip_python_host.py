@@ -133,7 +133,7 @@ def main() -> int:
     project.set_config(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "project": "scip-python",
                 "layers": [
                     {

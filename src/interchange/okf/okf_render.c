@@ -283,7 +283,7 @@ ArchbirdStatus ab_okf_render_markdown(const AbOkfIndex *index,
   OKF_RENDER_TRY(ab_buffer_literal(
       buffer,
       ".\n\nRequirement links come only from explicit `archbird` metadata and "
-      "typed relations. Prose is never translated into checks."));
+      "typed relations. Prose is never translated into constraints."));
   if (!query) {
     OKF_RENDER_TRY(ab_buffer_literal(buffer, "\n\n## Concepts\n"));
     for (item = 0; item < index->document_count; item++) {

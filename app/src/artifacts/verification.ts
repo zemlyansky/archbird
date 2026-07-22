@@ -1,5 +1,5 @@
 export interface VerificationFindingRow {
-  check: string;
+  constraint: string;
   comparison: string;
   fingerprint: string;
   key: string;
@@ -23,28 +23,33 @@ function requiredString(value: unknown, label: string): string {
 export function verificationFindings(
   document: Record<string, unknown>,
 ): VerificationFindingRow[] {
-  if (document.artifact !== "verification" || !Array.isArray(document.checks)) {
+  if (document.artifact !== "verification" ||
+      document.schema_version !== 2 ||
+      !Array.isArray(document.constraints)) {
     return [];
   }
   const result: VerificationFindingRow[] = [];
-  for (const [checkIndex, rawCheck] of document.checks.entries()) {
-    const check = record(rawCheck, `checks[${checkIndex}]`);
-    const checkId = requiredString(check.id, `checks[${checkIndex}].id`);
-    if (!Array.isArray(check.findings)) continue;
-    for (const [findingIndex, rawFinding] of check.findings.entries()) {
+  for (const [constraintIndex, rawConstraint] of document.constraints.entries()) {
+    const constraint = record(rawConstraint, `constraints[${constraintIndex}]`);
+    const constraintId = requiredString(
+      constraint.id,
+      `constraints[${constraintIndex}].id`,
+    );
+    if (!Array.isArray(constraint.findings)) continue;
+    for (const [findingIndex, rawFinding] of constraint.findings.entries()) {
       const finding = record(
         rawFinding,
-        `checks[${checkIndex}].findings[${findingIndex}]`,
+        `constraints[${constraintIndex}].findings[${findingIndex}]`,
       );
       const fingerprint = requiredString(
         finding.fingerprint,
-        `checks[${checkIndex}].findings[${findingIndex}].fingerprint`,
+        `constraints[${constraintIndex}].findings[${findingIndex}].fingerprint`,
       );
       if (!/^[0-9a-f]{64}$/.test(fingerprint)) {
         throw new Error("verification finding fingerprint must be lowercase SHA-256");
       }
       result.push({
-        check: checkId,
+        constraint: constraintId,
         comparison: requiredString(finding.comparison, "finding.comparison"),
         fingerprint,
         key: requiredString(finding.key, "finding.key"),
@@ -55,26 +60,48 @@ export function verificationFindings(
   return result;
 }
 
-export function candidateSuite(
+export function reviewedProjectConfiguration(
   document: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (document.schema_version !== 1 || typeof document.suite !== "string" ||
-      !Array.isArray(document.checks) || !document.projects) {
-    throw new Error("expected a schema-1 verification suite");
+  if (document.schema_version !== 2 || typeof document.project !== "string" ||
+      !Array.isArray(document.layers)) {
+    throw new Error("expected a schema-2 Archbird project configuration");
   }
   const result = structuredClone(document);
-  result.candidate = true;
-  for (const [index, rawCheck] of (result.checks as unknown[]).entries()) {
-    const check = record(rawCheck, `checks[${index}]`);
-    requiredString(check.id, `checks[${index}].id`);
-    requiredString(check.owner, `checks[${index}].owner`);
-    requiredString(check.rationale, `checks[${index}].rationale`);
-    if (check.requirements !== undefined &&
-        (!Array.isArray(check.requirements) ||
-         check.requirements.some((item) => typeof item !== "string" || !item))) {
-      throw new Error(`checks[${index}].requirements must contain non-empty IDs`);
+  const rawConstraints = result.constraints ?? {};
+  const rows: [string, Record<string, unknown>][] = [];
+  if (Array.isArray(rawConstraints)) {
+    for (const [index, rawConstraint] of rawConstraints.entries()) {
+      const constraint = record(rawConstraint, `constraints[${index}]`);
+      rows.push([
+        requiredString(constraint.id, `constraints[${index}].id`),
+        constraint,
+      ]);
+    }
+  } else {
+    const constraints = record(rawConstraints, "constraints");
+    for (const [id, rawConstraint] of Object.entries(constraints)) {
+      rows.push([requiredString(id, "constraint ID"), record(rawConstraint, `constraints.${id}`)]);
     }
   }
+  const normalized: Record<string, unknown> = {};
+  for (const [id, constraint] of rows.sort(([left], [right]) => left.localeCompare(right))) {
+    if (normalized[id]) throw new Error(`duplicate constraint ID ${id}`);
+    requiredString(constraint.owner, `constraints.${id}.owner`);
+    requiredString(constraint.rationale, `constraints.${id}.rationale`);
+    if (constraint.requirement !== undefined) {
+      const requirements = Array.isArray(constraint.requirement)
+        ? constraint.requirement
+        : [constraint.requirement];
+      if (requirements.some((item) => typeof item !== "string" || !item)) {
+        throw new Error(`constraints.${id}.requirement must contain non-empty IDs`);
+      }
+    }
+    const value = structuredClone(constraint);
+    delete value.id;
+    normalized[id] = value;
+  }
+  result.constraints = normalized;
   return result;
 }
 

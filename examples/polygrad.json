@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "polygrad",
   "description": "C11 tensor compiler/runtime with Python, JavaScript, browser/WASM, and R surfaces.",
-  "root": ".",
   "exclude": [
     "references/**",
     "temp/**",
@@ -438,33 +437,220 @@
       "enforce": false
     }
   ],
-  "checks": {
-    "files": ["src/uop.c", "src/engine/schedule.c", "src/engine/realize.c", "py/polygrad/tensor.py", "js/src/tensor.js"],
-    "symbols": [
-      {"layer": "core", "name": "poly_tensor_create"},
-      {"layer": "python", "name": "Tensor"},
-      {"layer": "javascript", "name": "createBoundTensorClass.Tensor"}
-    ],
-    "surfaces": [
-      {
-        "bridge": "javascript-wasm",
-        "declared": ["poly_ctx_new", "poly_tensor_create"],
-        "forbid_unregistered": true,
-        "forbid_unresolved": true,
-        "forbid_ambiguous": true
+  "projections": {
+    "tinygrad-ops": {
+      "select": "constant_values",
+      "container": "Ops"
+    },
+    "polygrad-ops": {
+      "select": "constant_values",
+      "container": "PolyOps",
+      "strip_prefix": "POLY_OP_"
+    },
+    "polygrad-op-values": {
+      "select": "constant_values",
+      "container": "op_values",
+      "strip_prefix": "POLY_OP_"
+    },
+    "tinygrad-binary": {
+      "select": "constant_memberships",
+      "container": "GroupOp.Binary"
+    },
+    "polygrad-binary": {
+      "select": "macro_members",
+      "call": "SET",
+      "selector": "POLY_GROUP_BINARY",
+      "strip_prefix": "POLY_OP_"
+    },
+    "tinygrad-irreducible": {
+      "select": "constant_memberships",
+      "container": "GroupOp.Irreducible"
+    },
+    "polygrad-irreducible": {
+      "select": "macro_members",
+      "call": "SET",
+      "selector": "POLY_GROUP_IRREDUCIBLE",
+      "strip_prefix": "POLY_OP_"
+    },
+    "tinygrad-movement": {
+      "select": "constant_memberships",
+      "container": "GroupOp.Movement"
+    },
+    "polygrad-movement": {
+      "select": "macro_members",
+      "call": "SET",
+      "selector": "POLY_GROUP_MOVEMENT",
+      "strip_prefix": "POLY_OP_"
+    }
+  },
+  "constraints": {
+    "TG-UOP-SET-001": {
+      "assert": "required_subset",
+      "expected": {
+        "projection": "tinygrad-ops",
+        "map": "tinygrad",
+        "source_lock": {
+          "tinygrad/uop/__init__.py": "6218635e6939c5d40fe33b40de51275447edd7390b9311b1066fc4831758621e"
+        }
       },
-      {
-        "bridge": "javascript-napi",
-        "declared": ["poly_ctx_new", "poly_tensor_create"],
-        "forbid_ambiguous": true
+      "actual": {"projection": "polygrad-ops"},
+      "severity": "error",
+      "owner": "compiler-core",
+      "requirement": "https://github.com/tinygrad/tinygrad/blob/40de90ab19ff623ef6fcb8e375a5e6ee209ad812/tinygrad/uop/__init__.py#L11-L105",
+      "rationale": "The port must implement every pinned reference operation; reviewed subject aliases, sentinels, and private extensions remain valid superset members."
+    },
+    "TG-UOP-VALUE-001": {
+      "assert": "required_values",
+      "expected": {
+        "projection": "tinygrad-ops",
+        "map": "tinygrad",
+        "source_lock": {
+          "tinygrad/uop/__init__.py": "6218635e6939c5d40fe33b40de51275447edd7390b9311b1066fc4831758621e"
+        }
       },
-      {
-        "bridge": "r-call",
-        "declared": ["C_poly_ctx_new", "C_poly_realize_read"],
-        "forbid_unregistered": true,
-        "forbid_unresolved": true,
-        "forbid_ambiguous": true
-      }
-    ]
+      "actual": {"projection": "polygrad-op-values"},
+      "severity": "error",
+      "owner": "compiler-core",
+      "requirement": "polygrad:poly_op_value-contract",
+      "rationale": "Polygrad declares poly_op_value as the reference Ops.value order, so every reference value must match while subject-only values remain valid."
+    },
+    "TG-GROUP-BINARY-001": {
+      "assert": "required_subset",
+      "expected": {
+        "projection": "tinygrad-binary",
+        "map": "tinygrad",
+        "source_lock": {
+          "tinygrad/uop/__init__.py": "6218635e6939c5d40fe33b40de51275447edd7390b9311b1066fc4831758621e"
+        }
+      },
+      "actual": {"projection": "polygrad-binary"},
+      "mapping": {"IDIV": "CDIV", "MOD": "CMOD"},
+      "severity": "error",
+      "owner": "compiler-core",
+      "requirement": "tinygrad:GroupOp.Binary",
+      "rationale": "Binary operation membership must match after the explicitly declared C compatibility aliases are normalized."
+    },
+    "TG-GROUP-IRREDUCIBLE-001": {
+      "assert": "required_subset",
+      "expected": {
+        "projection": "tinygrad-irreducible",
+        "map": "tinygrad",
+        "source_lock": {
+          "tinygrad/uop/__init__.py": "6218635e6939c5d40fe33b40de51275447edd7390b9311b1066fc4831758621e"
+        }
+      },
+      "actual": {"projection": "polygrad-irreducible"},
+      "mapping": {"IDIV": "CDIV", "MOD": "CMOD"},
+      "severity": "error",
+      "owner": "compiler-core",
+      "requirement": "tinygrad:GroupOp.Irreducible",
+      "rationale": "Irreducible operation membership controls graph termination and must be mapped explicitly."
+    },
+    "TG-GROUP-MOVEMENT-001": {
+      "assert": "required_subset",
+      "expected": {
+        "projection": "tinygrad-movement",
+        "map": "tinygrad",
+        "source_lock": {
+          "tinygrad/uop/__init__.py": "6218635e6939c5d40fe33b40de51275447edd7390b9311b1066fc4831758621e"
+        }
+      },
+      "actual": {"projection": "polygrad-movement"},
+      "severity": "error",
+      "owner": "compiler-core",
+      "requirement": "tinygrad:GroupOp.Movement",
+      "rationale": "Movement operation membership must match the pinned reference."
+    },
+    "TG-PERMUTE-ROUTES-001": {
+      "kind": "test_routes",
+      "selectors": ["*permute*"],
+      "min": 4,
+      "required_routes": [
+        "src/shape.c",
+        "src/placer.c",
+        "py/polygrad/tensor.py",
+        "js/src/tensor.js"
+      ],
+      "severity": "error",
+      "owner": "frontends",
+      "requirement": "polygrad:permute-route-floor",
+      "rationale": "Static permute-related tests must remain connected to the C core, Python, JavaScript, and configured browser path; this is a routing floor, not behavioral conformance."
+    },
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "src/uop.c",
+        "src/engine/schedule.c",
+        "src/engine/realize.c",
+        "py/polygrad/tensor.py",
+        "js/src/tensor.js"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    },
+    "REQUIRED-SYMBOLS-CORE": {
+      "kind": "required_symbols",
+      "layer": "core",
+      "symbols": [
+        "poly_tensor_create"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed core symbols remain present."
+    },
+    "REQUIRED-SYMBOLS-PYTHON": {
+      "kind": "required_symbols",
+      "layer": "python",
+      "symbols": [
+        "Tensor"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed python symbols remain present."
+    },
+    "REQUIRED-SYMBOLS-JAVASCRIPT": {
+      "kind": "required_symbols",
+      "layer": "javascript",
+      "symbols": [
+        "createBoundTensorClass.Tensor"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed javascript symbols remain present."
+    },
+    "PROVIDER-SURFACE-JAVASCRIPT-WASM": {
+      "declared": [
+        "poly_ctx_new",
+        "poly_tensor_create"
+      ],
+      "forbid_unregistered": true,
+      "forbid_unresolved": true,
+      "forbid_ambiguous": true,
+      "kind": "provider_surface",
+      "surface": "javascript-wasm",
+      "owner": "architecture",
+      "rationale": "The reviewed provider surface remains declared and resolvable."
+    },
+    "PROVIDER-SURFACE-JAVASCRIPT-NAPI": {
+      "declared": [
+        "poly_ctx_new",
+        "poly_tensor_create"
+      ],
+      "forbid_ambiguous": true,
+      "kind": "provider_surface",
+      "surface": "javascript-napi",
+      "owner": "architecture",
+      "rationale": "The reviewed provider surface remains declared and resolvable."
+    },
+    "PROVIDER-SURFACE-R-CALL": {
+      "declared": [
+        "C_poly_ctx_new",
+        "C_poly_realize_read"
+      ],
+      "forbid_unregistered": true,
+      "forbid_unresolved": true,
+      "forbid_ambiguous": true,
+      "kind": "provider_surface",
+      "surface": "r-call",
+      "owner": "architecture",
+      "rationale": "The reviewed provider surface remains declared and resolvable."
+    }
   }
 }

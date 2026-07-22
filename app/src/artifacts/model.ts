@@ -75,12 +75,10 @@ export function parseArtifact(bytes: Uint8Array, name: string): ParsedArtifact {
   const document = object(value, name);
   const artifact = typeof document.artifact === "string" && document.artifact.length
     ? document.artifact
-    : document.schema_version === 1
-      && typeof document.suite === "string"
-      && Array.isArray(document.checks)
-      && document.projects !== null
-      && typeof document.projects === "object"
-      ? "verification-suite"
+    : document.schema_version === 2
+      && typeof document.project === "string"
+      && Array.isArray(document.layers)
+      ? "project-configuration"
       : string(document.artifact, `${name}.artifact`);
   return { artifact, bytes, document, name };
 }

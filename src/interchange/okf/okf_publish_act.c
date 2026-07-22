@@ -85,13 +85,15 @@ static ArchbirdStatus relation_path(AbOkfPublication *pub,
 
 static int verification_has_finding(const AbOkfPublication *pub,
                                     const AbString *fingerprint) {
-  size_t check_index;
+  size_t constraint_index;
   if (!pub->has_verification || !fingerprint)
     return 0;
-  for (check_index = 0; check_index < pub->verification.checks->as.array.count;
-       check_index++) {
+  for (constraint_index = 0;
+       constraint_index < pub->verification.constraints->as.array.count;
+       constraint_index++) {
     const AbValue *findings = array_or_empty(
-        &pub->verification.checks->as.array.items[check_index], "findings");
+        &pub->verification.constraints->as.array.items[constraint_index],
+        "findings");
     size_t finding_index;
     if (!findings)
       return 0;
@@ -145,7 +147,7 @@ static ArchbirdStatus add_proposal(AbOkfPublication *pub,
   const AbValue *origin = pub->proposal.origin;
   const AbValue *finding =
       ab_okf_pub_member(origin, "finding", AB_VALUE_OBJECT);
-  const AbString *check_id = ab_okf_pub_text(origin, "check");
+  const AbString *constraint_id = ab_okf_pub_text(origin, "constraint");
   const AbString *fingerprint = ab_okf_pub_text(finding, "fingerprint");
   const AbString *message = ab_okf_pub_text(finding, "message");
   const AbValue *postconditions = pub->proposal.postconditions;
@@ -167,7 +169,7 @@ static ArchbirdStatus add_proposal(AbOkfPublication *pub,
   AbBuffer body;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!origin || !finding || !check_id || !fingerprint || !message ||
+  if (!origin || !finding || !constraint_id || !fingerprint || !message ||
       !postconditions || !candidates || !unknowns)
     return ab_okf_pub_error(pub, "invalid change proposal publication");
   has_finding = verification_has_finding(pub, fingerprint);
@@ -202,7 +204,7 @@ static ArchbirdStatus add_proposal(AbOkfPublication *pub,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&body, "\n\nDerived from ");
   if (status == ARCHBIRD_OK)
-    status = ab_okf_pub_code(&body, check_id);
+    status = ab_okf_pub_code(&body, constraint_id);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&body, " finding ");
   if (status == ARCHBIRD_OK)
@@ -224,16 +226,17 @@ static ArchbirdStatus add_proposal(AbOkfPublication *pub,
        status == ARCHBIRD_OK && index < postconditions->as.array.count;
        index++) {
     const AbValue *row = &postconditions->as.array.items[index];
-    const AbValue *check = ab_okf_pub_member(row, "check", AB_VALUE_OBJECT);
+    const AbValue *constraint =
+        ab_okf_pub_member(row, "constraint", AB_VALUE_OBJECT);
     const AbValue *coverage =
         ab_okf_pub_member(row, "coverage", AB_VALUE_OBJECT);
     const AbString *id = ab_okf_pub_text(row, "id");
-    const AbString *assertion = ab_okf_pub_text(check, "assert");
+    const AbString *assertion = ab_okf_pub_text(constraint, "assert");
     const AbString *strength = ab_okf_pub_text(row, "derivation_strength");
     const AbString *classification =
         ab_okf_pub_text(coverage, "classification");
     const AbString *domain = ab_okf_pub_text(coverage, "domain");
-    if (!check || !coverage || !id || !assertion || !strength ||
+    if (!constraint || !coverage || !id || !assertion || !strength ||
         !classification || !domain) {
       status = ab_okf_pub_error(pub, "invalid change proposal postcondition");
       break;

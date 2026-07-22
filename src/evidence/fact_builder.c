@@ -458,6 +458,26 @@ ArchbirdStatus ab_fact_add_u64_attribute(ArchbirdEngine *engine, AbFact *fact,
   return ab_string_copy(engine, &field->value.as.text, bytes, (size_t)length);
 }
 
+ArchbirdStatus ab_fact_add_i64_attribute(ArchbirdEngine *engine, AbFact *fact,
+                                         const char *name, int64_t value) {
+  AbObjectField *field = NULL;
+  char bytes[32];
+  int length;
+  ArchbirdStatus status;
+  if (!engine || !fact || !name)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  length = snprintf(bytes, sizeof(bytes), "%" PRId64, value);
+  if (length < 0 || (size_t)length >= sizeof(bytes))
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "failed to encode signed fact integer");
+  status = add_attribute(engine, fact, name, &field);
+  if (status != ARCHBIRD_OK)
+    return status;
+  field->value.kind = AB_VALUE_INTEGER;
+  return ab_string_copy(engine, &field->value.as.text, bytes, (size_t)length);
+}
+
 ArchbirdStatus
 ab_bundle_builder_add_diagnostic(AbBundleBuilder *builder, const char *severity,
                                  const char *code, const char *message,

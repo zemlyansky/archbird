@@ -59,20 +59,18 @@ function usage(command = "map") {
   const rows = {
     map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|audit] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
     observe: "archbird observe [ROOT] --map MAP.json --request COVERAGE.json [--output OBSERVATIONS.json]",
-    query: "archbird query [ROOT] [--config PROJECT.json | --map MAP.json] [SELECTORS] [--check]",
-    impact: "archbird impact [ROOT] [--config PROJECT.json | --map MAP.json] [SELECTORS] [--check]",
+    query: "archbird query [QUERY] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
+    impact: "archbird impact [QUERY] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
-    verify: "archbird verify [ROOT | --config SUITE.verify.json | --init PROJECT.json] [--baseline FILE | --freeze FILE] [--check]\narchbird verify recipe list|show|run|compile ...\narchbird verify debug selection|unknown [ROOT] [--check ID | --extractor NAME]\narchbird verify debug component COMPONENT [ROOT] [--project NAME]\narchbird verify debug unassigned|overlap [ROOT] [--project NAME]",
-    "verify-recipe": "archbird verify recipe list|show|run|compile [max-file-bytes] [OPTIONS]",
-    "verify-debug": "archbird verify debug selection|unknown [ROOT | --config SUITE.verify.json] [--check ID] [--extractor NAME] [--format json|markdown]\narchbird verify debug component COMPONENT [ROOT | --config SUITE.verify.json] [--project NAME]\narchbird verify debug unassigned|overlap [ROOT | --config SUITE.verify.json] [--project NAME]",
+    verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--check]",
     plan: "archbird plan --verification RESULT.json --finding FINGERPRINT",
     contract: "archbird contract --proposal PROPOSAL.json --objective TEXT --owner NAME --rationale TEXT",
     "verify-plan": "archbird verify-plan --proposal P.json --contract C.json --before-verification B.json --after-verification A.json [--check]",
     export: "archbird export graphml|json|mermaid --map MAP_OR_QUERY.json [--output FILE]",
-    serve: "archbird serve [ROOT] [--config PROJECT.json] [--host 127.0.0.1] [--port 4177]",
+    serve: "archbird serve [--root PROJECT] [--config PROJECT.json] [--host 127.0.0.1] [--port 4177]",
     support: "archbird support",
   };
   const selectorHelp = ["query", "impact"].includes(command)
@@ -151,53 +149,6 @@ function required(options, ...names) {
   }
 }
 
-const BYTE_SIZE_UNITS = new Map([
-  ["", 1n], ["b", 1n],
-  ["k", 1024n], ["kib", 1024n],
-  ["m", 1024n ** 2n], ["mib", 1024n ** 2n],
-  ["g", 1024n ** 3n], ["gib", 1024n ** 3n],
-  ["t", 1024n ** 4n], ["tib", 1024n ** 4n],
-  ["kb", 1000n], ["mb", 1000n ** 2n],
-  ["gb", 1000n ** 3n], ["tb", 1000n ** 4n],
-]);
-
-function byteSize(raw) {
-  const match = /^([0-9]+)([A-Za-z]*)$/.exec(raw || "");
-  const unit = match && BYTE_SIZE_UNITS.get(match[2].toLowerCase());
-  if (!match || unit === undefined) {
-    throw new Error(
-      "--max: expected an integer byte size such as 1048576, 1MiB, or 1MB",
-    );
-  }
-  const result = BigInt(match[1]) * unit;
-  if (result > (1n << 64n) - 1n) {
-    throw new Error("--max: byte size exceeds the unsigned 64-bit limit");
-  }
-  return result;
-}
-
-function recipeRequest(options, project) {
-  const check = {
-    id: options.id,
-    owner: options.owner,
-    rationale: options.rationale,
-    severity: options.severity,
-  };
-  if (options.requirement !== undefined) check.requirement = options.requirement;
-  if (options.tag.length) check.tags = options.tag;
-  const pieces = [
-    '{"artifact":"verification-recipe-request","schema_version":1,"recipe":',
-    JSON.stringify(options.recipe),
-    ',"project":', JSON.stringify(project),
-    ',"arguments":{"max":', options.maximum.toString(),
-    ',"include":', JSON.stringify(options.include),
-    ',"exclude":', JSON.stringify(options.exclude),
-    ',"allow_empty":', options.allowEmpty ? "true" : "false",
-    '},"check":', JSON.stringify(check), '}',
-  ];
-  return Buffer.from(pieces.join(""));
-}
-
 function read(name) {
   return fs.readFileSync(path.resolve(name));
 }
@@ -209,16 +160,6 @@ function write(value, output = "-") {
     : Buffer.concat([bytes, Buffer.from("\n")]);
   if (output === "-") process.stdout.write(encoded);
   else fs.writeFileSync(path.resolve(output), encoded);
-}
-
-function pathLexists(value) {
-  try {
-    fs.lstatSync(value);
-    return true;
-  } catch (error) {
-    if (error && error.code === "ENOENT") return false;
-    throw error;
-  }
 }
 
 function hasErrors(document) {
@@ -312,8 +253,22 @@ class Progress {
   }
 }
 
-function configRoot(configJson) {
-  return JSON.parse(archbird.discoveryPlan(configJson, []).toString("utf8")).root;
+function validateProjectConfiguration(configJson) {
+  let document;
+  try {
+    document = JSON.parse(configJson.toString("utf8"));
+  } catch (error) {
+    throw new Error(`invalid project configuration JSON: ${error.message}`);
+  }
+  if (!document || Array.isArray(document) || typeof document !== "object") {
+    throw new Error("project configuration must be an object");
+  }
+  if (document.schema_version !== 2) {
+    throw new Error("archbird.json schema_version must equal 2");
+  }
+  if (Object.hasOwn(document, "root")) {
+    throw new Error("archbird.json does not allow root; use --root");
+  }
 }
 
 function repositoryInputs(options) {
@@ -331,19 +286,14 @@ function repositoryInputs(options) {
   if (options.config) {
     if (options.config === "-") {
       configJson = fs.readFileSync(0);
-      if (!positional && !override) {
-        repository = path.resolve(repository, configRoot(configJson));
-      }
     }
     else {
       configPath = path.resolve(options.config);
       configJson = fs.readFileSync(configPath);
     }
-    if (!positional && !override && configPath) {
-      repository = path.resolve(path.dirname(configPath), configRoot(configJson));
-    }
+    validateProjectConfiguration(configJson);
   } else if (!options.noConfig) {
-    const candidates = ["archbird.json", ".archbird.json"]
+    const candidates = ["archbird.json"]
       .map((name) => path.join(repository, name))
       .filter((candidate) => {
         try {
@@ -354,13 +304,10 @@ function repositoryInputs(options) {
           throw error;
         }
       });
-    if (candidates.length > 1) {
-      throw new Error("repository contains both archbird.json and .archbird.json");
-    }
     if (candidates.length) {
       configPath = candidates[0];
       configJson = fs.readFileSync(configPath);
-      repository = path.resolve(repository, configRoot(configJson));
+      validateProjectConfiguration(configJson);
     }
   }
   if (!fs.statSync(repository).isDirectory()) {
@@ -468,6 +415,39 @@ function project(options, progress = null) {
     current.addTestSymbolObservations(read(observationPath));
   }
   return current;
+}
+
+function configForSavedMap(options, purpose) {
+  let configJson;
+  if (options.config === "-") configJson = fs.readFileSync(0);
+  else if (options.config) configJson = read(options.config);
+  else {
+    const candidate = path.join(path.resolve("."), "archbird.json");
+    if (!fs.existsSync(candidate)) {
+      throw new Error(`${purpose} requires archbird.json or --config with --map`);
+    }
+    configJson = fs.readFileSync(candidate);
+  }
+  validateProjectConfiguration(configJson);
+  return configJson;
+}
+
+function namedDocuments(values, option) {
+  const result = {};
+  for (const value of values) {
+    const split = value.indexOf("=");
+    if (split <= 0 || split === value.length - 1) {
+      throw new Error(`${option}: expected ID=PATH, got ${JSON.stringify(value)}`);
+    }
+    const id = value.slice(0, split);
+    if (Object.hasOwn(result, id)) throw new Error(`${option}: duplicate id ${JSON.stringify(id)}`);
+    const document = JSON.parse(read(value.slice(split + 1)).toString("utf8"));
+    if (!document || Array.isArray(document) || typeof document !== "object") {
+      throw new Error(`${option}: ${value.slice(split + 1)} must contain a JSON object`);
+    }
+    result[id] = document;
+  }
+  return result;
 }
 
 function mapMain(argv) {
@@ -679,12 +659,14 @@ function contextCounts(values, option) {
 
 function queryMain(argv, command) {
   const options = parse(argv, selectorDefinitions(), { positionals: 1 });
+  const queryId = options._[0] || null;
+  const repositoryOptions = { ...options, _: [] };
   if (options.help) {
     process.stdout.write(usage(command));
     return 0;
   }
   if (options.map && (
-    options.config || options.noConfig || options._.length || options.root ||
+    options.noConfig || options.root ||
     hasDiscoveryOverrides(options)
   )) {
     throw new Error("--map cannot be combined with repository discovery options");
@@ -694,6 +676,9 @@ function queryMain(argv, command) {
   }
   if (options.map && options.gitDiff) {
     throw new Error("--git-diff requires a live repository, not --map");
+  }
+  if (options.resolution && !options.map) {
+    throw new Error("--resolution requires --map");
   }
   if (options.verificationResult &&
       (options.format !== "markdown" || (options.view || "focused") !== "changes")) {
@@ -716,19 +701,37 @@ function queryMain(argv, command) {
   }
   const progress = new Progress(options.progress);
   let source;
+  let configJson = Buffer.alloc(0);
+  let resolutionJson = Buffer.alloc(0);
   let changeSet = null;
-  if (options.map) source = read(options.map);
+  if (options.map) {
+    source = read(options.map);
+    if (options.resolution) resolutionJson = read(options.resolution);
+    if (queryId || options.config) configJson = configForSavedMap(options, "named query");
+  }
   else {
     if (options.gitDiff) {
-      changeSet = gitChangeSet(repositoryInputs(options).repository, options.gitDiff);
+      changeSet = gitChangeSet(repositoryInputs(repositoryOptions).repository, options.gitDiff);
     }
-    const current = project(options, progress);
+    ({ configJson } = repositoryInputs(repositoryOptions));
+    const current = project(repositoryOptions, progress);
     progress.emit({ phase: "rendering", artifact: "canonical Map" });
     source = current.mapJson();
+    resolutionJson = current.resolutionJson || Buffer.alloc(0);
     warnMapCacheStats(current.mapCacheStats);
   }
   const sourceDocument = JSON.parse(source);
-  const queryOptions = {
+  if (options.check && options.map) {
+    const producer = sourceDocument.tool?.implementation_sha256;
+    if (producer !== archbird.IMPLEMENTATION_SHA256) {
+      process.stderr.write(
+        `archbird: check failed: saved Map core ${producer || "missing"} ` +
+        `does not match active core ${archbird.IMPLEMENTATION_SHA256}\n`,
+      );
+      return 1;
+    }
+  }
+  let queryOptions = {
     artifacts: options.artifact,
     components: options.component,
     changeSet,
@@ -757,6 +760,53 @@ function queryMain(argv, command) {
   if (Object.keys(quotas).length) context.quotas = quotas;
   if (Object.keys(offsets).length) context.offsets = offsets;
   if (Object.keys(context).length) queryOptions.context = context;
+  if (queryId) {
+    if (!configJson.length) {
+      throw new Error(`named query ${JSON.stringify(queryId)} requires archbird.json`);
+    }
+    const overrides = {};
+    for (const [name, value] of [
+      ["focus", options.focus], ["paths", options.path],
+      ["symbols", options.symbol], ["components", options.component],
+      ["packages", options.package], ["artifacts", options.artifact],
+      ["search", options.search],
+    ]) {
+      if (value.length) overrides[name] = value;
+    }
+    if (options.searchLimit !== 8) overrides.search_limit = options.searchLimit;
+    if (options.direction) overrides.direction = options.direction;
+    if (options.depth !== 1) overrides.depth = options.depth;
+    if (options.testDepth !== 8) overrides.test_depth = options.testDepth;
+    if (Object.keys(context).length) overrides.context = context;
+    const artifact = JSON.parse(archbird.compileQueryPlan(
+      configJson,
+      source,
+      queryId,
+      {
+        resolutionJson,
+        overridesJson: Buffer.from(JSON.stringify(overrides)),
+      },
+    ).toString("utf8"));
+    const request = artifact.request;
+    queryOptions = {
+      artifacts: request.artifacts,
+      components: request.components,
+      context: request.context,
+      depth: request.depth,
+      direction: request.direction,
+      focus: request.focus,
+      packages: request.packages,
+      paths: request.paths,
+      plan: artifact.plan,
+      producerPolicy: options.check && options.map ? "current" : "compatible",
+      projectionResults: artifact.projection_results,
+      search: request.search,
+      searchLimit: request.search_limit,
+      symbols: request.symbols,
+      testDepth: request.test_depth,
+      changeSet,
+    };
+  }
   try {
     if (options.format === "json") {
       if (options.maxChars) throw new Error("--max-chars applies only to Markdown");
@@ -943,382 +993,147 @@ function workspaceMain(argv) {
   return options.check && (hasErrors(document) || (document.projects || []).some((row) => row.diagnostics?.errors)) ? 1 : 0;
 }
 
-function projectRoots(values) {
-  const result = {};
-  for (const value of values) {
-    const split = value.indexOf("=");
-    if (split <= 0 || split === value.length - 1) throw new Error(`--project-root expects NAME=PATH: ${value}`);
-    const name = value.slice(0, split);
-    if (Object.hasOwn(result, name)) throw new Error(`duplicate project root: ${name}`);
-    result[name] = path.resolve(value.slice(split + 1));
-  }
-  return result;
-}
-
-const VERIFICATION_SUITE_NAMES = [
-  "archbird.verify.json",
-  ".archbird.verify.json",
-  "architecture.verify.json",
-];
-
-function discoverVerificationSuite(rootName) {
-  const root = path.resolve(rootName || ".");
-  let rootMetadata;
-  try {
-    rootMetadata = fs.statSync(root);
-  } catch (error) {
-    if (!error || error.code !== "ENOENT") throw error;
-  }
-  if (!rootMetadata || !rootMetadata.isDirectory()) {
-    throw new Error(`verification root is not a directory: ${root}`);
-  }
-  const candidates = VERIFICATION_SUITE_NAMES
-    .map((name) => path.join(root, name))
-    .filter((candidate) => {
-      try {
-        const metadata = fs.lstatSync(candidate);
-        return metadata.isFile() && !metadata.isSymbolicLink();
-      } catch (error) {
-        if (error && error.code === "ENOENT") return false;
-        throw error;
-      }
-    });
-  if (candidates.length > 1) {
-    throw new Error(
-      `verification root contains multiple suites: ${candidates.map((value) => path.basename(value)).join(", ")}`,
-    );
-  }
-  if (!candidates.length) {
-    throw new Error(
-      `no verification suite found in ${root}; expected one of: ` +
-      `${VERIFICATION_SUITE_NAMES.join(", ")}. Map can discover implementation ` +
-      "evidence, but Verify requires reviewed architecture intent",
-    );
-  }
-  return candidates[0];
-}
-
-function recipeCheckDefinitions({ reviewed }) {
-  return {
-    max: { type: "string" },
-    include: { type: "multiple" },
-    exclude: { type: "multiple" },
-    allowEmpty: { flag: "allow-empty", type: "boolean" },
-    id: { default: "MAX-FILE-BYTES", type: "string" },
-    owner: {
-      default: reviewed ? undefined : "command-line",
-      type: "string",
-    },
-    rationale: {
-      default: reviewed ? undefined : "Explicit one-shot max-file-bytes policy.",
-      type: "string",
-    },
-    severity: { default: "error", type: "string" },
-    requirement: { type: "string" },
-    tag: { type: "multiple" },
-  };
-}
-
-function checkedRecipe(options) {
-  if (options.recipe !== "max-file-bytes") {
-    throw new Error(`unknown verification recipe: ${options.recipe}`);
-  }
-  required(options, "max");
-  options.maximum = byteSize(options.max);
-  if (!["error", "warning", "info"].includes(options.severity)) {
-    throw new Error("--severity must be error, warning, or info");
-  }
-  return options;
-}
-
-function verificationRecipeMain(argv) {
-  const command = argv[0];
-  if (!command || ["--help", "-h"].includes(command)) {
-    process.stdout.write(usage("verify-recipe"));
-    return 0;
-  }
-  if (command === "list") {
-    const options = parse(argv.slice(1), {
-      pretty: COMMON.pretty, output: COMMON.output, help: COMMON.help,
-    });
-    if (options.help) { process.stdout.write(usage("verify-recipe")); return 0; }
-    write(archbird.verificationRecipeCatalog("", { pretty: options.pretty }), options.output);
-    return 0;
-  }
-  if (command === "show") {
-    const options = parse(argv.slice(1), {
-      pretty: COMMON.pretty, output: COMMON.output, help: COMMON.help,
-    }, { positionals: 1 });
-    if (options.help) { process.stdout.write(usage("verify-recipe")); return 0; }
-    if (!options._[0]) throw new Error("verify recipe show requires a recipe name");
-    write(
-      archbird.verificationRecipeCatalog(options._[0], { pretty: options.pretty }),
-      options.output,
-    );
-    return 0;
-  }
-  if (command === "compile") {
-    const options = parse(argv.slice(1), {
-      ...recipeCheckDefinitions({ reviewed: true }),
-      mapPath: { flag: "map-path", default: "ARCHBIRD.json", type: "string" },
-      pretty: COMMON.pretty,
-      force: { type: "boolean" },
-      output: {
-        aliases: ["o"], default: "archbird.verify.json", type: "string",
-      },
-      help: COMMON.help,
-    }, { positionals: 1 });
-    if (options.help) { process.stdout.write(usage("verify-recipe")); return 0; }
-    options.recipe = options._[0];
-    checkedRecipe(options);
-    required(options, "owner", "rationale");
-    const destination = path.resolve(options.output);
-    if (options.output !== "-" && pathLexists(destination) && !options.force) {
-      throw new Error(`refusing to replace existing verification suite: ${destination}`);
-    }
-    write(
-      archbird.compileVerificationRecipe(
-        recipeRequest(options, { map: options.mapPath }),
-        { pretty: options.pretty },
-      ),
-      options.output,
-    );
-    return 0;
-  }
-  if (command !== "run") {
-    throw new Error(`unknown verify recipe command: ${command}`);
-  }
-  const options = parse(argv.slice(1), {
-    ...COMMON,
-    noConfig: { flag: "no-config", type: "boolean" },
-    project: { type: "string" },
-    progress: { default: "auto", type: "string" },
-    ...recipeCheckDefinitions({ reviewed: false }),
-    format: { default: "markdown", type: "string" },
-    full: { type: "boolean" },
-    maxFindings: { flag: "max-findings", default: 200, type: "number" },
-  }, { positionals: 2 });
-  if (options.help) { process.stdout.write(usage("verify-recipe")); return 0; }
-  options.recipe = options._[0];
-  options._ = options._.slice(1);
-  checkedRecipe(options);
-  if (!["json", "markdown", "sarif", "junit"].includes(options.format)) {
-    throw new Error("--format must be json, markdown, sarif, or junit");
-  }
-  const suiteJson = archbird.compileVerificationRecipe(
-    recipeRequest(options, { map: "CURRENT.json" }),
-  );
-  const plan = JSON.parse(archbird.verificationPlan(suiteJson).toString("utf8"));
-  if (!Array.isArray(plan.projects) || plan.projects.length !== 1) {
-    throw new Error("verification recipe must select exactly one project");
-  }
-  const progress = new Progress(options.progress);
-  const { repository, configJson } = repositoryInputs(options);
-  progress.emit({ phase: "discovery", state: "start" });
-  const current = archbird.Project.fromRepository(repository, {
-    config: configJson.length ? configJson : null,
-    project: options.project || null,
-    scan: false,
-    typescript: !options.noTypescript,
-  });
-  try {
-    progress.emit({ phase: "selected", files: current.sources.length });
-    if (plan.projects[0].provider_scan) {
-      current.scan("primary", {
-        cacheDir: options.noCache
-          ? null
-          : (options.cacheDir || archbird.defaultProviderCacheDir()),
-        cacheMaxBytes: cacheMaxBytes(options),
-        typescript: !options.noTypescript,
-        progress: (event) => progress.emit(event),
-      });
-    } else {
-      progress.emit({ phase: "joining", state: "start" });
-      current.finalizeProviders();
-      progress.emit({ phase: "joining", state: "complete" });
-    }
-    warnCacheStats(current.cacheStats);
-    const mapJson = current.mapJson();
-    warnMapCacheStats(current.mapCacheStats);
-    const verification = archbird.Verification.fromMap(suiteJson, mapJson, {
-      resolutionJson: current.resolutionJson,
-    });
-    progress.emit({ phase: "rendering", artifact: "verification" });
-    const encoded = verification.report({
-      format: options.format,
-      full: options.full,
-      maxFindings: options.maxFindings,
-      pretty: options.pretty || options.format === "sarif",
-    });
-    write(encoded, options.output);
-    progress.finish();
-    return options.check && verification.hasErrors() ? 1 : 0;
-  } finally {
-    current.dispose();
-  }
-}
-
-function verificationDebugMain(argv) {
-  const options = parse(argv, {
-    config: COMMON.config,
-    output: COMMON.output,
-    pretty: COMMON.pretty,
-    help: COMMON.help,
-    noTypescript: COMMON.noTypescript,
-    cacheDir: COMMON.cacheDir,
-    cacheMaxBytes: COMMON.cacheMaxBytes,
-    noCache: COMMON.noCache,
-    baseline: { type: "string" },
-    checkId: { flag: "check", type: "string" },
-    extractor: { type: "string" },
-    project: { type: "string" },
-    limit: { default: 200, type: "number" },
-    projectRoot: { flag: "project-root", type: "multiple" },
-    format: { default: "markdown", type: "string" },
-  }, { positionals: 3 });
-  if (options.help) { process.stdout.write(usage("verify-debug")); return 0; }
-  const view = options._[0];
-  const targets = options._.slice(1);
-  let component = null;
-  let root = null;
-  if (!new Set(["selection", "unknown", "component", "unassigned", "overlap"]).has(view)) {
-    throw new Error("verify debug requires view selection, unknown, component, unassigned, or overlap");
-  }
-  if (view === "component") {
-    if (targets.length < 1 || targets.length > 2) {
-      throw new Error("component view requires COMPONENT and accepts one optional ROOT");
-    }
-    [component, root = null] = targets;
-  } else {
-    if (targets.length > 1) throw new Error(`${view} view accepts at most one ROOT`);
-    [root = null] = targets;
-  }
-  if (root && options.config) {
-    throw new Error("positional ROOT cannot be combined with --config");
-  }
-  if (!new Set(["json", "markdown"]).has(options.format)) {
-    throw new Error("--format must be json or markdown");
-  }
-  if (!Number.isSafeInteger(options.limit) || options.limit < 0) {
-    throw new Error("--limit must be a nonnegative safe integer");
-  }
-  const suitePath = options.config || discoverVerificationSuite(root);
-  const verification = archbird.Verification.fromConfig(suitePath, {
-    baseline: options.baseline || null,
-    cacheDir: options.noCache
-      ? null
-      : (options.cacheDir || archbird.defaultProviderCacheDir()),
-    cacheMaxBytes: cacheMaxBytes(options),
-    projectRoots: projectRoots(options.projectRoot),
-    typescript: !options.noTypescript,
-  });
-  write(verification.debug(view, {
-    check: options.checkId || null,
-    extractor: options.extractor || null,
-    project: options.project || null,
-    component,
-    limit: new Set(["component", "unassigned", "overlap"]).has(view)
-      ? options.limit
-      : null,
-    format: options.format,
-    pretty: options.pretty,
-  }), options.output);
-  return 0;
-}
-
 function verifyMain(argv) {
-  if (argv[0] === "recipe") return verificationRecipeMain(argv.slice(1));
-  if (argv[0] === "debug") return verificationDebugMain(argv.slice(1));
   const options = parse(argv, {
-    ...COMMON,
-    init: { type: "string" },
-    initRoot: { flag: "init-root", type: "string" },
-    format: { default: "json", type: "string" },
-    projectRoot: { flag: "project-root", type: "multiple" },
+    ...DISCOVERY,
+    map: { type: "string" },
+    resolution: { type: "string" },
     baseline: { type: "string" },
+    policyDate: { flag: "policy-date", type: "string" },
+    observation: { type: "multiple" },
+    mapInput: { flag: "map-input", type: "multiple" },
+    resolutionInput: { flag: "resolution-input", type: "multiple" },
     freeze: { type: "string" },
     freezeOwner: { flag: "freeze-owner", type: "string" },
     freezeRationale: { flag: "freeze-rationale", type: "string" },
+    format: { default: "json", type: "string" },
     full: { type: "boolean" },
     maxFindings: { flag: "max-findings", default: 200, type: "number" },
-  }, { positionals: 1 });
+  }, { positionals: Number.POSITIVE_INFINITY });
   if (options.help) { process.stdout.write(usage("verify")); return 0; }
-  if (options._.length && (options.config || options.init)) {
-    throw new Error("positional ROOT applies only when --config and --init are omitted");
+  if (!["json", "markdown", "sarif", "junit"].includes(options.format)) {
+    throw new Error("--format must be json, markdown, sarif, or junit");
   }
-  if (options.config && options.init) {
-    throw new Error("--config and --init are mutually exclusive");
-  }
-  if (options.init) {
-    if (options.output === "-") {
-      throw new Error("verify --init requires --output so relative paths stay portable");
-    }
-    if (options.projectRoot.length || options.baseline || options.freeze ||
-        options.freezeOwner || options.freezeRationale || options.check ||
-        options.full || options.format !== "json" || options.maxFindings !== 200) {
-      throw new Error(
-        "verify --init accepts only --init-root, cache options, --pretty, and --output",
-      );
-    }
-    const configPath = path.resolve(options.init);
-    const outputPath = path.resolve(options.output);
-    const relativeConfig = path.relative(path.dirname(outputPath), configPath)
-      .split(path.sep).join("/");
-    if (!relativeConfig || path.isAbsolute(relativeConfig)) {
-      throw new Error("verify --init refuses an absolute project config path");
-    }
-    const candidate = archbird.Project.fromConfig(configPath, {
-      root: options.initRoot ? path.resolve(options.initRoot) : null,
-      cacheDir: options.noCache
-        ? null
-        : (options.cacheDir || archbird.defaultProviderCacheDir()),
-      cacheMaxBytes: cacheMaxBytes(options),
-      typescript: !options.noTypescript,
-    });
-    try {
-      write(archbird.draftVerificationSuite(candidate.mapJson(), {
-        projectConfig: relativeConfig,
-        pretty: true,
-      }), options.output);
-    } finally {
-      candidate.dispose();
-    }
-    return 0;
-  }
-  if (options.initRoot) throw new Error("--init-root requires --init");
   if (options.freeze && (!options.freezeOwner || !options.freezeRationale)) {
     throw new Error("--freeze requires --freeze-owner and --freeze-rationale");
   }
   if (!options.freeze && (options.freezeOwner || options.freezeRationale)) {
     throw new Error("--freeze-owner/--freeze-rationale require --freeze");
   }
-  const suitePath = options.config || discoverVerificationSuite(options._[0]);
-  const baseline = options.baseline ||
-    (options.freeze && fs.existsSync(path.resolve(options.freeze)) ? options.freeze : null);
-  const verification = archbird.Verification.fromConfig(suitePath, {
-    baseline,
-    cacheDir: options.noCache
-      ? null
-      : (options.cacheDir || archbird.defaultProviderCacheDir()),
-    cacheMaxBytes: cacheMaxBytes(options),
-    projectRoots: projectRoots(options.projectRoot),
-    typescript: !options.noTypescript,
-  });
-  const encoded = verification.report({
-    format: options.format,
-    full: options.full,
-    maxFindings: options.maxFindings,
-    pretty: options.pretty || options.format === "sarif",
-  });
+  const constraintIds = [...options._];
+  const repositoryOptions = { ...options, _: [] };
+  const observations = namedDocuments(options.observation, "--observation");
+  const mapDocuments = namedDocuments(options.mapInput, "--map-input");
+  const resolutionDocuments = namedDocuments(
+    options.resolutionInput,
+    "--resolution-input",
+  );
+  const unmatched = Object.keys(resolutionDocuments)
+    .filter((id) => !Object.hasOwn(mapDocuments, id));
+  if (unmatched.length) {
+    throw new Error(
+      `--resolution-input has no matching --map-input: ${unmatched.sort().join(", ")}`,
+    );
+  }
+  const maps = {};
+  for (const [id, map] of Object.entries(mapDocuments)) {
+    maps[id] = { map };
+    if (Object.hasOwn(resolutionDocuments, id)) {
+      maps[id].resolution = resolutionDocuments[id];
+    }
+  }
+  let baseline = null;
+  const baselinePath = options.baseline ||
+    (options.freeze && fs.existsSync(path.resolve(options.freeze))
+      ? options.freeze
+      : null);
+  if (baselinePath) baseline = JSON.parse(read(baselinePath).toString("utf8"));
+
+  const progress = new Progress(options.progress);
+  const { repository, configJson } = repositoryInputs(repositoryOptions);
+  if (!configJson.length) {
+    throw new Error(
+      `no archbird.json found in ${repository}; Verify requires reviewed constraints`,
+    );
+  }
+  const configDocument = JSON.parse(configJson.toString("utf8"));
+  const configuredConstraints = Array.isArray(configDocument.constraints)
+    ? configDocument.constraints
+    : Object.values(configDocument.constraints || {});
+  const hasExpiringWaiver = configuredConstraints.some((constraint) =>
+    constraint && Array.isArray(constraint.waivers) &&
+    constraint.waivers.some((waiver) => waiver && waiver.expires_on));
+  const policyDate = options.policyDate ||
+    (hasExpiringWaiver ? new Date().toISOString().slice(0, 10) : null);
+  if (options.resolution && !options.map) {
+    throw new Error("--resolution requires --map");
+  }
+  let mapJson;
+  let resolutionJson;
+  if (options.map) {
+    mapJson = read(options.map);
+    resolutionJson = options.resolution
+      ? read(options.resolution)
+      : Buffer.alloc(0);
+  } else {
+    const current = project(repositoryOptions, progress);
+    mapJson = current.mapJson();
+    resolutionJson = current.resolutionJson || Buffer.alloc(0);
+    warnMapCacheStats(current.mapCacheStats);
+  }
+
+  const baseRequest = {};
+  if (baseline !== null) baseRequest.baseline = baseline;
+  if (Object.keys(maps).length) baseRequest.maps = maps;
+  if (Object.keys(observations).length) baseRequest.observations = observations;
+  if (policyDate !== null) baseRequest.policy_date = policyDate;
+  const selectedRequest = { ...baseRequest };
+  if (constraintIds.length) selectedRequest.ids = constraintIds;
+  const requestJson = Object.keys(selectedRequest).length
+    ? Buffer.from(JSON.stringify(selectedRequest))
+    : Buffer.alloc(0);
+
+  let verification = null;
+  let encoded;
+  if (options.format === "json") {
+    encoded = archbird.evaluateConstraints(configJson, mapJson, {
+      resolutionJson,
+      requestJson,
+      pretty: options.pretty,
+    });
+    verification = JSON.parse(encoded.toString("utf8"));
+  } else {
+    encoded = archbird.reportConstraints(configJson, mapJson, {
+      resolutionJson,
+      requestJson,
+      format: options.format,
+      maxFindings: options.full ? 0xffffffff : options.maxFindings,
+      pretty: options.pretty || options.format === "sarif",
+    });
+  }
   write(encoded, options.output);
+
   if (options.freeze) {
-    write(verification.freeze({
+    const freezeRequest = Object.keys(baseRequest).length
+      ? Buffer.from(JSON.stringify(baseRequest))
+      : Buffer.alloc(0);
+    write(archbird.freezeConstraints(configJson, mapJson, {
+      resolutionJson,
+      requestJson: freezeRequest,
       owner: options.freezeOwner,
       rationale: options.freezeRationale,
       pretty: true,
     }), options.freeze);
   }
-  return options.check && verification.hasErrors() ? 1 : 0;
+  progress.finish();
+  if (!options.check) return 0;
+  if (verification === null) {
+    verification = JSON.parse(archbird.evaluateConstraints(configJson, mapJson, {
+      resolutionJson,
+      requestJson,
+    }).toString("utf8"));
+  }
+  return verification.summary.blocking ? 1 : 0;
 }
 
 function planMain(argv) {
@@ -1339,7 +1154,7 @@ function planMain(argv) {
 function contractMain(argv) {
   const options = parse(argv, {
     proposal: { type: "string" }, objective: { type: "string" }, owner: { type: "string" },
-    rationale: { type: "string" }, preserveCheck: { flag: "preserve-check", type: "multiple" },
+    rationale: { type: "string" }, preserveConstraint: { flag: "preserve-constraint", type: "multiple" },
     preserveAll: { flag: "preserve-all", type: "boolean" },
     selectCandidate: { flag: "select-candidate", type: "multiple" },
     format: { default: "json", type: "string" }, pretty: COMMON.pretty,
@@ -1348,13 +1163,13 @@ function contractMain(argv) {
   if (options.help) { process.stdout.write(usage("contract")); return 0; }
   required(options, "proposal", "objective", "owner", "rationale");
   const proposal = read(options.proposal);
-  let preserveChecks = options.preserveCheck;
+  let preserveConstraints = options.preserveConstraint;
   if (options.preserveAll) {
-    preserveChecks = JSON.parse(proposal).preserved_invariants.map((row) => row.id);
+    preserveConstraints = JSON.parse(proposal).preserved_invariants.map((row) => row.id);
   }
   write(archbird.createChangeContract(proposal, {
     objective: options.objective, owner: options.owner, rationale: options.rationale,
-    preserveChecks, selectedCandidates: options.selectCandidate,
+    preserveConstraints, selectedCandidates: options.selectCandidate,
     format: options.format, pretty: options.pretty,
   }), options.output);
   return 0;
@@ -1453,7 +1268,7 @@ async function serveMain(argv) {
     port: { default: 4177, type: "number" },
     app: { type: "string" },
     help: { aliases: ["h"], type: "boolean" },
-  }, { positionals: 1 });
+  });
   if (options.help) {
     process.stdout.write(`${usage("serve")}\nThe local host keeps the last good generation while rebuilding on repository changes.\n`);
     return 0;

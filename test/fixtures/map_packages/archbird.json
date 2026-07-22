@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "map-packages",
   "layers": [
     {
@@ -177,24 +177,81 @@
       "enforce": true
     }
   ],
-  "checks": {
-    "files": ["src/core.c", "py/pkg/api.py", "js/src/index.js"],
-    "symbols": [{"layer": "core", "name": "poly_add"}],
-    "edges": [
-      {
-        "kind": "bridge:*",
-        "from": "py/**/*.py",
-        "to": "src/**/*.c",
-        "name": "poly_*"
-      }
-    ],
-    "bridges": ["browser-worker"],
-    "entrypoints": [
-      {"package": "npm", "route": "main", "target": "src/index.js"}
-    ],
-    "test_routes": [{"group": "c", "to": "src/core.c"}],
-    "surfaces": [{"bridge": "python-c", "declared": ["poly_add"]}],
-    "forbid_paths": ["legacy-forbidden/**"],
-    "forbid_symbols": [{"layer": "core", "name": "forbidden_symbol"}]
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "src/core.c",
+        "py/pkg/api.py",
+        "js/src/index.js"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    },
+    "REQUIRED-SYMBOLS-CORE": {
+      "kind": "required_symbols",
+      "layer": "core",
+      "symbols": [
+        "poly_add"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed core symbols remain present."
+    },
+    "REQUIRED-FILE-EDGE-001": {
+      "kind": "required_file_edge",
+      "edge_kind": "bridge:*",
+      "source": "py/**/*.py",
+      "target": "src/**/*.c",
+      "owner": "architecture",
+      "rationale": "The reviewed file dependency remains present.",
+      "name": "poly_*"
+    },
+    "REQUIRED-BRIDGE-BROWSER-WORKER": {
+      "kind": "required_bridge",
+      "bridge": "browser-worker",
+      "owner": "architecture",
+      "rationale": "The reviewed bridge remains connected."
+    },
+    "REQUIRED-ENTRYPOINT-001": {
+      "kind": "required_package_entrypoint",
+      "package": "npm",
+      "route": "main",
+      "owner": "architecture",
+      "rationale": "The reviewed package entrypoint remains present.",
+      "target": "src/index.js"
+    },
+    "REQUIRED-TEST-ROUTE-001": {
+      "kind": "required_test_route",
+      "group": "c",
+      "target": "src/core.c",
+      "owner": "architecture",
+      "rationale": "The reviewed static test route remains present."
+    },
+    "PROVIDER-SURFACE-PYTHON-C": {
+      "declared": [
+        "poly_add"
+      ],
+      "kind": "provider_surface",
+      "surface": "python-c",
+      "owner": "architecture",
+      "rationale": "The reviewed provider surface remains declared and resolvable."
+    },
+    "FORBIDDEN-REPOSITORY-PATHS": {
+      "kind": "forbidden_paths",
+      "paths": [
+        "legacy-forbidden/**"
+      ],
+      "owner": "architecture",
+      "rationale": "Deprecated repository paths remain absent."
+    },
+    "FORBIDDEN-SYMBOLS-CORE": {
+      "kind": "forbidden_symbols",
+      "layer": "core",
+      "symbols": [
+        "forbidden_symbol"
+      ],
+      "owner": "architecture",
+      "rationale": "Forbidden core symbols remain absent."
+    }
   }
 }

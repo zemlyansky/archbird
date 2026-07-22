@@ -147,7 +147,7 @@ def build_project(extension, sources: dict[str, bytes]):
         "schema_version": 1,
     }
     config = {
-        "schema_version": 1,
+        "schema_version": 2,
         "project": "ecmascript-identity",
         "layers": [
             {
@@ -161,13 +161,6 @@ def build_project(extension, sources: dict[str, bytes]):
                 ("tsx", "tsx"),
             )
         ],
-        "checks": {
-            "symbols": [
-                {"layer": layer, "name": name}
-                for layer, names in REQUIRED.items()
-                for name in names
-            ]
-        },
     }
     project = extension.project_create(canonical(manifest))
     for path, raw in sorted(sources.items()):
@@ -329,53 +322,44 @@ def check_diff(extension, before: dict) -> None:
 
 def check_verify(extension, mapped: dict) -> None:
     expected = sorted(REQUIRED["javascript"])
-    suite = {
-        "schema_version": 1,
-        "suite": "ecmascript-symbol-identity",
-        "projects": {"subject": {"map": "subject.map.json"}},
-        "extractors": {
-            "required.javascript": {"kind": "literal_set", "values": expected},
-            "actual.javascript": {
-                "kind": "symbols",
-                "project": "subject",
-                "layer": "javascript",
-            },
-        },
-        "checks": [
+    config = {
+        "schema_version": 2,
+        "project": "ecmascript-identity",
+        "layers": [
             {
-                "id": "ECMASCRIPT-NESTED-IDENTITY",
+                "name": language,
+                "language": "typescript" if language == "tsx" else language,
+                "globs": [f"{folder}/**"],
+            }
+            for language, folder in (
+                ("javascript", "js"),
+                ("typescript", "ts"),
+                ("tsx", "tsx"),
+            )
+        ],
+        "constraints": {
+            "ECMASCRIPT-NESTED-IDENTITY": {
                 "assert": "required_subset",
-                "expected": "required.javascript",
-                "actual": "actual.javascript",
+                "expected": {"literal": expected},
+                "actual": {
+                    "projection": {
+                        "select": "symbols",
+                        "layer": "javascript",
+                    }
+                },
                 "severity": "error",
                 "owner": "evidence",
                 "rationale": "Nested declaration identity must remain qualified.",
-            }
-        ],
-    }
-    verify_input = {
-        "schema_version": 1,
-        "artifact": "verification-input",
-        "suite_path": "ecmascript-identity.verify.json",
-        "projects": [
-            {
-                "name": "subject",
-                "map": mapped,
-                "sources": [
-                    {"path": path, "text": raw.decode()}
-                    for path, raw in sorted(SOURCES.items())
-                ],
-            }
-        ],
-        "provided_facts": [],
-        "attestations": [],
-        "baseline": None,
+            },
+        },
     }
     verified = json.loads(
-        extension.verification_analyze(canonical(suite), canonical(verify_input))
+        extension.constraints_evaluate(
+            canonical(config), canonical(mapped)
+        )
     )
-    check = verified["checks"][0]
-    assert check["status"] == "pass", check
+    constraint = verified["constraints"][0]
+    assert constraint["status"] == "pass", constraint
 
     broken = copy.deepcopy(mapped)
     js_file = next(row for row in broken["files"] if row["path"] == "js/factory.js")
@@ -383,18 +367,19 @@ def check_verify(extension, mapped: dict) -> None:
         row for row in js_file["symbols"] if row["name"] != "jsFactory.Product"
     ]
     broken["evidence"]["input_sha256"] = "a" * 64
-    verify_input["projects"][0]["map"] = broken
     failed = json.loads(
-        extension.verification_analyze(canonical(suite), canonical(verify_input))
-    )
-    failed_check = failed["checks"][0]
-    assert failed_check["status"] == "fail", failed_check
-    proposal = json.loads(
-        extension.change_proposal(
-            canonical(failed), failed_check["findings"][0]["fingerprint"]
+        extension.constraints_evaluate(
+            canonical(config), canonical(broken)
         )
     )
-    assert proposal["origin"]["check"] == "ECMASCRIPT-NESTED-IDENTITY", proposal
+    failed_constraint = failed["constraints"][0]
+    assert failed_constraint["status"] == "fail", failed_constraint
+    proposal = json.loads(
+        extension.change_proposal(
+            canonical(failed), failed_constraint["findings"][0]["fingerprint"]
+        )
+    )
+    assert proposal["origin"]["constraint"] == "ECMASCRIPT-NESTED-IDENTITY", proposal
 
 
 def main() -> int:

@@ -199,7 +199,7 @@ def main() -> int:
         markdown = run(binary, source_path, str(query_path), "markdown")
         assert markdown.returncode == 0, markdown.stderr
         assert markdown.stdout.startswith(b"# OKF query\n")
-        assert b"Prose is never translated into checks." in markdown.stdout
+        assert b"Prose is never translated into constraints." in markdown.stdout
 
         unmatched_path = root / "unmatched.json"
         unmatched_path.write_bytes(canonical(query(concepts=["absent/**"])))

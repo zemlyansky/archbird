@@ -1,8 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "tranfi",
   "description": "Streaming ETL C11 core with Python, Node, WASM, and Vue worker application surfaces.",
-  "root": ".",
   "exclude": ["**/csrc/**", "js/wasm/**", "js/app/assets/**", "references/**", "third_party/**", "temp/**", "corpus/**"],
   "layers": [
     {"name": "core", "role": "core", "language": "c", "globs": ["src/**/*.c", "src/**/*.h"], "public_headers": ["src/tranfi.h"]},
@@ -55,5 +54,18 @@
       "enforce": true
     }
   ],
-  "checks": {"files": ["src/tranfi.h", "src/pipeline.c", "py/tranfi/__init__.py", "js/src/index.js", "app/src/lib/tranfi-worker.js"]}
+  "constraints": {
+    "REQUIRED-MAPPED-PATHS": {
+      "kind": "required_paths",
+      "paths": [
+        "src/tranfi.h",
+        "src/pipeline.c",
+        "py/tranfi/__init__.py",
+        "js/src/index.js",
+        "app/src/lib/tranfi-worker.js"
+      ],
+      "owner": "architecture",
+      "rationale": "Reviewed source paths remain inside the configured Map scope."
+    }
+  }
 }

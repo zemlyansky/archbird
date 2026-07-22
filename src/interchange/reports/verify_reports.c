@@ -228,14 +228,20 @@ render_sarif_regression(AbBuffer *buffer, const AbVerifyCoverageRegression *row,
   return status;
 }
 
-ArchbirdStatus ab_verify_render_sarif(AbVerificationContext *context,
-                                      AbBuffer *buffer) {
+ArchbirdStatus ab_constraints_render_sarif(AbVerificationContext *context,
+                                           AbBuffer *buffer) {
   size_t check_index;
   size_t emitted = 0;
   REPORT_TRY(ab_buffer_literal(
       buffer, "{\"$schema\":\"https://json.schemastore.org/sarif-2.1.0.json\","
               "\"runs\":[{\"automationDetails\":{\"id\":"));
-  REPORT_TRY(ab_value_render(buffer, context->suite.name));
+  REPORT_TRY(ab_value_render(buffer, context->project));
+  REPORT_TRY(ab_buffer_literal(
+      buffer, ",\"properties\":{\"archbirdPolicyKind\":\"constraints\","
+              "\"constraintPolicySha256\":"));
+  REPORT_TRY(
+      ab_buffer_json_string(buffer, context->constraint_policy_sha256, 64));
+  REPORT_TRY(ab_buffer_literal(buffer, "}"));
   REPORT_TRY(ab_buffer_literal(buffer, "},\"results\":["));
   for (check_index = 0; check_index < context->check_count; check_index++) {
     const AbVerifyCheckResult *check = &context->checks[check_index];
@@ -408,15 +414,15 @@ static int check_is_skipped(const AbVerifyCheckResult *check) {
          string_literal(&check->status, "not_applicable");
 }
 
-ArchbirdStatus ab_verify_render_junit(AbVerificationContext *context,
-                                      AbBuffer *buffer) {
+ArchbirdStatus ab_constraints_render_junit(AbVerificationContext *context,
+                                           AbBuffer *buffer) {
   size_t check_index;
   size_t regression_index;
   size_t failures = 0;
   size_t errors = 0;
   size_t skipped = 0;
   size_t tests = context->check_count;
-  const AbString *suite_name = &context->suite.name->as.text;
+  const AbString *suite_name = &context->project->as.text;
   for (regression_index = 0;
        regression_index < context->baseline.coverage_regression_count;
        regression_index++)
@@ -483,8 +489,9 @@ ArchbirdStatus ab_verify_render_junit(AbVerificationContext *context,
       buffer, "    <property name=\"archbird.implementation_sha256\" "
               "value=\"" ARCHBIRD_IMPLEMENTATION_SHA256 "\" />\n"));
   REPORT_TRY(ab_buffer_literal(
-      buffer, "    <property name=\"archbird.suite_sha256\" value=\""));
-  REPORT_TRY(ab_buffer_append(buffer, context->suite.sha256, 64));
+      buffer, "    <property name=\"archbird.constraint_policy_sha256\" "
+              "value=\""));
+  REPORT_TRY(ab_buffer_append(buffer, context->constraint_policy_sha256, 64));
   REPORT_TRY(ab_buffer_literal(buffer, "\" />\n  </properties>"));
   for (check_index = 0; check_index < context->check_count; check_index++) {
     const AbVerifyCheckResult *check = &context->checks[check_index];
@@ -675,18 +682,6 @@ static void markdown_views_free(ArchbirdEngine *engine,
   ab_free(engine, views);
 }
 
-static const AbValue *named_project_input(const AbVerificationContext *context,
-                                          const AbString *name) {
-  size_t index;
-  for (index = 0; index < context->input.projects->as.array.count; index++) {
-    const AbValue *row = &context->input.projects->as.array.items[index];
-    const AbValue *candidate = ab_value_member(row, "name");
-    if (candidate && ab_string_equal(&candidate->as.text, name))
-      return row;
-  }
-  return NULL;
-}
-
 static int report_verification_blocks(const AbVerificationContext *context) {
   size_t index;
   for (index = 0; index < context->diagnostic_count; index++)
@@ -785,9 +780,27 @@ markdown_counter_line(AbVerificationContext *context, AbBuffer *buffer,
   return ab_buffer_literal(buffer, "\n");
 }
 
-ArchbirdStatus ab_verify_render_markdown(AbVerificationContext *context,
-                                         AbBuffer *buffer,
-                                         size_t max_findings) {
+static ArchbirdStatus markdown_constraint_map(AbBuffer *buffer,
+                                              const AbString *id,
+                                              const AbValue *map) {
+  const AbValue *evidence = ab_value_member(map, "evidence");
+  const AbValue *project = ab_value_member(map, "project");
+  const AbValue *config = ab_value_member(evidence, "config_sha256");
+  const AbValue *input = ab_value_member(evidence, "input_sha256");
+  REPORT_TRY(ab_buffer_append(buffer, id->data, id->length));
+  REPORT_TRY(ab_buffer_literal(buffer, ": project="));
+  REPORT_TRY(
+      ab_buffer_append(buffer, project->as.text.data, project->as.text.length));
+  REPORT_TRY(ab_buffer_literal(buffer, " config="));
+  REPORT_TRY(ab_buffer_append(buffer, config->as.text.data, 16));
+  REPORT_TRY(ab_buffer_literal(buffer, " inputs="));
+  REPORT_TRY(ab_buffer_append(buffer, input->as.text.data, 16));
+  return ab_buffer_literal(buffer, "\n");
+}
+
+ArchbirdStatus ab_constraints_render_markdown(AbVerificationContext *context,
+                                              AbBuffer *buffer,
+                                              size_t max_findings) {
   static const char *const statuses[] = {"pass", "fail", "unknown", "waived",
                                          "not_applicable"};
   static const char *const comparisons[] = {"different", "equal", "extra",
@@ -852,33 +865,36 @@ ArchbirdStatus ab_verify_render_markdown(AbVerificationContext *context,
       break;
   }
 
-  MD_TRY(ab_buffer_literal(buffer, "# Architecture verification: "));
-  MD_TRY(ab_buffer_append(buffer, context->suite.name->as.text.data,
-                          context->suite.name->as.text.length));
+  MD_TRY(ab_buffer_literal(buffer, "# Architecture constraints: "));
+  MD_TRY(ab_buffer_append(buffer, context->project->as.text.data,
+                          context->project->as.text.length));
   MD_TRY(ab_buffer_literal(buffer, "\n\n"));
-  if (context->suite.description) {
-    MD_TRY(ab_buffer_append(buffer, context->suite.description->as.text.data,
-                            context->suite.description->as.text.length));
+  if (context->description) {
+    MD_TRY(ab_buffer_append(buffer, context->description->as.text.data,
+                            context->description->as.text.length));
     MD_TRY(ab_buffer_literal(buffer, "\n\n"));
   }
   MD_TRY(
       ab_buffer_literal(buffer, "Evidence: Archbird " ARCHBIRD_VERSION " `"));
   MD_TRY(ab_buffer_append(buffer, ARCHBIRD_IMPLEMENTATION_SHA256, 16));
-  MD_TRY(ab_buffer_literal(buffer, "`; suite `"));
-  MD_TRY(ab_buffer_append(buffer, context->suite.sha256, 16));
-  MD_TRY(ab_buffer_literal(buffer, "`; projects="));
-  MD_TRY(ab_buffer_u64(buffer, context->suite.projects->as.object.count));
-  MD_TRY(ab_buffer_literal(buffer, "; checks="));
+  MD_TRY(ab_buffer_literal(buffer, "`; constraint policy `"));
+  MD_TRY(ab_buffer_append(buffer, context->constraint_policy_sha256, 16));
+  MD_TRY(ab_buffer_literal(buffer, "`; maps="));
+  MD_TRY(
+      ab_buffer_u64(buffer, 1 + (context->additional_maps
+                                     ? context->additional_maps->as.object.count
+                                     : 0)));
+  MD_TRY(ab_buffer_literal(buffer, "; constraints="));
   MD_TRY(ab_buffer_u64(buffer, context->check_count));
   MD_TRY(ab_buffer_literal(buffer, "; blocking="));
   MD_TRY(ab_buffer_literal(buffer,
                            report_verification_blocks(context) ? "yes" : "no"));
   MD_TRY(ab_buffer_literal(
       buffer,
-      ".\n\nStatic facts are derived; contracts/waivers are asserted; "
-      "attestations "
-      "are observed. Unknown, stale, and not-applicable evidence is never "
-      "rendered as pass.\n\n## Verdict summary\n\n```text\nchecks "));
+      ".\n\nProjection operands are exhaustive; literals and mappings are "
+      "asserted; observations are externally supplied. Unknown, stale, "
+      "partial, and not-applicable evidence is never rendered as "
+      "pass.\n\n## Verdict summary\n\n```text\nconstraints "));
   for (check_index = 0; check_index < sizeof(statuses) / sizeof(statuses[0]);
        check_index++) {
     size_t row;
@@ -908,83 +924,29 @@ ArchbirdStatus ab_verify_render_markdown(AbVerificationContext *context,
   MD_TRY(ab_buffer_literal(buffer, "coverage_keys="));
   MD_TRY(ab_buffer_u64(buffer, coverage));
   MD_TRY(ab_buffer_literal(
-      buffer, " unit=check_fact_or_route_key "
-              "aggregation=sum_of_unique_keys_per_check regressions="));
+      buffer, " unit=constraint_operand_or_route_key "
+              "aggregation=sum_of_unique_keys_per_constraint regressions="));
   MD_TRY(ab_buffer_u64(buffer, regressions));
-  MD_TRY(ab_buffer_literal(buffer, "\n```\n\n## Project targets\n\n```text\n"));
-  for (check_index = 0; check_index < context->suite.projects->as.object.count;
+  MD_TRY(ab_buffer_literal(buffer, "\n```\n\n## Evaluated Map\n\n```text\n"));
+  {
+    static const AbString current = {(char *)"current", 7};
+    MD_TRY(markdown_constraint_map(buffer, &current, context->current_map));
+  }
+  for (check_index = 0; context->additional_maps &&
+                        check_index < context->additional_maps->as.object.count;
        check_index++) {
-    const AbObjectField *spec =
-        &context->suite.projects->as.object.fields[check_index];
-    const AbValue *input = named_project_input(context, &spec->name);
-    const AbValue *map = ab_value_member(input, "map");
-    const AbValue *evidence = ab_value_member(map, "evidence");
-    const AbValue *revision = ab_value_member(&spec->value, "revision");
-    const AbValue *profile = ab_value_member(&spec->value, "profile");
-    MD_TRY(ab_buffer_append(buffer, spec->name.data, spec->name.length));
-    MD_TRY(ab_buffer_literal(buffer, ": project="));
-    MD_TRY(ab_buffer_append(buffer,
-                            ab_value_member(map, "project")->as.text.data,
-                            ab_value_member(map, "project")->as.text.length));
-    if (revision && revision->as.text.length) {
-      MD_TRY(ab_buffer_literal(buffer, " declared_revision="));
-      MD_TRY(ab_buffer_append(buffer, revision->as.text.data,
-                              revision->as.text.length));
-      MD_TRY(ab_buffer_literal(buffer, " revision_provenance=asserted"));
-    }
-    if (profile && profile->as.text.length) {
-      MD_TRY(ab_buffer_literal(buffer, " profile="));
-      MD_TRY(ab_buffer_append(buffer, profile->as.text.data,
-                              profile->as.text.length));
-    }
-    MD_TRY(ab_buffer_literal(buffer, " config="));
-    MD_TRY(ab_buffer_append(
-        buffer, ab_value_member(evidence, "config_sha256")->as.text.data, 16));
-    MD_TRY(ab_buffer_literal(buffer, " inputs="));
-    MD_TRY(ab_buffer_append(
-        buffer, ab_value_member(evidence, "input_sha256")->as.text.data, 16));
-    MD_TRY(ab_buffer_literal(buffer, " source_lock="));
-    MD_TRY(ab_buffer_literal(
-        buffer, ab_verify_source_lock_state_name(
-                    ab_verify_source_lock_state(context, &spec->name))));
-    MD_TRY(ab_buffer_literal(buffer, "\n"));
-    {
-      const AbValue *lock = ab_value_member(&spec->value, "source_lock");
-      size_t lock_index;
-      for (lock_index = 0; lock && lock_index < lock->as.object.count;
-           lock_index++) {
-        const AbObjectField *locked = &lock->as.object.fields[lock_index];
-        char observed[65];
-        int available = ab_verify_source_lock_observed_sha256(
-            context, &spec->name, &locked->name, observed);
-        int current =
-            available && memcmp(observed, locked->value.as.text.data, 64) == 0;
-        if (current)
-          continue;
-        MD_TRY(ab_buffer_literal(buffer, "  lock path="));
-        MD_TRY(
-            ab_buffer_append(buffer, locked->name.data, locked->name.length));
-        MD_TRY(ab_buffer_literal(buffer, " state="));
-        MD_TRY(
-            ab_buffer_literal(buffer, available ? "mismatch" : "unavailable"));
-        MD_TRY(ab_buffer_literal(buffer, " expected="));
-        MD_TRY(ab_buffer_append(buffer, locked->value.as.text.data, 64));
-        MD_TRY(ab_buffer_literal(buffer, " actual="));
-        if (available)
-          MD_TRY(ab_buffer_append(buffer, observed, 64));
-        else
-          MD_TRY(ab_buffer_literal(buffer, "unavailable"));
-        MD_TRY(ab_buffer_literal(buffer, "\n"));
-      }
-    }
+    const AbObjectField *row =
+        &context->additional_maps->as.object.fields[check_index];
+    MD_TRY(markdown_constraint_map(buffer, &row->name,
+                                   ab_value_member(&row->value, "map")));
   }
   MD_TRY(ab_buffer_literal(buffer, "```\n\n"));
 
-  if (context->attestation_count) {
+  if (context->observation_count) {
     MD_TRY(ab_buffer_literal(buffer, "## Observed evidence\n\n```text\n"));
-    for (check_index = 0; check_index < context->attestation_count;
+    for (check_index = 0; check_index < context->observation_count;
          check_index++) {
-      const AbVerifyAttestationState *row = &context->attestations[check_index];
+      const AbVerifyObservationState *row = &context->observations[check_index];
       MD_TRY(ab_buffer_append(buffer, row->name.data, row->name.length));
       MD_TRY(ab_buffer_literal(buffer, ": state="));
       MD_TRY(ab_buffer_append(buffer, row->state.data, row->state.length));
@@ -1094,7 +1056,7 @@ ArchbirdStatus ab_verify_render_markdown(AbVerificationContext *context,
     MD_TRY(ab_buffer_literal(buffer, "\n"));
   }
 
-  MD_TRY(ab_buffer_literal(buffer, "## Checks\n\n"));
+  MD_TRY(ab_buffer_literal(buffer, "## Constraints\n\n"));
   for (check_index = 0; check_index < context->check_count; check_index++) {
     const AbVerifyCheckResult *check = &context->checks[check_index];
     const AbValue *id = ab_value_member(check->spec, "id");

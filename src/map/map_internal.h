@@ -39,6 +39,9 @@ const AbFact *ab_map_enclosing_symbol(const ArchbirdProject *project,
 const AbFact *ab_map_unique_semantic_target(const ArchbirdProject *project,
                                             const AbFact *occurrence);
 
+ArchbirdStatus ab_map_render_facts(AbBuffer *buffer,
+                                   const ArchbirdProject *project);
+
 typedef struct AbMapNamedReference {
   const AbManifestFile *file;
   const AbString *name;
@@ -430,6 +433,6 @@ ab_map_resolve_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
                       const AbMapConfig *config, const AbManifestFile *file,
                       const AbString *imported, const AbManifestFile **out);
 
-ArchbirdStatus ab_map_run_legacy_checks(AbMapState *state);
+ArchbirdStatus ab_map_run_diagnostics(AbMapState *state);
 
 #endif

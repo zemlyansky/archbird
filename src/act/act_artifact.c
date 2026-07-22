@@ -172,8 +172,8 @@ validate_proposal_rows(ArchbirdEngine *engine,
   for (index = 0; index < proposal->postconditions->as.array.count; index++) {
     const AbValue *row = &proposal->postconditions->as.array.items[index];
     if (!nonblank(ab_value_member(row, "derivation_strength")) ||
-        !ab_value_member(row, "check") ||
-        ab_value_member(row, "check")->kind != AB_VALUE_OBJECT ||
+        !ab_value_member(row, "constraint") ||
+        ab_value_member(row, "constraint")->kind != AB_VALUE_OBJECT ||
         !ab_value_member(row, "coverage") ||
         ab_value_member(row, "coverage")->kind != AB_VALUE_OBJECT)
       return artifact_invalid(engine, "invalid Act proposal postcondition");
@@ -250,7 +250,7 @@ ArchbirdStatus ab_act_proposal_load(ArchbirdEngine *engine, const uint8_t *json,
   out->evidence = ab_value_member(&out->root, "evidence");
   if (!ab_act_object_fields_allowed(&out->root, allowed,
                                     sizeof(allowed) / sizeof(allowed[0])) ||
-      !ab_value_u64(schema, &version) || version != 1 ||
+      !ab_value_u64(schema, &version) || version != 2 ||
       !ab_value_string_is(ab_value_member(&out->root, "artifact"),
                           "change-proposal") ||
       !ab_value_string_is(ab_value_member(&out->root, "provenance"),
@@ -303,7 +303,7 @@ ArchbirdStatus ab_act_contract_load(ArchbirdEngine *engine, const uint8_t *json,
       "origin",
       "owner",
       "postconditions",
-      "preserved_checks",
+      "preserved_constraints",
       "proposal_sha256",
       "provenance",
       "rationale",
@@ -326,13 +326,13 @@ ArchbirdStatus ab_act_contract_load(ArchbirdEngine *engine, const uint8_t *json,
   out->tool = ab_value_member(&out->root, "tool");
   out->origin = ab_value_member(&out->root, "origin");
   out->postconditions = ab_value_member(&out->root, "postconditions");
-  out->preserved = ab_value_member(&out->root, "preserved_checks");
+  out->preserved = ab_value_member(&out->root, "preserved_constraints");
   out->selected_candidates = ab_value_member(&out->root, "selected_candidates");
   out->acknowledged_unknowns =
       ab_value_member(&out->root, "acknowledged_unknowns");
   if (!ab_act_object_fields_allowed(&out->root, allowed,
                                     sizeof(allowed) / sizeof(allowed[0])) ||
-      !ab_value_u64(schema, &version) || version != 1 ||
+      !ab_value_u64(schema, &version) || version != 2 ||
       !ab_value_string_is(ab_value_member(&out->root, "artifact"),
                           "change-contract") ||
       !ab_value_string_is(ab_value_member(&out->root, "provenance"),

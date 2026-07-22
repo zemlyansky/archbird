@@ -1,5 +1,7 @@
 #include "lexical/c/scanner.h"
 
+#include "lexical/c/constants.h"
+
 #include "lexical/tokenizer.h"
 #include "render_internal.h"
 #include "sha256.h"
@@ -686,7 +688,7 @@ ArchbirdStatus ab_scan_c_file(ArchbirdEngine *engine,
                               size_t input_count, const AbNameSet *public_names,
                               const uint8_t implementation_sha256[32],
                               AbProviderBundle *out_bundle) {
-  static const char config_identity[] = "archbird-native-c-lexical-v1";
+  static const char config_identity[] = "archbird-native-c-lexical-v3";
   static const char boundary_calls[] =
       "direct identifier calls excluding controls, known types, typedefs, "
       "declarations, definitions, uppercase macros, and member access";
@@ -694,6 +696,12 @@ ArchbirdStatus ab_scan_c_file(ArchbirdEngine *engine,
       "DECLARE_NAPI_METHOD and napi_property_descriptor literal names";
   static const char boundary_symbols[] =
       "top-level function definitions and prototypes inferred from tokens";
+  static const char boundary_constant_values[] =
+      "static C enum members and top-level designated initializer entries; "
+      "no preprocessing or compiler constant folding";
+  static const char boundary_macro_invocations[] =
+      "arguments of function-like macros declared in the same source unit; "
+      "included definitions and expansion require compiler evidence";
   AbBundleBuilder builder;
   AbTokenList tokens;
   AbNameSet typedef_names = {0};
@@ -723,6 +731,14 @@ ArchbirdStatus ab_scan_c_file(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = ab_bundle_builder_add_capability(
         &builder, "symbols", "bounded", "lexical-occurrence", boundary_symbols);
+  if (status == ARCHBIRD_OK)
+    status = ab_bundle_builder_add_capability(&builder, "constant-values",
+                                              "bounded", "lexical-occurrence",
+                                              boundary_constant_values);
+  if (status == ARCHBIRD_OK)
+    status = ab_bundle_builder_add_capability(&builder, "macro-invocations",
+                                              "bounded", "lexical-occurrence",
+                                              boundary_macro_invocations);
   if (status != ARCHBIRD_OK)
     goto done;
   status = ab_tokenize(engine, source, source_length, AB_LEX_C_PREPROCESSOR,
@@ -752,6 +768,8 @@ ArchbirdStatus ab_scan_c_file(ArchbirdEngine *engine,
                         definition_indices);
   if (status == ARCHBIRD_OK)
     status = scan_exports(&builder, &tokens);
+  if (status == ARCHBIRD_OK)
+    status = ab_c_scan_constant_facts(&builder, &tokens);
   if (status == ARCHBIRD_OK)
     status = ab_bundle_builder_finish(&builder, out_bundle);
 done:

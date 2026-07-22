@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "map-base",
   "description": "Native aggregate map fixture.",
   "layers": [
@@ -27,6 +27,50 @@
       "paths": ["py/**"]
     }
   ],
+  "constraints": {
+    "JAVASCRIPT-ENTRY": {
+      "assert": "set_equal",
+      "expected": {"literal": ["add"]},
+      "actual": {
+        "projection": {
+          "select": "symbols",
+          "paths": ["js/index.js"]
+        }
+      },
+      "severity": "error",
+      "owner": "architecture",
+      "requirement": "ARCH-JS-001",
+      "rationale": "The change overlay cites the checked JavaScript entrypoint."
+    },
+    "PYTHON-ENTRY": {
+      "assert": "set_equal",
+      "expected": {"literal": ["add"]},
+      "actual": {
+        "projection": {
+          "select": "symbols",
+          "paths": ["py/pkg/api.py"]
+        }
+      },
+      "severity": "error",
+      "owner": "architecture",
+      "requirement": "ARCH-PY-001",
+      "rationale": "An unrelated Python constraint stays outside JavaScript changes."
+    },
+    "OTHER-ENTRY": {
+      "assert": "required_subset",
+      "expected": {"literal": ["missing"]},
+      "actual": {
+        "projection": {
+          "select": "symbols",
+          "paths": ["py/pkg/api.py"]
+        }
+      },
+      "severity": "error",
+      "owner": "architecture",
+      "requirement": "ARCH-OTHER-001",
+      "rationale": "A second unrelated constraint stays outside JavaScript changes."
+    }
+  },
   "limits": {
     "compact_symbols": 7,
     "compact_edge_names": 9

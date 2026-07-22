@@ -83,7 +83,7 @@ static void test_scip_pipeline(void) {
   static const uint8_t unknown_core[] = "int unknown_add(void) { return 1; }\n";
   static const uint8_t contract[] = "int contract(void) { return 1; }\n";
   static const char config[] =
-      "{\"schema_version\":1,\"project\":\"scip-test\",\"layers\":[{"
+      "{\"schema_version\":2,\"project\":\"scip-test\",\"layers\":[{"
       "\"name\":\"python\",\"role\":\"frontend\",\"language\":\"python\","
       "\"globs\":[\"py/**\"]},{\"name\":\"core\",\"role\":\"core\","
       "\"language\":\"c\",\"globs\":[\"src/**\"]}],\"indexes\":[{"

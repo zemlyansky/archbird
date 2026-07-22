@@ -64,14 +64,15 @@ static ArchbirdStatus validate_contract(ArchbirdEngine *engine,
                                         const AbActContractView *contract) {
   const AbValue *proposal_sha =
       ab_value_member(&contract->root, "proposal_sha256");
-  const AbValue *proposal_origin_check =
-      ab_value_member(proposal->origin, "check");
+  const AbValue *proposal_origin_constraint =
+      ab_value_member(proposal->origin, "constraint");
   const AbValue *proposal_finding =
       ab_value_member(proposal->origin, "finding");
   const AbValue *proposal_fingerprint =
       proposal_finding ? ab_value_member(proposal_finding, "fingerprint")
                        : NULL;
-  const AbValue *contract_check = ab_value_member(contract->origin, "check");
+  const AbValue *contract_constraint =
+      ab_value_member(contract->origin, "constraint");
   const AbValue *contract_fingerprint =
       ab_value_member(contract->origin, "fingerprint");
   size_t index;
@@ -80,7 +81,7 @@ static ArchbirdStatus validate_contract(ArchbirdEngine *engine,
     return archbird_error_set(
         engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
         "change contract proposal SHA-256 does not match proposal");
-  if (!value_string_equal(proposal_origin_check, contract_check) ||
+  if (!value_string_equal(proposal_origin_constraint, contract_constraint) ||
       !value_string_equal(proposal_fingerprint, contract_fingerprint))
     return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                               ARCHBIRD_NO_OFFSET,
@@ -108,9 +109,10 @@ static ArchbirdStatus validate_contract(ArchbirdEngine *engine,
     const AbValue *expected =
         id ? row_by_id(proposal->preserved, &id->as.text) : NULL;
     if (!expected || !ab_value_equal(row, expected))
-      return archbird_error_set(
-          engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
-          "change contract preserved check does not match proposal evidence");
+      return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                ARCHBIRD_NO_OFFSET,
+                                "change contract preserved constraint does not "
+                                "match proposal evidence");
   }
   return ARCHBIRD_OK;
 }
@@ -230,17 +232,18 @@ static int slice_value(ArchbirdEngine *engine,
     output[64] = '\0';
     return 1;
   }
-  if (kind->length == 5 && memcmp(kind->data, "suite", 5) == 0) {
-    const AbValue *suite_name = ab_value_member(artifact->suite, "name");
-    const AbValue *value = ab_value_member(artifact->suite, "sha256");
-    if (!ab_string_equal(&suite_name->as.text, name))
+  if (kind->length == 6 && memcmp(kind->data, "policy", 6) == 0) {
+    const AbValue *project = ab_value_member(artifact->policy, "project");
+    const AbValue *value =
+        ab_value_member(artifact->policy, "constraint_policy_sha256");
+    if (!ab_string_equal(&project->as.text, name))
       return 0;
     memcpy(output, value->as.text.data, 64);
     output[64] = '\0';
     return 1;
   }
-  if (kind->length == 5 && memcmp(kind->data, "check", 5) == 0) {
-    row = ab_act_verification_check(artifact, name);
+  if (kind->length == 10 && memcmp(kind->data, "constraint", 10) == 0) {
+    row = ab_act_verification_constraint(artifact, name);
     return row && ab_act_value_digest(engine, row, output) == ARCHBIRD_OK;
   }
   if (kind->length == 7 && memcmp(kind->data, "finding", 7) == 0) {
@@ -261,8 +264,8 @@ static int slice_value(ArchbirdEngine *engine,
     row = ab_act_verification_mapping(artifact, name);
     return row && ab_act_value_digest(engine, row, output) == ARCHBIRD_OK;
   }
-  if (kind->length == 11 && memcmp(kind->data, "attestation", 11) == 0) {
-    row = ab_act_verification_attestation(artifact, name);
+  if (kind->length == 11 && memcmp(kind->data, "observation", 11) == 0) {
+    row = ab_act_verification_observation(artifact, name);
     return row && ab_act_value_digest(engine, row, output) == ARCHBIRD_OK;
   }
   return 0;
@@ -304,20 +307,22 @@ static ArchbirdStatus proposal_freshness(ArchbirdEngine *engine,
       ab_value_member(proposal->tool, "implementation_sha256");
   const AbValue *contract_impl =
       ab_value_member(contract->tool, "implementation_sha256");
-  const AbValue *source_suite = ab_value_member(proposal->source, "suite");
-  const AbValue *source_suite_sha = ab_value_member(source_suite, "sha256");
+  const AbValue *source_policy = ab_value_member(proposal->source, "policy");
+  const AbValue *source_policy_sha = ab_value_member(source_policy, "sha256");
   const AbValue *source_verify_impl = ab_value_member(
       proposal->source, "verification_tool_implementation_sha256");
-  const AbValue *before_suite_sha = ab_value_member(before->suite, "sha256");
+  const AbValue *before_policy_sha =
+      ab_value_member(before->policy, "constraint_policy_sha256");
   const AbValue *before_impl =
       ab_value_member(before->tool, "implementation_sha256");
-  const AbValue *origin_check_id = ab_value_member(proposal->origin, "check");
+  const AbValue *origin_constraint_id =
+      ab_value_member(proposal->origin, "constraint");
   const AbValue *origin_finding = ab_value_member(proposal->origin, "finding");
   const AbValue *origin_fingerprint =
       ab_value_member(origin_finding, "fingerprint");
   const AbValue *origin_key = ab_value_member(origin_finding, "key");
   const AbValue *current_check =
-      ab_act_verification_check(before, &origin_check_id->as.text);
+      ab_act_verification_constraint(before, &origin_constraint_id->as.text);
   const AbValue *exact =
       current_check
           ? finding_by_fingerprint(current_check, &origin_fingerprint->as.text)
@@ -336,9 +341,9 @@ static ArchbirdStatus proposal_freshness(ArchbirdEngine *engine,
         engine, diagnostics,
         "contract implementation differs from the current tool");
   if (status == ARCHBIRD_OK &&
-      !value_string_equal(source_suite_sha, before_suite_sha))
+      !value_string_equal(source_policy_sha, before_policy_sha))
     status = diagnostic_literal(engine, diagnostics,
-                                "verification suite digest changed");
+                                "constraint policy digest changed");
   if (status == ARCHBIRD_OK &&
       !value_string_equal(source_verify_impl, before_impl))
     status = diagnostic_literal(engine, diagnostics,
@@ -348,7 +353,7 @@ static ArchbirdStatus proposal_freshness(ArchbirdEngine *engine,
   if (!current_check) {
     status = diagnostic_literal(
         engine, diagnostics,
-        "origin check is absent from the current before-state");
+        "origin constraint is absent from the current before-state");
     *out_freshness = "stale";
     string_list_finish(diagnostics);
     return status;
@@ -386,13 +391,13 @@ static ArchbirdStatus proposal_freshness(ArchbirdEngine *engine,
     const AbValue *preserved = &contract->preserved->as.array.items[index];
     const AbValue *id = ab_value_member(preserved, "id");
     const AbValue *sha = ab_value_member(preserved, "sha256");
-    const AbValue *check = ab_act_verification_check(before, &id->as.text);
+    const AbValue *check = ab_act_verification_constraint(before, &id->as.text);
     char current[65];
     if (!check || ab_act_value_digest(engine, check, current) != ARCHBIRD_OK ||
         memcmp(current, sha->as.text.data, 64) != 0)
       status = diagnostic_named(
           engine, diagnostics,
-          "preserved check evidence changed: ", &id->as.text, NULL, NULL);
+          "preserved constraint evidence changed: ", &id->as.text, NULL, NULL);
   }
   string_list_finish(diagnostics);
   if (status != ARCHBIRD_OK)
@@ -419,20 +424,21 @@ static ArchbirdStatus after_compatible(ArchbirdEngine *engine,
                                        const AbActVerification *after,
                                        int *out_compatible,
                                        AbActStringList *diagnostics) {
-  const AbValue *source_suite = ab_value_member(proposal->source, "suite");
-  const AbValue *source_suite_sha = ab_value_member(source_suite, "sha256");
+  const AbValue *source_policy = ab_value_member(proposal->source, "policy");
+  const AbValue *source_policy_sha = ab_value_member(source_policy, "sha256");
   const AbValue *source_impl = ab_value_member(
       proposal->source, "verification_tool_implementation_sha256");
-  const AbValue *after_suite_sha = ab_value_member(after->suite, "sha256");
+  const AbValue *after_policy_sha =
+      ab_value_member(after->policy, "constraint_policy_sha256");
   const AbValue *after_impl =
       ab_value_member(after->tool, "implementation_sha256");
   const AbValue *entries = ab_value_member(proposal->evidence_slice, "entries");
   size_t diagnostic_start = diagnostics->count;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!value_string_equal(source_suite_sha, after_suite_sha))
-    status = diagnostic_literal(
-        engine, diagnostics, "after-state verification suite digest changed");
+  if (!value_string_equal(source_policy_sha, after_policy_sha))
+    status = diagnostic_literal(engine, diagnostics,
+                                "after-state constraint policy digest changed");
   if (status == ARCHBIRD_OK && !value_string_equal(source_impl, after_impl))
     status = diagnostic_literal(
         engine, diagnostics, "after-state verification implementation changed");
@@ -443,11 +449,11 @@ static ArchbirdStatus after_compatible(ArchbirdEngine *engine,
     const AbValue *name = ab_value_member(entry, "name");
     const AbValue *sha = ab_value_member(entry, "sha256");
     char current[65];
-    if (ab_value_string_is(kind, "check") ||
+    if (ab_value_string_is(kind, "constraint") ||
         ab_value_string_is(kind, "finding"))
       continue;
     if ((ab_value_string_is(kind, "fact") ||
-         ab_value_string_is(kind, "attestation")) &&
+         ab_value_string_is(kind, "observation")) &&
         mutable_source(proposal, &name->as.text))
       continue;
     if (!slice_value(engine, after, &kind->as.text, &name->as.text, current) ||
@@ -544,12 +550,13 @@ static ArchbirdStatus origin_outcome(ArchbirdEngine *engine,
                                      const AbActProposalView *proposal,
                                      const AbActVerification *after,
                                      AbActResultData *result) {
-  const AbValue *origin_check_id = ab_value_member(proposal->origin, "check");
+  const AbValue *origin_constraint_id =
+      ab_value_member(proposal->origin, "constraint");
   const AbValue *origin_finding = ab_value_member(proposal->origin, "finding");
   const AbValue *fingerprint = ab_value_member(origin_finding, "fingerprint");
   const AbValue *key = ab_value_member(origin_finding, "key");
   const AbValue *check =
-      ab_act_verification_check(after, &origin_check_id->as.text);
+      ab_act_verification_constraint(after, &origin_constraint_id->as.text);
   AbActEvidenceList evidence = {0};
   size_t matches = 0;
   size_t index;
@@ -557,7 +564,7 @@ static ArchbirdStatus origin_outcome(ArchbirdEngine *engine,
   if (!check)
     return outcome_add(
         engine, result, "origin:", &fingerprint->as.text, "origin", "stale",
-        "origin check is absent from the after-state", &evidence);
+        "origin constraint is absent from the after-state", &evidence);
   status = finding_evidence_for_key(engine, check, &key->as.text, &evidence,
                                     &matches);
   if (status != ARCHBIRD_OK) {
@@ -606,13 +613,13 @@ static ArchbirdStatus origin_outcome(ArchbirdEngine *engine,
   }
   (void)matches;
   if (ab_value_string_is(ab_value_member(check, "status"), "unknown"))
-    return outcome_add(engine, result, "origin:", &fingerprint->as.text,
-                       "origin", "unknown",
-                       "origin check is unknown in the after-state", &evidence);
+    return outcome_add(
+        engine, result, "origin:", &fingerprint->as.text, "origin", "unknown",
+        "origin constraint is unknown in the after-state", &evidence);
   if (ab_value_string_is(ab_value_member(check, "status"), "not_applicable"))
     return outcome_add(engine, result, "origin:", &fingerprint->as.text,
                        "origin", "unexpected",
-                       "origin check became not applicable", &evidence);
+                       "origin constraint became not applicable", &evidence);
   return outcome_add(
       engine, result, "origin:", &fingerprint->as.text, "origin", "satisfied",
       "origin finding is resolved with current applicable evidence", &evidence);
@@ -723,7 +730,7 @@ static ArchbirdStatus postcondition_outcomes(ArchbirdEngine *engine,
     const AbValue *postcondition =
         &proposal->postconditions->as.array.items[index];
     const AbValue *id = ab_value_member(postcondition, "id");
-    const AbValue *check = ab_value_member(postcondition, "check");
+    const AbValue *check = ab_value_member(postcondition, "constraint");
     const AbValue *origin_finding =
         ab_value_member(proposal->origin, "finding");
     const AbValue *origin_key = ab_value_member(origin_finding, "key");
@@ -803,24 +810,24 @@ static ArchbirdStatus preserved_outcomes(ArchbirdEngine *engine,
        index++) {
     const AbValue *preserved = &contract->preserved->as.array.items[index];
     const AbValue *id = ab_value_member(preserved, "id");
-    const AbValue *check = ab_act_verification_check(after, &id->as.text);
+    const AbValue *check = ab_act_verification_constraint(after, &id->as.text);
     AbActEvidenceList evidence = {0};
     const char *outcome_status;
     const char *message;
     if (!check) {
       outcome_status = "stale";
-      message = "preserved check is absent from the after-state";
+      message = "preserved constraint is absent from the after-state";
     } else if (ab_value_string_is(ab_value_member(check, "status"),
                                   "unknown")) {
       outcome_status = "unknown";
-      message = "preserved check became unknown";
+      message = "preserved constraint became unknown";
       status = evidence_from_rows(engine, &evidence,
                                   ab_value_member(check, "witnesses"));
     } else if (ab_value_string_is(ab_value_member(check, "status"), "fail")) {
       const AbValue *findings = ab_value_member(check, "findings");
       size_t finding_index;
       outcome_status = "unexpected";
-      message = "preserved check became blocking";
+      message = "preserved constraint became blocking";
       for (finding_index = 0;
            status == ARCHBIRD_OK && finding_index < findings->as.array.count;
            finding_index++)
@@ -833,25 +840,25 @@ static ArchbirdStatus preserved_outcomes(ArchbirdEngine *engine,
       const AbValue *check_status = ab_value_member(check, "status");
       outcome_status = "satisfied";
       if (ab_value_string_is(check_status, "pass"))
-        message = "preserved check remains nonblocking (pass)";
+        message = "preserved constraint remains nonblocking (pass)";
       else if (ab_value_string_is(check_status, "waived"))
-        message = "preserved check remains nonblocking (waived)";
+        message = "preserved constraint remains nonblocking (waived)";
       else
-        message = "preserved check remains nonblocking (not_applicable)";
+        message = "preserved constraint remains nonblocking (not_applicable)";
       if (status == ARCHBIRD_OK)
         status = evidence_from_rows(engine, &evidence,
                                     ab_value_member(check, "witnesses"));
       if (status == ARCHBIRD_OK)
-        status =
-            outcome_add(engine, result, "preserved:", &id->as.text,
-                        "preserved_check", outcome_status, message, &evidence);
+        status = outcome_add(engine, result, "preserved:", &id->as.text,
+                             "preserved_constraint", outcome_status, message,
+                             &evidence);
       if (status == ARCHBIRD_OK)
         continue;
     }
     if (status == ARCHBIRD_OK)
-      status =
-          outcome_add(engine, result, "preserved:", &id->as.text,
-                      "preserved_check", outcome_status, message, &evidence);
+      status = outcome_add(engine, result, "preserved:", &id->as.text,
+                           "preserved_constraint", outcome_status, message,
+                           &evidence);
     ab_act_evidence_list_free(&evidence);
   }
   return status;
@@ -1016,7 +1023,7 @@ static ArchbirdStatus render_result_document(AbBuffer *buffer,
   RESULT_TRY(ab_buffer_literal(buffer, ",\"proposal_sha256\":"));
   RESULT_TRY(ab_buffer_json_string(buffer, result->proposal_sha256, 64));
   RESULT_TRY(ab_buffer_literal(
-      buffer, ",\"provenance\":\"derived\",\"schema_version\":1"));
+      buffer, ",\"provenance\":\"derived\",\"schema_version\":2"));
   if (include_sha256) {
     RESULT_TRY(ab_buffer_literal(buffer, ",\"sha256\":"));
     RESULT_TRY(ab_buffer_json_string(buffer, sha256, 64));

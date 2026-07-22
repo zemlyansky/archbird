@@ -41,6 +41,7 @@ NATIVE_CORE_C_FILES = $(shell rg --files src | rg '\.c$$' | sort)
 NATIVE_TEST_C_FILES = $(shell rg --files bindings test | rg '\.c$$' | \
 	rg -v '^test/fixtures/' | sort)
 NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Isrc/api -Isrc/base -Isrc/evidence -Isrc/map \
+	-Isrc/configuration -Isrc/projection -Isrc/query -Isrc/constraints \
 	-Isrc/verify -Isrc/act -Isrc/interchange/graph \
 	-Isrc/interchange/okf -Isrc/interchange/reports -Ivendor/yyjson/src \
 	-I$(NATIVE_BUILD)/vendor/pcre2 -Ivendor/pcre2/src \
@@ -139,14 +140,7 @@ test-py: build-py
 		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_identity.py \
 		$(PYTHON_NATIVE)
-	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_verify_source_lock.py \
-		$(PYTHON_NATIVE)
-	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_verify_recipes.py \
-		$(PYTHON_NATIVE) $(CURDIR)
-	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_verify_debug.py \
-		$(PYTHON_NATIVE) $(CURDIR)
-	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_verify_membership.py \
-		$(PYTHON_NATIVE) $(CURDIR)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_project_configuration.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_freshness.py $(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_fuzz_seeds.py \
 		$(PYTHON_NATIVE) $(CURDIR)/test/fuzz/corpus
