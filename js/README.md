@@ -37,111 +37,22 @@ Archbird never edits the code.
 current repository. The explicit `npx archbird map` form is useful in scripts
 and alongside the other stage commands.
 
-## Use from JavaScript
-
-### Node API
-
-```js
-const { Project } = require("archbird");
-
-const project = Project.fromRepository(".");
-try {
-  const mapJson = project.mapJson({ pretty: true });       // canonical bytes
-  const overview = project.mapMarkdown({
-    view: "overview",
-    detail: "standard",
-    maxChars: 12000,
-  });
-  const context = project.queryMarkdown({
-    symbols: ["src/runtime.c:runtime_start"],
-    depth: 1,
-    context: { profile: "change" },
-    maxChars: 8000,
-  });
-  const brief = project.queryMarkdown({
-    symbols: ["src/runtime.c:runtime_start"],
-    depth: 1,
-    view: "changes",
-    detail: "compact",
-  });
-  console.log(overview.toString("utf8"));
-  console.log(context.toString("utf8"));
-  console.log(brief.toString("utf8"));
-} finally {
-  project.dispose();
-}
-```
-
-`Project.fromRepository()` applies discovery, repository configuration, and
-explicit options. `Project.fromConfig()` uses exactly one reviewed config.
-Canonical JSON methods return stable artifact bytes or decoded objects;
-Markdown and graph views are derived presentations and are not verification
-inputs.
-
-Saved-Map functions `queryMap()` and `queryMapMarkdown()` accept
-`producerPolicy: "compatible"` (default) or `"current"`. The current policy
-rejects a missing or different core producer digest; it is independent of the
-live-source comparison performed by `auditMapFreshness()`.
-`queryMapMarkdown(map, { view: "changes", verificationResult: resultJson })`
-adds only constraints with exact subject-side source-path overlap and reports input
-and producer freshness. The browser `Project.queryMarkdown()` accepts the same
-option.
-
-Pass `{ search: ["provider registration"], searchLimit: 8 }` when the path or
-symbol is not yet known. Archbird returns advisory candidate seeds with the
-exact matched Map fields and scores, then expands them through normal typed
-Query routes. This deterministic lexical ranking does not claim semantic
-equivalence, and its transitive symbol neighbors do not strengthen static test
-routes.
-
-Test matches report file distance and symbol-hop distance independently. A
-case-local call to a traversed wrapper can therefore rank above same-file
-fallback without being presented as runtime coverage.
-
-### Import observed test routes
-
-Run each case in isolation with V8 or Istanbul coverage, then convert the
-project-owned reports without rerunning the project:
-
-```bash
-npx archbird observe . --map .archbird/map.json \
-  --request .archbird/coverage-request.json \
-  --output .archbird/test-symbols.json
-```
-
-`compileTestObservations(map, request, { repository, requestDirectory })`
-provides the same Node API. The Node host supports V8, Istanbul, LLVM, and gcov
-JSON. One isolated report is required per case because aggregate reports cannot
-establish which test produced a hit; use the PyPI host for coverage.py dynamic
-contexts. Archbird reads and source-hash-checks the reports but never launches
-the test runner.
-
-### Browser API
-
-```js
-const { createBrowserArchbird } = require("archbird/browser");
-
-const archbird = await createBrowserArchbird();
-const source = new archbird.Source(
-  "src/index.ts",
-  new TextEncoder().encode("export function answer() { return 42; }\n"),
-);
-const project = archbird.Project.fromFiles([source]);
-try {
-  console.log(project.map());
-} finally {
-  project.dispose();
-}
-```
-
-The direct browser API runs in the caller's context. The visualization app and
-`archbird/worker` isolate analysis in a Worker. Browser Map and Query use the
-same canonical formats as Node; include configured SCIP bytes among supplied
-files when semantic index evidence is required.
-
 ## Command line
 
-Save complete evidence once and query it without re-analyzing:
+Start with the CLI in any repository; no configuration is required:
+
+```bash
+cd project
+npx archbird
+npx archbird query --symbol runtime_start
+npx archbird query --search 'where is provider registration handled'
+npx archbird serve
+```
+
+### Save and reuse evidence
+
+Save complete evidence when subsequent operations must use the exact same
+repository state:
 
 ```bash
 mkdir -p .archbird
@@ -253,7 +164,17 @@ npx archbird config init . --output archbird.json
   "components": [
     {"name": "native-core", "paths": ["include/**", "src/**"]},
     {"name": "javascript-api", "paths": ["js/src/**"]}
-  ],
+  ]
+}
+```
+<!-- archbird-minimal-project-config:end -->
+
+That first file changes only Map construction. Add a reusable projection, a
+named Query, and a constraint when the project is ready to persist reviewed
+architecture policy:
+
+```json
+{
   "projections": {
     "public-core-api": {
       "select": "symbols",
@@ -280,19 +201,24 @@ npx archbird config init . --output archbird.json
   }
 }
 ```
-<!-- archbird-minimal-project-config:end -->
 
-Configuration can additionally declare:
+These are top-level members of the same `archbird.json`. The complete field
+inventory is:
 
+<!-- archbird-config-fields:start -->
 | Section | Purpose |
 | --- | --- |
+| `schema_version`, `project`, `description` | configuration format, stable project identity, and human context |
+| `exclude`, `discovery` | project-level selection and explicit discovery policy |
+| `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
-| `tests` | static cases, reviewed `case_routes`, and generated-source relations |
+| `tests` | static cases, reviewed case routes, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
 | `limits` | bounded Map analysis policy |
+<!-- archbird-config-fields:end -->
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
 `src/**/*.c` is recursive. Components group selected files; they do not discover
@@ -335,7 +261,7 @@ standard JSON Schema cannot express.
 Reviewed architecture policy belongs in the `constraints` collection of the
 same `archbird.json` that defines project structure. Typed constraints infer
 their exhaustive Map projections; primitive assertions can use inline literals,
-observations, or named/inline projections. The quick-start configuration above
+observations, or named/inline projections. The staged configuration above
 therefore needs no second suite file.
 
 ```bash
@@ -415,6 +341,22 @@ tags and severity. Findings cite exact evidence and separately record
 comparison, evidence state, applicability, disposition, baseline state, and a
 stable fingerprint. JSON, Markdown, SARIF, and JUnit are views of the same
 canonical Verification result.
+
+### Add observed test evidence
+
+Run each case in isolation with V8 or Istanbul coverage, then convert the
+project-owned reports without rerunning the project:
+
+```bash
+npx archbird observe . --map .archbird/map.json \
+  --request .archbird/coverage-request.json \
+  --output .archbird/test-symbols.json
+```
+
+`compileTestObservations(map, request, { repository, requestDirectory })`
+provides the same Node operation. Node also accepts isolated LLVM and gcov
+JSON. Aggregate reports without exact per-test identity are rejected; use the
+Python host for coverage.py dynamic contexts.
 
 ## Act: review and judge a change
 
@@ -507,11 +449,103 @@ GraphML and Mermaid are deterministic projections. Node exposes normalized OKF
 publication primitives, but the filesystem OKF CLI is Python-only. SCIP is an
 input evidence provider. Verify and change results can render SARIF or JUnit.
 
-The CLI commands are `map`, `config show|init`, `query`, `impact`, `freshness`,
-`diff`, `workspace`, `verify`, `plan`, `contract`, `verify-plan`,
-`export json|graphml|mermaid`, `serve`, and `support`. Use
+<!-- archbird-node-cli:start -->
+The CLI command names are `map`, `config`, `query`, `impact`, `diff`,
+`observe`, `freshness`, `workspace`, `verify`, `plan`, `contract`,
+`verify-plan`, `export`, `serve`, and `support`.
+<!-- archbird-node-cli:end -->
+
+`config` provides `show|init`; `export` provides
+`json|graphml|mermaid`. Use
 `npx archbird COMMAND --help` for flags. Exit status is 0 for success, 1 when
 requested `--check` blocks, and 2 for invalid input or configuration.
+
+## JavaScript APIs
+
+### Node
+
+```js
+const { Project, auditMapFreshness } = require("archbird");
+
+const project = Project.fromRepository(".");
+try {
+  const mapJson = project.mapJson({ pretty: true });
+  console.log(project.mapMarkdown({ maxChars: 12000 }).toString("utf8"));
+  console.log(project.queryMarkdown({
+    symbols: ["src/runtime.c:runtime_start"],
+    depth: 1,
+    context: { profile: "change" },
+  }).toString("utf8"));
+  console.log(auditMapFreshness(mapJson, project.mapJson()).toString("utf8"));
+} finally {
+  project.dispose();
+}
+```
+
+`Project.fromRepository()` applies discovery, project configuration, and
+explicit options. `Project.fromConfig()` requires one reviewed configuration.
+Canonical JSON methods return stable artifact bytes; Markdown and graph outputs
+are presentation views.
+
+<!-- archbird-node-api:start -->
+| Area | Public names |
+| --- | --- |
+| Repository model | `Project`, `Source`, `Workspace` |
+| Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `resolveDiscovery` |
+| Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
+| Change lifecycle | `ChangeContract`, `ChangeProposal`, `compileChangeProposal`, `createChangeContract`, `verifyChangeContract` |
+| Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
+| Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
+| Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |
+<!-- archbird-node-api:end -->
+
+Node and Python share 31 top-level capabilities after conventional naming.
+The inventory above is checked against `Object.keys(require("archbird"))`.
+Node's eight additional names expose engine/provider/cache diagnostics, raw
+discovery and canonicalization, and a separate report renderer. Python instead
+adds five schema/filesystem-OKF/observation helpers and folds report rendering
+into constraint evaluation.
+
+### Browser and package entrypoints
+
+```js
+const { createBrowserArchbird } = require("archbird/browser");
+
+const archbird = await createBrowserArchbird();
+const project = archbird.Project.fromFiles([
+  new archbird.Source(
+    "src/index.ts",
+    new TextEncoder().encode("export function answer() { return 42; }\n"),
+  ),
+]);
+try {
+  console.log(project.map());
+  console.log(JSON.parse(
+    project.queryJson({ symbols: ["answer"] }).toString("utf8"),
+  ));
+} finally {
+  project.dispose();
+}
+```
+
+Browser input is supplied bytes; it has no filesystem discovery. The resolved
+facade is:
+
+<!-- archbird-browser-api:start -->
+`Project`, `Source`, `auditMapFreshness`, `ENGINE`, `NATIVE_ABI_VERSION`,
+`PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `VERSION`, and `core`.
+<!-- archbird-browser-api:end -->
+
+The `core` property is the advanced raw Wasm facade.
+
+<!-- archbird-node-entrypoints:start -->
+Package entrypoints are `archbird`, `archbird/browser`, `archbird/schema/*`,
+`archbird/serve`, `archbird/wasm`, `archbird/wasm-sync`, and
+`archbird/worker`.
+<!-- archbird-node-entrypoints:end -->
+
+The direct browser API runs in the caller; the worker entrypoint and application
+isolate analysis in a Web Worker.
 
 ## Guarantees and limits
 

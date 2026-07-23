@@ -37,97 +37,22 @@ Archbird never edits the code.
 repository. The explicit `archbird map` form is useful in scripts and alongside
 the other stage commands.
 
-## Use from Python
-
-```python
-from archbird import Project, audit_map_freshness
-
-project = Project.from_repository(".")
-map_json = project.map_json(pretty=True)                 # canonical bytes
-overview = project.map_markdown(view="overview", detail="standard", max_chars=12_000)
-context = project.query_markdown(
-    symbols=["src/runtime.c:runtime_start"],
-    depth=1,
-    context={"profile": "change"},
-    max_chars=8_000,
-)
-brief = project.query_markdown(
-    symbols=["src/runtime.c:runtime_start"],
-    depth=1,
-    view="changes",
-    detail="compact",
-)
-
-print(overview.decode())
-print(context.decode())
-print(brief.decode())
-print(audit_map_freshness(map_json, project.map_json()).decode())
-```
-
-`Project.from_repository()` applies discovery, repository configuration, and
-explicit options. `Project.from_config()` uses exactly one reviewed config.
-Canonical JSON methods return stable artifact bytes or decoded objects;
-Markdown and graph views are derived presentations and are not verification
-inputs.
-
-Saved-Map helpers `query_map_json()` and `query_map_markdown()` accept
-`producer_policy="compatible"` (default) or `"current"`. The current policy
-rejects a missing or different core producer digest; it is independent of the
-live-source comparison performed by `audit_map_freshness()`.
-`query_map_markdown(..., view="changes", verification_result=result_json)`
-adds only constraints with exact subject-side source-path overlap and reports input
-and producer freshness.
-
-Pass `search=["provider registration"]` and `search_limit=8` when the path or
-symbol is not yet known. Archbird returns advisory candidate seeds with the
-exact matched Map fields and scores, then expands them through normal typed
-Query routes. This deterministic lexical ranking does not claim semantic
-equivalence, and its transitive symbol neighbors do not strengthen static test
-routes.
-
-Test matches report file distance and symbol-hop distance independently. A
-case-local call to a traversed wrapper can therefore rank above same-file
-fallback without being presented as runtime coverage.
-
-Workspace, Verification, ChangeProposal, ChangeContract, change-result,
-graph-view, freshness, diff, OKF, and report functions use the same canonical
-schemas as the CLI and C core.
-
-`schema_names()` lists the versioned JSON schemas bundled in the wheel and
-source distribution; `read_schema()` returns the exact bytes for offline
-editors, agents, and external validators. The native configuration compiler
-remains authoritative for relational invariants outside standard JSON Schema.
-
-The top-level package also exposes the schema-2 planning primitives:
-`compile_project_configuration()`, `evaluate_projection_json()`,
-`compile_query_plan_json()`, `evaluate_constraints_json()`, and
-`freeze_constraints_json()`. These return the same canonical artifacts as the
-C and Node APIs; normal application code can continue to use `Project` and the
-CLI workflows above.
-
-### Import observed test routes
-
-Generate coverage.py JSON with pytest dynamic contexts, then convert it without
-rerunning the project:
-
-```bash
-pytest --cov=your_package --cov-context=test
-coverage json --show-contexts -o .archbird/coverage.json
-archbird observe . --map .archbird/map.json \
-  --request .archbird/coverage-request.json \
-  --output .archbird/test-symbols.json
-```
-
-The request explicitly maps test selectors and contexts to report files and
-names mapped runner configuration. `compile_test_observations()` provides the
-same operation through Python. The Python host also accepts isolated Istanbul,
-LLVM, and gcov JSON; use the Node host for V8’s UTF-16 offsets. Aggregate
-reports without an exact per-test context are rejected rather than presented
-as test attribution.
-
 ## Command line
 
-Save complete evidence once and query it without re-analyzing:
+Start with the CLI in any repository; no configuration is required:
+
+```bash
+cd project
+archbird
+archbird query --symbol runtime_start
+archbird query --search 'where is provider registration handled'
+archbird serve
+```
+
+### Save and reuse evidence
+
+Save complete evidence when subsequent operations must use the exact same
+repository state:
 
 ```bash
 mkdir -p .archbird
@@ -244,7 +169,17 @@ archbird config init . --output archbird.json
   "components": [
     {"name": "native-core", "paths": ["include/**", "src/**"]},
     {"name": "javascript-api", "paths": ["js/src/**"]}
-  ],
+  ]
+}
+```
+<!-- archbird-minimal-project-config:end -->
+
+That first file changes only Map construction. Add a reusable projection, a
+named Query, and a constraint when the project is ready to persist reviewed
+architecture policy:
+
+```json
+{
   "projections": {
     "public-core-api": {
       "select": "symbols",
@@ -271,19 +206,24 @@ archbird config init . --output archbird.json
   }
 }
 ```
-<!-- archbird-minimal-project-config:end -->
 
-Configuration can additionally declare:
+These are top-level members of the same `archbird.json`. The complete field
+inventory is:
 
+<!-- archbird-config-fields:start -->
 | Section | Purpose |
 | --- | --- |
+| `schema_version`, `project`, `description` | configuration format, stable project identity, and human context |
+| `exclude`, `discovery` | project-level selection and explicit discovery policy |
+| `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
-| `tests` | static cases, reviewed `case_routes`, and generated-source relations |
+| `tests` | static cases, reviewed case routes, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
 | `limits` | bounded Map analysis policy |
+<!-- archbird-config-fields:end -->
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
 `src/**/*.c` is recursive. Components group selected files rather than
@@ -318,7 +258,7 @@ source repository also contains a complete package/build/test example in
 Reviewed architecture policy belongs in the `constraints` collection of the
 same `archbird.json` that defines project structure. Typed constraints infer
 their exhaustive Map projections; primitive assertions can use inline literals,
-observations, or named/inline projections. The quick-start configuration above
+observations, or named/inline projections. The staged configuration above
 therefore needs no second suite file.
 
 ```bash
@@ -398,6 +338,25 @@ tags and severity. Findings cite exact evidence and separately record
 comparison, evidence state, applicability, disposition, baseline state, and a
 stable fingerprint. JSON, Markdown, SARIF, and JUnit are views of the same
 canonical Verification result.
+
+### Add observed test evidence
+
+Generate coverage.py JSON with pytest dynamic contexts, then convert it without
+rerunning the project:
+
+```bash
+pytest --cov=your_package --cov-context=test
+coverage json --show-contexts -o .archbird/coverage.json
+archbird observe . --map .archbird/map.json \
+  --request .archbird/coverage-request.json \
+  --output .archbird/test-symbols.json
+```
+
+The request maps exact test selectors and contexts to report files.
+`compile_test_observations()` provides the same operation through Python. The
+Python host also accepts isolated Istanbul, LLVM, and gcov JSON; use the Node
+host for V8 UTF-16 offsets. Aggregate reports without exact per-test identity
+are rejected.
 
 ## Act: review and judge a change
 
@@ -494,12 +453,66 @@ analysis. `--jobs 0` is automatic. Python analysis uses a bounded ordered
 process pool only for large Python source sets; worker count cannot change
 canonical output.
 
+## Python API
+
+Use `Project` for the normal repository workflow:
+
+```python
+from archbird import Project, audit_map_freshness
+
+project = Project.from_repository(".")
+map_json = project.map_json(pretty=True)
+overview = project.map_markdown(
+    view="overview", detail="standard", max_chars=12_000
+)
+context = project.query_markdown(
+    symbols=["src/runtime.c:runtime_start"],
+    depth=1,
+    context={"profile": "change"},
+    max_chars=8_000,
+)
+
+print(overview.decode())
+print(context.decode())
+print(audit_map_freshness(map_json, project.map_json()).decode())
+```
+
+`Project.from_repository()` applies discovery, project configuration, and
+explicit options. `Project.from_config()` requires one reviewed configuration.
+Canonical JSON methods return stable artifact bytes; Markdown and graph outputs
+are presentation views.
+
+Saved-Map helpers `query_map_json()` and `query_map_markdown()` accept
+`producer_policy="compatible"` or `"current"`. Configuration, projection,
+QueryPlan, constraint, baseline, observation, workspace, change, graph, and OKF
+functions expose the same canonical artifacts as the CLI and C core.
+
+`schema_names()` lists every bundled JSON schema and `read_schema()` returns its
+exact bytes. Filesystem OKF parsing/writing is Python-specific because it uses
+the optional YAML/CommonMark adapter; normalized OKF analysis and publication
+remain shared with Node and C.
+
+<!-- archbird-python-api:start -->
+| Area | Public names |
+| --- | --- |
+| Repository model | `Project`, `Source`, `Workspace` |
+| Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `resolve_discovery` |
+| Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
+| Change lifecycle | `ChangeContract`, `ChangeProposal`, `change_contract`, `change_proposal`, `change_verify` |
+| Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
+| Runtime and schemas | `__version__`, `implementation_digest`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `read_schema`, `schema_names` |
+<!-- archbird-python-api:end -->
+
 ## Commands, installation, and limits
 
-The commands are `map`, `config show|init`, `query`, `impact`, `freshness`,
-`diff`, `workspace`, `verify`, `plan`, `contract`, `verify-plan`,
-`export json|graphml|mermaid|okf`, `okf validate|index|query`, `serve`, and
-`support`. Use
+<!-- archbird-python-cli:start -->
+The command names are `map`, `config`, `query`, `impact`, `diff`, `observe`,
+`freshness`, `workspace`, `verify`, `plan`, `contract`, `verify-plan`,
+`export`, `okf`, `serve`, and `support`.
+<!-- archbird-python-cli:end -->
+
+`config` provides `show|init`; `export` provides
+`json|graphml|mermaid|okf`; `okf` provides `validate|index|query`. Use
 `archbird COMMAND --help` for flags. Exit status is 0 for success, 1 when
 requested `--check` blocks, and 2 for invalid input/configuration.
 

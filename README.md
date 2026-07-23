@@ -51,7 +51,25 @@ the other stage commands.
 
 ## Map and query a repository
 
-Save complete evidence once, then query it without re-analyzing:
+Start in any repository. No configuration or saved artifact is required:
+
+```bash
+cd project
+archbird
+archbird query --symbol runtime_start
+archbird query --search 'where is provider registration handled'
+archbird serve
+```
+
+The first command prints an architecture overview. Query derives a focused
+artifact from the same canonical Map model; `serve` opens the local application.
+Add selectors such as `--path`, `--component`, or `--test` as the question
+becomes more specific.
+
+### Save and reuse evidence
+
+Save complete evidence when subsequent operations must use the exact same
+repository state:
 
 ```bash
 mkdir -p .archbird
@@ -119,46 +137,6 @@ their constraint IDs, requirement IDs, owners, severity, source paths, and wheth
 the verification input and producer still match the current Map. It does not
 rerun verification, match reference-only evidence, or treat a path-free constraint
 as relevant.
-
-### Import tests that actually reached a symbol
-
-Static test routes are candidates. `observe` converts project-owned per-test
-coverage reports into exact runtime test-to-symbol evidence that subsequent
-Map and Query runs can attach:
-
-```bash
-archbird observe . --map .archbird/map.json \
-  --request .archbird/coverage-request.json \
-  --output .archbird/test-symbols.json
-
-archbird query --symbol runtime_start \
-  --test-symbol-observations .archbird/test-symbols.json
-```
-
-The request names mapped runner/test files and report files. Python supports
-coverage.py JSON produced with dynamic test contexts; Node supports V8 JSON.
-Both hosts support isolated Istanbul, `llvm-cov export`, and gcov JSON. For
-formats without per-test contexts, use one isolated report per case—Archbird
-rejects aggregate coverage because it cannot prove which test produced a hit.
-Archbird reads these reports and checks their source hashes; it does not run
-the tests or coverage tools.
-
-```json
-{
-  "schema_version": 1,
-  "artifact": "archbird-coverage-observation-request",
-  "format": "coverage.py",
-  "group": "python",
-  "runner_paths": ["pyproject.toml"],
-  "reports": [{"id": "pytest", "path": "coverage.json"}],
-  "cases": [{
-    "path": "tests/test_runtime.py",
-    "selector": "tests/test_runtime.py::test_start",
-    "report": "pytest",
-    "context": "tests/test_runtime.py::test_start|run"
-  }]
-}
-```
 
 The default is an architecture-first overview for a person or coding agent;
 canonical JSON still contains every selected file and mapped fact. Choose the
@@ -253,7 +231,17 @@ archbird config init . --output archbird.json
   "components": [
     {"name": "native-core", "paths": ["include/**", "src/**"]},
     {"name": "javascript-api", "paths": ["js/src/**"]}
-  ],
+  ]
+}
+```
+<!-- archbird-minimal-project-config:end -->
+
+That first file changes only Map construction. Add a reusable exhaustive
+projection, a named Query, and a constraint when the project is ready to make
+reviewed architecture policy persistent:
+
+```json
+{
   "projections": {
     "public-core-api": {
       "select": "symbols",
@@ -280,20 +268,25 @@ archbird config init . --output archbird.json
   }
 }
 ```
-<!-- archbird-minimal-project-config:end -->
 
-The complete configuration vocabulary is:
+These are top-level members of the same `archbird.json`; the fragment is shown
+separately to make the progression visible. The complete configuration
+vocabulary is:
 
+<!-- archbird-config-fields:start -->
 | Section | Purpose |
 | --- | --- |
+| `schema_version`, `project`, `description` | configuration format, stable project identity, and human context |
+| `exclude`, `discovery` | project-level selection and explicit discovery policy |
 | `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
-| `tests` | static cases, reviewed `case_routes`, and generated-source relations |
+| `tests` | static cases, reviewed case routes, and generated-source relations |
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
 | `limits` | bounded Map analysis policy |
+<!-- archbird-config-fields:end -->
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
 `src/**/*.c` is recursive. Components group selected files; they do not discover
@@ -341,8 +334,9 @@ schedule; Archbird has no global schema version.
 Reviewed architecture policy belongs in the `constraints` collection of the
 same `archbird.json` that defines project structure. Typed constraints infer
 their exhaustive Map projections; primitive assertions can use inline literals,
-observations, or named/inline projections. The quick-start configuration above
-therefore needs no second suite file.
+observations, or named/inline projections. The complete
+[`quickstart.archbird.json`](examples/quickstart.archbird.json) combines these
+stages and needs no second suite file.
 
 ```bash
 # Run one saved Query plan or an ad-hoc query.
@@ -422,6 +416,26 @@ comparison, evidence state, applicability, disposition, baseline state, and a
 stable fingerprint. JSON, Markdown, SARIF, and JUnit are views of the same
 canonical Verification result.
 
+### Add observed test evidence
+
+Static test routes are candidates. `observe` converts project-owned per-test
+coverage reports into exact runtime test-to-symbol evidence:
+
+```bash
+archbird observe . --map .archbird/map.json \
+  --request .archbird/coverage-request.json \
+  --output .archbird/test-symbols.json
+
+archbird query --symbol runtime_start \
+  --test-symbol-observations .archbird/test-symbols.json
+```
+
+Python supports coverage.py JSON with dynamic test contexts; Node supports V8
+JSON. Both hosts support isolated Istanbul, `llvm-cov export`, and gcov JSON.
+Formats without per-test contexts require one isolated report per case.
+Archbird checks source hashes and rejects aggregate coverage that cannot prove
+which test produced a hit; it never runs the tests or coverage tools.
+
 ## Act: review and judge a change
 
 Archbird does not make the edit. It turns one failed architecture rule into a
@@ -493,7 +507,7 @@ SCIP is host-neutral. Tree-sitter recovery is fact-local. Semantic indexes
 retain producer, document coverage, source anchoring, and freshness. Provider
 conflicts, ambiguity, and unresolved targets remain explicit.
 
-## APIs
+## Programmatic APIs
 
 ### Python
 
@@ -561,6 +575,70 @@ if (status == ARCHBIRD_OK) {
 The public C ABI uses opaque handles, allocator-aware byte buffers, explicit
 statuses, and canonical JSON boundaries. It is experimental ABI v0.
 
+### Complete API inventory
+
+Python and Node share 31 top-level capabilities after conventional
+snake_case/camelCase naming. The inventories below are checked against
+`archbird.__all__` and `Object.keys(require("archbird"))`. Their totals
+intentionally differ: Python adds schema readers, filesystem OKF output, and
+standalone observation validation; Node adds engine/provider/cache diagnostics,
+raw discovery/canonicalization, and a separate constraint-report renderer.
+Python folds report rendering into
+`evaluate_constraints_json(format=...)`.
+
+<!-- archbird-python-api:start -->
+| Python area | Public names |
+| --- | --- |
+| Repository model | `Project`, `Source`, `Workspace` |
+| Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `resolve_discovery` |
+| Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
+| Change lifecycle | `ChangeContract`, `ChangeProposal`, `change_contract`, `change_proposal`, `change_verify` |
+| Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
+| Runtime and schemas | `__version__`, `implementation_digest`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `read_schema`, `schema_names` |
+<!-- archbird-python-api:end -->
+
+<!-- archbird-node-api:start -->
+| Node area | Public names |
+| --- | --- |
+| Repository model | `Project`, `Source`, `Workspace` |
+| Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `resolveDiscovery` |
+| Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
+| Change lifecycle | `ChangeContract`, `ChangeProposal`, `compileChangeProposal`, `createChangeContract`, `verifyChangeContract` |
+| Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
+| Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
+| Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |
+<!-- archbird-node-api:end -->
+
+`archbird/browser` exports `createBrowserArchbird()`. Browser repository input
+is supplied bytes, not filesystem discovery. The resolved facade is:
+
+<!-- archbird-browser-api:start -->
+`Project`, `Source`, `auditMapFreshness`, `ENGINE`, `NATIVE_ABI_VERSION`,
+`PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `VERSION`, and `core`.
+<!-- archbird-browser-api:end -->
+
+The `core` property is the advanced raw Wasm facade.
+
+<!-- archbird-node-entrypoints:start -->
+npm package entrypoints are `archbird`, `archbird/browser`,
+`archbird/schema/*`, `archbird/serve`, `archbird/wasm`,
+`archbird/wasm-sync`, and `archbird/worker`.
+<!-- archbird-node-entrypoints:end -->
+
+The complete C ABI is declared in
+[`include/archbird/archbird.h`](include/archbird/archbird.h):
+
+<!-- archbird-c-api:start -->
+| C area | Public functions |
+| --- | --- |
+| Engine and JSON | `archbird_engine_create`, `archbird_engine_destroy`, `archbird_engine_error`, `archbird_engine_error_offset`, `archbird_engine_options_init`, `archbird_engine_options_init_for_input`, `archbird_graph_options_init`, `archbird_implementation_sha256`, `archbird_json_canonicalize`, `archbird_json_validate` |
+| Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
+| Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_query_plan_compile` |
+| Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
+| Map, Query, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish` |
+| Workspace and change | `archbird_change_contract`, `archbird_change_contract_report`, `archbird_change_proposal`, `archbird_change_proposal_report`, `archbird_change_verify`, `archbird_change_verify_report`, `archbird_workspace_analyze`, `archbird_workspace_plan` |
+<!-- archbird-c-api:end -->
+
 ## Interchange and command surface
 
 Canonical Archbird JSON is authoritative. Optional inputs/projections are:
@@ -582,10 +660,23 @@ archbird export mermaid --map .archbird/map.json \
   --output .archbird/architecture.mmd
 ```
 
-The complete commands are `map`, `config show|init`, `query`, `impact`,
-`freshness`, `diff`, `workspace`, `verify`, `plan`, `contract`, `verify-plan`,
-`export json|graphml|mermaid`, `serve`, and `support`; Python adds filesystem
-`okf validate|index|query` and `export okf`. Use
+The command names are:
+
+<!-- archbird-python-cli:start -->
+Python: `map`, `config`, `query`, `impact`, `diff`, `observe`, `freshness`,
+`workspace`, `verify`, `plan`, `contract`, `verify-plan`, `export`, `okf`,
+`serve`, `support`.
+<!-- archbird-python-cli:end -->
+
+<!-- archbird-node-cli:start -->
+Node: `map`, `config`, `query`, `impact`, `diff`, `observe`, `freshness`,
+`workspace`, `verify`, `plan`, `contract`, `verify-plan`, `export`, `serve`,
+`support`.
+<!-- archbird-node-cli:end -->
+
+`config` provides `show|init`; `export` provides `json|graphml|mermaid` and
+Python additionally provides `okf`; Python `okf` provides
+`validate|index|query`. Use
 `archbird COMMAND --help` for flags. Exit status is 0 for success, 1 when
 requested `--check` blocks, and 2 for invalid input/configuration.
 

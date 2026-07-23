@@ -19,29 +19,5 @@
   "components": [
     {"name": "native-core", "paths": ["include/**", "src/**"]},
     {"name": "javascript-api", "paths": ["js/src/**"]}
-  ],
-  "projections": {
-    "public-core-api": {
-      "select": "symbols",
-      "paths": ["include/demo.h"],
-      "public_only": true
-    }
-  },
-  "queries": {
-    "public-api-impact": {
-      "projection": "public-core-api",
-      "direction": "upstream",
-      "depth": 1
-    }
-  },
-  "constraints": {
-    "CORE-PUBLIC-API": {
-      "assert": "required_subset",
-      "expected": {"literal": ["demo_close", "demo_open"]},
-      "actual": {"projection": "public-core-api"},
-      "severity": "error",
-      "owner": "core",
-      "rationale": "Supported native entrypoints must remain public."
-    }
-  }
+  ]
 }

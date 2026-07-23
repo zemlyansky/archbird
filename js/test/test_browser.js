@@ -13,12 +13,31 @@ const packageRoot = path.resolve(process.argv[2]);
 const repository = path.resolve(process.argv[3]);
 const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js"));
 
+function markedNames(relative, name) {
+  const text = fs.readFileSync(path.join(repository, relative), "utf8");
+  const start = `<!-- ${name}:start -->`;
+  const end = `<!-- ${name}:end -->`;
+  assert.equal(text.split(start).length - 1, 1, `${relative}: ${name} start`);
+  assert.equal(text.split(end).length - 1, 1, `${relative}: ${name} end`);
+  const body = text.split(start, 2)[1].split(end, 1)[0];
+  const names = [...body.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]);
+  assert.equal(new Set(names).size, names.length, `${relative}: duplicate ${name}`);
+  return new Set(names);
+}
+
 (async () => {
   const archbird = await createBrowserArchbird({
     wasmBinary: fs.readFileSync(path.join(packageRoot, "wasm/archbird.wasm")),
   });
   assert.equal(archbird.ENGINE.kind, "wasm");
   assert.equal(archbird.VERSION, "0.0.1");
+  for (const relative of ["README.md", "js/README.md"]) {
+    assert.deepEqual(
+      markedNames(relative, "archbird-browser-api"),
+      new Set(Object.keys(archbird)),
+      `${relative}: browser API inventory drifted`,
+    );
+  }
   const conformanceCorpus = JSON.parse(fs.readFileSync(path.join(
     repository,
     "test/fixtures/project_configuration_conformance.json",

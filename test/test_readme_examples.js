@@ -47,9 +47,21 @@ function run(arguments_) {
   return result.stdout;
 }
 
+function markedNames(relative, name) {
+  const text = fs.readFileSync(path.join(repository, relative), "utf8");
+  const start = `<!-- ${name}:start -->`;
+  const end = `<!-- ${name}:end -->`;
+  assert.equal(text.split(start).length - 1, 1, `${relative}: ${name} start`);
+  assert.equal(text.split(end).length - 1, 1, `${relative}: ${name} end`);
+  const body = text.split(start, 2)[1].split(end, 1)[0];
+  const names = [...body.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]);
+  assert.equal(new Set(names).size, names.length, `${relative}: duplicate ${name}`);
+  return new Set(names);
+}
+
 try {
   fs.copyFileSync(
-    path.join(repository, "examples", "minimal.archbird.json"),
+    path.join(repository, "examples", "quickstart.archbird.json"),
     path.join(root, "archbird.json"),
   );
   write(
@@ -88,6 +100,22 @@ try {
   );
   write("Makefile", "all:\n\t@echo demo\n");
 
+  const zeroConfig = JSON.parse(
+    run(["--no-config", "--format", "json", "--check"]),
+  );
+  assert.ok(zeroConfig.files.length > 0);
+  assert.ok(zeroConfig.project);
+  const resolution = JSON.parse(run(["config", "show", "."]));
+  assert.equal(resolution.artifact, "archbird-config-resolution");
+  run([
+    "config", "init", ".", "--output", ".archbird/generated.archbird.json",
+  ]);
+  const generatedConfig = JSON.parse(
+    fs.readFileSync(path.join(root, ".archbird/generated.archbird.json")),
+  );
+  assert.equal(generatedConfig.schema_version, 2);
+  assert.equal(Object.hasOwn(generatedConfig, "root"), false);
+
   const explicitMap = run(["map", ".", "--format", "json", "--check"]);
   assert.match(run([]), /^# demo architecture\n[\s\S]*\nMap `/);
   assert.equal(run(["--format", "json", "--check"]), explicitMap);
@@ -110,14 +138,69 @@ try {
   assert.deepEqual(verification.summary.constraints, {
     fail: 0,
     not_applicable: 0,
-    pass: 1,
+    pass: 2,
     unknown: 0,
     waived: 0,
   });
 
   process.env.ARCHBIRD_ENGINE = "native";
   process.env.ARCHBIRD_NATIVE_ADDON = addon;
-  const { Project, auditMapFreshness } = require(path.join(repository, "js", "src", "index.js"));
+  const api = require(path.join(repository, "js", "src", "index.js"));
+  const { Project, auditMapFreshness } = api;
+  for (const relative of ["README.md", "js/README.md"]) {
+    assert.deepEqual(
+      markedNames(relative, "archbird-node-api"),
+      new Set(Object.keys(api)),
+      `${relative}: Node API inventory drifted`,
+    );
+  }
+  const cliSource = fs.readFileSync(path.join(repository, "js", "src", "cli.js"), "utf8");
+  const commandBlock = cliSource.match(/const COMMANDS = new Set\(\[([\s\S]*?)\]\);/);
+  assert.ok(commandBlock, "Node command inventory is unavailable");
+  const commands = new Set(
+    [...commandBlock[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+  );
+  for (const relative of ["README.md", "js/README.md"]) {
+    assert.deepEqual(
+      markedNames(relative, "archbird-node-cli"),
+      commands,
+      `${relative}: Node CLI inventory drifted`,
+    );
+  }
+  const packageDocument = JSON.parse(
+    fs.readFileSync(path.join(repository, "js", "package.json"), "utf8"),
+  );
+  const entrypoints = new Set(
+    Object.keys(packageDocument.exports).map((name) => (
+      name === "." ? packageDocument.name : packageDocument.name + name.slice(1)
+    )),
+  );
+  for (const relative of ["README.md", "js/README.md"]) {
+    assert.deepEqual(
+      markedNames(relative, "archbird-node-entrypoints"),
+      entrypoints,
+      `${relative}: npm entrypoint inventory drifted`,
+    );
+  }
+  const browserSource = fs.readFileSync(
+    path.join(repository, "js", "src", "browser.js"),
+    "utf8",
+  );
+  const browserFacade = browserSource.match(
+    /return Object\.freeze\(\{([\s\S]*?)\n  \}\);\n\}/,
+  );
+  assert.ok(browserFacade, "browser facade inventory is unavailable");
+  const browserNames = new Set(
+    [...browserFacade[1].matchAll(/^\s{4}([A-Za-z][A-Za-z0-9_]*)(?=:|,)/gm)]
+      .map((match) => match[1]),
+  );
+  for (const relative of ["README.md", "js/README.md"]) {
+    assert.deepEqual(
+      markedNames(relative, "archbird-browser-api"),
+      browserNames,
+      `${relative}: browser API inventory drifted`,
+    );
+  }
   const project = Project.fromRepository(root, {
     config: path.join(root, "archbird.json"),
   });
