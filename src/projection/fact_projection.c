@@ -1293,6 +1293,26 @@ static ArchbirdStatus decode_projection_completeness(ArchbirdEngine *engine,
   return status;
 }
 
+static int
+projection_completeness_equal(const AbProjectionCompleteness *left,
+                              const AbProjectionCompleteness *right) {
+  return ab_string_equal(&left->unit, &right->unit) &&
+         left->has_universe == right->has_universe &&
+         (!left->has_universe || left->universe == right->universe) &&
+         left->has_selected == right->has_selected &&
+         (!left->has_selected || left->selected == right->selected) &&
+         left->has_evaluated == right->has_evaluated &&
+         (!left->has_evaluated || left->evaluated == right->evaluated) &&
+         left->has_excluded == right->has_excluded &&
+         (!left->has_excluded || left->excluded == right->excluded) &&
+         left->has_unsupported == right->has_unsupported &&
+         (!left->has_unsupported || left->unsupported == right->unsupported) &&
+         left->has_unknown == right->has_unknown &&
+         (!left->has_unknown || left->unknown == right->unknown) &&
+         left->has_truncated == right->has_truncated &&
+         (!left->has_truncated || left->truncated == right->truncated);
+}
+
 ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
                                                   const AbValue *value,
                                                   AbProjectionData *out) {
@@ -1312,6 +1332,7 @@ ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
   const AbValue *completeness = ab_value_member(value, "completeness");
   const AbValue *sha = ab_value_member(value, "sha256");
   const AbValue *items = ab_value_member(value, "items");
+  AbProjectionCompleteness declared_completeness = {0};
   ArchbirdStatus status;
   size_t index;
   if (!engine || !value || !out)
@@ -1343,6 +1364,8 @@ ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
   }
   if (status == ARCHBIRD_OK)
     status = decode_projection_completeness(engine, completeness, out);
+  if (status == ARCHBIRD_OK)
+    declared_completeness = out->selection;
   for (index = 0; status == ARCHBIRD_OK && index < items->as.array.count;
        index++) {
     const AbValue *row = &items->as.array.items[index];
@@ -1401,6 +1424,11 @@ ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
   }
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(engine, out);
+  if (status == ARCHBIRD_OK &&
+      !projection_completeness_equal(&declared_completeness, &out->selection))
+    status = archbird_error_set(
+        engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+        "projection completeness ledger does not match its items");
   if (status == ARCHBIRD_OK) {
     const AbValue *classification =
         ab_value_member(completeness, "classification");

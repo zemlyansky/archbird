@@ -44,6 +44,12 @@ int ab_act_identifier(const AbValue *value) {
   return 1;
 }
 
+int ab_act_string_values_equal(const AbValue *left, const AbValue *right) {
+  return left && right && left->kind == AB_VALUE_STRING &&
+         right->kind == AB_VALUE_STRING &&
+         ab_string_equal(&left->as.text, &right->as.text);
+}
+
 int ab_act_object_fields_allowed(const AbValue *object,
                                  const char *const *allowed, size_t count) {
   size_t field_index;
@@ -84,22 +90,27 @@ ArchbirdStatus ab_act_value_digest(ArchbirdEngine *engine, const AbValue *value,
   return status;
 }
 
-ArchbirdStatus ab_act_value_digest_without_sha256(ArchbirdEngine *engine,
-                                                  const AbValue *value,
-                                                  char output[65]) {
+ArchbirdStatus ab_act_value_digest_without_field(ArchbirdEngine *engine,
+                                                 const AbValue *value,
+                                                 const char *field_name,
+                                                 char output[65]) {
   AbBuffer buffer;
   uint8_t digest[32];
   ArchbirdStatus status;
+  size_t field_name_length;
   size_t index;
   size_t written = 0;
-  if (!engine || !value || value->kind != AB_VALUE_OBJECT || !output)
+  if (!engine || !value || value->kind != AB_VALUE_OBJECT || !field_name ||
+      !output)
     return ARCHBIRD_INVALID_ARGUMENT;
+  field_name_length = strlen(field_name);
   ab_buffer_init(&buffer, engine);
   status = ab_buffer_literal(&buffer, "{");
   for (index = 0; status == ARCHBIRD_OK && index < value->as.object.count;
        index++) {
     const AbObjectField *field = &value->as.object.fields[index];
-    if (field->name.length == 6 && memcmp(field->name.data, "sha256", 6) == 0)
+    if (field->name.length == field_name_length &&
+        memcmp(field->name.data, field_name, field_name_length) == 0)
       continue;
     if (written++)
       status = ab_buffer_literal(&buffer, ",");
@@ -177,7 +188,7 @@ static ArchbirdStatus validate_evidence_array(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus validate_finding(ArchbirdEngine *engine,
+ArchbirdStatus ab_act_validate_finding(ArchbirdEngine *engine,
                                        const AbValue *row) {
   static const char *const allowed[] = {
       "applicability", "baseline_state", "comparison",  "disposition",
@@ -259,7 +270,7 @@ static ArchbirdStatus validate_check(ArchbirdEngine *engine,
   }
   for (index = 0; index < findings->as.array.count; index++) {
     ArchbirdStatus status =
-        validate_finding(engine, &findings->as.array.items[index]);
+        ab_act_validate_finding(engine, &findings->as.array.items[index]);
     if (status != ARCHBIRD_OK)
       return status;
   }
@@ -332,6 +343,7 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
   const AbValue *diagnostics;
   const AbValue *summary;
   const AbValue *result_sha;
+  char actual_result_sha[65];
   uint64_t schema_version;
   size_t index;
   static const AbString current = {(char *)"current", 7};
@@ -384,6 +396,8 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
       !ab_act_lowercase_sha256(
           ab_value_member(out->policy, "project_configuration_sha256")) ||
       !string_nonblank(ab_value_member(out->policy, "project")) ||
+      !ab_act_string_values_equal(ab_value_member(out->evaluation, "project"),
+                                  ab_value_member(out->policy, "project")) ||
       !identities || identities->kind != AB_VALUE_ARRAY || !out->operands ||
       out->operands->kind != AB_VALUE_ARRAY ||
       !named_rows_unique(out->operands, "name", 1) || !out->mappings ||
@@ -398,6 +412,15 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
       diagnostics->kind != AB_VALUE_ARRAY ||
       !ab_act_lowercase_sha256(result_sha)) {
     status = invalid(engine, "invalid canonical verification artifact");
+    goto fail;
+  }
+  status = ab_act_value_digest_without_field(
+      engine, &out->root, "verification_result_sha256", actual_result_sha);
+  if (status != ARCHBIRD_OK)
+    goto fail;
+  if (memcmp(actual_result_sha, result_sha->as.text.data, 64) != 0) {
+    status = invalid(
+        engine, "canonical verification result SHA-256 does not match content");
     goto fail;
   }
   for (index = 0; index < out->evaluations->as.array.count; index++) {
@@ -415,7 +438,8 @@ ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
         !ab_act_lowercase_sha256(ab_value_member(
             evaluation, "map_producer_implementation_sha256")) ||
         !string_nonblank(ab_value_member(evaluation, "project")) ||
-        (resolution && resolution->kind != AB_VALUE_NULL &&
+        !resolution ||
+        (resolution->kind != AB_VALUE_NULL &&
          !ab_act_lowercase_sha256(resolution))) {
       status = invalid(engine, "invalid constraint Map evaluation");
       goto fail;

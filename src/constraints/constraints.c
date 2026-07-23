@@ -1992,13 +1992,13 @@ static ArchbirdStatus render_constraint_result(ConstraintExecution *execution,
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&base, &execution->mappings);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&base, ",\"operand_definitions\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_value_render(&base, &execution->operand_definitions);
-  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&base, ",\"observations\":");
   if (status == ARCHBIRD_OK)
     status = ab_constraints_observations_render(&execution->context, &base);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&base, ",\"operand_definitions\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&base, &execution->operand_definitions);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&base, ",\"operands\":[");
   for (index = 0;

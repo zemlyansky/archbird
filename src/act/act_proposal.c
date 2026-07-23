@@ -88,6 +88,10 @@ static ArchbirdStatus copy_item(ArchbirdEngine *engine,
                                 memcmp(source->state.data, "current", 7) != 0))
     status = ab_projection_item_set_state(engine, target, source->state.data,
                                           source->message.data);
+  else if (status == ARCHBIRD_OK) {
+    ab_string_free(engine, &target->message);
+    status = copy_string(engine, &target->message, &source->message);
+  }
   for (index = 0; status == ARCHBIRD_OK && index < source->evidence_count;
        index++)
     status = ab_projection_item_add_evidence(engine, target,
@@ -136,10 +140,11 @@ ArchbirdStatus ab_act_project_fact(ArchbirdEngine *engine,
       (source->state.length != 7 ||
        memcmp(source->state.data, "current", 7) != 0)) {
     ab_string_free(engine, &out->state);
-    ab_string_free(engine, &out->message);
     status = copy_string(engine, &out->state, &source->state);
-    if (status == ARCHBIRD_OK)
-      status = copy_string(engine, &out->message, &source->message);
+  }
+  if (status == ARCHBIRD_OK) {
+    ab_string_free(engine, &out->message);
+    status = copy_string(engine, &out->message, &source->message);
   }
   for (index = 0; status == ARCHBIRD_OK && index < source->item_count;
        index++) {

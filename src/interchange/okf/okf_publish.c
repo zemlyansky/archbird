@@ -244,7 +244,7 @@ static int sealed_result(AbOkfPublication *pub, const AbValue *root,
                          char digest[65]) {
   const AbString *declared = ab_okf_pub_text(root, "sha256");
   if (!lowercase_sha256(declared) ||
-      ab_act_value_digest_without_sha256(pub->engine, root, digest) !=
+      ab_act_value_digest_without_field(pub->engine, root, "sha256", digest) !=
           ARCHBIRD_OK)
     return 0;
   return !memcmp(declared->data, digest, 64);

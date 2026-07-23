@@ -107,7 +107,12 @@
             "map_config_sha256": {"$ref": "#/$defs/sha256"},
             "map_input_sha256": {"$ref": "#/$defs/sha256"},
             "map_producer_implementation_sha256": {"$ref": "#/$defs/sha256"},
-            "resolution_sha256": {"$ref": "#/$defs/sha256"}
+            "resolution_sha256": {
+              "oneOf": [
+                {"type": "null"},
+                {"$ref": "#/$defs/sha256"}
+              ]
+            }
           }
         },
         "policy": {
@@ -240,8 +245,7 @@
         "label": {"type": "string", "minLength": 1},
         "value": {},
         "attributes": {
-          "type": "object",
-          "additionalProperties": {"type": "string"}
+          "type": "object"
         },
         "state": {"enum": ["current", "unknown", "stale"]},
         "message": {"type": "string"},

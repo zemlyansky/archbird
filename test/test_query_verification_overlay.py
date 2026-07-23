@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,20 @@ from archbird.native import (
     query_map_json,
     query_map_markdown,
 )
+
+
+def seal_verification(document: dict) -> bytes:
+    payload = {
+        key: value
+        for key, value in document.items()
+        if key != "verification_result_sha256"
+    }
+    document["verification_result_sha256"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return json.dumps(
+        document, sort_keys=True, separators=(",", ":")
+    ).encode()
 
 
 def run(arguments: list[str], cwd: Path, env: dict[str, str]) -> bytes:
@@ -49,7 +64,7 @@ def main() -> None:
     map_bytes = project.map_json()
     query = json.loads(query_map_json(map_bytes, paths=["js/index.js"]))
     result = json.loads(evaluate_constraints_json(config_bytes, map_bytes))
-    result_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+    result_bytes = seal_verification(result)
 
     markdown = query_map_markdown(
         map_bytes,
@@ -75,7 +90,7 @@ def main() -> None:
         map_bytes,
         paths=["js/index.js"],
         view="changes",
-        verification_result=json.dumps(stale, sort_keys=True, separators=(",", ":")).encode(),
+        verification_result=seal_verification(stale),
     ).decode()
     if "evidence=stale" not in stale_markdown:
         raise AssertionError("overlay hid stale verification inputs")
@@ -87,9 +102,7 @@ def main() -> None:
             map_bytes,
             paths=["js/index.js"],
             view="changes",
-            verification_result=json.dumps(
-                ambiguous, sort_keys=True, separators=(",", ":")
-            ).encode(),
+            verification_result=seal_verification(ambiguous),
         )
     except (_native.Error, ValueError):
         pass
@@ -103,9 +116,7 @@ def main() -> None:
             map_bytes,
             paths=["js/index.js"],
             view="changes",
-            verification_result=json.dumps(
-                malformed, sort_keys=True, separators=(",", ":")
-            ).encode(),
+            verification_result=seal_verification(malformed),
         )
     except (_native.Error, ValueError):
         pass

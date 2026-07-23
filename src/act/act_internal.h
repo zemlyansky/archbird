@@ -177,13 +177,17 @@ typedef struct AbActResultData {
 
 ArchbirdStatus ab_act_value_digest(ArchbirdEngine *engine, const AbValue *value,
                                    char output[65]);
-ArchbirdStatus ab_act_value_digest_without_sha256(ArchbirdEngine *engine,
-                                                  const AbValue *value,
-                                                  char output[65]);
+ArchbirdStatus ab_act_value_digest_without_field(ArchbirdEngine *engine,
+                                                 const AbValue *value,
+                                                 const char *field_name,
+                                                 char output[65]);
 int ab_act_lowercase_sha256(const AbValue *value);
 int ab_act_identifier(const AbValue *value);
+int ab_act_string_values_equal(const AbValue *left, const AbValue *right);
 int ab_act_object_fields_allowed(const AbValue *object,
                                  const char *const *allowed, size_t count);
+ArchbirdStatus ab_act_validate_finding(ArchbirdEngine *engine,
+                                       const AbValue *row);
 
 ArchbirdStatus ab_act_verification_load(ArchbirdEngine *engine,
                                         const uint8_t *json, size_t json_length,

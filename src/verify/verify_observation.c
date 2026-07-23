@@ -1193,12 +1193,12 @@ static ArchbirdStatus render_evidence(AbBuffer *buffer,
 
 static ArchbirdStatus render_policy(AbBuffer *buffer,
                                     const AbVerifyEqualityPolicy *policy) {
-  AT_RENDER_TRY(ab_buffer_literal(buffer, "{\"kind\":"));
-  AT_RENDER_TRY(
-      ab_buffer_json_string(buffer, policy->kind->data, policy->kind->length));
   if (string_literal(policy->kind, "float")) {
-    AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"atol\":"));
+    AT_RENDER_TRY(ab_buffer_literal(buffer, "{\"atol\":"));
     AT_RENDER_TRY(render_real(buffer, policy->atol));
+    AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"kind\":"));
+    AT_RENDER_TRY(ab_buffer_json_string(buffer, policy->kind->data,
+                                        policy->kind->length));
     AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"max_ulp\":"));
     if (policy->has_max_ulp) {
       const AbValue *raw =
@@ -1216,6 +1216,10 @@ static ArchbirdStatus render_policy(AbBuffer *buffer,
     AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"signed_zero_equal\":"));
     AT_RENDER_TRY(ab_buffer_literal(
         buffer, policy->signed_zero_equal ? "true" : "false"));
+  } else {
+    AT_RENDER_TRY(ab_buffer_literal(buffer, "{\"kind\":"));
+    AT_RENDER_TRY(ab_buffer_json_string(buffer, policy->kind->data,
+                                        policy->kind->length));
   }
   return ab_buffer_literal(buffer, "}");
 }
@@ -1290,6 +1294,9 @@ render_observation_data_public(AbBuffer *buffer,
   AT_RENDER_TRY(ab_buffer_literal(buffer, "],\"evidence_slice_sha256\":"));
   AT_RENDER_TRY(ab_buffer_json_string(buffer, data->evidence_slice_sha256->data,
                                       data->evidence_slice_sha256->length));
+  AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"id\":"));
+  AT_RENDER_TRY(
+      ab_buffer_json_string(buffer, data->id->data, data->id->length));
   AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"map_input_sha256\":"));
   AT_RENDER_TRY(ab_buffer_json_string(buffer, data->map_input_sha256->data,
                                       data->map_input_sha256->length));
@@ -1310,9 +1317,6 @@ render_observation_data_public(AbBuffer *buffer,
                             data->revision ? data->revision->length : 0));
   AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"sha256\":"));
   AT_RENDER_TRY(ab_buffer_json_string(buffer, data->sha256, 64));
-  AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"id\":"));
-  AT_RENDER_TRY(
-      ab_buffer_json_string(buffer, data->id->data, data->id->length));
   return ab_buffer_literal(buffer, "}");
 }
 
@@ -1327,22 +1331,22 @@ static ArchbirdStatus render_observation_states(AbVerificationContext *context,
     size_t witness_index;
     if (index)
       AT_RENDER_TRY(ab_buffer_literal(buffer, ","));
-    AT_RENDER_TRY(ab_buffer_literal(buffer, "{\"message\":"));
-    AT_RENDER_TRY(ab_buffer_json_string(buffer, state->message.data,
-                                        state->message.length));
-    AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"id\":"));
+    AT_RENDER_TRY(ab_buffer_literal(buffer, "{\"id\":"));
     AT_RENDER_TRY(
         ab_buffer_json_string(buffer, state->name.data, state->name.length));
+    AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"message\":"));
+    AT_RENDER_TRY(ab_buffer_json_string(buffer, state->message.data,
+                                        state->message.length));
+    if (state->has_data) {
+      AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"observation\":"));
+      AT_RENDER_TRY(render_observation_data_public(buffer, &state->data));
+    }
     AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"project\":"));
     AT_RENDER_TRY(ab_buffer_json_string(buffer, state->project.data,
                                         state->project.length));
     AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"state\":"));
     AT_RENDER_TRY(
         ab_buffer_json_string(buffer, state->state.data, state->state.length));
-    if (state->has_data) {
-      AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"observation\":"));
-      AT_RENDER_TRY(render_observation_data_public(buffer, &state->data));
-    }
     AT_RENDER_TRY(ab_buffer_literal(buffer, ",\"whole_map_matches\":"));
     AT_RENDER_TRY(
         ab_buffer_literal(buffer, state->whole_map_matches ? "true" : "false"));

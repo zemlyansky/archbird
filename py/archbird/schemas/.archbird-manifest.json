@@ -20,9 +20,9 @@
       "source": "schema/change-contract.schema.json"
     },
     {
-      "bytes": 13901,
+      "bytes": 13954,
       "path": "change-proposal.schema.json",
-      "sha256": "78c00131ba0085b623abf5d7eaaff0404f20540680056ae6b5e0c4ee5ed7fa7f",
+      "sha256": "01ac36c8a449c5b03466bdc933467c797dbda8e3093e399f1c4b3364a3f29cee",
       "source": "schema/change-proposal.schema.json"
     },
     {

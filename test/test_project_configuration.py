@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -25,6 +26,50 @@ from archbird.project_configuration import compile_ad_hoc_query, compile_named_q
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _reseal(document: dict) -> bytes:
+    canonical = {
+        key: value for key, value in document.items() if key != "sha256"
+    }
+    document["sha256"] = hashlib.sha256(
+        json.dumps(
+            canonical, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    return json.dumps(
+        document, sort_keys=True, separators=(",", ":")
+    ).encode()
+
+
+def _seal_verification(document: dict) -> bytes:
+    canonical = {
+        key: value
+        for key, value in document.items()
+        if key != "verification_result_sha256"
+    }
+    document["verification_result_sha256"] = hashlib.sha256(
+        json.dumps(
+            canonical, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    return json.dumps(
+        document, sort_keys=True, separators=(",", ":")
+    ).encode()
+
+
+def _assert_invalid_proposal(document: dict, expected: str) -> None:
+    try:
+        change_contract(
+            _reseal(document),
+            objective="Restore the reviewed literal.",
+            owner="architecture",
+            rationale="Reject malformed canonical change artifacts.",
+        )
+    except RuntimeError as error:
+        assert expected in str(error)
+    else:
+        raise AssertionError("Act accepted a malformed resealed proposal")
 
 
 def _assert_project_configuration_conformance() -> None:
@@ -1060,6 +1105,9 @@ def main() -> None:
         observations=observations,
     )
     browser_result = json.loads(browser_verification)
+    assert browser_verification == json.dumps(
+        browser_result, sort_keys=True, separators=(",", ":")
+    ).encode()
     browser_constraint = next(
         row
         for row in browser_result["constraints"]
@@ -1352,9 +1400,74 @@ def main() -> None:
     assert proposal["source"]["policy"]["sha256"] == failing_result["policy"][
         "constraint_policy_sha256"
     ]
+    forged_verification = json.loads(failing_verification)
+    forged_verification["verification_result_sha256"] = "0" * 64
+    try:
+        change_proposal(
+            json.dumps(
+                forged_verification, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            fingerprint,
+        )
+    except RuntimeError as error:
+        assert "result SHA-256" in str(error)
+    else:
+        raise AssertionError(
+            "Act accepted a verification artifact with a forged result identity"
+        )
+    contradictory_verification = json.loads(failing_verification)
+    contradictory_verification["policy"]["project"] = "another-project"
+    try:
+        change_proposal(
+            _seal_verification(contradictory_verification),
+            fingerprint,
+        )
+    except RuntimeError as error:
+        assert "verification artifact" in str(error)
+    else:
+        raise AssertionError(
+            "Act accepted contradictory verification project identities"
+        )
+    incomplete_verification = json.loads(failing_verification)
+    current_evaluation = next(
+        row
+        for row in incomplete_verification["evaluations"]
+        if row["id"] == "current"
+    )
+    del current_evaluation["resolution_sha256"]
+    try:
+        change_proposal(
+            _seal_verification(incomplete_verification),
+            fingerprint,
+        )
+    except RuntimeError as error:
+        assert "Map evaluation" in str(error)
+    else:
+        raise AssertionError(
+            "Act accepted an incomplete verification evaluation identity"
+        )
     assert change_proposal(
         failing_verification, fingerprint, format="markdown"
     ).startswith(b"# Architecture change proposal: MISSING-LITERAL\n")
+    malformed_proposal = json.loads(proposal_bytes)
+    malformed_proposal["projections"][0]["selection"] = 7
+    _assert_invalid_proposal(malformed_proposal, "projection")
+    malformed_proposal = json.loads(proposal_bytes)
+    malformed_proposal["source"]["evaluation"]["resolution_sha256"] = 7
+    _assert_invalid_proposal(malformed_proposal, "source")
+    malformed_proposal = json.loads(proposal_bytes)
+    malformed_proposal["source"]["policy"]["project"] = "another-project"
+    _assert_invalid_proposal(malformed_proposal, "source")
+    malformed_proposal = json.loads(proposal_bytes)
+    malformed_proposal["origin"]["finding"]["message"] = 7
+    _assert_invalid_proposal(malformed_proposal, "finding")
+    malformed_proposal = json.loads(proposal_bytes)
+    entries = malformed_proposal["evidence_slice"]["entries"]
+    entries.append(entries[0])
+    malformed_proposal["evidence_slice"]["sha256"] = hashlib.sha256(
+        json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    _assert_invalid_proposal(malformed_proposal, "evidence slice")
     contract_bytes = change_contract(
         proposal_bytes,
         objective="Restore the reviewed literal.",
@@ -1375,6 +1488,19 @@ def main() -> None:
         rationale="Exercise the state-bound constraint lifecycle.",
         format="markdown",
     ).startswith(b"# Reviewed architecture change contract: MISSING-LITERAL\n")
+    malformed_contract = json.loads(contract_bytes)
+    malformed_contract["origin"]["fingerprint"] = 7
+    try:
+        change_verify(
+            proposal_bytes,
+            _reseal(malformed_contract),
+            failing_verification,
+            failing_verification,
+        )
+    except RuntimeError as error:
+        assert "contract" in str(error)
+    else:
+        raise AssertionError("Act accepted a malformed resealed contract")
     change_result = json.loads(
         change_verify(
             proposal_bytes,

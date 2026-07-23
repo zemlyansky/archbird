@@ -66,6 +66,7 @@ int main(void) {
   ArchbirdEngine *engine = NULL;
   AbProjectionData source = {0};
   AbProjectionData projected = {0};
+  AbProjectionData reprojected = {0};
   AbProjectionData decoded = {0};
   AbProjectionData incomplete = {0};
   AbString name = {(char *)"target", 6};
@@ -111,6 +112,29 @@ int main(void) {
             !memcmp(decoded.sha256, projected.sha256, 65),
         "artifact round trip preserves completeness identity");
   ab_projection_data_free(engine, &decoded);
+  {
+    AbValue *completeness =
+        (AbValue *)ab_value_member(&envelope, "completeness");
+    AbValue *counts = completeness
+                          ? (AbValue *)ab_value_member(completeness, "counts")
+                          : NULL;
+    AbValue *evaluated =
+        counts ? (AbValue *)ab_value_member(counts, "evaluated") : NULL;
+    AbValue *unknown =
+        counts ? (AbValue *)ab_value_member(counts, "unknown") : NULL;
+    ArchbirdStatus mutation_status = ARCHBIRD_INVALID_SCHEMA;
+    if (evaluated && unknown && evaluated->kind == AB_VALUE_INTEGER &&
+        unknown->kind == AB_VALUE_INTEGER && evaluated->as.text.length == 1 &&
+        unknown->as.text.length == 1) {
+      evaluated->as.text.data[0] = '1';
+      unknown->as.text.data[0] = '1';
+      mutation_status =
+          ab_projection_data_decode_artifact(engine, &envelope, &decoded);
+    }
+    check(mutation_status == ARCHBIRD_INVALID_SCHEMA,
+          "artifact rejects completeness counts inconsistent with items");
+    ab_projection_data_free(engine, &decoded);
+  }
   ab_value_free(engine, &envelope);
   ab_buffer_free(&rendered);
   ab_buffer_init(&rendered, engine);
@@ -142,8 +166,19 @@ int main(void) {
   check(!strcmp(ab_projection_data_classification(&projected), "incomplete") &&
             projected.item_count == 1 &&
             projected.items[0].evidence_count == 2 &&
-            projected.selection.unknown == 2,
+            projected.selection.unknown == 2 &&
+            !strcmp(projected.message.data, "normalization collision"),
         "alias collision remains incomplete with both witnesses");
+  ab_value_free(engine, &aliases);
+  if (status == ARCHBIRD_OK)
+    status = decode_value(engine, "{}", &aliases);
+  if (status == ARCHBIRD_OK)
+    status = ab_act_project_fact(engine, &projected, &name, &aliases, "all",
+                                 NULL, &reprojected);
+  check(status == ARCHBIRD_OK &&
+            !strcmp(reprojected.message.data, "normalization collision"),
+        "projection preserves the source fact diagnostic");
+  ab_projection_data_free(engine, &reprojected);
   ab_projection_data_free(engine, &projected);
   ab_value_free(engine, &aliases);
 
