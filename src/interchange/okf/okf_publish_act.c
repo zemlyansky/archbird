@@ -511,15 +511,15 @@ static ArchbirdStatus add_result(AbOkfPublication *pub,
                                  const AbString *proposal_path,
                                  const AbString *contract_path,
                                  const AbString *result_path) {
-  const AbString *result_status = ab_okf_pub_text(&pub->result, "status");
-  const AbString *freshness = ab_okf_pub_text(&pub->result, "freshness");
+  const AbString *result_status = ab_okf_pub_text(&pub->result.root, "status");
+  const AbString *freshness = ab_okf_pub_text(&pub->result.root, "freshness");
   const AbString *before =
-      ab_okf_pub_text(&pub->result, "before_verification_sha256");
+      ab_okf_pub_text(&pub->result.root, "before_verification_sha256");
   const AbString *after =
-      text_or_empty(&pub->result, "after_verification_sha256");
-  const AbValue *outcomes = array_or_empty(&pub->result, "outcomes");
-  const AbValue *diagnostics = array_or_empty(&pub->result, "diagnostics");
-  const AbString *declared_sha = ab_okf_pub_text(&pub->result, "sha256");
+      text_or_empty(&pub->result.root, "after_verification_sha256");
+  const AbValue *outcomes = array_or_empty(&pub->result.root, "outcomes");
+  const AbValue *diagnostics = array_or_empty(&pub->result.root, "diagnostics");
+  const AbString *declared_sha = ab_okf_pub_text(&pub->result.root, "sha256");
   const char *summary_headers[] = {"Status", "Freshness", "Before", "After"};
   const char *outcome_headers[] = {"ID", "Kind", "Status", "Message"};
   AbOkfPubRelationList relations = {0};
@@ -696,7 +696,7 @@ ArchbirdStatus ab_okf_pub_act(AbOkfPublication *pub) {
     status = artifact_path(pub, "changes/contracts/", pub->contract.sha256,
                            &contract_path);
   if (status == ARCHBIRD_OK && pub->has_result) {
-    const AbString *sha = ab_okf_pub_text(&pub->result, "sha256");
+    const AbString *sha = ab_okf_pub_text(&pub->result.root, "sha256");
     if (!sha || sha->length != 64)
       status = ab_okf_pub_error(pub, "invalid change result SHA-256");
     else {

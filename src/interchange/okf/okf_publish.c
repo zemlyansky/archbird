@@ -230,81 +230,29 @@ static ArchbirdStatus load_contract(AbOkfPublication *pub, const uint8_t *json,
   return status;
 }
 
-static int string_array(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_ARRAY)
-    return 0;
-  for (index = 0; index < value->as.array.count; index++)
-    if (value->as.array.items[index].kind != AB_VALUE_STRING)
-      return 0;
-  return 1;
-}
-
-static int sealed_result(AbOkfPublication *pub, const AbValue *root,
-                         char digest[65]) {
-  const AbString *declared = ab_okf_pub_text(root, "sha256");
-  if (!lowercase_sha256(declared) ||
-      ab_act_value_digest_without_field(pub->engine, root, "sha256", digest) !=
-          ARCHBIRD_OK)
-    return 0;
-  return !memcmp(declared->data, digest, 64);
-}
-
 static ArchbirdStatus load_result(AbOkfPublication *pub, const uint8_t *json,
                                   size_t length) {
-  const AbValue *outcomes;
   const AbString *proposal_sha;
   const AbString *contract_sha;
   const AbString *before_sha;
-  const AbString *status_text;
-  const AbString *freshness;
-  char digest_hex[65];
   AbString digest;
-  size_t index;
-  uint64_t schema_version;
   ArchbirdStatus status;
   if (!pub->has_verification || !pub->has_proposal || !pub->has_contract)
     return invalid(pub,
                    "OKF result requires verification, proposal, and contract");
-  status = ab_json_value_decode(pub->engine, json, length, &pub->result);
+  status = ab_act_result_load(pub->engine, json, length, &pub->result);
   if (status != ARCHBIRD_OK)
     return status;
-  outcomes = ab_okf_pub_array(&pub->result, "outcomes");
-  proposal_sha = ab_okf_pub_text(&pub->result, "proposal_sha256");
-  contract_sha = ab_okf_pub_text(&pub->result, "contract_sha256");
-  before_sha = ab_okf_pub_text(&pub->result, "before_verification_sha256");
-  status_text = ab_okf_pub_text(&pub->result, "status");
-  freshness = ab_okf_pub_text(&pub->result, "freshness");
-  if (!ab_value_string_is(ab_value_member(&pub->result, "artifact"),
-                          "change-result") ||
-      !ab_value_u64(ab_value_member(&pub->result, "schema_version"),
-                    &schema_version) ||
-      schema_version != 2 ||
-      !ab_value_string_is(ab_value_member(&pub->result, "provenance"),
-                          "derived") ||
-      !tool_valid(ab_value_member(&pub->result, "tool")) || !outcomes ||
-      !string_array(ab_value_member(&pub->result, "diagnostics")) ||
-      !proposal_sha || proposal_sha->length != 64 ||
-      memcmp(proposal_sha->data, pub->proposal.sha256, 64) || !contract_sha ||
-      contract_sha->length != 64 ||
-      memcmp(contract_sha->data, pub->contract.sha256, 64) || !before_sha ||
-      before_sha->length != 64 ||
-      memcmp(before_sha->data, pub->verification.sha256, 64) ||
-      !nonblank(status_text) || !nonblank(freshness) ||
-      !sealed_result(pub, &pub->result, digest_hex))
+  proposal_sha = ab_okf_pub_text(&pub->result.root, "proposal_sha256");
+  contract_sha = ab_okf_pub_text(&pub->result.root, "contract_sha256");
+  before_sha = ab_okf_pub_text(&pub->result.root, "before_verification_sha256");
+  if (!proposal_sha || memcmp(proposal_sha->data, pub->proposal.sha256, 64) ||
+      !contract_sha || memcmp(contract_sha->data, pub->contract.sha256, 64) ||
+      !before_sha || memcmp(before_sha->data, pub->verification.sha256, 64))
     return invalid(pub, "invalid or mismatched OKF change result");
-  for (index = 0; index < outcomes->as.array.count; index++) {
-    const AbValue *row = &outcomes->as.array.items[index];
-    if (!nonblank(ab_okf_pub_text(row, "id")) ||
-        !nonblank(ab_okf_pub_text(row, "kind")) ||
-        !nonblank(ab_okf_pub_text(row, "status")) ||
-        !nonblank(ab_okf_pub_text(row, "message")) ||
-        !ab_okf_pub_array(row, "evidence"))
-      return invalid(pub, "invalid OKF change-result outcome");
-  }
-  digest = (AbString){digest_hex, 64};
-  status = source_init(pub, &pub->result_source, "change-result", &pub->result,
-                       json, length, &digest);
+  digest = (AbString){pub->result.sha256, 64};
+  status = source_init(pub, &pub->result_source, "change-result",
+                       &pub->result.root, json, length, &digest);
   if (status == ARCHBIRD_OK)
     pub->has_result = 1;
   return status;
@@ -371,7 +319,7 @@ void ab_okf_pub_free(AbOkfPublication *pub) {
   ab_string_free(pub->engine, &pub->proposal_source.evidence_sha256);
   ab_string_free(pub->engine, &pub->verification_source.evidence_sha256);
   ab_string_free(pub->engine, &pub->map_source.evidence_sha256);
-  ab_value_free(pub->engine, &pub->result);
+  ab_act_result_view_free(&pub->result);
   ab_act_contract_view_free(&pub->contract);
   ab_act_proposal_view_free(&pub->proposal);
   ab_act_verification_free(&pub->verification);

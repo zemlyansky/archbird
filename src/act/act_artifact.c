@@ -683,3 +683,131 @@ void ab_act_contract_view_free(AbActContractView *contract) {
   ab_value_free(contract->engine, &contract->root);
   memset(contract, 0, sizeof(*contract));
 }
+
+static ArchbirdStatus validate_result_outcomes(ArchbirdEngine *engine,
+                                               const AbValue *rows,
+                                               unsigned *out_statuses) {
+  static const char *const allowed[] = {
+      "evidence", "id", "kind", "message", "status",
+  };
+  size_t index;
+  if (!rows || rows->kind != AB_VALUE_ARRAY || !out_statuses)
+    return artifact_invalid(engine, "invalid Act result outcome inventory");
+  *out_statuses = 0;
+  for (index = 0; index < rows->as.array.count; index++) {
+    const AbValue *row = &rows->as.array.items[index];
+    const AbValue *row_status = ab_value_member(row, "status");
+    ArchbirdStatus status;
+    if (!ab_act_object_fields_allowed(row, allowed,
+                                      sizeof(allowed) / sizeof(allowed[0])) ||
+        !ab_act_identifier(ab_value_member(row, "id")) ||
+        !ab_act_identifier(ab_value_member(row, "kind")) || !row_status ||
+        row_status->kind != AB_VALUE_STRING ||
+        !ab_act_result_status_bit(row_status->as.text.data,
+                                  row_status->as.text.length) ||
+        !nonblank(ab_value_member(row, "message")))
+      return artifact_invalid(engine, "invalid Act result outcome");
+    *out_statuses |= ab_act_result_status_bit(row_status->as.text.data,
+                                              row_status->as.text.length);
+    status = validate_evidence_rows(engine, ab_value_member(row, "evidence"));
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  return ARCHBIRD_OK;
+}
+
+ArchbirdStatus ab_act_result_load(ArchbirdEngine *engine, const uint8_t *json,
+                                  size_t json_length, AbActResultView *out) {
+  static const char *const allowed[] = {
+      "after_verification_sha256",
+      "artifact",
+      "before_verification_sha256",
+      "contract_sha256",
+      "diagnostics",
+      "freshness",
+      "outcomes",
+      "proposal_sha256",
+      "provenance",
+      "schema_version",
+      "sha256",
+      "status",
+      "tool",
+  };
+  static const char *const freshness_values[] = {
+      "context_drift",
+      "current",
+      "stale",
+      "superseded",
+  };
+  const AbValue *schema;
+  const AbValue *freshness;
+  const AbValue *result_status;
+  unsigned outcome_statuses = 0;
+  uint64_t version;
+  ArchbirdStatus status;
+  if (!engine || (!json && json_length) || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memset(out, 0, sizeof(*out));
+  out->engine = engine;
+  status = ab_json_value_decode(engine, json, json_length, &out->root);
+  if (status != ARCHBIRD_OK)
+    return status;
+  schema = ab_value_member(&out->root, "schema_version");
+  out->tool = ab_value_member(&out->root, "tool");
+  out->outcomes = ab_value_member(&out->root, "outcomes");
+  out->diagnostics = ab_value_member(&out->root, "diagnostics");
+  freshness = ab_value_member(&out->root, "freshness");
+  result_status = ab_value_member(&out->root, "status");
+  if (!ab_act_object_fields_allowed(&out->root, allowed,
+                                    sizeof(allowed) / sizeof(allowed[0])) ||
+      !ab_value_u64(schema, &version) || version != 2 ||
+      !ab_value_string_is(ab_value_member(&out->root, "artifact"),
+                          "change-result") ||
+      !ab_value_string_is(ab_value_member(&out->root, "provenance"),
+                          "derived") ||
+      !tool_valid(out->tool) ||
+      !ab_act_lowercase_sha256(
+          ab_value_member(&out->root, "proposal_sha256")) ||
+      !ab_act_lowercase_sha256(
+          ab_value_member(&out->root, "contract_sha256")) ||
+      !ab_act_lowercase_sha256(
+          ab_value_member(&out->root, "before_verification_sha256")) ||
+      !ab_act_lowercase_sha256(
+          ab_value_member(&out->root, "after_verification_sha256")) ||
+      !value_is_one_of(freshness, freshness_values,
+                       sizeof(freshness_values) /
+                           sizeof(freshness_values[0])) ||
+      !result_status || result_status->kind != AB_VALUE_STRING ||
+      !ab_act_result_status_bit(result_status->as.text.data,
+                                result_status->as.text.length) ||
+      !strings_unique(out->diagnostics)) {
+    status = artifact_invalid(
+        engine, "invalid or unsealed canonical architecture change result");
+    goto result_fail;
+  }
+  status = validate_result_outcomes(engine, out->outcomes, &outcome_statuses);
+  if (status == ARCHBIRD_OK &&
+      !ab_value_string_is(result_status,
+                          ab_act_result_status_reduce(freshness->as.text.data,
+                                                      freshness->as.text.length,
+                                                      outcome_statuses)))
+    status = artifact_invalid(engine, "inconsistent Act result status");
+  if (status == ARCHBIRD_OK)
+    status = validate_seal(
+        engine, &out->root, out->sha256,
+        "invalid or unsealed canonical architecture change result");
+  if (status != ARCHBIRD_OK)
+    goto result_fail;
+  return ARCHBIRD_OK;
+
+result_fail:
+  ab_act_result_view_free(out);
+  return status;
+}
+
+void ab_act_result_view_free(AbActResultView *result) {
+  if (!result)
+    return;
+  ab_value_free(result->engine, &result->root);
+  memset(result, 0, sizeof(*result));
+}

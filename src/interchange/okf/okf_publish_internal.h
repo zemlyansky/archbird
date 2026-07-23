@@ -64,7 +64,7 @@ typedef struct AbOkfPublication {
   AbActContractView contract;
   AbOkfPubSource contract_source;
   int has_contract;
-  AbValue result;
+  AbActResultView result;
   AbOkfPubSource result_source;
   int has_result;
   AbOkfPubConcept *concepts;

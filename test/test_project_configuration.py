@@ -1501,19 +1501,111 @@ def main() -> None:
         assert "contract" in str(error)
     else:
         raise AssertionError("Act accepted a malformed resealed contract")
-    change_result = json.loads(
-        change_verify(
-            proposal_bytes,
-            contract_bytes,
-            failing_verification,
-            failing_verification,
-            pretty=False,
-        )
+    change_result_bytes = change_verify(
+        proposal_bytes,
+        contract_bytes,
+        failing_verification,
+        failing_verification,
+        pretty=False,
     )
+    change_result = json.loads(change_result_bytes)
     assert change_result["artifact"] == "change-result"
     assert change_result["schema_version"] == 2
     assert change_result["status"] == "missing"
     assert any(row["status"] == "missing" for row in change_result["outcomes"])
+    published_result = json.loads(
+        publish_okf_bundle(
+            modern_map,
+            verification_json=failing_verification,
+            proposal_json=proposal_bytes,
+            contract_json=contract_bytes,
+            result_json=change_result_bytes,
+        )
+    )
+    assert any(
+        row["path"].startswith("changes/results/")
+        for row in published_result["files"]
+    )
+
+    def assert_invalid_result(document: dict) -> None:
+        try:
+            publish_okf_bundle(
+                modern_map,
+                verification_json=failing_verification,
+                proposal_json=proposal_bytes,
+                contract_json=contract_bytes,
+                result_json=_reseal(document),
+            )
+        except RuntimeError:
+            return
+        raise AssertionError("OKF accepted a malformed resealed change result")
+
+    for field in (
+        "after_verification_sha256",
+        "artifact",
+        "before_verification_sha256",
+        "contract_sha256",
+        "diagnostics",
+        "freshness",
+        "outcomes",
+        "proposal_sha256",
+        "provenance",
+        "schema_version",
+        "status",
+        "tool",
+    ):
+        malformed_result = json.loads(change_result_bytes)
+        del malformed_result[field]
+        assert_invalid_result(malformed_result)
+        malformed_result = json.loads(change_result_bytes)
+        malformed_result[field] = None
+        assert_invalid_result(malformed_result)
+
+    for field in ("evidence", "id", "kind", "message", "status"):
+        malformed_result = json.loads(change_result_bytes)
+        del malformed_result["outcomes"][0][field]
+        assert_invalid_result(malformed_result)
+        malformed_result = json.loads(change_result_bytes)
+        malformed_result["outcomes"][0][field] = None
+        assert_invalid_result(malformed_result)
+
+    for field in ("detail", "line", "path", "project", "provenance", "sha256"):
+        malformed_result = json.loads(change_result_bytes)
+        del malformed_result["outcomes"][0]["evidence"][0][field]
+        assert_invalid_result(malformed_result)
+        malformed_result = json.loads(change_result_bytes)
+        malformed_result["outcomes"][0]["evidence"][0][field] = None
+        assert_invalid_result(malformed_result)
+
+    for path, value in (
+        (("unexpected",), True),
+        (("freshness",), "nonsense"),
+        (("freshness",), "stale"),
+        (("status",), "nonsense"),
+        (("status",), "satisfied"),
+        (("tool", "unexpected"), True),
+        (("outcomes", 0, "unexpected"), True),
+        (("outcomes", 0, "status"), "nonsense"),
+        (("outcomes", 0, "evidence", 0, "unexpected"), True),
+        (("outcomes", 0, "evidence", 0, "provenance"), "nonsense"),
+        (("diagnostics",), ["duplicate", "duplicate"]),
+        (("diagnostics",), [""]),
+    ):
+        malformed_result = json.loads(change_result_bytes)
+        target = malformed_result
+        for part in path[:-1]:
+            target = target[part]
+        target[path[-1]] = value
+        assert_invalid_result(malformed_result)
+
+    for field in (
+        "proposal_sha256",
+        "contract_sha256",
+        "before_verification_sha256",
+    ):
+        malformed_result = json.loads(change_result_bytes)
+        malformed_result[field] = "0" * 64
+        assert_invalid_result(malformed_result)
 
     transition_root = ROOT / "build/act-transition-test"
     shutil.rmtree(transition_root, ignore_errors=True)

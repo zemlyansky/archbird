@@ -864,31 +864,71 @@ static ArchbirdStatus preserved_outcomes(ArchbirdEngine *engine,
   return status;
 }
 
+enum {
+  AB_ACT_RESULT_SATISFIED = 1u << 0,
+  AB_ACT_RESULT_MISSING = 1u << 1,
+  AB_ACT_RESULT_UNEXPECTED = 1u << 2,
+  AB_ACT_RESULT_UNKNOWN = 1u << 3,
+  AB_ACT_RESULT_STALE = 1u << 4,
+  AB_ACT_RESULT_SUPERSEDED = 1u << 5,
+};
+
+unsigned ab_act_result_status_bit(const char *status, size_t status_length) {
+  static const struct {
+    const char *name;
+    size_t length;
+    unsigned bit;
+  } values[] = {
+      {"satisfied", 9, AB_ACT_RESULT_SATISFIED},
+      {"missing", 7, AB_ACT_RESULT_MISSING},
+      {"unexpected", 10, AB_ACT_RESULT_UNEXPECTED},
+      {"unknown", 7, AB_ACT_RESULT_UNKNOWN},
+      {"stale", 5, AB_ACT_RESULT_STALE},
+      {"superseded", 10, AB_ACT_RESULT_SUPERSEDED},
+  };
+  size_t index;
+  if (!status)
+    return 0;
+  for (index = 0; index < sizeof(values) / sizeof(values[0]); index++) {
+    if (status_length == values[index].length &&
+        memcmp(status, values[index].name, status_length) == 0)
+      return values[index].bit;
+  }
+  return 0;
+}
+
+const char *ab_act_result_status_reduce(const char *freshness,
+                                        size_t freshness_length,
+                                        unsigned outcome_statuses) {
+  if (freshness && freshness_length == 5 && memcmp(freshness, "stale", 5) == 0)
+    return "stale";
+  if (outcome_statuses & AB_ACT_RESULT_STALE)
+    return "stale";
+  if (freshness && freshness_length == 10 &&
+      memcmp(freshness, "superseded", 10) == 0)
+    return "superseded";
+  if (outcome_statuses & AB_ACT_RESULT_SUPERSEDED)
+    return "superseded";
+  if (outcome_statuses & AB_ACT_RESULT_UNEXPECTED)
+    return "unexpected";
+  if (outcome_statuses & AB_ACT_RESULT_MISSING)
+    return "missing";
+  if (outcome_statuses & AB_ACT_RESULT_UNKNOWN)
+    return "unknown";
+  return "satisfied";
+}
+
 static const char *overall_status(const char *freshness,
                                   const AbActResultData *result) {
-  static const char *const precedence[] = {"unexpected", "missing", "unknown"};
-  size_t status_index;
+  unsigned outcome_statuses = 0;
   size_t outcome_index;
-  if (strcmp(freshness, "stale") == 0)
-    return "stale";
   for (outcome_index = 0; outcome_index < result->outcome_count;
-       outcome_index++) {
-    if (strcmp(result->outcomes[outcome_index].status, "stale") == 0)
-      return "stale";
-  }
-  if (strcmp(freshness, "superseded") == 0)
-    return "superseded";
-  for (status_index = 0;
-       status_index < sizeof(precedence) / sizeof(precedence[0]);
-       status_index++) {
-    for (outcome_index = 0; outcome_index < result->outcome_count;
-         outcome_index++) {
-      if (strcmp(result->outcomes[outcome_index].status,
-                 precedence[status_index]) == 0)
-        return precedence[status_index];
-    }
-  }
-  return "satisfied";
+       outcome_index++)
+    outcome_statuses |= ab_act_result_status_bit(
+        result->outcomes[outcome_index].status,
+        strlen(result->outcomes[outcome_index].status));
+  return ab_act_result_status_reduce(freshness, strlen(freshness),
+                                     outcome_statuses);
 }
 
 ArchbirdStatus ab_act_result_verify(ArchbirdEngine *engine,

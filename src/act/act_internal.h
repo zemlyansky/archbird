@@ -146,6 +146,15 @@ typedef struct AbActContractView {
   const AbValue *acknowledged_unknowns;
 } AbActContractView;
 
+typedef struct AbActResultView {
+  ArchbirdEngine *engine;
+  AbValue root;
+  char sha256[65];
+  const AbValue *tool;
+  const AbValue *outcomes;
+  const AbValue *diagnostics;
+} AbActResultView;
+
 typedef struct AbActOutcome {
   AbString id;
   const char *kind;
@@ -241,6 +250,13 @@ void ab_act_proposal_view_free(AbActProposalView *proposal);
 ArchbirdStatus ab_act_contract_load(ArchbirdEngine *engine, const uint8_t *json,
                                     size_t json_length, AbActContractView *out);
 void ab_act_contract_view_free(AbActContractView *contract);
+ArchbirdStatus ab_act_result_load(ArchbirdEngine *engine, const uint8_t *json,
+                                  size_t json_length, AbActResultView *out);
+void ab_act_result_view_free(AbActResultView *result);
+unsigned ab_act_result_status_bit(const char *status, size_t status_length);
+const char *ab_act_result_status_reduce(const char *freshness,
+                                        size_t freshness_length,
+                                        unsigned outcome_statuses);
 ArchbirdStatus ab_act_contract_create_json(ArchbirdEngine *engine,
                                            const AbActProposalView *proposal,
                                            const uint8_t *review_json,
