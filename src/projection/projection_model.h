@@ -89,6 +89,11 @@ ArchbirdStatus ab_projection_data_completeness_exact(
     uint64_t universe, uint64_t selected, uint64_t excluded,
     uint64_t unsupported, int truncated);
 
+ArchbirdStatus
+ab_projection_data_completeness_copy(ArchbirdEngine *engine,
+                                     AbProjectionData *target,
+                                     const AbProjectionData *source);
+
 const char *ab_projection_data_classification(const AbProjectionData *fact);
 
 ArchbirdStatus ab_projection_completeness_render(AbBuffer *buffer,

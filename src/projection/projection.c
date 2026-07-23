@@ -55,10 +55,10 @@ ArchbirdStatus ab_projection_completeness_render(AbBuffer *buffer,
   TRY(render_nullable(buffer, selection->excluded, selection->has_excluded));
   TRY(ab_buffer_literal(buffer, ",\"selected\":"));
   TRY(render_nullable(buffer, selection->selected, selection->has_selected));
-  TRY(ab_buffer_literal(buffer, ",\"unknown\":"));
-  TRY(render_nullable(buffer, selection->unknown, selection->has_unknown));
   TRY(ab_buffer_literal(buffer, ",\"universe\":"));
   TRY(render_nullable(buffer, selection->universe, selection->has_universe));
+  TRY(ab_buffer_literal(buffer, ",\"unknown\":"));
+  TRY(render_nullable(buffer, selection->unknown, selection->has_unknown));
   TRY(ab_buffer_literal(buffer, ",\"unsupported\":"));
   TRY(render_nullable(buffer, selection->unsupported,
                       selection->has_unsupported));

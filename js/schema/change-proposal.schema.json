@@ -255,6 +255,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "completeness",
         "name",
         "shape",
         "provenance",
@@ -265,6 +266,7 @@
         "items"
       ],
       "properties": {
+        "completeness": {"$ref": "#/$defs/completeness"},
         "name": {"$ref": "#/$defs/id"},
         "shape": {"type": "string", "minLength": 1},
         "provenance": {"enum": ["derived", "asserted", "observed"]},
@@ -276,6 +278,45 @@
           "type": "array",
           "items": {"$ref": "#/$defs/factItem"}
         }
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "counts",
+        "exhaustive",
+        "truncated",
+        "unit"
+      ],
+      "properties": {
+        "classification": {
+          "enum": ["complete", "incomplete", "bounded", "unknown"]
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evaluated",
+            "excluded",
+            "selected",
+            "unknown",
+            "universe",
+            "unsupported"
+          ],
+          "properties": {
+            "evaluated": {"type": ["integer", "null"], "minimum": 0},
+            "excluded": {"type": ["integer", "null"], "minimum": 0},
+            "selected": {"type": ["integer", "null"], "minimum": 0},
+            "unknown": {"type": ["integer", "null"], "minimum": 0},
+            "universe": {"type": ["integer", "null"], "minimum": 0},
+            "unsupported": {"type": ["integer", "null"], "minimum": 0}
+          }
+        },
+        "exhaustive": {"type": "boolean"},
+        "truncated": {"type": ["boolean", "null"]},
+        "unit": {"type": "string", "minLength": 1}
       }
     },
     "projection": {

@@ -173,6 +173,24 @@ ArchbirdStatus ab_projection_data_completeness_exact(
   return ARCHBIRD_OK;
 }
 
+ArchbirdStatus
+ab_projection_data_completeness_copy(ArchbirdEngine *engine,
+                                     AbProjectionData *target,
+                                     const AbProjectionData *source) {
+  AbProjectionCompleteness copied;
+  ArchbirdStatus status;
+  if (!engine || !target || !source)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  copied = source->selection;
+  memset(&copied.unit, 0, sizeof(copied.unit));
+  status = copy_string(engine, &copied.unit, &source->selection.unit);
+  if (status != ARCHBIRD_OK)
+    return status;
+  ab_string_free(engine, &target->selection.unit);
+  target->selection = copied;
+  return ARCHBIRD_OK;
+}
+
 const char *ab_projection_data_classification(const AbProjectionData *fact) {
   uint64_t accounted;
   if (!fact ||
@@ -505,7 +523,9 @@ static ArchbirdStatus render_digest_item(AbBuffer *buffer,
 static ArchbirdStatus render_digest_document(AbBuffer *buffer,
                                              const AbProjectionData *fact) {
   size_t index;
-  TRY(ab_buffer_literal(buffer, "{\"items\":["));
+  TRY(ab_buffer_literal(buffer, "{\"completeness\":"));
+  TRY(ab_projection_completeness_render(buffer, fact));
+  TRY(ab_buffer_literal(buffer, ",\"items\":["));
   for (index = 0; index < fact->item_count; index++) {
     if (index)
       TRY(ab_buffer_literal(buffer, ","));
@@ -619,7 +639,9 @@ static ArchbirdStatus render_output_item(AbBuffer *buffer,
 ArchbirdStatus ab_projection_data_render_content(AbBuffer *buffer,
                                                  const AbProjectionData *fact) {
   size_t index;
-  TRY(ab_buffer_literal(buffer, "{\"items\":["));
+  TRY(ab_buffer_literal(buffer, "{\"completeness\":"));
+  TRY(ab_projection_completeness_render(buffer, fact));
+  TRY(ab_buffer_literal(buffer, ",\"items\":["));
   for (index = 0; index < fact->item_count; index++) {
     if (index)
       TRY(ab_buffer_literal(buffer, ","));
@@ -643,7 +665,9 @@ ArchbirdStatus ab_projection_data_render(AbBuffer *buffer,
                                          const AbProjectionData *fact,
                                          int include_sha256) {
   size_t index;
-  TRY(ab_buffer_literal(buffer, "{\"items\":["));
+  TRY(ab_buffer_literal(buffer, "{\"completeness\":"));
+  TRY(ab_projection_completeness_render(buffer, fact));
+  TRY(ab_buffer_literal(buffer, ",\"items\":["));
   for (index = 0; index < fact->item_count; index++) {
     if (index)
       TRY(ab_buffer_literal(buffer, ","));

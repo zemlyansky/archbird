@@ -130,6 +130,7 @@ ArchbirdStatus ab_act_project_fact(ArchbirdEngine *engine,
                                    AbProjectionData *out) {
   ArchbirdStatus status = ab_projection_data_init(
       engine, out, name, source->shape.data, "derived", &source->project);
+  uint64_t selected = 0;
   size_t index;
   if (status == ARCHBIRD_OK &&
       (source->state.length != 7 ||
@@ -146,11 +147,24 @@ ArchbirdStatus ab_act_project_fact(ArchbirdEngine *engine,
     const AbString *key = mapped_key(aliases, &source->items[index].key);
     if (!projection_selected(selection, keys, key))
       continue;
+    selected++;
     status = copy_item(engine, &item, &source->items[index], key);
     if (status == ARCHBIRD_OK)
       status = ab_projection_data_add_item(engine, out, &item);
     if (status != ARCHBIRD_OK)
       ab_projection_item_free(engine, &item);
+  }
+  if (status == ARCHBIRD_OK && (!selection || strcmp(selection, "all") == 0))
+    status = ab_projection_data_completeness_copy(engine, out, source);
+  else if (status == ARCHBIRD_OK &&
+           strcmp(ab_projection_data_classification(source), "complete") == 0) {
+    if (selected > source->selection.universe)
+      status = archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+                                  "Act selection exceeds its source universe");
+    else
+      status = ab_projection_data_completeness_exact(
+          engine, out, source->selection.unit.data, source->selection.universe,
+          selected, source->selection.universe - selected, 0, 0);
   }
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(engine, out);
@@ -959,12 +973,16 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
     AbProjectionItem *actual_item;
     AbString projection_name = {0};
     AbString expected_name = {0};
+    int projected_complete = 0;
     status =
         formatted_string(engine, &projection_name, "after.",
                          &(AbString){out->fingerprint.data, 12}, ".actual");
     if (status == ARCHBIRD_OK)
       status = ab_act_project_fact(engine, actual, &projection_name, aliases,
                                    "all", NULL, &projected);
+    if (status == ARCHBIRD_OK)
+      projected_complete = strcmp(ab_projection_data_classification(&projected),
+                                  "complete") == 0;
     actual_item = status == ARCHBIRD_OK ? find_item(&projected, key) : NULL;
     if (status == ARCHBIRD_OK)
       status = formatted_string(engine, &expected_name, "proposal.",
@@ -991,6 +1009,19 @@ ArchbirdStatus ab_act_proposal_compile(ArchbirdEngine *engine,
     } else if (status == ARCHBIRD_OK &&
                ab_value_string_is(comparison, "extra")) {
       remove_item(engine, &out->literal_fact, key);
+    }
+    if (status == ARCHBIRD_OK && out->literal_fact.name.data &&
+        projected_complete) {
+      uint64_t selected = (uint64_t)out->literal_fact.item_count;
+      uint64_t excluded = projected.selection.excluded;
+      if (selected + excluded < selected)
+        status = archbird_error_set(
+            engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+            "Act postcondition selection count overflow");
+      else
+        status = ab_projection_data_completeness_exact(
+            engine, &out->literal_fact, projected.selection.unit.data,
+            selected + excluded, selected, excluded, 0, 0);
     }
     if (status == ARCHBIRD_OK && out->literal_fact.name.data) {
       status = ab_projection_data_finish(engine, &out->literal_fact);

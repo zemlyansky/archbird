@@ -871,6 +871,16 @@ if(BUILD_TESTING)
   target_compile_features(archbird_native_act PRIVATE c_std_11)
   set_target_properties(archbird_native_act PROPERTIES C_EXTENSIONS OFF)
 
+  add_executable(archbird_native_act_projection_test
+    test/test_act_projection.c)
+  target_link_libraries(archbird_native_act_projection_test PRIVATE
+    archbird_native)
+  target_include_directories(archbird_native_act_projection_test PRIVATE
+    src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
+  target_compile_features(archbird_native_act_projection_test PRIVATE c_std_11)
+  set_target_properties(archbird_native_act_projection_test PROPERTIES
+    C_EXTENSIONS OFF)
+
   add_executable(archbird_native_graph test/graph_cli.c)
   target_link_libraries(archbird_native_graph PRIVATE archbird_native)
   target_compile_features(archbird_native_graph PRIVATE c_std_11)
@@ -903,6 +913,7 @@ if(BUILD_TESTING)
                    archbird_native_lex
                    archbird_native_scanner
                    archbird_native_act
+                   archbird_native_act_projection_test
                    archbird_native_graph
                    archbird_native_okf
                    archbird_native_okf_publish)
@@ -938,6 +949,8 @@ if(BUILD_TESTING)
   add_test(NAME archbird_native_build_identity
            COMMAND archbird_native_build_identity_test)
   add_test(NAME archbird_native_builds COMMAND archbird_native_builds_test)
+  add_test(NAME archbird_native_act_projection
+           COMMAND archbird_native_act_projection_test)
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
     add_test(

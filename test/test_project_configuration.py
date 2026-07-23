@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 from archbird import _native
 from archbird.errors import ConfigError
@@ -1344,6 +1345,10 @@ def main() -> None:
     assert "constraint_sha256" in proposal["origin"]
     assert "check" not in proposal["origin"]
     assert all("constraint" in row for row in proposal["postconditions"])
+    assert all(
+        fact["completeness"]["classification"] == "complete"
+        for fact in proposal["facts"]
+    )
     assert proposal["source"]["policy"]["sha256"] == failing_result["policy"][
         "constraint_policy_sha256"
     ]
@@ -1381,6 +1386,178 @@ def main() -> None:
     )
     assert change_result["artifact"] == "change-result"
     assert change_result["schema_version"] == 2
+    assert change_result["status"] == "missing"
+    assert any(row["status"] == "missing" for row in change_result["outcomes"])
+
+    transition_root = ROOT / "build/act-transition-test"
+    shutil.rmtree(transition_root, ignore_errors=True)
+    before_root = transition_root / "before"
+    after_root = transition_root / "after"
+    transition_config = {
+        "schema_version": 2,
+        "project": "act-transition",
+        "layers": [
+            {
+                "globs": ["src/**/*.py"],
+                "language": "python",
+                "name": "python",
+            }
+        ],
+        "limits": {"max_file_bytes": 64},
+        "constraints": {
+            "REQUIRED-SYMBOL": {
+                "kind": "required_symbols",
+                "owner": "architecture",
+                "rationale": "The reviewed entrypoint remains present.",
+                "symbols": ["required"],
+            }
+        },
+    }
+    transition_json = json.dumps(
+        transition_config, sort_keys=True, separators=(",", ":")
+    ).encode()
+    for repository, source in (
+        (before_root, "def other():\n    return 0\n"),
+        (after_root, "def required():\n    return 1\n"),
+    ):
+        (repository / "src").mkdir(parents=True)
+        (repository / "src/module.py").write_text(source, encoding="utf-8")
+
+    def transition_verification(repository: Path) -> bytes:
+        project = Project.from_repository(
+            repository, config=transition_json, jobs=1
+        )
+        return evaluate_constraints_json(transition_json, project.map_json())
+
+    before_transition = transition_verification(before_root)
+    after_transition = transition_verification(after_root)
+    before_document = json.loads(before_transition)
+    after_document = json.loads(after_transition)
+    assert before_document["constraints"][0]["status"] == "fail"
+    assert after_document["constraints"][0]["status"] == "pass"
+    transition_fingerprint = before_document["constraints"][0]["findings"][0][
+        "fingerprint"
+    ]
+    transition_proposal = change_proposal(
+        before_transition, transition_fingerprint, pretty=False
+    )
+    transition_contract = change_contract(
+        transition_proposal,
+        objective="Restore the reviewed entrypoint.",
+        owner="architecture",
+        rationale="Exercise complete and incomplete transition outcomes.",
+        pretty=False,
+    )
+    satisfied = json.loads(
+        change_verify(
+            transition_proposal,
+            transition_contract,
+            before_transition,
+            after_transition,
+            pretty=False,
+        )
+    )
+    assert satisfied["status"] == "satisfied"
+    assert {row["status"] for row in satisfied["outcomes"]} == {"satisfied"}
+    unresolved = json.loads(
+        change_verify(
+            transition_proposal,
+            transition_contract,
+            before_transition,
+            before_transition,
+            pretty=False,
+        )
+    )
+    assert unresolved["status"] == "missing"
+    assert any(row["status"] == "missing" for row in unresolved["outcomes"])
+
+    incomplete_transition_config = {
+        "schema_version": 2,
+        "project": "incomplete-act-transition",
+        "layers": [
+            {
+                "globs": ["src/**/*.c"],
+                "language": "c",
+                "name": "c",
+            }
+        ],
+        "projections": {
+            "normalized": {
+                "container": "Ops",
+                "select": "constant_values",
+                "strip_prefix": "API_",
+            }
+        },
+        "constraints": {
+            "NORMALIZED-CONSTANTS": {
+                "actual": {"projection": "normalized"},
+                "assert": "values_equal",
+                "expected": {"literal": {"TWO": 3}},
+                "owner": "architecture",
+                "rationale": "Incomplete normalized identities cannot pass.",
+            }
+        },
+    }
+    incomplete_transition_json = json.dumps(
+        incomplete_transition_config, sort_keys=True, separators=(",", ":")
+    ).encode()
+
+    def constant_verification(source: bytes) -> bytes:
+        project = Project(
+            "incomplete-act-transition",
+            (
+                Source(
+                    "src/constants.c",
+                    source,
+                    language="c",
+                    layer="c",
+                ),
+            ),
+        )
+        project.set_config(incomplete_transition_json)
+        project.scan(jobs=1, map_cache=False)
+        return evaluate_constraints_json(
+            incomplete_transition_json, project.map_json()
+        )
+
+    complete_failure = constant_verification(b"enum Ops { API_ONE = 1 };\n")
+    incomplete_after = constant_verification(
+        b"enum Ops { API_ONE = 1, ONE = 2, API_TWO = 3 };\n"
+    )
+    complete_failure_document = json.loads(complete_failure)
+    incomplete_after_document = json.loads(incomplete_after)
+    assert complete_failure_document["constraints"][0]["status"] == "fail"
+    assert incomplete_after_document["constraints"][0]["status"] == "unknown"
+    missing_constant = next(
+        row
+        for row in complete_failure_document["constraints"][0]["findings"]
+        if row["comparison"] == "missing"
+    )
+    incomplete_proposal = change_proposal(
+        complete_failure, missing_constant["fingerprint"], pretty=False
+    )
+    incomplete_contract = change_contract(
+        incomplete_proposal,
+        objective="Restore the reviewed constant.",
+        owner="architecture",
+        rationale="Incomplete postcondition evidence remains unknown.",
+        pretty=False,
+    )
+    incomplete_result = json.loads(
+        change_verify(
+            incomplete_proposal,
+            incomplete_contract,
+            complete_failure,
+            incomplete_after,
+            pretty=False,
+        )
+    )
+    assert incomplete_result["status"] == "unknown"
+    assert any(
+        row["kind"] == "postcondition" and row["status"] == "unknown"
+        for row in incomplete_result["outcomes"]
+    )
+    shutil.rmtree(transition_root)
 
 
 if __name__ == "__main__":

@@ -1211,12 +1211,94 @@ ArchbirdStatus ab_projection_evidence_decode_artifact(
       detail->as.text.length);
 }
 
+static int decode_nullable_count(const AbValue *value, uint64_t *out,
+                                 int *present) {
+  if (!value)
+    return 0;
+  if (value->kind == AB_VALUE_NULL) {
+    *out = 0;
+    *present = 0;
+    return 1;
+  }
+  *present = ab_value_u64(value, out);
+  return *present;
+}
+
+static ArchbirdStatus decode_projection_completeness(ArchbirdEngine *engine,
+                                                     const AbValue *value,
+                                                     AbProjectionData *out) {
+  static const char *const allowed[] = {
+      "classification", "counts", "exhaustive", "truncated", "unit",
+  };
+  static const char *const count_allowed[] = {
+      "evaluated", "excluded", "selected", "unknown", "universe", "unsupported",
+  };
+  const AbValue *classification = ab_value_member(value, "classification");
+  const AbValue *counts = ab_value_member(value, "counts");
+  const AbValue *exhaustive = ab_value_member(value, "exhaustive");
+  const AbValue *truncated = ab_value_member(value, "truncated");
+  const AbValue *unit = ab_value_member(value, "unit");
+  AbProjectionCompleteness *selection = &out->selection;
+  uint64_t accounted;
+  ArchbirdStatus status;
+  if (!object_fields_allowed(value, allowed,
+                             sizeof(allowed) / sizeof(allowed[0])) ||
+      !classification || classification->kind != AB_VALUE_STRING || !counts ||
+      !object_fields_allowed(counts, count_allowed,
+                             sizeof(count_allowed) /
+                                 sizeof(count_allowed[0])) ||
+      !exhaustive || exhaustive->kind != AB_VALUE_BOOL ||
+      !ab_projection_nonblank(unit) ||
+      !decode_nullable_count(ab_value_member(counts, "universe"),
+                             &selection->universe, &selection->has_universe) ||
+      !decode_nullable_count(ab_value_member(counts, "selected"),
+                             &selection->selected, &selection->has_selected) ||
+      !decode_nullable_count(ab_value_member(counts, "evaluated"),
+                             &selection->evaluated,
+                             &selection->has_evaluated) ||
+      !decode_nullable_count(ab_value_member(counts, "excluded"),
+                             &selection->excluded, &selection->has_excluded) ||
+      !decode_nullable_count(ab_value_member(counts, "unsupported"),
+                             &selection->unsupported,
+                             &selection->has_unsupported) ||
+      !decode_nullable_count(ab_value_member(counts, "unknown"),
+                             &selection->unknown, &selection->has_unknown) ||
+      !truncated ||
+      (truncated->kind != AB_VALUE_NULL && truncated->kind != AB_VALUE_BOOL))
+    return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                              ARCHBIRD_NO_OFFSET,
+                              "invalid projection completeness ledger");
+  selection->has_truncated = truncated->kind == AB_VALUE_BOOL;
+  selection->truncated = selection->has_truncated ? truncated->as.boolean : 0;
+  if (selection->has_universe && selection->has_selected &&
+      selection->has_excluded &&
+      (selection->selected > selection->universe ||
+       selection->excluded > selection->universe ||
+       selection->selected + selection->excluded < selection->selected ||
+       selection->selected + selection->excluded != selection->universe))
+    return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                              ARCHBIRD_NO_OFFSET,
+                              "inconsistent projection selection counts");
+  if (selection->has_selected && selection->has_evaluated &&
+      selection->has_unknown) {
+    accounted = selection->evaluated + selection->unknown;
+    if (accounted < selection->evaluated || accounted != selection->selected)
+      return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                ARCHBIRD_NO_OFFSET,
+                                "inconsistent projection evaluation counts");
+  }
+  ab_string_free(engine, &selection->unit);
+  status = ab_string_copy(engine, &selection->unit, unit->as.text.data,
+                          unit->as.text.length);
+  return status;
+}
+
 ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
                                                   const AbValue *value,
                                                   AbProjectionData *out) {
   static const char *const envelope_allowed[] = {
-      "items",      "message", "name",  "project",
-      "provenance", "sha256",  "shape", "state",
+      "completeness", "items",  "message", "name",  "project",
+      "provenance",   "sha256", "shape",   "state",
   };
   static const char *const item_allowed[] = {
       "attributes", "evidence", "key", "label", "message", "state", "value",
@@ -1227,6 +1309,7 @@ ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
   const AbValue *project = ab_value_member(value, "project");
   const AbValue *state = ab_value_member(value, "state");
   const AbValue *message = ab_value_member(value, "message");
+  const AbValue *completeness = ab_value_member(value, "completeness");
   const AbValue *sha = ab_value_member(value, "sha256");
   const AbValue *items = ab_value_member(value, "items");
   ArchbirdStatus status;
@@ -1240,7 +1323,7 @@ ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
       !ab_projection_nonblank(name) || !ab_projection_nonblank(shape) ||
       !valid_fact_provenance(provenance) || !project ||
       project->kind != AB_VALUE_STRING || !valid_fact_state(state) ||
-      !message || message->kind != AB_VALUE_STRING ||
+      !message || message->kind != AB_VALUE_STRING || !completeness ||
       !lowercase_sha256_value(sha) || !items || items->kind != AB_VALUE_ARRAY)
     return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                               ARCHBIRD_NO_OFFSET,
@@ -1250,13 +1333,16 @@ ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
                               provenance->as.text.data, &project->as.text);
   if (status == ARCHBIRD_OK && !ab_value_string_is(state, "current")) {
     ab_string_free(engine, &out->state);
-    ab_string_free(engine, &out->message);
     status = ab_string_copy(engine, &out->state, state->as.text.data,
                             state->as.text.length);
-    if (status == ARCHBIRD_OK)
-      status = ab_string_copy(engine, &out->message, message->as.text.data,
-                              message->as.text.length);
   }
+  if (status == ARCHBIRD_OK) {
+    ab_string_free(engine, &out->message);
+    status = ab_string_copy(engine, &out->message, message->as.text.data,
+                            message->as.text.length);
+  }
+  if (status == ARCHBIRD_OK)
+    status = decode_projection_completeness(engine, completeness, out);
   for (index = 0; status == ARCHBIRD_OK && index < items->as.array.count;
        index++) {
     const AbValue *row = &items->as.array.items[index];
@@ -1315,6 +1401,18 @@ ArchbirdStatus ab_projection_data_decode_artifact(ArchbirdEngine *engine,
   }
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(engine, out);
+  if (status == ARCHBIRD_OK) {
+    const AbValue *classification =
+        ab_value_member(completeness, "classification");
+    const AbValue *exhaustive = ab_value_member(completeness, "exhaustive");
+    const char *actual = ab_projection_data_classification(out);
+    if (!ab_value_string_is(classification, actual) ||
+        exhaustive->as.boolean != (strcmp(actual, "complete") == 0))
+      status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "projection completeness classification "
+                                  "does not match its ledger");
+  }
   if (status == ARCHBIRD_OK && memcmp(out->sha256, sha->as.text.data, 64) != 0)
     status =
         archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
