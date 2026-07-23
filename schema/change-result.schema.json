@@ -34,6 +34,8 @@
     "status": {"$ref": "#/$defs/status"},
     "outcomes": {
       "type": "array",
+      "description": "Outcome objects with IDs unique within this result.",
+      "uniqueItems": true,
       "items": {"$ref": "#/$defs/outcome"}
     },
     "diagnostics": {

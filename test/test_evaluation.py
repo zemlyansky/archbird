@@ -81,9 +81,13 @@ def main() -> int:
         """#!/usr/bin/env python3
 import json, os, pathlib, sys
 if sys.argv[1:] == ['--version']:
+  assert 'ARCHBIRD_CACHE_DIR' not in os.environ
+  assert 'ARCHBIRD_CACHE_MAX_BYTES' not in os.environ
   print('0.test')
   raise SystemExit(0)
 if sys.argv[1:] == ['support']:
+  assert 'ARCHBIRD_CACHE_DIR' not in os.environ
+  assert 'ARCHBIRD_CACHE_MAX_BYTES' not in os.environ
   print(json.dumps({
     'core_implementation_sha256':'2'*64,
     'engine':{'kind':'fixture','source':'test'},
@@ -108,6 +112,17 @@ if command == 'config':
     'layers':[{'globs':['**/*.py'],'language':'python','name':'python'}],
   }
 elif command == 'map':
+  assert 'ARCHBIRD_CACHE_DIR' not in os.environ
+  assert 'ARCHBIRD_CACHE_MAX_BYTES' not in os.environ
+  cache = pathlib.Path(sys.argv[sys.argv.index('--cache-dir') + 1])
+  assert sys.argv[sys.argv.index('--cache-max-bytes') + 1] == '1073741824'
+  marker = cache / 'fixture-marker'
+  if out.name == 'map.json':
+    assert not marker.exists()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text('warm')
+  elif out.name == 'after-map.json':
+    assert marker.read_text() == 'warm'
   if variant == 'fail':
     raise SystemExit(3)
   value = {'artifact':'map','schema_version':7,'project':'fixture','files':[],
@@ -298,6 +313,8 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     ]
 
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "bad"
+    environment["ARCHBIRD_CACHE_DIR"] = str(TEMPORARY / "ambient-cache")
+    environment["ARCHBIRD_CACHE_MAX_BYTES"] = "7"
     run("run", "--archbird", str(fake), "--label", "bad", environment=environment)
     first_run = json.loads((root / "state.json").read_text())["current_run_sha256"]
     first = json.loads((root / f"runs/{first_run}/result.json").read_text())
@@ -305,6 +322,15 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         (REPOSITORY / "schema/evaluation-run.schema.json").read_text()
     )
     assert set(first).issubset(run_schema["properties"])
+    assert first["schema_version"] == 2
+    assert first["cache_policy"] == {
+        "provider_cache": {
+            "initial_state": "empty",
+            "max_bytes": 1_073_741_824,
+            "mode": "isolated_per_case",
+            "reuse": "before_and_after_revision",
+        }
+    }
     assert first["held_out_opened"] is False
     assert first["cases"][0]["metrics"]["relevant_file_recall_all"] == 0.0
     assert first["tool"]["launcher"] == {
@@ -316,6 +342,45 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert support["report"]["runtime"]["kind"] == "python"
     assert support["report"]["runtime"]["executable"] == str(Path(sys.executable).resolve())
 
+    incompatible_run = json.loads(json.dumps(first))
+    incompatible_run["cache_policy"]["provider_cache"]["max_bytes"] //= 2
+    incompatible_bytes = (
+        json.dumps(
+            incompatible_run,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    incompatible_sha256 = __import__("hashlib").sha256(
+        incompatible_bytes
+    ).hexdigest()
+    incompatible_path = root / f"runs/{incompatible_sha256}/result.json"
+    incompatible_path.parent.mkdir()
+    incompatible_path.write_bytes(incompatible_bytes)
+    incompatible_comparison_path = root / "incompatible-comparison.json"
+    run(
+        "compare",
+        "--before",
+        first_run,
+        "--after",
+        incompatible_sha256,
+        "--output",
+        str(incompatible_comparison_path),
+        environment=environment,
+    )
+    incompatible_comparison = json.loads(
+        incompatible_comparison_path.read_text()
+    )
+    assert incompatible_comparison["cache_relation"] == "changed"
+    assert incompatible_comparison["cases"][0]["performance_status"] == (
+        "incomparable"
+    )
+    assert incompatible_comparison["cases"][0]["metrics"][
+        "map_duration_ms"
+    ]["classification"] == "incomparable"
+
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "good"
     run("run", "--archbird", str(fake), "--label", "good", environment=environment)
     state = json.loads((root / "state.json").read_text())
@@ -323,6 +388,8 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert state["previous_run_sha256"] == first_run
     comparison_path = root / state["current_run_comparison"]
     comparison = json.loads(comparison_path.read_text())
+    assert comparison["schema_version"] == 2
+    assert comparison["cache_relation"] == "same"
     row = comparison["cases"][0]
     assert row["metrics"]["relevant_file_recall_all"]["classification"] == "improved"
     assert row["metrics"]["relevant_test_recall_all"]["classification"] == "improved"

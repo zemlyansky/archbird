@@ -691,7 +691,8 @@ static ArchbirdStatus validate_result_outcomes(ArchbirdEngine *engine,
       "evidence", "id", "kind", "message", "status",
   };
   size_t index;
-  if (!rows || rows->kind != AB_VALUE_ARRAY || !out_statuses)
+  if (!rows || rows->kind != AB_VALUE_ARRAY || !out_statuses ||
+      !object_ids_unique(rows, "id"))
     return artifact_invalid(engine, "invalid Act result outcome inventory");
   *out_statuses = 0;
   for (index = 0; index < rows->as.array.count; index++) {

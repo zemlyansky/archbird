@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/evaluation-run.schema.json",
   "title": "Archbird historical-change evaluation run",
-  "description": "Immutable observed metrics from one Archbird executable over one frozen evaluation corpus.",
+  "description": "Immutable observed metrics and enforced cache policy from one Archbird executable over one frozen evaluation corpus.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,16 +12,35 @@
     "corpus_sha256",
     "label",
     "evaluator",
+    "cache_policy",
     "host",
     "tool",
     "cases",
     "aggregate"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "artifact": {"const": "archbird-evaluation-run"},
     "provenance": {"const": "observed"},
     "corpus_sha256": {"$ref": "#/$defs/sha256"},
+    "cache_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider_cache"],
+      "properties": {
+        "provider_cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["initial_state", "max_bytes", "mode", "reuse"],
+          "properties": {
+            "initial_state": {"const": "empty"},
+            "max_bytes": {"type": "integer", "minimum": 1},
+            "mode": {"const": "isolated_per_case"},
+            "reuse": {"const": "before_and_after_revision"}
+          }
+        }
+      }
+    },
     "held_out_opened": {"type": "boolean"},
     "label": {"type": "string", "minLength": 1},
     "evaluator": {

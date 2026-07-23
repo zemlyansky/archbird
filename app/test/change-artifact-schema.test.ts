@@ -42,3 +42,26 @@ test("canonical change artifacts conform to their public schemas", () => {
     );
   }
 });
+
+test("change-result schema rejects duplicate outcomes", () => {
+  const schema = JSON.parse(
+    readFileSync(
+      new URL("../../schema/change-result.schema.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const artifact = JSON.parse(
+    readFileSync(
+      new URL("../../test/fuzz/corpus/act-result/result.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  artifact.outcomes.push(structuredClone(artifact.outcomes[0]));
+  const validator = new Ajv2020({
+    allErrors: true,
+    strict: true,
+    strictRequired: false,
+    strictTypes: false,
+  }).compile(schema);
+  assert.equal(validator(artifact), false);
+});

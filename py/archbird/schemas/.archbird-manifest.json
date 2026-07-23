@@ -26,9 +26,9 @@
       "source": "schema/change-proposal.schema.json"
     },
     {
-      "bytes": 3118,
+      "bytes": 3221,
       "path": "change-result.schema.json",
-      "sha256": "9f43663d0b00ee26c5750400c91001aca159311c6338e3fd4a99115e6642e069",
+      "sha256": "6490becbd728e6ff9a2c31623c9ff221aac060e537d8511cb5d4477c44473867",
       "source": "schema/change-result.schema.json"
     },
     {
@@ -44,9 +44,9 @@
       "source": "schema/evaluation-case.schema.json"
     },
     {
-      "bytes": 1317,
+      "bytes": 1424,
       "path": "evaluation-comparison.schema.json",
-      "sha256": "6687ac51117ac02000b70ac67158d7acd184e6e253ef5aeb6e13fb99ea48a463",
+      "sha256": "c5c9a847b4a7c65ce24a748925f17bd28fa27700b1e4e4748e0090d53c929d10",
       "source": "schema/evaluation-comparison.schema.json"
     },
     {
@@ -80,9 +80,9 @@
       "source": "schema/evaluation-reservation.schema.json"
     },
     {
-      "bytes": 1318,
+      "bytes": 1959,
       "path": "evaluation-run.schema.json",
-      "sha256": "8a98c4062f69b8a52ded5746bcbb6db1f4ca7e240cc2d5a0b16f8e8a8216992c",
+      "sha256": "46fa9a45cb276f1bb8e0358727d2bfa87edf6f5b7c81a47440a3a63dee212f86",
       "source": "schema/evaluation-run.schema.json"
     },
     {

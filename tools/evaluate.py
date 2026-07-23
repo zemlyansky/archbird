@@ -25,6 +25,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 SCHEMA_VERSION = 1
+RUN_SCHEMA_VERSION = 2
+COMPARISON_SCHEMA_VERSION = 2
 ROOT_ENV = "ARCHBIRD_EVAL_ROOT"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -40,6 +42,19 @@ PROTOCOL_ARTIFACT = "archbird-evaluation-protocol"
 STATE_ARTIFACT = "archbird-evaluation-state"
 HELD_OUT_CLAIM_ARTIFACT = "archbird-evaluation-held-out-claim"
 HELD_OUT_CLAIM_FILE = "held-out-opened.json"
+PROVIDER_CACHE_MAX_BYTES = 1_073_741_824
+CACHE_POLICY = {
+    "provider_cache": {
+        "initial_state": "empty",
+        "max_bytes": PROVIDER_CACHE_MAX_BYTES,
+        "mode": "isolated_per_case",
+        "reuse": "before_and_after_revision",
+    }
+}
+CACHE_ENVIRONMENT_KEYS = (
+    "ARCHBIRD_CACHE_DIR",
+    "ARCHBIRD_CACHE_MAX_BYTES",
+)
 
 
 class EvaluationError(RuntimeError):
@@ -1128,13 +1143,26 @@ def load_corpus(root: Path, corpus_sha256: str | None = None) -> tuple[str, Mapp
     return corpus_sha256, document, directory
 
 
+def evaluated_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for key in CACHE_ENVIRONMENT_KEYS:
+        environment.pop(key, None)
+    return environment
+
+
 def run_process(command: Sequence[str], cwd: Path, stdout_path: Path, stderr_path: Path) -> Mapping[str, Any]:
     import time
 
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic_ns()
     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-        process = subprocess.Popen(command, cwd=cwd, stdout=stdout, stderr=stderr)
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=evaluated_environment(),
+            stdout=stdout,
+            stderr=stderr,
+        )
         max_rss_kib: int | None = None
         if hasattr(os, "wait4"):
             _, status, usage = os.wait4(process.pid, 0)
@@ -1784,6 +1812,7 @@ def run_case(
     entry: Mapping[str, Any],
     archbird: Path,
     stage: Path,
+    cache_root: Path,
 ) -> Mapping[str, Any]:
     case_id = str(entry["id"])
     case_path = corpus_directory / "cases" / f"{case_id}.json"
@@ -1802,7 +1831,15 @@ def run_case(
     try:
         checkout(repository, worktree, str(repository_info["before_revision"]))
         map_path = case_output / "map.json"
-        map_command = [str(archbird), "map", str(worktree)]
+        map_command = [
+            str(archbird),
+            "map",
+            str(worktree),
+            "--cache-dir",
+            str(cache_root),
+            "--cache-max-bytes",
+            str(PROVIDER_CACHE_MAX_BYTES),
+        ]
         config = case["analysis"].get("config")
         config_path = case_output / "archbird.json"
         if config is None:
@@ -2043,7 +2080,15 @@ def run_case(
         remove_checkout(repository, worktree)
         checkout(repository, worktree, str(repository_info["after_revision"]))
         after_map_path = case_output / "after-map.json"
-        after_map_command = [str(archbird), "map", str(worktree)]
+        after_map_command = [
+            str(archbird),
+            "map",
+            str(worktree),
+            "--cache-dir",
+            str(cache_root),
+            "--cache-max-bytes",
+            str(PROVIDER_CACHE_MAX_BYTES),
+        ]
         after_map_command.extend(("--config", str(config_path)))
         after_map_command.extend(
             ("--format", "json", "--output", str(after_map_path))
@@ -2224,11 +2269,19 @@ def run_evaluation(
             )
     if not archbird.is_file() or not os.access(archbird, os.X_OK):
         raise EvaluationError(f"Archbird executable is unavailable: {archbird}")
+    environment = evaluated_environment()
     version = subprocess.run(
-        [str(archbird), "--version"], check=True, capture_output=True, text=True
+        [str(archbird), "--version"],
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
     ).stdout.strip()
     support_process = subprocess.run(
-        [str(archbird), "support"], capture_output=True, text=True
+        [str(archbird), "support"],
+        capture_output=True,
+        env=environment,
+        text=True,
     )
     support: Mapping[str, Any]
     if support_process.returncode == 0:
@@ -2253,13 +2306,23 @@ def run_evaluation(
         "sha256": sha256_file(archbird),
     }
     stage = Path(tempfile.mkdtemp(prefix=".run-", dir=root / "work"))
+    cache_stage = Path(tempfile.mkdtemp(prefix=".cache-", dir=root / "work"))
     try:
         if open_held_out:
             claim_held_out_opening(root, corpus_sha256, label)
         cases = []
         for entry in selected_entries:
             print(f"evaluating {entry['id']} ...", flush=True)
-            cases.append(run_case(root, corpus_directory, entry, archbird, stage))
+            cases.append(
+                run_case(
+                    root,
+                    corpus_directory,
+                    entry,
+                    archbird,
+                    stage,
+                    cache_stage / str(entry["id"]),
+                )
+            )
         tool_evidence = next((case.get("map_tool") for case in cases if case.get("map_tool") is not None), None)
         result = {
             "aggregate": {
@@ -2276,6 +2339,7 @@ def run_evaluation(
                 },
             },
             "artifact": RUN_ARTIFACT,
+            "cache_policy": CACHE_POLICY,
             "cases": cases,
             "corpus_sha256": corpus_sha256,
             "evaluator": {"implementation_sha256": sha256_file(Path(__file__))},
@@ -2287,7 +2351,7 @@ def run_evaluation(
             "held_out_opened": open_held_out,
             "label": label,
             "provenance": "observed",
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": RUN_SCHEMA_VERSION,
             "tool": {
                 "cli_version": version,
                 "launcher": launcher,
@@ -2330,6 +2394,7 @@ def run_evaluation(
     finally:
         if stage.exists():
             shutil.rmtree(stage)
+        shutil.rmtree(cache_stage, ignore_errors=True)
 
 
 def metric_direction(name: str) -> str | None:
@@ -2405,6 +2470,10 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
         raise EvaluationError("evaluation run is missing or corrupt")
     before = read_json(before_path, "before evaluation run")
     after = read_json(after_path, "after evaluation run")
+    cache_comparable = (
+        before.get("cache_policy") is not None
+        and before.get("cache_policy") == after.get("cache_policy")
+    )
     old = {str(case["id"]): case for case in before["cases"]}
     new = {str(case["id"]): case for case in after["cases"]}
     rows = []
@@ -2418,7 +2487,7 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
             for split in ("development", "validation", "held_out")
         },
         "incomparable": 0,
-        "performance": {"changed": 0, "unchanged": 0},
+        "performance": {"changed": 0, "incomparable": 0, "unchanged": 0},
         "quality_by_split": {
             split: counters()
             for split in ("development", "validation", "held_out")
@@ -2443,7 +2512,12 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
                 and isinstance(after_value, (int, float))
                 and not isinstance(after_value, bool)
             ):
-                metrics[name] = compare_metric(name, float(before_value), float(after_value))
+                metric = compare_metric(
+                    name, float(before_value), float(after_value)
+                )
+                if metric["family"] == "performance" and not cache_comparable:
+                    metric = {**metric, "classification": "incomparable"}
+                metrics[name] = metric
         quality_classes = {
             metric["classification"]
             for metric in metrics.values()
@@ -2461,7 +2535,12 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
         }
         status = comparison_status(quality_classes)
         context_status = comparison_status(context_classes)
-        performance_status = "changed" if "changed" in performance_classes else "unchanged"
+        if "incomparable" in performance_classes:
+            performance_status = "incomparable"
+        else:
+            performance_status = (
+                "changed" if "changed" in performance_classes else "unchanged"
+            )
         summary["performance"][performance_status] += 1
         review_status = str(right.get("review_status", "candidate"))
         split = str(right.get("split", "development"))
@@ -2484,11 +2563,12 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
         "after_run_sha256": after_sha,
         "artifact": COMPARISON_ARTIFACT,
         "before_run_sha256": before_sha,
+        "cache_relation": "same" if cache_comparable else "changed",
         "cases": rows,
         "corpus_relation": "same" if before["corpus_sha256"] == after["corpus_sha256"] else "changed",
         "evaluator": {"implementation_sha256": sha256_file(Path(__file__))},
         "provenance": "derived",
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": COMPARISON_SCHEMA_VERSION,
         "summary": summary,
     }
 

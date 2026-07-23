@@ -1598,6 +1598,17 @@ def main() -> None:
         target[path[-1]] = value
         assert_invalid_result(malformed_result)
 
+    malformed_result = json.loads(change_result_bytes)
+    malformed_result["outcomes"].append(
+        json.loads(json.dumps(malformed_result["outcomes"][0]))
+    )
+    assert_invalid_result(malformed_result)
+    malformed_result = json.loads(change_result_bytes)
+    duplicate_id = json.loads(json.dumps(malformed_result["outcomes"][0]))
+    duplicate_id["message"] += " Distinct content with the same identity."
+    malformed_result["outcomes"].append(duplicate_id)
+    assert_invalid_result(malformed_result)
+
     for field in (
         "proposal_sha256",
         "contract_sha256",
