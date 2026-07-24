@@ -125,6 +125,11 @@ try {
     "query", "--map", ".archbird/map.json", "--symbol", "demo_open",
     "--depth", "1", "--max-chars", "12000",
   ]);
+  const liveQuery = JSON.parse(run([
+    "query", ".", "--symbol", "demo_open", "--depth", "1",
+    "--format", "json", "--check",
+  ]));
+  assert.equal(liveQuery.artifact, "query");
   run([
     "query", "public-api-impact", "--map", ".archbird/map.json",
     "--config", "archbird.json", "--format", "json",

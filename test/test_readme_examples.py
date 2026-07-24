@@ -339,6 +339,22 @@ def main() -> None:
             "12000",
             cwd=root,
         )
+        live_query = json.loads(
+            run(
+                "query",
+                ".",
+                "--symbol",
+                "demo_open",
+                "--depth",
+                "1",
+                "--format",
+                "json",
+                "--check",
+                cwd=root,
+            ).stdout
+        )
+        if live_query["artifact"] != "query":
+            raise AssertionError("query . did not produce a live Query artifact")
         run(
             "query",
             "public-api-impact",

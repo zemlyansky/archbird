@@ -59,8 +59,8 @@ function usage(command = "map") {
   const rows = {
     map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|audit] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
     observe: "archbird observe [ROOT] --map MAP.json --request COVERAGE.json [--output OBSERVATIONS.json]",
-    query: "archbird query [QUERY] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
-    impact: "archbird impact [QUERY] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
+    query: "archbird query [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
+    impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
@@ -657,16 +657,29 @@ function contextCounts(values, option) {
   return result;
 }
 
+function queryPositionalIsRoot(value) {
+  return Boolean(
+    value &&
+    (value === "." || value === ".." || path.isAbsolute(value) ||
+      value.includes("/") || value.includes("\\")),
+  );
+}
+
 function queryMain(argv, command) {
   const options = parse(argv, selectorDefinitions(), { positionals: 1 });
-  const queryId = options._[0] || null;
-  const repositoryOptions = { ...options, _: [] };
+  const positional = options._[0] || null;
+  const positionalRoot = queryPositionalIsRoot(positional);
+  const queryId = positionalRoot ? null : positional;
+  const repositoryOptions = {
+    ...options,
+    _: positionalRoot ? [positional] : [],
+  };
   if (options.help) {
     process.stdout.write(usage(command));
     return 0;
   }
   if (options.map && (
-    options.noConfig || options.root ||
+    positionalRoot || options.noConfig || options.root ||
     hasDiscoveryOverrides(options)
   )) {
     throw new Error("--map cannot be combined with repository discovery options");

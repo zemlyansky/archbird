@@ -288,7 +288,12 @@ select an explicit subset and the Verification artifact records configured,
 requested, evaluated, and omitted counts; a successful subset is never reported
 as whole-policy compliance. Unknown IDs are errors. Repository selection is
 execution context: run in the project root or use `--root PATH`; an external
-configuration uses `--config CONFIG --root PROJECT`.
+configuration uses `--config CONFIG --root PROJECT`. Query and Impact also
+accept an unambiguous path-shaped positional root, such as
+`npx archbird query . --symbol demo_open`.
+`npx archbird impact ../project --path src/api.c` works similarly. A bare
+positional token remains a saved query ID; use `./project` rather than
+`project` when selecting a relative repository path.
 
 Common typed constraints cover required/forbidden paths and symbols, file-size
 bounds, symbol cardinality, component membership and cycles, allowed/forbidden/

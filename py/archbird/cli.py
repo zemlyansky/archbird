@@ -205,7 +205,13 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
         description="Select a deterministic neighborhood from current or saved Map evidence.",
     )
     result.add_argument(
-        "query_id", nargs="?", metavar="QUERY", help="named query from archbird.json"
+        "query_id",
+        nargs="?",
+        metavar="QUERY_OR_ROOT",
+        help=(
+            "named query from archbird.json, or a path-shaped repository root "
+            "such as . or ../project"
+        ),
     )
     source = result.add_mutually_exclusive_group()
     source.add_argument("-c", "--config", help="project configuration JSON")
@@ -1022,6 +1028,26 @@ def _repository_inputs(args: argparse.Namespace) -> tuple[Path, bytes, Optional[
     return selected, config_json, config_path
 
 
+def _query_positional_is_root(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    separators = tuple(
+        separator for separator in (os.sep, os.altsep) if separator
+    )
+    return (
+        value in (".", "..")
+        or Path(value).is_absolute()
+        or any(separator in value for separator in separators)
+    )
+
+
+def _normalize_query_positional(args: argparse.Namespace) -> None:
+    if not _query_positional_is_root(args.query_id):
+        return
+    args.root_path = args.query_id
+    args.query_id = None
+
+
 def _has_discovery_overrides(args: argparse.Namespace) -> bool:
     return bool(
         args.project
@@ -1245,12 +1271,16 @@ def _query_main(
     argv: Sequence[str], *, command: str, default_direction: str
 ) -> int:
     args = query_parser(command, default_direction=default_direction).parse_args(argv)
+    _normalize_query_positional(args)
     progress = _Progress(args.progress)
     try:
         if args.resolution and not args.map:
             raise ValueError("--resolution requires --map")
         if args.map and (
-            args.root_override or args.no_config or _has_discovery_overrides(args)
+            getattr(args, "root_path", None)
+            or args.root_override
+            or args.no_config
+            or _has_discovery_overrides(args)
         ):
             raise ValueError("--map cannot be combined with repository discovery options")
         if args.map and args.jobs:
