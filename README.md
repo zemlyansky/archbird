@@ -57,7 +57,7 @@ Start in any repository. No configuration or saved artifact is required:
 cd project
 archbird
 archbird query --symbol runtime_start
-archbird query --search 'where is provider registration handled'
+archbird query --search 'provider registry'
 archbird serve
 ```
 
@@ -80,7 +80,7 @@ archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000 --check
 
 archbird query --map .archbird/map.json \
-  --search 'where is provider registration handled' --search-limit 8
+  --search 'provider registry' --search-limit 8
 
 archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
@@ -102,14 +102,17 @@ surfaces, parity surfaces, and named entries. `query` is bidirectional by
 default; `impact` starts upstream. Occurrence-backed symbol relations are used
 before conservative file expansion.
 
-`--search TEXT` is the deterministic starting point when you do not yet know a
-path or symbol. It ranks candidate symbols, files, components, packages, and
-artifacts from names, paths, signatures, component descriptions, and package
-metadata, shows the exact field and match behind every score, then expands the
-selected candidates through the same typed graph. Prefix, substring, and
-bounded typo matches are advisory seeds; they never become semantic edges or
-make a constraint pass. Symbol neighbors reached only from those advisory
-seeds do not strengthen a static test route.
+`--search KEYWORDS` is deterministic lexical retrieval for cases where you do
+not yet know a path or symbol. Use concise repository vocabulary such as
+`provider registry`; it does not interpret questions, intent, or synonyms. It
+ranks candidate symbols, files, components, packages, and artifacts from names,
+paths, signatures, component descriptions, and package metadata, shows the
+exact field and match behind every score, then expands the selected candidates
+through the same typed graph. Prefix, substring, and bounded typo matches are
+advisory seeds; they never become semantic edges or make a constraint pass.
+Prefer `--symbol`, `--path`, or another typed selector once you know the target.
+Symbol neighbors reached only from advisory seeds do not strengthen a static
+test route.
 
 Focused test routes keep file distance and symbol-hop distance separate. A
 case that calls a wrapper reached from the requested symbol is labeled with

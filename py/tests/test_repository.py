@@ -790,7 +790,7 @@ def main() -> int:
     )
     retrieval = retrieval_query["query"]["retrieval"]
     if (
-        retrieval["contract"] != "archbird-lexical-ranking-v2"
+        retrieval["contract"] != "archbird-lexical-ranking-v3"
         or retrieval["confidence"] != "candidate"
         or len(retrieval["hits"]) != 4
         or retrieval["hits"][0]["path"] != "py/pkg/api.py"
@@ -832,6 +832,59 @@ def main() -> int:
     ):
         raise AssertionError(
             f"package metadata retrieval lost its witness: {package_retrieval!r}"
+        )
+    coverage_map = json.loads(report_map_json)
+    coverage_file = next(
+        row for row in coverage_map["files"] if row["path"] == "js/main.js"
+    )
+    coverage_file["symbols"].append(
+        {
+            "kind": "function",
+            "line": 99,
+            "name": "bridge",
+            "scope": "function",
+            "signature": "bridge(quasar, handle)",
+        }
+    )
+    coverage_map["components"].append(
+        {
+            "description": "",
+            "files": ["js/main.js"],
+            "name": "quasar-runtime",
+            "outgoing": {},
+            "symbol_count": 1,
+        }
+    )
+    coverage_retrieval = json.loads(
+        query_map_json(
+            json.dumps(
+                coverage_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            search=["quasar handled"],
+            search_limit=5,
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    if (
+        coverage_retrieval["hits"][0]["kind"] != "component"
+        or coverage_retrieval["hits"][0]["name"] != "quasar-runtime"
+    ):
+        raise AssertionError(
+            "weak fuzzy matches received a full query-coverage boost: "
+            f"{coverage_retrieval!r}"
+        )
+    weak_hit = next(
+        hit for hit in coverage_retrieval["hits"] if hit.get("name") == "bridge"
+    )
+    if not any(
+        reason["term"] == "handled"
+        and reason["match"] == "edit-1"
+        and reason["field"] == "symbol.signature"
+        for reason in weak_hit["reasons"]
+    ):
+        raise AssertionError(
+            f"soft coverage discarded its fuzzy witness: {weak_hit!r}"
         )
     call_retrieval = json.loads(
         query_map_json(

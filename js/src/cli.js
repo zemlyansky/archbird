@@ -75,7 +75,7 @@ function usage(command = "map") {
   };
   const selectorHelp = ["query", "impact"].includes(command)
     ? "\n--symbol accepts PATTERN or repository-relative PATH:PATTERN; repeated selectors form a union.\n" +
-      "--search TEXT ranks advisory lexical seeds, then expands them through the typed graph.\n" +
+      "--search KEYWORDS ranks advisory lexical seeds from repository vocabulary; it does not interpret questions.\n" +
       "--git-diff REVISION seeds tracked current paths and retains deletions as change evidence.\n" +
       "Context profiles exact|change|architecture|audit control Markdown; " +
       "--max-chars is only the final guard.\n"

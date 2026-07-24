@@ -251,10 +251,11 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
         "--search",
         action="append",
         default=[],
-        metavar="TEXT",
+        metavar="KEYWORDS",
         help=(
-            "rank deterministic candidate seeds from names, paths, signatures, "
-            "component descriptions, and package/artifact metadata; repeatable"
+            "rank lexical candidate seeds from repository names, paths, "
+            "signatures, descriptions, and metadata; does not interpret "
+            "natural-language questions; repeatable"
         ),
     )
     result.add_argument(

@@ -641,7 +641,7 @@ assert.equal(currentProducerQuery.query.producer_compatibility, "current");
 const retrievalQuery = JSON.parse(queryMap(repositoryMapJson, {
   search: ["twce javascript"], searchLimit: 4, depth: 0, testDepth: 0,
 }));
-assert.equal(retrievalQuery.query.retrieval.contract, "archbird-lexical-ranking-v2");
+assert.equal(retrievalQuery.query.retrieval.contract, "archbird-lexical-ranking-v3");
 assert.equal(retrievalQuery.query.retrieval.confidence, "candidate");
 assert.equal(retrievalQuery.query.retrieval.hits.length, 4);
 assert.equal(retrievalQuery.query.retrieval.hits[0].path, "js/index.js");
@@ -652,6 +652,42 @@ assert.ok(retrievalQuery.query.retrieval.hits[0].reasons.some(
 assert.ok(queryMapMarkdown(repositoryMapJson, {
   search: ["twce javascript"], searchLimit: 4, depth: 0, testDepth: 0,
 }).includes("## Candidate seeds"));
+const coverageMap = JSON.parse(fs.readFileSync(
+  path.resolve(process.argv[3], "test/fixtures/report_map.json"),
+));
+coverageMap.files.find((file) => file.path === "js/main.js").symbols.push({
+  kind: "function",
+  line: 99,
+  name: "bridge",
+  scope: "function",
+  signature: "bridge(quasar, handle)",
+});
+coverageMap.components.push({
+  description: "",
+  files: ["js/main.js"],
+  name: "quasar-runtime",
+  outgoing: {},
+  symbol_count: 1,
+});
+const coverageRetrieval = JSON.parse(queryMap(
+  Buffer.from(JSON.stringify(coverageMap)),
+  {
+    search: ["quasar handled"],
+    searchLimit: 5,
+    depth: 0,
+    testDepth: 0,
+  },
+)).query.retrieval;
+assert.equal(coverageRetrieval.hits[0].kind, "component");
+assert.equal(coverageRetrieval.hits[0].name, "quasar-runtime");
+const weakCoverageHit = coverageRetrieval.hits.find(
+  (hit) => hit.name === "bridge",
+);
+assert.ok(weakCoverageHit.reasons.some(
+  (reason) => reason.term === "handled"
+    && reason.match === "edit-1"
+    && reason.field === "symbol.signature",
+));
 const sameLineCConfig = Buffer.from(JSON.stringify({
   schema_version: 2,
   project: "same-line-c-query",

@@ -45,7 +45,7 @@ Start with the CLI in any repository; no configuration is required:
 cd project
 archbird
 archbird query --symbol runtime_start
-archbird query --search 'where is provider registration handled'
+archbird query --search 'provider registry'
 archbird serve
 ```
 
@@ -63,7 +63,7 @@ archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000
 
 archbird query --map .archbird/map.json \
-  --search 'where is provider registration handled' --search-limit 8
+  --search 'provider registry' --search-limit 8
 
 archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
@@ -78,6 +78,11 @@ archbird query --git-diff HEAD \
 archbird query --git-diff HEAD --view changes \
   --verification-result .archbird/verify.json --check
 ```
+
+`--search KEYWORDS` is deterministic lexical retrieval, not natural-language
+or semantic search. Use concise repository vocabulary such as
+`provider registry`; every candidate records the matched field and match type.
+Prefer a typed selector such as `--symbol` or `--path` once the target is known.
 
 `query --view changes` presents the same complete Query artifact as a coding
 packet. It groups change seeds, affected code, strongest routes, ranked tests,

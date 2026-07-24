@@ -303,6 +303,73 @@ def main() -> int:
         raise AssertionError(
             f"package metadata retrieval lost its witness: {retrieval!r}"
         )
+    coverage_map = copy.deepcopy(retrieval_map)
+    coverage_file = next(
+        row for row in coverage_map["files"] if row["path"] == "js/main.js"
+    )
+    coverage_file["symbols"].append(
+        {
+            "kind": "function",
+            "line": 99,
+            "name": "bridge",
+            "scope": "function",
+            "signature": "bridge(quasar, handle)",
+        }
+    )
+    coverage_file["symbols"].sort(
+        key=lambda row: (
+            row["line"],
+            row["name"],
+            row["kind"],
+            row["scope"],
+            row["signature"],
+        )
+    )
+    coverage_map["components"].append(
+        {
+            "description": "",
+            "files": ["js/main.js"],
+            "name": "quasar-runtime",
+            "outgoing": {},
+            "symbol_count": 1,
+        }
+    )
+    coverage_map["components"].sort(key=lambda row: row["name"])
+    coverage_retrieval = json.loads(
+        extension.map_query(
+            canonical(coverage_map),
+            canonical(
+                {
+                    "search": ["quasar handled"],
+                    "search_limit": 5,
+                    "direction": "both",
+                    "depth": 0,
+                    "test_depth": 0,
+                }
+            ),
+        )
+    )["query"]["retrieval"]
+    if (
+        coverage_retrieval["contract"] != "archbird-lexical-ranking-v3"
+        or coverage_retrieval["hits"][0]["kind"] != "component"
+        or coverage_retrieval["hits"][0]["name"] != "quasar-runtime"
+    ):
+        raise AssertionError(
+            "weak fuzzy matches received a full query-coverage boost: "
+            f"{coverage_retrieval!r}"
+        )
+    weak_hit = next(
+        hit for hit in coverage_retrieval["hits"] if hit.get("name") == "bridge"
+    )
+    if not any(
+        reason["term"] == "handled"
+        and reason["match"] == "edit-1"
+        and reason["field"] == "symbol.signature"
+        for reason in weak_hit["reasons"]
+    ):
+        raise AssertionError(
+            f"soft coverage discarded its fuzzy witness: {weak_hit!r}"
+        )
     supported_legacy_map = copy.deepcopy(retrieval_map)
     for package in supported_legacy_map["packages"]:
         package.pop("aliases", None)

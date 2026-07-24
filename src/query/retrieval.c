@@ -295,13 +295,39 @@ static unsigned field_match(const AbString *field, const AbString *term,
   return best;
 }
 
+static uint64_t apply_query_coverage(uint64_t score,
+                                     uint64_t coverage_strength) {
+  if (!score || !coverage_strength)
+    return 0;
+  if (score > UINT64_MAX / coverage_strength)
+    return UINT64_MAX;
+  score *= coverage_strength;
+  if (score > UINT64_MAX / coverage_strength)
+    return UINT64_MAX;
+  return score * coverage_strength / 10000;
+}
+
+static unsigned query_coverage_strength(unsigned match_strength,
+                                        unsigned field_weight) {
+  unsigned bonus;
+  if (match_strength >= 100)
+    return 100;
+  /*
+   * Match strength already scales the score contribution. For query coverage,
+   * a weak match in an identity field is stronger evidence than the same
+   * token appearing incidentally in a signature or description.
+   */
+  bonus = field_weight > 40 ? 100 : (field_weight * 5) / 2;
+  return bonus > 100 - match_strength ? 100 : match_strength + bonus;
+}
+
 uint64_t ab_query_retrieval_text_score(const AbRetrievalResult *result,
                                        const AbString *primary,
                                        unsigned primary_weight,
                                        const AbString *secondary,
                                        unsigned secondary_weight) {
   uint64_t score = 0;
-  size_t matched_terms = 0;
+  uint64_t coverage_strength = 0;
   size_t term_index;
   if (!result)
     return 0;
@@ -320,7 +346,7 @@ uint64_t ab_query_retrieval_text_score(const AbRetrievalResult *result,
     }
     if (!strength)
       continue;
-    matched_terms++;
+    coverage_strength += query_coverage_strength(strength, weight);
     rarity = 64 + (((uint64_t)result->candidate_count + 1) * 256) /
                       (result->document_frequency[term_index] + 1);
     if (rarity > 2048)
@@ -330,7 +356,7 @@ uint64_t ab_query_retrieval_text_score(const AbRetrievalResult *result,
       contribution /= 4;
     score += contribution;
   }
-  return score * (uint64_t)matched_terms * matched_terms;
+  return apply_query_coverage(score, coverage_strength);
 }
 
 static ArchbirdStatus grow_candidates(ArchbirdEngine *engine,
@@ -979,13 +1005,14 @@ ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
         out->document_frequency[term_index]++;
   for (index = 0; index < candidate_count; index++) {
     RetrievalCandidate *candidate = &candidates[index];
-    size_t matched_terms = 0;
+    uint64_t coverage_strength = 0;
     for (term_index = 0; term_index < out->term_count; term_index++) {
       uint64_t rarity;
       uint64_t contribution;
       if (!candidate->strengths[term_index])
         continue;
-      matched_terms++;
+      coverage_strength += query_coverage_strength(
+          candidate->strengths[term_index], candidate->weights[term_index]);
       rarity = 64 + (((uint64_t)candidate_count + 1) * 256) /
                         (out->document_frequency[term_index] + 1);
       if (rarity > 2048)
@@ -996,7 +1023,8 @@ ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
         contribution /= 4;
       candidate->hit.score += contribution;
     }
-    candidate->hit.score *= (uint64_t)matched_terms * matched_terms;
+    candidate->hit.score =
+        apply_query_coverage(candidate->hit.score, coverage_strength);
   }
   for (index = 0; index < candidate_count; index++)
     if (candidates[index].hit.score)
