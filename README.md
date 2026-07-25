@@ -1,4 +1,4 @@
-# Archbird
+# archbird
 
 **Map codebases. Verify architecture. Plan and check structural changes.**
 
@@ -29,42 +29,95 @@ archbird map            # explicit form; npm: npx archbird map
 archbird serve          # npm: npx archbird serve
 ```
 
-## Map, Verify, Act
+## Language support
+
+All interfaces produce the same Map model. The C core provides portable lexical
+and Tree-sitter syntax analysis; the Python, Node, and browser hosts add the
+precision available in their own runtimes.
+
+| | archbird binary | archbird.js | archbird.py | archbird app |
+| --- | --- | --- | --- | --- |
+| C and C++ | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical |
+| Python | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ CPython AST + Tree-sitter + lexical | ✓ Tree-sitter + lexical |
+| JavaScript, TypeScript, and TSX | ✓ Tree-sitter + lexical | ✓ TypeScript compiler + Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ TypeScript compiler + Tree-sitter + lexical |
+| R | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical |
+| Supplied SCIP index | ✓ semantic evidence | ✓ semantic evidence | ✓ semantic evidence | ✓ semantic evidence |
+
+Lexical providers conservatively recover declarations, calls, and explicit
+protocols from source text. Tree-sitter adds syntax, scopes, imports, and exact
+spans. CPython AST and the TypeScript compiler add host-specific precision.
+SCIP is optional input for resolved definitions, references, and relationships;
+Archbird reads a supplied index but does not invoke an indexer.
+
+## Stages
 
 | Stage | Question | Output |
 | --- | --- | --- |
 | **Map** | What exists, and how is it connected? | Searchable files, symbols, dependencies, tests, and build routes |
-| **Verify** | Does the code follow the architecture rules? | Passed and failed rules, with reasons and code locations |
-| **Act** | Did a coordinated change produce the required structural result? | A change checklist and a before/after check |
+| **Verify** | Does the code follow the architecture constraints? | Constraint status, violations, code locations, and unknowns |
+| **Act** | Did a coordinated change produce the required structural result? | A reviewable change checklist and a before/after judgment |
 
-Every result links back to the source, configuration, or test data used to
-produce it. Missing or uncertain information is shown instead of guessed.
+**Map handles fragmentation.** In a complex repository, architecture is spread
+across source languages, package manifests, public interfaces, native/frontend
+bridges, tests, build systems, and generated artifacts. Map joins those parts
+into one navigable model, so a developer or coding agent can locate a symbol,
+follow its dependencies and consumers, and see which tests and delivery
+surfaces are connected to it.
 
-Map works without configuration. Add Verify when you want automated
-architecture constraints. Use Act when one change spans several files, packages, or
-languages and you want to record the required outcome and check it afterward.
-Archbird never edits the code.
+**Verify handles architectural drift.** Map describes what the repository
+currently contains; constraints describe what must remain true. Verify checks
+the complete relevant Map rather than a shortened query view and reports which
+constraints pass, which fail, where the violation occurs, and where incomplete
+or stale information prevents a reliable answer.
 
-`archbird` and `archbird .` remain supported shortcuts for mapping the current
-repository. The explicit `archbird map` form is useful in scripts and alongside
-the other stage commands.
+**Act handles coordinated change.** A structural fix may need synchronized
+updates to an implementation, public interface, language binding, package
+entrypoint, tests, and build artifacts. Starting from a failed constraint, Act
+collects the affected obligations and candidate locations into a proposal. A
+reviewer turns that proposal into an explicit change contract; after a person,
+agent, or codemod performs the work, Archbird compares the before and after
+verification results and reports which obligations were satisfied, missed,
+unexpected, or still unknown.
 
-## Map and query a repository
+Across all three stages, results retain links to the source, configuration, or
+test data that produced them. Archbird keeps ambiguous, incomplete, and stale
+information visible instead of guessing, and it never edits the repository.
 
-Start in any repository. No configuration or saved artifact is required:
+## Map
+
+Start in any repository:
 
 ```bash
 cd project
-archbird
-archbird query --symbol runtime_start
-archbird query --search 'provider registry'
-archbird serve
+archbird map .
+archbird query . --symbol runtime_start
+archbird query . --search 'provider registry'
+archbird serve --root .
 ```
 
-The first command prints an architecture overview. Query derives a focused
-artifact from the same canonical Map model; `serve` opens the local application.
-Add selectors such as `--path`, `--component`, or `--test` as the question
-becomes more specific.
+`map` scans the repository and builds Archbird's complete model of its files,
+symbols, dependencies, public interfaces, tests, build routes, artifacts, and
+components. The default Markdown output is a readable architecture overview;
+use JSON when you want to save the complete Map for later commands.
+
+`query` loads or builds that Map, selects a starting point, follows its recorded
+relationships, and returns a focused neighborhood. Use typed selectors such as
+`--symbol`, `--path`, `--component`, `--package`, or `--artifact` when you know
+what you are looking for.
+
+`query --search` helps find that starting point when you do not know its exact
+path or symbol. It ranks lexical matches from repository names, paths,
+signatures, descriptions, and package metadata, then runs the same focused
+Query from those candidates. It tolerates prefixes, substrings, and small
+typos, but it does not interpret a natural-language question or turn a text
+match into a proven code relationship.
+
+`serve` starts a browser-based architecture explorer and immediately prints its
+loopback URL. Use it to browse the repository as component, file, and symbol
+graphs; search for code; run focused queries; inspect connections at their
+source locations; and compare Map snapshots as the repository changes.
+Analysis runs in the background and watches the source tree. If an update
+fails, the explorer reports the failure and keeps showing the last valid Map.
 
 ### Save and reuse evidence
 
@@ -503,17 +556,9 @@ can contribute without erasing provenance or blindly unioning contradictions.
 | L3 | resolved definitions, references, relationships | supplied SCIP; CPython AST; TypeScript compiler |
 | L4 | behavior and exact runtime hits | project-owned observed artifacts |
 
-| Language | PyPI | npm | browser/Wasm |
-| --- | --- | --- | --- |
-| C/C++ | Tree-sitter + lexical | Tree-sitter + lexical | Tree-sitter + lexical |
-| Python | CPython AST + Tree-sitter + lexical | Tree-sitter + lexical | Tree-sitter + lexical |
-| JavaScript/TypeScript/TSX | Tree-sitter + lexical | TypeScript compiler + Tree-sitter + lexical | TypeScript compiler + Tree-sitter + lexical |
-| R | Tree-sitter + lexical | Tree-sitter + lexical | Tree-sitter + lexical |
-| Vue | lexical | lexical | lexical |
-
-SCIP is host-neutral. Tree-sitter recovery is fact-local. Semantic indexes
-retain producer, document coverage, source anchoring, and freshness. Provider
-conflicts, ambiguity, and unresolved targets remain explicit.
+Tree-sitter recovery is fact-local. Semantic indexes retain producer, document
+coverage, source anchoring, and freshness. Provider conflicts, ambiguity, and
+unresolved targets remain explicit.
 
 ## Programmatic APIs
 
