@@ -649,6 +649,14 @@ assert.equal(retrievalQuery.query.retrieval.hits[0].name, "twice");
 assert.ok(retrievalQuery.query.retrieval.hits[0].reasons.some(
   (reason) => reason.match === "edit-1",
 ));
+const pythonRetrievalQuery = JSON.parse(queryMap(repositoryMapJson, {
+  search: ["twce python"], searchLimit: 4, depth: 0, testDepth: 0,
+}));
+assert.equal(
+  pythonRetrievalQuery.query.retrieval.hits[0].path,
+  "py/pkg/api.py",
+);
+assert.equal(pythonRetrievalQuery.files[0].path, "py/pkg/api.py");
 assert.ok(queryMapMarkdown(repositoryMapJson, {
   search: ["twce javascript"], searchLimit: 4, depth: 0, testDepth: 0,
 }).includes("## Candidate seeds"));

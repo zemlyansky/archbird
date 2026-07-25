@@ -795,6 +795,7 @@ def main() -> int:
         or len(retrieval["hits"]) != 4
         or retrieval["hits"][0]["path"] != "py/pkg/api.py"
         or retrieval["hits"][0]["name"] != "twice"
+        or retrieval_query["files"][0]["path"] != "py/pkg/api.py"
         or not any(
             reason["match"] == "edit-1" for reason in retrieval["hits"][0]["reasons"]
         )

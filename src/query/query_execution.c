@@ -42,6 +42,8 @@ typedef struct QueryFile {
   size_t degree;
   size_t retrieval_rank;
   uint64_t retrieval_score;
+  size_t ordering_retrieval_rank;
+  uint64_t ordering_retrieval_score;
   int seed;
   int symbol_seed;
   int matched_symbol_seed;
@@ -727,6 +729,7 @@ static ArchbirdStatus build_files(QueryContext *context) {
     file->original_index = index;
     file->distance = SIZE_MAX;
     file->retrieval_rank = SIZE_MAX;
+    file->ordering_retrieval_rank = SIZE_MAX;
     if (!file->path || !file->layer || !file->language || !file->sha256 ||
         !file->symbols)
       return ARCHBIRD_INVALID_SCHEMA;
@@ -856,6 +859,25 @@ static void mark_seed(QueryContext *context, const AbString *path) {
     context->files[index].seed = 1;
 }
 
+static void record_retrieval_score(QueryFile *file, uint64_t score,
+                                   size_t rank) {
+  if (score > file->retrieval_score ||
+      (score == file->retrieval_score && rank < file->retrieval_rank)) {
+    file->retrieval_score = score;
+    file->retrieval_rank = rank;
+  }
+}
+
+static void record_ordering_retrieval_score(QueryFile *file, uint64_t score,
+                                            size_t rank) {
+  if (score > file->ordering_retrieval_score ||
+      (score == file->ordering_retrieval_score &&
+       rank < file->ordering_retrieval_rank)) {
+    file->ordering_retrieval_score = score;
+    file->ordering_retrieval_rank = rank;
+  }
+}
+
 static void mark_retrieval_seed(QueryContext *context, const AbString *path,
                                 uint64_t score, size_t rank) {
   size_t index = find_file(context, path);
@@ -864,11 +886,8 @@ static void mark_retrieval_seed(QueryContext *context, const AbString *path,
     return;
   file = &context->files[index];
   file->seed = 1;
-  if (score > file->retrieval_score ||
-      (score == file->retrieval_score && rank < file->retrieval_rank)) {
-    file->retrieval_score = score;
-    file->retrieval_rank = rank;
-  }
+  record_retrieval_score(file, score, rank);
+  record_ordering_retrieval_score(file, score, rank);
 }
 
 static int qualified_matches(QueryContext *context, const AbString *path,
@@ -1345,6 +1364,8 @@ static ArchbirdStatus select_retrieval(QueryContext *context) {
       size_t file_index = find_file(context, hit->path);
       if (!scope || file_index == SIZE_MAX)
         return ARCHBIRD_INVALID_SCHEMA;
+      record_ordering_retrieval_score(&context->files[file_index], hit->score,
+                                      index);
       context->files[file_index].symbol_seed = 1;
       context->files[file_index].matched_symbol_seed = 1;
       status = append_symbol(context, file_index, hit->row, hit->name,
@@ -2921,6 +2942,18 @@ static int order_compare(const void *left_raw, const void *right_raw) {
   if (left->distance != right->distance)
     return (left->distance > right->distance) -
            (left->distance < right->distance);
+  /*
+   * Retrieval is already a deterministic evidence-ranked projection. Preserve
+   * that order among files at the same graph distance; graph degree is only a
+   * fallback for selectors without retrieval evidence.
+   */
+  if (left->ordering_retrieval_score != right->ordering_retrieval_score)
+    return (left->ordering_retrieval_score < right->ordering_retrieval_score) -
+           (left->ordering_retrieval_score > right->ordering_retrieval_score);
+  if (left->ordering_retrieval_score &&
+      left->ordering_retrieval_rank != right->ordering_retrieval_rank)
+    return (left->ordering_retrieval_rank > right->ordering_retrieval_rank) -
+           (left->ordering_retrieval_rank < right->ordering_retrieval_rank);
   if (left->degree != right->degree)
     return (left->degree < right->degree) - (left->degree > right->degree);
   return ab_string_compare(left->path, right->path);
