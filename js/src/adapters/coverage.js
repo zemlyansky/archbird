@@ -3,23 +3,17 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { fileURLToPath } = require("node:url");
 
 const FORMATS = new Set(["gcov", "istanbul", "llvm", "v8"]);
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+const SYMBOLS_BY_LINE = new WeakMap();
 
 class CoverageAdapterError extends Error {}
 
-function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort((left, right) => (
-      Buffer.compare(Buffer.from(left), Buffer.from(right))
-    )).map((key) => (
-      `${JSON.stringify(key)}:${canonical(value[key])}`
-    )).join(",")}}`;
-  }
-  return JSON.stringify(value);
+function canonical(value, canonicalize) {
+  return Buffer.from(canonicalize(Buffer.from(JSON.stringify(value))));
 }
 
 function sha256(value) {
@@ -77,7 +71,7 @@ function request(value) {
   }
   const runners = root.runner_paths.map((value) => relative(value, "runner_paths"));
   const sortedRunners = [...new Set(runners)].sort(utf8Compare);
-  if (canonical(runners) !== canonical(sortedRunners)) {
+  if (runners.some((value, index) => value !== sortedRunners[index])) {
     throw new CoverageAdapterError("runner_paths must be sorted and unique");
   }
   if (!Array.isArray(root.reports) || !root.reports.length) {
@@ -93,7 +87,8 @@ function request(value) {
   const sortedReports = [...reports].sort((left, right) => (
     utf8Compare(left.id, right.id) || utf8Compare(left.path, right.path)
   ));
-  if (canonical(reports) !== canonical(sortedReports) || new Set(reports.map((row) => row.id)).size !== reports.length) {
+  if (reports.some((value, index) => value !== sortedReports[index]) ||
+      new Set(reports.map((row) => row.id)).size !== reports.length) {
     throw new CoverageAdapterError("reports must be sorted with unique ids");
   }
   const reportIds = new Set(reports.map((row) => row.id));
@@ -118,14 +113,14 @@ function request(value) {
   const sortedCases = [...cases].sort((left, right) => (
     utf8Compare(left.path, right.path) || utf8Compare(left.selector, right.selector)
   ));
-  if (canonical(cases) !== canonical(sortedCases) ||
+  if (cases.some((value, index) => value !== sortedCases[index]) ||
       new Set(cases.map((row) => `${row.path}\0${row.selector}`)).size !== cases.length) {
     throw new CoverageAdapterError("cases must be sorted and unique by path/selector");
   }
   if (new Set(cases.map((row) => row.report)).size !== cases.length) {
     throw new CoverageAdapterError(`${root.format} requires one isolated report per case`);
   }
-  return { cases, format: root.format, group: root.group, raw: root, reports, runners };
+  return { cases, format: root.format, group: root.group, reports, runners };
 }
 
 function mapIndex(value) {
@@ -155,9 +150,19 @@ function mapIndex(value) {
 
 function reportPath(raw, repository, files) {
   let candidate = raw;
-  if (candidate.startsWith("file://")) candidate = candidate.slice(7);
+  if (candidate.startsWith("file:")) {
+    try {
+      candidate = fileURLToPath(candidate);
+    } catch (_) {
+      return null;
+    }
+  }
   if (path.isAbsolute(candidate)) {
-    candidate = path.relative(repository, path.resolve(candidate)).split(path.sep).join("/");
+    try {
+      candidate = path.relative(repository, fs.realpathSync(candidate)).split(path.sep).join("/");
+    } catch (_) {
+      return null;
+    }
     if (candidate === ".." || candidate.startsWith("../")) return null;
   } else {
     candidate = candidate.replace(/^\.\//, "");
@@ -166,7 +171,18 @@ function reportPath(raw, repository, files) {
 }
 
 function symbolAtLine(file, line, reportedName = null) {
-  const matches = file.symbols.filter((row) => row && row.line === line && typeof row.name === "string" && row.name);
+  let indexed = SYMBOLS_BY_LINE.get(file);
+  if (!indexed) {
+    indexed = new Map();
+    for (const row of file.symbols) {
+      if (!row || !Number.isSafeInteger(row.line) || typeof row.name !== "string" || !row.name) continue;
+      const matches = indexed.get(row.line);
+      if (matches) matches.push(row);
+      else indexed.set(row.line, [row]);
+    }
+    SYMBOLS_BY_LINE.set(file, indexed);
+  }
+  const matches = indexed.get(line) || [];
   if (reportedName) {
     const normalized = reportedName.split("(", 1)[0].trim();
     const leaf = normalized.split("::").pop();
@@ -214,6 +230,10 @@ function v8Hits(report, testCase, repository, files) {
       throw new CoverageAdapterError(`mapped JavaScript source is stale: ${filePath}`);
     }
     const source = bytes.toString("utf8");
+    const lineStarts = [0];
+    for (let offset = source.indexOf("\n"); offset !== -1; offset = source.indexOf("\n", offset + 1)) {
+      lineStarts.push(offset + 1);
+    }
     for (const fn of script.functions) {
       if (!fn || !Array.isArray(fn.ranges)) continue;
       const positive = fn.ranges.filter((row) => row && Number.isSafeInteger(row.count) && row.count > 0);
@@ -221,7 +241,14 @@ function v8Hits(report, testCase, repository, files) {
       const start = positive[0].startOffset;
       if (!Number.isSafeInteger(start) || start < 0 || start > source.length) continue;
       // JavaScript string indexes are UTF-16 code-unit offsets, matching V8.
-      const line = source.slice(0, start).split("\n").length;
+      let low = 0;
+      let high = lineStarts.length;
+      while (low < high) {
+        const middle = low + Math.floor((high - low) / 2);
+        if (lineStarts[middle] <= start) low = middle + 1;
+        else high = middle;
+      }
+      const line = low;
       const symbol = symbolAtLine(
         files.get(filePath),
         line,
@@ -281,7 +308,7 @@ function gcovHits(report, testCase, repository, files) {
 }
 
 function compileTestObservations(mapJson, requestJson, options) {
-  const repository = path.resolve(options.repository);
+  const repository = fs.realpathSync(path.resolve(options.repository));
   const requestDirectory = path.resolve(options.requestDirectory);
   let mapDocument;
   let requestDocument;
@@ -292,6 +319,7 @@ function compileTestObservations(mapJson, requestJson, options) {
     throw new CoverageAdapterError(`invalid JSON input: ${error.message}`);
   }
   const spec = request(requestDocument);
+  const canonicalRequest = Buffer.from(options.canonicalize(Buffer.from(requestJson)));
   const indexed = mapIndex(mapDocument);
   const reportBytes = new Map();
   const reports = new Map();
@@ -340,9 +368,9 @@ function compileTestObservations(mapJson, requestJson, options) {
     artifact: "archbird-test-symbol-observations",
     cases: outputCases,
     producer: {
-      configuration_sha256: sha256(Buffer.from(canonical(spec.raw))),
+      configuration_sha256: sha256(canonicalRequest),
       implementation_sha256: options.implementationSha256,
-      input_sha256: sha256(Buffer.from(canonical(inputRows))),
+      input_sha256: sha256(canonical(inputRows, options.canonicalize)),
       name: `archbird-${spec.format}-adapter`,
       runtime: `node-${process.versions.node}`,
       version: options.version,
@@ -353,11 +381,11 @@ function compileTestObservations(mapJson, requestJson, options) {
     source: {
       config_sha256: indexed.config,
       evidence,
-      evidence_slice_sha256: sha256(Buffer.from(canonical(evidence))),
+      evidence_slice_sha256: sha256(canonical(evidence, options.canonicalize)),
       map_input_sha256: indexed.inputs,
     },
   };
-  return Buffer.from(`${canonical(artifact)}\n`);
+  return Buffer.concat([canonical(artifact, options.canonicalize), Buffer.from("\n")]);
 }
 
 module.exports = { CoverageAdapterError, compileTestObservations };

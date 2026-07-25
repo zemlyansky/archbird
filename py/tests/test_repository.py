@@ -249,6 +249,66 @@ def main() -> int:
     shutil.rmtree(c_cache_root, ignore_errors=True)
     map_cache_root = repository / "build/test-map-cache-python"
     shutil.rmtree(map_cache_root, ignore_errors=True)
+    streamed_map = Project.from_config(
+        fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
+    )
+    streamed_output = io.BytesIO()
+    streamed_map.write_map_json(streamed_output.write)
+    if streamed_map.map_cache_stats["writes"] != 1:
+        raise AssertionError(
+            "streaming Python Map output did not populate the complete Map cache"
+        )
+    streamed_warm = Project.from_config(
+        fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
+    )
+    if (
+        streamed_warm.map_json() != streamed_output.getvalue()
+        or streamed_warm.map_cache_stats["hits"] != 1
+    ):
+        raise AssertionError("streaming Python Map cache was not reusable")
+    shutil.rmtree(map_cache_root, ignore_errors=True)
+    pretty_streamed = Project.from_config(
+        fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
+    )
+    pretty_output = io.BytesIO()
+    pretty_streamed.write_map_json(pretty_output.write, pretty=True)
+    if not pretty_output.getvalue().startswith(b"{\n"):
+        raise AssertionError("pretty streaming Python Map output is not formatted")
+    pretty_warm = Project.from_config(
+        fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
+    )
+    if pretty_warm.map_json() != first:
+        raise AssertionError("pretty streaming stored noncanonical Map cache bytes")
+    shutil.rmtree(map_cache_root, ignore_errors=True)
+    skipped_stream = Project.from_config(
+        fixture / "archbird.json",
+        root=fixture,
+        cache_dir=map_cache_root,
+        cache_max_bytes=1,
+    )
+    skipped_output = io.BytesIO()
+    skipped_stream.write_map_json(skipped_output.write)
+    if (
+        not skipped_output.getvalue()
+        or skipped_stream.map_cache_stats["skipped"] != 1
+        or tuple((map_cache_root / "maps-v1").rglob("*.json"))
+    ):
+        raise AssertionError("bounded streaming Map cache changed output or stored data")
+    shutil.rmtree(map_cache_root, ignore_errors=True)
+    failed_stream = Project.from_config(
+        fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
+    )
+    try:
+        failed_stream.write_map_json(lambda _chunk: 0)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("cached streaming accepted a short output write")
+    if tuple((map_cache_root / "maps-v1").rglob("*.json")):
+        raise AssertionError("failed streaming output populated the Map cache")
+    if tuple(map_cache_root.rglob("*.tmp")):
+        raise AssertionError("failed streaming output retained a cache temporary")
+    shutil.rmtree(map_cache_root, ignore_errors=True)
     map_cold = Project.from_config(
         fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
     )
@@ -366,6 +426,28 @@ def main() -> int:
     bounded.store(b"c" * 101, **cache_parameters)
     if bounded.stats.skipped != 1:
         raise AssertionError("Python cache did not reject an oversized entry")
+    remaining = tuple((bounded_root / "providers-v1").rglob("*.json"))
+    if len(remaining) != 1:
+        raise AssertionError("bounded Python cache fixture is not singular")
+    missing_target = remaining[0]
+    missing_target.unlink()
+    bounded.reject(**second_parameters)
+    if bounded.stats.bytes != 0:
+        raise AssertionError("missing rejected cache entry stayed accounted")
+    map_parameters = {
+        "namespace": "fixture",
+        "project": "cache-budget",
+        "manifest_sha256": "3" * 64,
+        "config_sha256": "4" * 64,
+    }
+    bounded.store_map(b"{}", **map_parameters)
+    map_targets = tuple((bounded_root / "maps-v1").rglob("*.json"))
+    if len(map_targets) != 1:
+        raise AssertionError("bounded Python Map cache fixture is not singular")
+    map_targets[0].unlink()
+    bounded.reject_map(**map_parameters)
+    if bounded.stats.bytes != 0:
+        raise AssertionError("missing rejected Map cache entry stayed accounted")
     stale = bounded_root / "providers-v1" / "aa" / ".stale.tmp"
     stale.parent.mkdir(parents=True, exist_ok=True)
     stale.write_bytes(b"partial")
@@ -378,8 +460,11 @@ def main() -> int:
         side_effect=OSError(errno.ENOSPC, "no space left on device"),
     ):
         recovered.store(b"d", **cache_parameters)
+        recovered.store_map(b"{}", **map_parameters)
     if recovered.stats.no_space != 1 or recovered.stats.errors != 1:
         raise AssertionError("Python cache did not classify ENOSPC")
+    if recovered.map_stats.no_space != 1 or recovered.map_stats.errors != 1:
+        raise AssertionError("Python Map cache did not classify ENOSPC")
     shutil.rmtree(bounded_root, ignore_errors=True)
     changed = Project(
         "cache-source",

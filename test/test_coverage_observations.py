@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 
-from archbird import validate_test_symbol_observations
+from archbird import _native, validate_test_symbol_observations
 from archbird.adapters.coverage import CoverageAdapterError, compile_test_observations
 
 
@@ -78,7 +78,7 @@ def main() -> None:
         javascript_source = (
             'const emoji = "😀";\nfunction alpha() { return 1; }\n'.encode()
         )
-        javascript_file = write(root, "src/subject.js", javascript_source)
+        javascript_file = write(root, "src/subject file.js", javascript_source)
         javascript_file["symbols"] = [
             {"kind": "function", "line": 2, "name": "alpha", "public": True}
         ]
@@ -126,7 +126,7 @@ def main() -> None:
         (root / "istanbul.json").write_text(
             json.dumps(
                 {
-                    str(root / "src/subject.js"): {
+                    (root / "src/subject file.js").as_uri(): {
                         "fnMap": {
                             "0": {"name": "alpha", "decl": {"start": {"line": 2}}}
                         },
@@ -135,12 +135,15 @@ def main() -> None:
                 }
             )
         )
-        observed = compile(
-            root,
-            map_value,
-            request("istanbul", "istanbul.json", "test/test.js", "package.json"),
+        istanbul_request = request(
+            "istanbul", "istanbul.json", "test/test.js", "package.json"
         )
+        istanbul_request["schema_version"] = 1.0
+        observed = compile(root, map_value, istanbul_request)
         assert observed["cases"][0]["symbols"][0]["hits"] == 3
+        assert observed["producer"]["configuration_sha256"] == digest(
+            _native.json_canonicalize(canonical(istanbul_request))
+        )
 
         (root / "llvm.json").write_text(
             json.dumps(

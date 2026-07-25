@@ -8,7 +8,7 @@ import hashlib
 import os
 from pathlib import Path
 import tempfile
-from typing import Mapping
+from typing import BinaryIO, Mapping
 
 
 _CACHE_CONTRACT = b"archbird-provider-cache-v1"
@@ -140,6 +140,105 @@ class MapCacheStats:
         }
 
 
+class _MapCacheWriter:
+    """Collect one canonical Map without making cache failures observable."""
+
+    def __init__(self, cache: "ProviderCache", target: Path) -> None:
+        self._cache = cache
+        self._target = target
+        previous = cache._entries.get(target)
+        self._previous_size = previous[0] if previous is not None else 0
+        self._stream: BinaryIO | None = None
+        self._temporary: Path | None = None
+        self._size = 0
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            stream = tempfile.NamedTemporaryFile(
+                dir=target.parent,
+                prefix=f".{target.stem}.",
+                suffix=".tmp",
+                delete=False,
+            )
+            self._stream = stream
+            self._temporary = Path(stream.name)
+        except OSError as error:
+            self._record_error(error)
+
+    def _record_error(self, error: OSError) -> None:
+        self._cache.map_stats.errors += 1
+        if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)}:
+            self._cache.map_stats.no_space += 1
+
+    def _discard(self) -> None:
+        stream, self._stream = self._stream, None
+        temporary, self._temporary = self._temporary, None
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                self._cache.map_stats.errors += 1
+
+    def write(self, data: bytes) -> int:
+        stream = self._stream
+        if stream is None:
+            return len(data)
+        if self._size + len(data) > self._cache.max_bytes:
+            self._cache.map_stats.skipped += 1
+            self._discard()
+            return len(data)
+        try:
+            written = stream.write(data)
+        except OSError as error:
+            self._record_error(error)
+            self._discard()
+            return len(data)
+        if written != len(data):
+            self._record_error(OSError(errno.EIO, "short cache write"))
+            self._discard()
+            return len(data)
+        self._size += written
+        return written
+
+    def abort(self) -> None:
+        self._discard()
+
+    def commit(self) -> None:
+        stream = self._stream
+        temporary = self._temporary
+        if stream is None or temporary is None:
+            return
+        try:
+            stream.flush()
+            os.fsync(stream.fileno())
+            stream.close()
+            self._stream = None
+            incoming = max(0, self._size - self._previous_size)
+            self._cache._prune(incoming, preserve=self._target)
+            if self._cache.stats.bytes + incoming > self._cache.max_bytes:
+                self._cache.map_stats.skipped += 1
+                self._discard()
+                return
+            os.replace(temporary, self._target)
+            self._temporary = None
+            metadata = self._target.stat()
+            self._cache.stats.bytes += metadata.st_size - self._previous_size
+            self._cache._entries[self._target] = (
+                metadata.st_size,
+                metadata.st_mtime_ns,
+            )
+            self._cache.map_stats.writes += 1
+        except OSError as error:
+            self._record_error(error)
+            self._discard()
+
+
 class ProviderCache:
     """Store raw canonical bundles; the native core still validates every hit."""
 
@@ -200,8 +299,6 @@ class ProviderCache:
         self._prune(0)
 
     def _prune(self, incoming: int, *, preserve: Path | None = None) -> None:
-        if incoming > self.max_bytes:
-            return
         ordered = sorted(
             self._entries.items(),
             key=lambda row: (row[1][1], os.fsencode(str(row[0]))),
@@ -375,50 +472,37 @@ class ProviderCache:
         manifest_sha256: str,
         config_sha256: str,
     ) -> None:
-        target = self._map_path(
+        if len(data) > self.max_bytes:
+            self.map_stats.skipped += 1
+            return
+        writer = self.open_map_writer(
             namespace=namespace,
             project=project,
             manifest_sha256=manifest_sha256,
             config_sha256=config_sha256,
         )
-        if len(data) > self.max_bytes:
-            self.map_stats.skipped += 1
-            return
-        previous = self._entries.get(target)
-        previous_size = previous[0] if previous is not None else 0
-        incoming = max(0, len(data) - previous_size)
-        self._prune(incoming, preserve=target)
-        if self.stats.bytes + incoming > self.max_bytes:
-            self.map_stats.skipped += 1
-            return
-        temporary_name = ""
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                dir=target.parent,
-                prefix=f".{target.stem}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary:
-                temporary.write(data)
-                temporary.flush()
-                os.fsync(temporary.fileno())
-                temporary_name = temporary.name
-            os.replace(temporary_name, target)
-            metadata = target.stat()
-            self.stats.bytes += metadata.st_size - previous_size
-            self._entries[target] = (metadata.st_size, metadata.st_mtime_ns)
-            self.map_stats.writes += 1
-        except OSError as error:
-            self.map_stats.errors += 1
-            if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)}:
-                self.map_stats.no_space += 1
-        finally:
-            if temporary_name:
-                try:
-                    Path(temporary_name).unlink()
-                except FileNotFoundError:
-                    pass
+        writer.write(data)
+        writer.commit()
+
+    def open_map_writer(
+        self,
+        *,
+        namespace: str,
+        project: str,
+        manifest_sha256: str,
+        config_sha256: str,
+    ) -> _MapCacheWriter:
+        """Open a bounded atomic sink for one compact canonical Map."""
+
+        return _MapCacheWriter(
+            self,
+            self._map_path(
+                namespace=namespace,
+                project=project,
+                manifest_sha256=manifest_sha256,
+                config_sha256=config_sha256,
+            ),
+        )
 
     def reject(
         self,
@@ -448,10 +532,10 @@ class ProviderCache:
             pass
         except OSError:
             self.stats.errors += 1
-        else:
-            previous = self._entries.pop(target, None)
-            if previous is not None:
-                self.stats.bytes -= previous[0]
+            return
+        previous = self._entries.pop(target, None)
+        if previous is not None:
+            self.stats.bytes -= previous[0]
 
     def reject_map(
         self,
@@ -479,10 +563,10 @@ class ProviderCache:
             pass
         except OSError:
             self.map_stats.errors += 1
-        else:
-            previous = self._entries.pop(target, None)
-            if previous is not None:
-                self.stats.bytes -= previous[0]
+            return
+        previous = self._entries.pop(target, None)
+        if previous is not None:
+            self.stats.bytes -= previous[0]
 
 
 __all__ = [

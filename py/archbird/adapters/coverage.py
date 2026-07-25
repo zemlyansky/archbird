@@ -10,8 +10,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from archbird import __version__, implementation_digest
+from archbird._native import json_canonicalize
 
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
@@ -23,13 +26,10 @@ class CoverageAdapterError(ValueError):
 
 
 def _canonical(value: object) -> bytes:
-    return json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
+    encoded = json.dumps(
+        value, allow_nan=False, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")
+    return json_canonicalize(encoded)
 
 
 def _sha256(value: bytes) -> str:
@@ -92,7 +92,6 @@ class _Request:
     group: str
     reports: tuple[tuple[str, str], ...]
     runner_paths: tuple[str, ...]
-    raw: Mapping[str, Any]
 
 
 def _request(value: object) -> _Request:
@@ -184,10 +183,18 @@ def _request(value: object) -> _Request:
             raise CoverageAdapterError(
                 f"{format_name} requires one isolated report per case"
             )
-    return _Request(tuple(cases), format_name, group, tuple(reports), runners, root)
+    return _Request(tuple(cases), format_name, group, tuple(reports), runners)
 
 
-def _map_index(value: object) -> tuple[str, str, str, dict[str, Mapping[str, Any]]]:
+def _map_index(
+    value: object,
+) -> tuple[
+    str,
+    str,
+    str,
+    dict[str, Mapping[str, Any]],
+    dict[str, dict[int, tuple[Mapping[str, Any], ...]]],
+]:
     root = value
     if not isinstance(root, dict) or root.get("artifact") != "map":
         raise CoverageAdapterError("map input must be a canonical Map")
@@ -206,6 +213,7 @@ def _map_index(value: object) -> tuple[str, str, str, dict[str, Mapping[str, Any
     ):
         raise CoverageAdapterError("Map digests are invalid")
     indexed: dict[str, Mapping[str, Any]] = {}
+    symbol_indexes: dict[str, dict[int, tuple[Mapping[str, Any], ...]]] = {}
     for index, row in enumerate(files):
         if not isinstance(row, dict):
             raise CoverageAdapterError(f"Map files[{index}] is invalid")
@@ -219,10 +227,33 @@ def _map_index(value: object) -> tuple[str, str, str, dict[str, Mapping[str, Any
         if path in indexed:
             raise CoverageAdapterError(f"duplicate Map file: {path}")
         indexed[path] = row
-    return project, config, inputs, indexed
+        by_line: dict[int, list[Mapping[str, Any]]] = {}
+        for symbol in symbols:
+            if (
+                isinstance(symbol, dict)
+                and isinstance(symbol.get("line"), int)
+                and not isinstance(symbol.get("line"), bool)
+                and isinstance(symbol.get("name"), str)
+                and symbol["name"]
+            ):
+                by_line.setdefault(symbol["line"], []).append(symbol)
+        symbol_indexes[path] = {
+            line: tuple(matches) for line, matches in by_line.items()
+        }
+    return project, config, inputs, indexed, symbol_indexes
 
 
 def _report_path(raw: str, repository: Path, files: Mapping[str, Any]) -> str | None:
+    if raw.startswith("file:"):
+        parsed = urlsplit(raw)
+        if (
+            parsed.scheme != "file"
+            or parsed.netloc not in {"", "localhost"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+        raw = url2pathname(parsed.path)
     candidate = Path(raw)
     if candidate.is_absolute():
         try:
@@ -237,16 +268,11 @@ def _report_path(raw: str, repository: Path, files: Mapping[str, Any]) -> str | 
 
 
 def _map_symbol_at_line(
-    file: Mapping[str, Any], line: int, reported_name: str | None = None
+    symbols_by_line: Mapping[int, tuple[Mapping[str, Any], ...]],
+    line: int,
+    reported_name: str | None = None,
 ) -> str | None:
-    matches = [
-        row
-        for row in file["symbols"]
-        if isinstance(row, dict)
-        and row.get("line") == line
-        and isinstance(row.get("name"), str)
-        and row["name"]
-    ]
+    matches = symbols_by_line.get(line, ())
     if reported_name:
         normalized = reported_name.split("(", 1)[0].strip()
         named = [
@@ -287,7 +313,11 @@ class _PythonRanges(ast.NodeVisitor):
 
 
 def _coverage_py_hits(
-    report: Mapping[str, Any], case: _Case, repository: Path, files: Mapping[str, Any]
+    report: Mapping[str, Any],
+    case: _Case,
+    repository: Path,
+    files: Mapping[str, Any],
+    _symbol_indexes: Mapping[str, Mapping[int, tuple[Mapping[str, Any], ...]]],
 ) -> dict[tuple[str, str], int]:
     rows = report.get("files")
     if not isinstance(rows, dict):
@@ -338,7 +368,11 @@ def _coverage_py_hits(
 
 
 def _istanbul_hits(
-    report: Mapping[str, Any], case: _Case, repository: Path, files: Mapping[str, Any]
+    report: Mapping[str, Any],
+    case: _Case,
+    repository: Path,
+    files: Mapping[str, Any],
+    symbol_indexes: Mapping[str, Mapping[int, tuple[Mapping[str, Any], ...]]],
 ) -> dict[tuple[str, str], int]:
     result: dict[tuple[str, str], int] = {}
     for raw_path, coverage in report.items():
@@ -367,14 +401,18 @@ def _istanbul_hits(
             name = (
                 function.get("name") if isinstance(function.get("name"), str) else None
             )
-            symbol = _map_symbol_at_line(files[path], line, name)
+            symbol = _map_symbol_at_line(symbol_indexes[path], line, name)
             if symbol:
                 result[(path, symbol)] = result.get((path, symbol), 0) + count
     return result
 
 
 def _llvm_hits(
-    report: Mapping[str, Any], case: _Case, repository: Path, files: Mapping[str, Any]
+    report: Mapping[str, Any],
+    case: _Case,
+    repository: Path,
+    files: Mapping[str, Any],
+    symbol_indexes: Mapping[str, Mapping[int, tuple[Mapping[str, Any], ...]]],
 ) -> dict[tuple[str, str], int]:
     data = report.get("data")
     if report.get("type") != "llvm.coverage.json.export" or not isinstance(data, list):
@@ -414,7 +452,7 @@ def _llvm_hits(
                 path = _report_path(str(names[file_id]), repository, files)
                 if path is None or path == case.path:
                     continue
-                symbol = _map_symbol_at_line(files[path], line, name)
+                symbol = _map_symbol_at_line(symbol_indexes[path], line, name)
                 if symbol:
                     result[(path, symbol)] = result.get((path, symbol), 0) + count
                     break
@@ -422,7 +460,11 @@ def _llvm_hits(
 
 
 def _gcov_hits(
-    report: Mapping[str, Any], case: _Case, repository: Path, files: Mapping[str, Any]
+    report: Mapping[str, Any],
+    case: _Case,
+    repository: Path,
+    files: Mapping[str, Any],
+    symbol_indexes: Mapping[str, Mapping[int, tuple[Mapping[str, Any], ...]]],
 ) -> dict[tuple[str, str], int]:
     rows = report.get("files")
     if not isinstance(report.get("format_version"), str) or not isinstance(rows, list):
@@ -454,7 +496,7 @@ def _gcov_hits(
                 continue
             name = function.get("demangled_name", function.get("name"))
             symbol = _map_symbol_at_line(
-                files[path], line, name if isinstance(name, str) else None
+                symbol_indexes[path], line, name if isinstance(name, str) else None
             )
             if symbol:
                 result[(path, symbol)] = result.get((path, symbol), 0) + count
@@ -476,7 +518,8 @@ def compile_test_observations(
     except (UnicodeError, json.JSONDecodeError) as error:
         raise CoverageAdapterError(f"invalid JSON input: {error}") from error
     request = _request(request_document)
-    project, config_sha, map_sha, files = _map_index(map_document)
+    canonical_request = json_canonicalize(request_json)
+    project, config_sha, map_sha, files, symbol_indexes = _map_index(map_document)
     repository = repository.resolve()
     report_bytes: dict[str, bytes] = {}
     reports: dict[str, Mapping[str, Any]] = {}
@@ -504,7 +547,9 @@ def compile_test_observations(
     for case in request.cases:
         if case.path not in files:
             raise CoverageAdapterError(f"case test path is not mapped: {case.path}")
-        hits = extractor(reports[case.report], case, repository, files)
+        hits = extractor(
+            reports[case.report], case, repository, files, symbol_indexes
+        )
         if not hits:
             raise CoverageAdapterError(
                 f"case {case.selector!r} has no exact mapped symbol hits"
@@ -550,7 +595,6 @@ def compile_test_observations(
                 {"path": path, "role": role, "sha256": files[path]["sha256"]}
             )
     evidence.sort(key=lambda row: (row["role"].encode(), row["path"].encode()))
-    configuration = dict(request.raw)
     input_rows = [
         {"id": report_id, "sha256": _sha256(report_bytes[report_id])}
         for report_id, _ in request.reports
@@ -559,7 +603,7 @@ def compile_test_observations(
         "artifact": "archbird-test-symbol-observations",
         "cases": output_cases,
         "producer": {
-            "configuration_sha256": _sha256(_canonical(configuration)),
+            "configuration_sha256": _sha256(canonical_request),
             "implementation_sha256": implementation_digest(),
             "input_sha256": _sha256(_canonical(input_rows)),
             "name": f"archbird-{request.format}-adapter".replace(".", "-"),

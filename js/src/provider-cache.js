@@ -142,7 +142,6 @@ class ProviderCache {
   }
 
   prune(incoming, preserve = null) {
-    if (incoming > this.maxBytes) return;
     const ordered = [...this.entries.entries()].sort((left, right) =>
       left[1].mtime - right[1].mtime || Buffer.compare(
         Buffer.from(left[0]), Buffer.from(right[0]),

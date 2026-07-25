@@ -879,7 +879,38 @@ class Project:
                     f"output sink wrote {written} of {len(data)} bytes"
                 )
             return
-        _native.project_write_map(self._capsule, sink, pretty=pretty)
+        if self._map_cache is None or self._map_cache_parameters is None:
+            _native.project_write_map(self._capsule, sink, pretty=pretty)
+            return
+        cache_writer = self._map_cache.open_map_writer(
+            **self._map_cache_parameters
+        )
+        if pretty:
+            try:
+                _native.project_write_map(
+                    self._capsule, cache_writer.write, pretty=False
+                )
+            except BaseException:
+                cache_writer.abort()
+                raise
+            cache_writer.commit()
+            self.map_cache_stats = self._map_cache.map_stats.as_dict()
+            self.cache_stats = self._map_cache.stats.as_dict()
+            _native.project_write_map(self._capsule, sink, pretty=True)
+            return
+
+        def write(chunk: bytes) -> object:
+            cache_writer.write(chunk)
+            return sink(chunk)
+
+        try:
+            _native.project_write_map(self._capsule, write, pretty=False)
+        except BaseException:
+            cache_writer.abort()
+            raise
+        cache_writer.commit()
+        self.map_cache_stats = self._map_cache.map_stats.as_dict()
+        self.cache_stats = self._map_cache.stats.as_dict()
 
     def map(self) -> Mapping[str, object]:
         return json.loads(self.map_json())

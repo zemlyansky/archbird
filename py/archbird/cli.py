@@ -2056,6 +2056,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         progress.emit({"phase": "rendering", "artifact": "canonical Map"})
         if args.format == "json" and not args.check:
             _write_project_map(project, args.output, pretty=args.pretty)
+            _warn_map_cache_stats(project.map_cache_stats)
             progress.finish()
             return 0
         map_json = project.map_json(pretty=args.pretty and args.format == "json")

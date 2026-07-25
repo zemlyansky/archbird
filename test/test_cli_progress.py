@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 
 class _TerminalCapture:
@@ -61,7 +62,12 @@ def verify_adaptive_terminal() -> None:
 
 
 def run(
-    root: Path, mode: str, *, check: bool = True
+    root: Path,
+    mode: str,
+    *,
+    cache_dir: Path | None = None,
+    cache_max_bytes: int | None = None,
+    check: bool = True,
 ) -> subprocess.CompletedProcess[bytes]:
     fixture = root / "test/fixtures/map_base"
     return subprocess.run(
@@ -75,7 +81,16 @@ def run(
             str(fixture / "archbird.json"),
             "--progress",
             mode,
-            "--no-cache",
+            *(
+                ["--no-cache"]
+                if cache_dir is None
+                else ["--cache-dir", str(cache_dir)]
+            ),
+            *(
+                []
+                if cache_max_bytes is None
+                else ["--cache-max-bytes", str(cache_max_bytes)]
+            ),
             "--format",
             "json",
             *(["--check"] if check else []),
@@ -107,6 +122,28 @@ def main() -> int:
             raise AssertionError(f"missing {phase} phase: {progress}")
     if automatic.stderr:
         raise AssertionError(f"auto progress wrote off-TTY: {automatic.stderr!r}")
+    cache_parent = root / "build"
+    cache_parent.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=cache_parent) as raw:
+        cache_root = Path(raw) / "cache"
+        cached = run(root, "never", cache_dir=cache_root, check=False)
+        if cached.stdout != always.stdout or not tuple(
+            (cache_root / "maps-v1").rglob("*.json")
+        ):
+            raise AssertionError("unchecked streaming CLI did not populate Map cache")
+        bounded = run(
+            root,
+            "never",
+            cache_dir=Path(raw) / "bounded",
+            cache_max_bytes=1,
+            check=False,
+        )
+        if (
+            bounded.stdout != always.stdout
+            or b"canonical Map exceeded the configured cache budget"
+            not in bounded.stderr
+        ):
+            raise AssertionError("streaming CLI did not report bounded Map cache")
     verify_adaptive_terminal()
     print("Python CLI progress isolation passed")
     return 0

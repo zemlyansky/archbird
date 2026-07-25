@@ -428,8 +428,6 @@ ARCHBIRD_ENGINE=wasm npx archbird map . --check
 | C/C++ | Tree-sitter + lexical | Tree-sitter + lexical |
 | Python | Tree-sitter + lexical | Tree-sitter + lexical |
 | R | Tree-sitter + lexical | Tree-sitter + lexical |
-| Vue | lexical | lexical |
-| supplied SCIP | native semantic decoder | Wasm semantic decoder |
 
 For CPython-AST evidence, use the PyPI host. Tree-sitter recovery is fact-local;
 SCIP retains producer, document coverage, source anchoring, and freshness.

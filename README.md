@@ -35,13 +35,12 @@ All interfaces produce the same Map model. The C core provides portable lexical
 and Tree-sitter syntax analysis; the Python, Node, and browser hosts add the
 precision available in their own runtimes.
 
-| | archbird binary | archbird.js | archbird.py | archbird app |
+| | libarchbird | archbird.js | archbird.py | archbird app |
 | --- | --- | --- | --- | --- |
 | C and C++ | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical |
 | Python | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ CPython AST + Tree-sitter + lexical | ✓ Tree-sitter + lexical |
 | JavaScript, TypeScript, and TSX | ✓ Tree-sitter + lexical | ✓ TypeScript compiler + Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ TypeScript compiler + Tree-sitter + lexical |
 | R | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical | ✓ Tree-sitter + lexical |
-| Supplied SCIP index | ✓ semantic evidence | ✓ semantic evidence | ✓ semantic evidence | ✓ semantic evidence |
 
 Lexical providers conservatively recover declarations, calls, and explicit
 protocols from source text. Tree-sitter adds syntax, scopes, imports, and exact

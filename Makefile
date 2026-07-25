@@ -35,11 +35,12 @@ JS_BROWSER_SMOKE = $(CURDIR)/build/release-browser-smoke
 APP_BROWSER_SMOKE = $(CURDIR)/build/app-browser
 PY_RELEASE_SMOKE = $(CURDIR)/build/release-python-smoke
 PY_SDIST_SMOKE = $(CURDIR)/build/release-python-sdist-smoke
-NATIVE_C_FILES = $(shell rg --files include src bindings test | rg '\.[ch]$$' | \
-	rg -v '^test/fixtures/' | sort)
-NATIVE_CORE_C_FILES = $(shell rg --files src | rg '\.c$$' | sort)
-NATIVE_TEST_C_FILES = $(shell rg --files bindings test | rg '\.c$$' | \
-	rg -v '^test/fixtures/' | sort)
+NATIVE_C_FILES = $(shell find include src bindings test -type f \
+	\( -name '*.c' -o -name '*.h' \) ! -path 'test/fixtures/*' -print | \
+	LC_ALL=C sort)
+NATIVE_CORE_C_FILES = $(shell find src -type f -name '*.c' -print | LC_ALL=C sort)
+NATIVE_TEST_C_FILES = $(shell find bindings test -type f -name '*.c' \
+	! -path 'test/fixtures/*' -print | LC_ALL=C sort)
 NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Isrc/api -Isrc/base -Isrc/evidence -Isrc/map \
 	-Isrc/configuration -Isrc/projection -Isrc/query -Isrc/constraints \
 	-Isrc/verify -Isrc/act -Isrc/interchange/graph \
@@ -245,6 +246,12 @@ native-fuzz-smoke:
 		--target archbird_fuzz_smoke --parallel
 
 native-analyze: native-configure
+	@test -n "$(strip $(NATIVE_C_FILES))" || { \
+		echo "native analysis found no C/header inputs" >&2; exit 1; }
+	@test -n "$(strip $(NATIVE_CORE_C_FILES))" || { \
+		echo "native analysis found no core C inputs" >&2; exit 1; }
+	@test -n "$(strip $(NATIVE_TEST_C_FILES))" || { \
+		echo "native analysis found no binding/test C inputs" >&2; exit 1; }
 	command $(CLANG_FORMAT) --dry-run --Werror $(NATIVE_C_FILES)
 	$(PYTHON) test/test_allocator_boundary.py
 	$(PYTHON) test/test_planning_boundaries.py

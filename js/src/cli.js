@@ -553,6 +553,13 @@ const GIT_CHANGE_STATUS = Object.freeze({
   X: "unknown",
 });
 
+function decodeGitStatus(value) {
+  if ([...value].some((byte) => byte > 0x7f)) {
+    throw new Error("git diff emitted a non-ASCII status");
+  }
+  return value.toString("ascii");
+}
+
 function gitChangeSet(repository, revision) {
   if (
     !revision || revision !== revision.trim() || revision.startsWith("-") ||
@@ -590,7 +597,7 @@ function gitChangeSet(repository, revision) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const entries = [];
   for (let index = 0; index < fields.length;) {
-    const rawStatus = fields[index++].toString("ascii");
+    const rawStatus = decodeGitStatus(fields[index++]);
     const code = rawStatus.slice(0, 1);
     const status = GIT_CHANGE_STATUS[code];
     const pathCount = ["C", "R"].includes(code) ? 2 : 1;
@@ -1346,4 +1353,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main };
+module.exports = { _decodeGitStatus: decodeGitStatus, main };

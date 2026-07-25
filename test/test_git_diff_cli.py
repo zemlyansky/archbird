@@ -124,6 +124,22 @@ def main() -> None:
             cwd=repository,
             env=node_env,
         )
+        run(
+            [
+                node,
+                "-e",
+                (
+                    "const decode=require(process.argv[1])._decodeGitStatus;"
+                    "if(decode(Buffer.from('M'))!=='M')process.exit(1);"
+                    "try{decode(Buffer.from([0xc1]));process.exit(2)}"
+                    "catch(error){"
+                    "if(!/non-ASCII status/.test(error.message))process.exit(3)}"
+                ),
+                str(repository / "js/src/cli.js"),
+            ],
+            cwd=repository,
+            env=node_env,
+        )
         expected = {
             "entries": [
                 {"path": "README.md", "status": "deleted"},

@@ -444,8 +444,6 @@ is only for reference/differential tooling.
 | C/C++ | Tree-sitter + lexical |
 | JavaScript/TypeScript/TSX | Tree-sitter + lexical |
 | R | Tree-sitter + lexical |
-| Vue | lexical |
-| supplied SCIP | native semantic decoder |
 
 A Python file rejected by the installed CPython grammar marks that optional
 provider inapplicable while portable facts remain. Tree-sitter recovery is

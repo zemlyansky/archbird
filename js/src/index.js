@@ -84,6 +84,7 @@ function sha256(bytes) {
 function compileTestObservations(mapJson, requestJson, options) {
   const result = compileCoverageObservations(mapJson, requestJson, {
     ...options,
+    canonicalize: native.jsonCanonicalize,
     implementationSha256: sha256(Buffer.from([
       "archbird-node-coverage-adapter-v1",
       native.IMPLEMENTATION_SHA256,
