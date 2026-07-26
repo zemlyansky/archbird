@@ -175,7 +175,8 @@ const metricQueryPlanArtifact = JSON.parse(
   compileQueryPlan(constraintConfig, "large-impact"),
 );
 assert.equal(metricQueryPlanArtifact.artifact, "query-plan");
-assert.equal(metricQueryPlanArtifact.schema_version, 2);
+assert.equal(metricQueryPlanArtifact.schema_version, 3);
+assert.equal(metricQueryPlanArtifact.plan.kind, "configured");
 assert.equal(metricQueryPlanArtifact.plan.projections.length, 1);
 assert.equal(
   Object.hasOwn(

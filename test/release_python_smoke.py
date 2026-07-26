@@ -74,6 +74,8 @@ def main() -> int:
     )
     if (
         query_plan["artifact"] != "query-plan"
+        or query_plan["schema_version"] != 3
+        or query_plan["plan"]["kind"] != "ad_hoc"
         or query_plan["plan"]["selection"]["paths"] != ["py/pkg"]
         or "projection_result_sha256"
         in query_plan["plan"]["projections"][0]

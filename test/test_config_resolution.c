@@ -73,6 +73,7 @@ int main(void) {
       "{\"bytes\":10,\"path\":\"code.rs\"},"
       "{\"bytes\":15,\"path\":\"package.json\"},"
       "{\"bytes\":3,\"path\":\"build/leak.py\"},"
+      "{\"bytes\":20,\"path\":\".archbird/generated.py\"},"
       "{\"bytes\":11,\"path\":\".gitignore\"}],"
       "\"ignore_files\":[{\"content_hex\":\"69676e6f7265642e70790a\",\"path\":"
       "\".gitignore\"}],"
@@ -84,6 +85,7 @@ int main(void) {
       "22312e322e33227d\",\"path\":\"package.json\"}],"
       "\"files\":["
       "{\"bytes\":11,\"path\":\".gitignore\"},"
+      "{\"bytes\":20,\"path\":\".archbird/generated.py\"},"
       "{\"bytes\":3,\"path\":\"build/leak.py\"},"
       "{\"bytes\":15,\"path\":\"package.json\"},"
       "{\"bytes\":10,\"path\":\"code.rs\"},"
@@ -207,6 +209,7 @@ int main(void) {
   ArchbirdDiscovery *discovery = NULL;
   int descend_temp = 1;
   int descend_src = 0;
+  int descend_archbird = 1;
   int descend_root_venv = 1;
   int descend_nested_venv = 0;
   int descend_nested_dot_venv = 1;
@@ -223,6 +226,8 @@ int main(void) {
                                         &descend_temp) != ARCHBIRD_OK ||
       archbird_discovery_should_descend(engine, discovery, "src", 3,
                                         &descend_src) != ARCHBIRD_OK ||
+      archbird_discovery_should_descend(engine, discovery, ".archbird", 9,
+                                        &descend_archbird) != ARCHBIRD_OK ||
       archbird_discovery_should_descend(engine, discovery, "venv", 4,
                                         &descend_root_venv) != ARCHBIRD_OK ||
       archbird_discovery_should_descend(engine, discovery, "Lib/venv", 8,
@@ -230,7 +235,7 @@ int main(void) {
       archbird_discovery_should_descend(engine, discovery, "Lib/.venv", 9,
                                         &descend_nested_dot_venv) !=
           ARCHBIRD_OK ||
-      descend_temp || !descend_src || descend_root_venv ||
+      descend_temp || !descend_src || descend_archbird || descend_root_venv ||
       !descend_nested_venv || descend_nested_dot_venv) {
     fprintf(stderr, "incremental ignore descent is incorrect\n");
     failed = 1;
@@ -257,7 +262,9 @@ int main(void) {
       !contains(&first, "\"unsupported_known\":1") ||
       contains(&first, "\"layer\":\"auto-python\",\"path\":\"ignored.py\"") ||
       contains(&first, "\"layer\":\"auto-python\",\"path\":"
-                       "\"build/leak.py\"")) {
+                       "\"build/leak.py\"") ||
+      contains(&first, "\"layer\":\"auto-python\",\"path\":"
+                       "\".archbird/generated.py\"")) {
     fprintf(stderr, "config-free selection evidence is incorrect\n");
     failed = 1;
   }

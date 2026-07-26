@@ -64,6 +64,40 @@ _PORTABLE_PROVIDERS = (
     "semantic:scip",
 )
 
+_COMMANDS = (
+    "config",
+    "contract",
+    "diff",
+    "export",
+    "freshness",
+    "impact",
+    "map",
+    "observe",
+    "okf",
+    "plan",
+    "query",
+    "serve",
+    "support",
+    "verify",
+    "verify-plan",
+    "workspace",
+)
+
+
+def _top_level_help() -> str:
+    return (
+        "usage: archbird COMMAND [OPTIONS]\n"
+        "       archbird [ROOT] [MAP OPTIONS]\n\n"
+        "Map codebases, query evidence, verify architecture, and review "
+        "structural changes.\n\n"
+        "commands:\n"
+        "  map, config, query, impact, diff, observe, freshness, workspace\n"
+        "  verify, plan, contract, verify-plan, export, okf, serve, support\n\n"
+        "Run `archbird COMMAND --help` for command-specific options. With no "
+        "command, Archbird maps the current directory; an existing or "
+        "path-shaped positional argument is the Map root.\n"
+    )
+
 
 def _support_main(arguments: Sequence[str]) -> int:
     support = argparse.ArgumentParser(
@@ -405,6 +439,7 @@ def freshness_parser() -> argparse.ArgumentParser:
             "live repository Map."
         ),
     )
+    result.add_argument("root_path", nargs="?", help="repository root (default: .)")
     source = result.add_mutually_exclusive_group()
     source.add_argument("-c", "--config", help="live project configuration JSON")
     source.add_argument("--no-config", action="store_true")
@@ -657,13 +692,18 @@ def verification_parser() -> argparse.ArgumentParser:
         metavar="CONSTRAINT",
         help="constraint IDs; omit to evaluate the complete configured policy",
     )
-    result.add_argument("-c", "--config", help="project configuration JSON")
+    source = result.add_mutually_exclusive_group()
+    source.add_argument("-c", "--config", help="project configuration JSON")
+    source.add_argument(
+        "--no-config",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     result.add_argument("--map", help="saved canonical Map JSON")
     result.add_argument(
         "--resolution",
         help="configuration-resolution JSON paired with --map",
     )
-    result.add_argument("--no-config", action="store_true")
     result.add_argument("--root", dest="root_override", help="repository root (default: .)")
     _add_discovery_options(result)
     result.add_argument(
@@ -730,8 +770,8 @@ def verification_parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--max-findings",
         type=int,
-        default=200,
-        help="maximum findings in compact Markdown",
+        default=None,
+        help="maximum findings in compact Markdown (default: 200)",
     )
     result.add_argument("--pretty", action="store_true", help="pretty JSON")
     result.add_argument(
@@ -1068,6 +1108,13 @@ def _query_positional_is_root(value: Optional[str]) -> bool:
     )
 
 
+def _map_shortcut(arguments: Sequence[str]) -> bool:
+    if not arguments or arguments[0].startswith("-"):
+        return True
+    value = arguments[0]
+    return _query_positional_is_root(value) or Path(value).is_dir()
+
+
 def _normalize_query_positional(args: argparse.Namespace) -> None:
     if not _query_positional_is_root(args.query_id):
         return
@@ -1332,6 +1379,13 @@ def _query_main(
             raise ValueError("--search-limit must be from 1 to 100")
         if args.format == "json" and args.max_chars:
             raise ValueError("--max-chars applies only to Markdown")
+        if args.format == "json" and (
+            args.compact
+            or args.full
+            or args.detail != "standard"
+            or args.view != "focused"
+        ):
+            raise ValueError("--view and detail options apply only to Markdown")
         if args.format == "markdown" and args.pretty:
             raise ValueError("--pretty applies only to JSON")
         if args.compact and args.full:
@@ -1686,6 +1740,22 @@ def _verify_main(argv: Sequence[str]) -> int:
     args = verification_parser().parse_args(argv)
     progress = _Progress(args.progress)
     try:
+        if args.no_config:
+            raise ConfigError(
+                "Verify requires reviewed constraints from archbird.json; "
+                "--no-config is not supported"
+            )
+        if args.max_findings is not None and args.max_findings < 0:
+            raise ValueError("--max-findings must be nonnegative")
+        if args.full and args.max_findings is not None:
+            raise ValueError("--full and --max-findings conflict")
+        if args.format != "markdown" and (
+            args.full or args.max_findings is not None
+        ):
+            raise ValueError("--full and --max-findings apply only to Markdown")
+        if args.pretty and args.format != "json":
+            raise ValueError("--pretty applies only to JSON")
+        max_findings = 200 if args.max_findings is None else args.max_findings
         if args.freeze is not None and (
             not args.freeze_owner or not args.freeze_rationale
         ):
@@ -1770,9 +1840,10 @@ def _verify_main(argv: Sequence[str]) -> int:
             observations=observations,
             policy_date=policy_date,
             format=args.format,
-            max_findings=-1 if args.full else args.max_findings,
+            max_findings=-1 if args.full else max_findings,
             pretty=args.pretty or args.format == "sarif",
         )
+        verification = json.loads(encoded) if args.format == "json" else None
         _write(encoded, args.output)
         if args.freeze is not None:
             _write(
@@ -1793,19 +1864,20 @@ def _verify_main(argv: Sequence[str]) -> int:
         progress.finish()
         if not args.check:
             return 0
-        result = json.loads(
-            evaluate_constraints_json(
-                config_json,
-                map_json,
-                resolution_json=resolution_json,
-                constraint_ids=args.constraint_ids,
-                baseline=baseline,
-                maps=maps,
-                observations=observations,
-                policy_date=policy_date,
+        if verification is None:
+            verification = json.loads(
+                evaluate_constraints_json(
+                    config_json,
+                    map_json,
+                    resolution_json=resolution_json,
+                    constraint_ids=args.constraint_ids,
+                    baseline=baseline,
+                    maps=maps,
+                    observations=observations,
+                    policy_date=policy_date,
+                )
             )
-        )
-        return int(bool(result["summary"]["blocking"]))
+        return int(bool(verification["summary"]["blocking"]))
     except (ConfigError, OSError, RuntimeError, ValueError, _native.Error) as error:
         progress.clear()
         print(f"archbird: error: {error}", file=sys.stderr)
@@ -2025,6 +2097,23 @@ def _serve_main(argv: Sequence[str]) -> int:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] in (["-h"], ["--help"], ["help"]):
+        print(_top_level_help(), end="")
+        return 0
+    if arguments[:1] == ["--version"]:
+        print(__version__)
+        return 0
+    if (
+        arguments
+        and arguments[0] not in _COMMANDS
+        and not _map_shortcut(arguments)
+    ):
+        print(
+            f"archbird: error: unknown command {arguments[0]!r}; "
+            "run `archbird --help`",
+            file=sys.stderr,
+        )
+        return 2
     if arguments and arguments[0] == "map":
         arguments = arguments[1:]
     if arguments and arguments[0] == "query":

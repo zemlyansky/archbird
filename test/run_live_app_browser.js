@@ -207,6 +207,12 @@ async function main() {
     if (!pythonHost) {
       await page.getByRole("heading", { name: "Mapping project", exact: true })
         .waitFor({ timeout: 10_000 });
+      await page.locator(".artifact-drop small")
+        .getByText(
+          "Live project · analysis in progress on the local Archbird server",
+          { exact: true },
+        )
+        .waitFor();
       if (await page.getByRole("heading", { name: "Open a project or saved artifact" }).count()) {
         throw new Error("live app showed the empty workspace while Map analysis was running");
       }
@@ -225,6 +231,9 @@ async function main() {
       undefined,
       { timeout: 30_000 },
     );
+    await page.locator(".artifact-drop small")
+      .getByText("Live project · analyzed by the local Archbird server", { exact: true })
+      .waitFor();
     if (empty) {
       await page.getByRole("heading", { name: "No source files were mapped", exact: true })
         .waitFor({ timeout: 30_000 });
@@ -325,8 +334,12 @@ async function main() {
       }
       for (const view of ["architecture", "tests", "evidence", "overview"]) {
         await changeMapAxis(page, view, "map-view", view);
+        await page.locator(".inspector h2")
+          .getByText(`${view[0].toUpperCase()}${view.slice(1)} view`, { exact: true })
+          .waitFor();
       }
       await changeMapAxis(page, "layer", "group-by", "layer");
+      await page.locator(".inspector").getByText("layer", { exact: true }).first().waitFor();
       await page.locator(".search input").fill("JavaScript");
       await page.locator(".results button").first().click();
       await page.getByText("inferred layer group", { exact: true }).waitFor();
@@ -375,6 +388,12 @@ async function main() {
       return;
     }
     await page.getByText("Constraints", { exact: true }).waitFor({ timeout: 10_000 });
+    const firstConstraint = page.locator(".constraint-row").first();
+    const firstConstraintId = (await firstConstraint.locator("strong").textContent()).trim();
+    await firstConstraint.click();
+    await page.locator(".inspector h2").getByText(firstConstraintId, { exact: true })
+      .waitFor();
+    await page.getByRole("button", { name: "Show all", exact: true }).click();
     await page.getByRole("button", { name: "directory", exact: true }).waitFor();
     await page.getByRole("button", { name: "component", exact: true }).waitFor();
     await page.getByRole("button", { name: "layer", exact: true }).waitFor();

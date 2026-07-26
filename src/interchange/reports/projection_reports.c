@@ -60,6 +60,24 @@ static int text_is(const AbString *value, const char *literal) {
          (!length || !memcmp(value->data, literal, length));
 }
 
+static size_t plan_array_count(const AbProjectionPlan *plan,
+                               const char *field) {
+  const AbValue *value = ab_value_member(&plan->definition, field);
+  return value && value->kind == AB_VALUE_ARRAY ? value->as.array.count : 0;
+}
+
+static int plan_has(const AbProjectionPlan *plan, const char *field,
+                    const char *literal) {
+  const AbValue *value = ab_value_member(&plan->definition, field);
+  size_t index;
+  if (!value || value->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < value->as.array.count; index++)
+    if (ab_projection_value_is(&value->as.array.items[index], literal))
+      return 1;
+  return 0;
+}
+
 static ArchbirdStatus render_names(AbBuffer *out,
                                    const AbProjectionItem *item) {
   const AbValue *names = item_attribute(item, "names");
@@ -425,19 +443,38 @@ static ArchbirdStatus render_group_relations(AbBuffer *out,
 
 static ArchbirdStatus render_landmarks(AbBuffer *out,
                                        const AbProjectionData *data,
-                                       size_t limit, int standard_detail,
+                                       const char *heading, size_t limit,
+                                       int standard_detail, int connected_only,
                                        size_t *omitted) {
   const AbProjectionItem **items = NULL;
   size_t count = 0;
+  size_t total;
   size_t shown;
   size_t index;
   ArchbirdStatus status =
       collect_items(out, data, "node", "file", &items, &count);
   if (status != ARCHBIRD_OK || !count)
     return status;
+  total = count;
+  if (connected_only) {
+    size_t write = 0;
+    for (index = 0; index < count; index++)
+      if (item_u64(items[index], "relation_witness_count"))
+        items[write++] = items[index];
+    count = write;
+    *omitted += total - count;
+  }
+  if (!count) {
+    ab_free(out->engine, items);
+    REPORT_TRY(ab_report_literal_line(out, "## Test routes"));
+    REPORT_TRY(ab_report_blank(out));
+    REPORT_TRY(ab_report_literal_line(
+        out, "- No static or observed test routes were selected."));
+    return ab_report_blank(out);
+  }
   qsort(items, count, sizeof(*items), landmark_compare);
   shown = count < limit ? count : limit;
-  status = ab_report_literal_line(out, "## File landmarks");
+  status = ab_report_linef(out, "## %s", heading);
   if (status == ARCHBIRD_OK)
     status = ab_report_blank(out);
   for (index = 0; index < shown; index++) {
@@ -470,6 +507,49 @@ static ArchbirdStatus render_landmarks(AbBuffer *out,
   }
   ab_free(out->engine, items);
   return status == ARCHBIRD_OK ? ab_report_blank(out) : status;
+}
+
+static ArchbirdStatus render_evidence_accounting(AbBuffer *out,
+                                                 const AbProjectionData *data) {
+  size_t direct = 0;
+  size_t unknown = 0;
+  size_t stale = 0;
+  size_t diagnostics = 0;
+  uint64_t witnesses = 0;
+  size_t index;
+  for (index = 0; index < data->item_count; index++) {
+    const AbProjectionItem *item = &data->items[index];
+    const AbString *classification;
+    if (item_is(item, "diagnostic")) {
+      diagnostics++;
+      continue;
+    }
+    if (!item_is(item, "node") && !item_is(item, "relation"))
+      continue;
+    classification = item_text(item, "evidence_class");
+    if (text_is(classification, "direct"))
+      direct++;
+    else if (text_is(classification, "unknown"))
+      unknown++;
+    else
+      stale++;
+    if (UINT64_MAX - witnesses < item_u64(item, "evidence_count"))
+      return archbird_error_set(out->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "too many graph evidence witnesses");
+    witnesses += item_u64(item, "evidence_count");
+  }
+  REPORT_TRY(ab_report_literal_line(out, "## Evidence accounting"));
+  REPORT_TRY(ab_report_blank(out));
+  REPORT_TRY(ab_report_linef(
+      out,
+      "- Entities/relations by evidence class: direct=%zu; unknown=%zu; "
+      "stale=%zu.",
+      direct, unknown, stale));
+  REPORT_TRY(ab_report_linef(
+      out, "- Attached evidence witnesses=%" PRIu64 "; diagnostics=%zu.",
+      witnesses, diagnostics));
+  return ab_report_blank(out);
 }
 
 static ArchbirdStatus
@@ -523,6 +603,10 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
   const AbValue *group = ab_value_member(&plan->definition, "group_by");
   const AbValue *level = ab_value_member(&plan->definition, "level");
   const char *classification = ab_projection_data_classification(&result->data);
+  int tests_only = plan_array_count(plan, "relations") == 1 &&
+                   plan_has(plan, "relations", "tests");
+  int evidence_only = !plan_array_count(plan, "relations") &&
+                      plan_has(plan, "overlays", "evidence-quality");
   size_t omitted = 0;
   size_t landmark_limit = limit < 12 ? limit : 12;
   REPORT_TRY(ab_report_linef(out, "# %.*s architecture evidence",
@@ -558,8 +642,13 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
     REPORT_TRY(render_architecture_groups(out, &result->data, limit, &omitted));
     REPORT_TRY(render_group_relations(out, &result->data, limit,
                                       standard_detail, &omitted));
-    REPORT_TRY(render_landmarks(out, &result->data, landmark_limit,
-                                standard_detail, &omitted));
+    if (evidence_only)
+      REPORT_TRY(render_evidence_accounting(out, &result->data));
+    else
+      REPORT_TRY(render_landmarks(
+          out, &result->data,
+          tests_only ? "Test route landmarks" : "File landmarks",
+          landmark_limit, standard_detail, tests_only, &omitted));
     REPORT_TRY(render_inventory_groups(out, &result->data));
     REPORT_TRY(ab_report_literal_line(out, "## Presentation accounting"));
     REPORT_TRY(ab_report_blank(out));
@@ -624,8 +713,12 @@ ArchbirdStatus ab_projection_report_markdown(ArchbirdEngine *engine,
           &(AbValue){.kind = AB_VALUE_STRING, .as.text = result->data.shape},
           "graph") ||
       detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
-      detail > ARCHBIRD_REPORT_DETAIL_FULL || (full_detail && max_chars))
+      detail > ARCHBIRD_REPORT_DETAIL_FULL)
     return ARCHBIRD_INVALID_ARGUMENT;
+  if (full_detail && max_chars)
+    return archbird_error_set(
+        engine, ARCHBIRD_INVALID_ARGUMENT, ARCHBIRD_NO_OFFSET,
+        "projection.max_chars cannot be combined with full detail");
   if (!max_chars)
     return render_once(plan, result, high, standard_detail, full_detail, out);
   high = high == SIZE_MAX ? result->data.item_count : high;

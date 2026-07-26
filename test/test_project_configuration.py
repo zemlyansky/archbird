@@ -20,6 +20,7 @@ from archbird.native import (
     evaluate_projection_json,
     freeze_constraints_json,
     publish_okf_bundle,
+    query_map_markdown,
     query_map_json,
     render_map_markdown,
 )
@@ -202,6 +203,9 @@ def main() -> None:
             }
         },
         "queries": {
+            "ad-hoc": {
+                "projection": "core-engine",
+            },
             "api-impact": {
                 "direction": "upstream",
                 "projection": ["public-api", "core-engine"],
@@ -545,10 +549,22 @@ def main() -> None:
         render_map_markdown(
             report_map, view="overview", detail="full", max_chars=1_800
         )
-    except RuntimeError:
-        pass
+    except RuntimeError as error:
+        assert "projection.max_chars cannot be combined with full detail" in str(
+            error
+        )
     else:
         raise AssertionError("full graph report accepted a presentation budget")
+    tests_report = render_map_markdown(
+        report_map, view="tests", detail="standard"
+    )
+    assert b"## Test route landmarks\n" in tests_report
+    assert b"`py/sample/api.py`" not in tests_report
+    evidence_report = render_map_markdown(
+        report_map, view="evidence", detail="standard"
+    )
+    assert b"## Evidence accounting\n" in evidence_report
+    assert b"relation-witnesses=0" not in evidence_report
     component_graph = json.loads(
         evaluate_projection_json(
             report_map,
@@ -782,6 +798,7 @@ def main() -> None:
     ).encode()
     query_plan = compile_named_query(config_json, "api-impact")
     assert query_plan["id"] == "api-impact"
+    assert query_plan["kind"] == "configured"
     assert len(query_plan["projections"]) == 2
     assert all(
         "projection_result_sha256" not in row
@@ -793,7 +810,7 @@ def main() -> None:
     assert public_query_plan == {
         "artifact": "query-plan",
         "plan": query_plan,
-        "schema_version": 2,
+        "schema_version": 3,
     }
     named_query = json.loads(query_map_json(modern_map, plan=query_plan))
     assert named_query["query"]["plan"] == query_plan
@@ -806,11 +823,32 @@ def main() -> None:
         row["projection_definition_sha256"] for row in projection_results
     ]
     assert all("projection_result_sha256" in row for row in projection_results)
+    named_report = query_map_markdown(modern_map, plan=query_plan).decode()
+    assert "Named query: `api-impact`" in named_report
+    assert "Focus: ``" not in named_report
+    if "Continue with:" in named_report:
+        assert "Continue with: `archbird query api-impact " in named_report
+
+    sentinel_named_plan = compile_named_query(config_json, "ad-hoc")
+    assert sentinel_named_plan["id"] == "ad-hoc"
+    assert sentinel_named_plan["kind"] == "configured"
+    sentinel_named_query = json.loads(
+        query_map_json(modern_map, plan=sentinel_named_plan)
+    )
+    assert sentinel_named_query["query"]["plan"] == sentinel_named_plan
+    sentinel_named_report = query_map_markdown(
+        modern_map, plan=sentinel_named_plan
+    ).decode()
+    assert "Named query: `ad-hoc`" in sentinel_named_report
+    assert "Focus: ``" not in sentinel_named_report
 
     inferred_plan = compile_named_query(config_json, "inferred-impact")
     assert len(inferred_plan["projections"]) == 14
     inferred_query = json.loads(query_map_json(modern_map, plan=inferred_plan))
     assert len(inferred_query["query"]["projection_results"]) == 14
+    inferred_report = query_map_markdown(modern_map, plan=inferred_plan).decode()
+    assert "Named query: `inferred-impact`; focus: `" in inferred_report
+    assert "test/test_project.c" in inferred_report
     direct_query = json.loads(
         query_map_json(
             modern_map,
@@ -839,6 +877,7 @@ def main() -> None:
 
     ad_hoc_plan = compile_ad_hoc_query({"paths": ["src/base/**"]})
     assert ad_hoc_plan["id"] == "ad-hoc"
+    assert ad_hoc_plan["kind"] == "ad_hoc"
     assert ad_hoc_plan["project_configuration_sha256"] is None
     assert len(ad_hoc_plan["projections"]) == 1
     ad_hoc_query = json.loads(query_map_json(modern_map, plan=ad_hoc_plan))
@@ -1074,6 +1113,15 @@ def main() -> None:
         assert "identity does not match its kind" in str(error)
     else:
         raise AssertionError("named Query plan accepted missing configuration identity")
+
+    missing_kind_plan = dict(query_plan)
+    del missing_kind_plan["kind"]
+    try:
+        query_map_json(modern_map, plan=missing_kind_plan)
+    except RuntimeError as error:
+        assert "identities are invalid" in str(error)
+    else:
+        raise AssertionError("Query plan accepted a missing kind discriminator")
 
     invalid_ad_hoc_plan = dict(ad_hoc_plan)
     invalid_ad_hoc_plan["project_configuration_sha256"] = compiled[

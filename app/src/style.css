@@ -530,6 +530,11 @@ textarea { min-height: 76px; resize: vertical; }
 }
 .inspector dt, .definition-list dt { color: var(--muted); }
 .inspector dd, .definition-list dd { margin: 0; text-align: right; }
+.constraint-inspection {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
 details { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
 summary { cursor: pointer; font-size: 0.78rem; }
 pre {

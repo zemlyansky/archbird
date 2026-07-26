@@ -83,6 +83,20 @@ function usage(command = "map") {
   return `${rows[command]}\n${selectorHelp}\nMap → Verify → Act with deterministic native/Wasm evidence.\n`;
 }
 
+function topLevelUsage() {
+  return (
+    "usage: archbird COMMAND [OPTIONS]\n" +
+    "       archbird [ROOT] [MAP OPTIONS]\n\n" +
+    "Map codebases, query evidence, verify architecture, and review structural changes.\n\n" +
+    "commands:\n" +
+    "  map, config, query, impact, diff, observe, freshness, workspace\n" +
+    "  verify, plan, contract, verify-plan, export, serve, support\n\n" +
+    "Run `archbird COMMAND --help` for command-specific options. With no command, " +
+    "Archbird maps the current directory; an existing or path-shaped positional " +
+    "argument is the Map root.\n"
+  );
+}
+
 function camel(flag) {
   return flag.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 }
@@ -493,6 +507,9 @@ function mapMain(argv) {
   )) {
     throw new Error("--view, graph projection axes, and detail options apply only to Markdown");
   }
+  if (options.format === "markdown" && options.pretty) {
+    throw new Error("--pretty applies only to JSON");
+  }
   const progress = new Progress(options.progress);
   const current = project(options, progress);
   progress.emit({ phase: "rendering", artifact: "canonical Map" });
@@ -689,6 +706,17 @@ function queryPositionalIsRoot(value) {
   );
 }
 
+function mapShortcut(argv) {
+  if (!argv.length || argv[0].startsWith("-")) return true;
+  if (queryPositionalIsRoot(argv[0])) return true;
+  try {
+    return fs.statSync(path.resolve(argv[0])).isDirectory();
+  } catch (error) {
+    if (error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 function queryMain(argv, command) {
   const options = parse(argv, selectorDefinitions(), { positionals: 1 });
   const positional = options._[0] || null;
@@ -735,6 +763,15 @@ function queryMain(argv, command) {
   }
   if ((options.compact || options.full) && options.detail !== "standard") {
     throw new Error("--detail conflicts with --compact/--full");
+  }
+  if (options.format === "json" && (
+    options.compact || options.full || options.maxChars ||
+    options.detail !== "standard" || (options.view && options.view !== "focused")
+  )) {
+    throw new Error("--view and detail options apply only to Markdown");
+  }
+  if (options.format === "markdown" && options.pretty) {
+    throw new Error("--pretty applies only to JSON");
   }
   const progress = new Progress(options.progress);
   let source;
@@ -832,7 +869,6 @@ function queryMain(argv, command) {
   }
   try {
     if (options.format === "json") {
-      if (options.maxChars) throw new Error("--max-chars applies only to Markdown");
       progress.finish();
       write(archbird.queryMap(source, { ...queryOptions, pretty: options.pretty }), options.output);
     } else if (options.format === "markdown") {
@@ -861,6 +897,10 @@ function queryMain(argv, command) {
 }
 
 function configMain(argv) {
+  if (["-h", "--help", "help"].includes(argv[0])) {
+    process.stdout.write(usage("config"));
+    return 0;
+  }
   const command = argv[0];
   if (!["show", "init"].includes(command)) {
     throw new Error("archbird config requires show or init");
@@ -1031,12 +1071,29 @@ function verifyMain(argv) {
     freezeRationale: { flag: "freeze-rationale", type: "string" },
     format: { default: "json", type: "string" },
     full: { type: "boolean" },
-    maxFindings: { flag: "max-findings", default: 200, type: "number" },
+    maxFindings: { flag: "max-findings", type: "number" },
   }, { positionals: Number.POSITIVE_INFINITY });
   if (options.help) { process.stdout.write(usage("verify")); return 0; }
   if (!["json", "markdown", "sarif", "junit"].includes(options.format)) {
     throw new Error("--format must be json, markdown, sarif, or junit");
   }
+  if (options.noConfig) {
+    throw new Error(
+      "Verify requires reviewed constraints from archbird.json; " +
+      "--no-config is not supported",
+    );
+  }
+  if (options.full && options.maxFindings !== undefined) {
+    throw new Error("--full and --max-findings conflict");
+  }
+  if (options.format !== "markdown" &&
+      (options.full || options.maxFindings !== undefined)) {
+    throw new Error("--full and --max-findings apply only to Markdown");
+  }
+  if (options.pretty && options.format !== "json") {
+    throw new Error("--pretty applies only to JSON");
+  }
+  const maxFindings = options.maxFindings ?? 200;
   if (options.freeze && (!options.freezeOwner || !options.freezeRationale)) {
     throw new Error("--freeze requires --freeze-owner and --freeze-rationale");
   }
@@ -1130,7 +1187,7 @@ function verifyMain(argv) {
       resolutionJson,
       requestJson,
       format: options.format,
-      maxFindings: options.full ? 0xffffffff : options.maxFindings,
+      maxFindings: options.full ? 0xffffffff : maxFindings,
       pretty: options.pretty || options.format === "sarif",
     });
   }
@@ -1340,6 +1397,19 @@ async function serveMain(argv) {
 }
 
 function main(argv = process.argv.slice(2)) {
+  if (["-h", "--help", "help"].includes(argv[0])) {
+    process.stdout.write(topLevelUsage());
+    return 0;
+  }
+  if (argv[0] === "--version") {
+    process.stdout.write(`${archbird.VERSION}\n`);
+    return 0;
+  }
+  if (argv.length && !COMMANDS.has(argv[0]) && !mapShortcut(argv)) {
+    throw new Error(
+      `unknown command ${JSON.stringify(argv[0])}; run \`archbird --help\``,
+    );
+  }
   const command = argv[0] && COMMANDS.has(argv[0]) ? argv[0] : "map";
   const rest = command === "map" && argv[0] !== "map" ? argv : argv.slice(1);
   if (command === "config") return configMain(rest);

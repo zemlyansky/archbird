@@ -204,6 +204,8 @@ static ArchbirdStatus copy_excludes(ArchbirdEngine *engine, yyjson_val *value,
                                     int include_defaults, AbStringArray *out) {
   static const char *const defaults[] = {".git/**",
                                          "**/.git/**",
+                                         ".archbird/**",
+                                         "**/.archbird/**",
                                          ".hg/**",
                                          "**/.hg/**",
                                          ".svn/**",

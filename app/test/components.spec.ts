@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, nextTick, type App as VueApp } from "vue";
 import type { ParsedArtifact } from "../src/artifacts/model";
+import ConstraintPanel from "../src/components/ConstraintPanel.vue";
 import DocumentPanel from "../src/components/DocumentPanel.vue";
 import InspectorPanel from "../src/components/InspectorPanel.vue";
 import VerificationEditor from "../src/components/VerificationEditor.vue";
@@ -100,6 +101,7 @@ describe("artifact workspaces", () => {
       tool: {},
     };
     const root = mount(InspectorPanel, {
+      constraint: null,
       fileGraph: {
         ...graph,
         edges: [{
@@ -150,6 +152,102 @@ describe("artifact workspaces", () => {
     expect(root.textContent).toContain("src/a.c");
     expect(root.textContent).toContain("src/b.c");
     expect(root.textContent).toContain("All applicable evaluated constraints pass");
+  });
+
+  it("reports the selected Map axes and unmapped constraint findings", () => {
+    const graph = {
+      artifact: "archbird-graph-view",
+      diagnostics: [],
+      edges: [],
+      nodes: [],
+      omissions: [],
+      project: "demo",
+      request: {
+        max_edge_names: 0,
+        max_nodes: 0,
+        query: {
+          grouping: "layer",
+          projection: { group_by: "layer", level: "file", select: "graph" },
+          view: "evidence",
+        },
+        view: "components",
+      },
+      schema_version: 1,
+      source: {},
+      summary: { edges: 0, nodes: 0 },
+      tool: {},
+    };
+    const constraint = {
+      assert: "required_subset",
+      coverage: ["src/missing.c"],
+      findings: [{
+        evidence: [{ path: "src/missing.c" }],
+        fingerprint: "a".repeat(64),
+        key: "src/missing.c",
+        message: "required path is not mapped",
+      }],
+      id: "REQUIRED-PATH",
+      owner: "architecture",
+      rationale: "Public paths remain available.",
+      requirements: ["ARCH-001"],
+      severity: "error",
+      status: "fail",
+      tags: ["public-api"],
+      witnesses: [{ path: "archbird.json" }],
+    };
+    const root = mount(InspectorPanel, {
+      constraint,
+      fileGraph: null,
+      graph,
+      selectedId: null,
+      source: null,
+      sourcePath: null,
+    });
+
+    expect(root.textContent).toContain("Architecture constraint");
+    expect(root.textContent).toContain("REQUIRED-PATH");
+    expect(root.textContent).toContain("required path is not mapped");
+    expect(root.textContent).toContain("Public paths remain available.");
+    expect(root.textContent).toContain("architecture");
+    expect(root.textContent).toContain("ARCH-001");
+    expect(root.textContent).toContain("public-api");
+    expect(root.textContent).not.toContain("Projectioncomponents");
+    mounted?.unmount();
+
+    const summary = mount(InspectorPanel, {
+      constraint: null,
+      fileGraph: null,
+      graph,
+      selectedId: null,
+      source: null,
+      sourcePath: null,
+    });
+    expect(summary.textContent).toContain("Evidence view");
+    expect(summary.textContent).toContain("Viewevidence");
+    expect(summary.textContent).toContain("Groupinglayer");
+    expect(summary.textContent).toContain("Levelfile");
+  });
+
+  it("pluralizes constraint finding counts", () => {
+    const root = mount(ConstraintPanel, {
+      constraints: [{
+        assert: "required_subset",
+        coverage: [],
+        findings: [{ evidence: [], fingerprint: "f", key: "x", message: "missing" }],
+        id: "ONE",
+        owner: "architecture",
+        rationale: "One finding remains visible.",
+        requirements: [],
+        severity: "error",
+        status: "fail",
+        tags: [],
+        witnesses: [],
+      }],
+      selectedId: null,
+      unmappedFindings: 1,
+    });
+    expect(root.textContent).toContain("1 finding");
+    expect(root.textContent).toContain("1 finding has no visible graph location");
   });
 
   it("mounts a Verification result and creates a reviewed waiver", async () => {

@@ -47,6 +47,12 @@ function run(arguments_) {
   return result.stdout;
 }
 
+function expectError(arguments_, match) {
+  const result = execute(arguments_);
+  assert.equal(result.status, 2, `archbird ${arguments_.join(" ")} status`);
+  assert.match(result.stderr, match);
+}
+
 function markedNames(relative, name) {
   const text = fs.readFileSync(path.join(repository, relative), "utf8");
   const start = `<!-- ${name}:start -->`;
@@ -103,6 +109,12 @@ try {
   const zeroConfig = JSON.parse(
     run(["--no-config", "--format", "json", "--check"]),
   );
+  assert.match(run(["--help"]), /^usage: archbird COMMAND/m);
+  assert.match(run(["config", "--help"]), /^archbird config show\|init/m);
+  expectError(["verfiy"], /unknown command/);
+  expectError([
+    "map", "--no-config", "--format", "markdown", "--pretty",
+  ], /--pretty applies only to JSON/);
   assert.ok(zeroConfig.files.length > 0);
   assert.ok(zeroConfig.project);
   const resolution = JSON.parse(run(["config", "show", "."]));
@@ -125,6 +137,9 @@ try {
   assert.equal(run([".", "--format", "json", "--check"]), explicitMap);
   run(["map", ".", "--format", "json", "--output", ".archbird/map.json", "--check"]);
   run([
+    "config", "show", ".", "--output", ".archbird/resolution.json", "--check",
+  ]);
+  run([
     "query", "--map", ".archbird/map.json", "--symbol", "demo_open",
     "--depth", "1", "--max-chars", "12000",
   ]);
@@ -138,8 +153,28 @@ try {
     "--config", "archbird.json", "--format", "json",
     "--output", ".archbird/public-api-impact.json",
   ]);
+  assert.match(
+    run([
+      "query", "public-api-impact", "--map", ".archbird/map.json",
+      "--config", "archbird.json",
+    ]),
+    /Named query: `public-api-impact`/,
+  );
+  run(["freshness", ".", "--snapshot", ".archbird/map.json", "--check"]);
+  expectError([
+    "query", "--map", ".archbird/map.json", "--symbol", "demo_open",
+    "--format", "json", "--full",
+  ], /apply only to Markdown/);
+  expectError([
+    "verify", "--map", ".archbird/map.json", "--format", "json", "--full",
+  ], /apply only to Markdown/);
+  expectError(["verify", "--no-config"], /--no-config is not supported/);
+  expectError([
+    "verify", "--format", "markdown", "--max-findings", "-1",
+  ], /nonnegative/);
   run([
-    "verify", "--map", ".archbird/map.json", "--format", "json",
+    "verify", "--map", ".archbird/map.json",
+    "--resolution", ".archbird/resolution.json", "--format", "json",
     "--output", "verification.json", "--check",
   ]);
   const verification = JSON.parse(fs.readFileSync(path.join(root, "verification.json")));

@@ -3,8 +3,10 @@ import { computed } from "vue";
 import type { GraphEdge, GraphNode, GraphView } from "../artifacts/model";
 import { edgePresentation } from "../graph/explore";
 import type { ComponentDetails } from "../graph/explore";
+import type { VerificationConstraint } from "../graph/verification";
 
 const props = defineProps<{
+  constraint: VerificationConstraint | null;
   graph: GraphView;
   fileGraph: GraphView | null;
   selectedId: string | null;
@@ -39,6 +41,28 @@ const edgeEndpoints = computed(() => {
 });
 const selectedEdgePresentation = computed(() =>
   selectedEdge.value ? edgePresentation(props.graph, selectedEdge.value) : null);
+const projectionRequest = computed(() => {
+  const query = props.graph.request.query;
+  const projection = query && typeof query.projection === "object"
+    && query.projection && !Array.isArray(query.projection)
+    ? query.projection as Record<string, unknown>
+    : {};
+  const view = typeof query?.view === "string"
+    ? query.view
+    : props.graph.request.view;
+  const grouping = typeof query?.grouping === "string"
+    ? query.grouping
+    : typeof projection.group_by === "string"
+      ? projection.group_by
+      : "none";
+  const level = typeof projection.level === "string"
+    ? projection.level
+    : props.graph.request.view.replace(/s$/, "");
+  return { grouping, level, view };
+});
+const projectionViewLabel = computed(() =>
+  projectionRequest.value.view.charAt(0).toUpperCase()
+  + projectionRequest.value.view.slice(1));
 const relations = computed(() => {
   if (!selectedNode.value) return { incoming: [], outgoing: [] };
   return {
@@ -303,13 +327,21 @@ function relatedLabel(edge: GraphEdge, direction: "incoming" | "outgoing"): stri
         <pre>{{ JSON.stringify(selected, null, 2) }}</pre>
       </details>
     </template>
+    <template v-else-if="constraint">
+      <div class="eyebrow">Architecture constraint</div>
+      <h2>{{ constraint.id }}</h2>
+      <code>{{ constraint.assert }}</code>
+    </template>
     <template v-else>
-      <div class="eyebrow">Evidence inspector</div>
-      <h2>Select a node or edge</h2>
-      <p>Every rendered relation comes from the deterministic graph-view artifact.</p>
+      <div class="eyebrow">Map projection</div>
+      <h2>{{ projectionViewLabel }} view</h2>
       <dl>
-        <dt>Projection</dt>
-        <dd>{{ graph.request.view }}</dd>
+        <dt>View</dt>
+        <dd>{{ projectionRequest.view }}</dd>
+        <dt>Grouping</dt>
+        <dd>{{ projectionRequest.grouping }}</dd>
+        <dt>Level</dt>
+        <dd>{{ projectionRequest.level }}</dd>
         <dt>Nodes / edges</dt>
         <dd>{{ graph.summary.nodes }} / {{ graph.summary.edges }}</dd>
         <dt>Diagnostics</dt>
@@ -318,5 +350,59 @@ function relatedLabel(edge: GraphEdge, direction: "incoming" | "outgoing"): stri
         <dd>{{ graph.omissions.length }}</dd>
       </dl>
     </template>
+    <section v-if="constraint" class="constraint-inspection">
+      <dl>
+        <dt>Status</dt>
+        <dd :data-status="constraint.status">{{ constraint.status }}</dd>
+        <dt>Severity</dt>
+        <dd>{{ constraint.severity }}</dd>
+        <dt>Owner</dt>
+        <dd>{{ constraint.owner || 'Unspecified' }}</dd>
+        <dt>Assertion</dt>
+        <dd>{{ constraint.assert }}</dd>
+        <dt>Coverage</dt>
+        <dd>{{ constraint.coverage.length }}</dd>
+        <dt>Findings</dt>
+        <dd>{{ constraint.findings.length }}</dd>
+      </dl>
+      <p v-if="constraint.rationale">{{ constraint.rationale }}</p>
+      <details v-if="constraint.requirements.length">
+        <summary>Requirements · {{ constraint.requirements.length }}</summary>
+        <ul class="evidence-list">
+          <li v-for="value in constraint.requirements" :key="value">
+            <code>{{ value }}</code>
+          </li>
+        </ul>
+      </details>
+      <details v-if="constraint.tags.length">
+        <summary>Tags · {{ constraint.tags.length }}</summary>
+        <ul class="evidence-list">
+          <li v-for="value in constraint.tags" :key="value">
+            <code>{{ value }}</code>
+          </li>
+        </ul>
+      </details>
+      <details v-if="constraint.coverage.length">
+        <summary>Evaluated coverage · {{ constraint.coverage.length }}</summary>
+        <ul class="evidence-list">
+          <li v-for="value in constraint.coverage" :key="value">
+            <code>{{ value }}</code>
+          </li>
+        </ul>
+      </details>
+      <details
+        v-for="finding in constraint.findings"
+        :key="finding.fingerprint || `${constraint.id}:${finding.key}`"
+        open
+      >
+        <summary>{{ finding.key || finding.fingerprint || 'Constraint finding' }}</summary>
+        <p>{{ finding.message }}</p>
+        <pre v-if="finding.evidence.length">{{ JSON.stringify(finding.evidence, null, 2) }}</pre>
+      </details>
+      <details v-if="constraint.witnesses.length">
+        <summary>Constraint witnesses · {{ constraint.witnesses.length }}</summary>
+        <pre>{{ JSON.stringify(constraint.witnesses, null, 2) }}</pre>
+      </details>
+    </section>
   </aside>
 </template>

@@ -704,7 +704,7 @@ static ArchbirdStatus query_plan_value(
     const AbValue *selection, const AbProjectionPlan *projections,
     size_t projection_count, const char query_definition_sha256[65],
     const char query_plan_sha256[65], AbValue *out) {
-  ArchbirdStatus status = object_init(engine, out, 8);
+  ArchbirdStatus status = object_init(engine, out, 9);
   if (status == ARCHBIRD_OK)
     status = field_text(engine, &out->as.object.fields[0], "id", id->data,
                         id->length);
@@ -717,31 +717,35 @@ static ArchbirdStatus query_plan_value(
   }
   if (status == ARCHBIRD_OK)
     status =
-        field_copy(engine, &out->as.object.fields[2], "operations", operations);
+        field_string(engine, &out->as.object.fields[2], "kind",
+                     project_configuration_sha256 ? "configured" : "ad_hoc");
+  if (status == ARCHBIRD_OK)
+    status =
+        field_copy(engine, &out->as.object.fields[3], "operations", operations);
   if (status == ARCHBIRD_OK && project_configuration_sha256)
-    status = field_string(engine, &out->as.object.fields[3],
+    status = field_string(engine, &out->as.object.fields[4],
                           "project_configuration_sha256",
                           project_configuration_sha256);
   else if (status == ARCHBIRD_OK) {
-    status = field_name(engine, &out->as.object.fields[3],
+    status = field_name(engine, &out->as.object.fields[4],
                         "project_configuration_sha256");
-    out->as.object.fields[3].value.kind = AB_VALUE_NULL;
+    out->as.object.fields[4].value.kind = AB_VALUE_NULL;
   }
   if (status == ARCHBIRD_OK) {
-    status = field_name(engine, &out->as.object.fields[4], "projections");
+    status = field_name(engine, &out->as.object.fields[5], "projections");
     if (status == ARCHBIRD_OK)
       status = projection_plan_values(engine, projections, projection_count,
-                                      &out->as.object.fields[4].value);
+                                      &out->as.object.fields[5].value);
   }
   if (status == ARCHBIRD_OK)
-    status = field_string(engine, &out->as.object.fields[5],
+    status = field_string(engine, &out->as.object.fields[6],
                           "query_definition_sha256", query_definition_sha256);
   if (status == ARCHBIRD_OK)
-    status = field_string(engine, &out->as.object.fields[6],
+    status = field_string(engine, &out->as.object.fields[7],
                           "query_plan_sha256", query_plan_sha256);
   if (status == ARCHBIRD_OK)
     status =
-        field_copy(engine, &out->as.object.fields[7], "selection", selection);
+        field_copy(engine, &out->as.object.fields[8], "selection", selection);
   if (status == ARCHBIRD_OK)
     qsort(out->as.object.fields, out->as.object.count,
           sizeof(*out->as.object.fields), field_compare);

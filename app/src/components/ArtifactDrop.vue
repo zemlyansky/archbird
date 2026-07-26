@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
+defineProps<{ status: string }>();
 const emit = defineEmits<{
   directory: [files: File[]];
   select: [file: File];
@@ -50,7 +51,7 @@ function selectZip(input: HTMLInputElement) {
       <button type="button" @click="directoryInput?.click()">Folder</button>
       <button type="button" @click="zipInput?.click()">ZIP</button>
     </div>
-    <small>Artifact, project folder, or source ZIP · nothing is uploaded</small>
+    <small>{{ status }}</small>
     <input
       ref="artifactInput"
       type="file"

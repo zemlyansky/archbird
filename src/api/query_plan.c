@@ -98,7 +98,7 @@ ArchbirdStatus archbird_query_plan_compile(
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&rendered, &plan);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&rendered, ",\"schema_version\":2}");
+    status = ab_buffer_literal(&rendered, ",\"schema_version\":3}");
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, rendered.data, rendered.length,
                                         json_flags, write_fn, user_data);

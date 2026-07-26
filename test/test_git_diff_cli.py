@@ -95,24 +95,32 @@ def main() -> None:
             cwd=repository,
             env=python_env,
         )
-        common = [
+        query_arguments = [
             "query",
             "--root",
             str(root),
             "--no-config",
             "--git-diff",
             "HEAD",
-            "--view",
-            "changes",
-            "--format",
-            "json",
             "--no-cache",
             "--progress",
             "never",
+        ]
+        json_arguments = [
+            *query_arguments,
+            "--format",
+            "json",
             "--check",
         ]
         run(
-            [sys.executable, "-m", "archbird", *common, "--output", str(python_output)],
+            [
+                sys.executable,
+                "-m",
+                "archbird",
+                *json_arguments,
+                "--output",
+                str(python_output),
+            ],
             cwd=repository,
             env=python_env,
         )
@@ -120,7 +128,13 @@ def main() -> None:
         node_env["ARCHBIRD_ENGINE"] = "native"
         node_env["ARCHBIRD_NATIVE_ADDON"] = str(addon)
         run(
-            [node, str(repository / "js/src/cli.js"), *common, "--output", str(node_output)],
+            [
+                node,
+                str(repository / "js/src/cli.js"),
+                *json_arguments,
+                "--output",
+                str(node_output),
+            ],
             cwd=repository,
             env=node_env,
         )
@@ -205,7 +219,7 @@ def main() -> None:
                 sys.executable,
                 "-m",
                 "archbird",
-                *common[:-8],
+                *query_arguments,
                 "--view",
                 "changes",
                 "--detail",

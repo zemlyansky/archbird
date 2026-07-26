@@ -1558,12 +1558,16 @@ static ArchbirdStatus render_query_view(
   const AbValue *seed_identities;
   const AbValue *change_set;
   const AbValue *retrieval;
+  const AbValue *plan;
+  const AbString *plan_id;
+  const AbString *plan_kind;
   const AbString *scope;
   const AbString *producer_policy;
   const AbString *producer_compatibility;
   int change_view = view == ARCHBIRD_QUERY_VIEW_CHANGES;
   int full_detail = detail == ARCHBIRD_REPORT_DETAIL_FULL;
   int compact_detail = detail == ARCHBIRD_REPORT_DETAIL_COMPACT;
+  int named_plan;
   QueryReportFile *report_files = NULL;
   QueryContextPolicy policy;
   size_t compact_symbols =
@@ -1593,6 +1597,13 @@ static ArchbirdStatus render_query_view(
   seed_identities = optional_array(metadata, "seed_identities");
   change_set = ab_value_member(metadata, "change_set");
   retrieval = ab_value_member(metadata, "retrieval");
+  plan = optional_object(metadata, "plan");
+  plan_id = plan ? ab_report_string(plan, "id") : NULL;
+  plan_kind = plan ? ab_report_string(plan, "kind") : NULL;
+  if (plan && (!plan_id || (!ab_report_string_equal(plan_kind, "ad_hoc") &&
+                            !ab_report_string_equal(plan_kind, "configured"))))
+    return query_schema_error(engine, "query plan identity is malformed");
+  named_plan = plan_kind && ab_report_string_equal(plan_kind, "configured");
   if (retrieval && retrieval->kind != AB_VALUE_OBJECT)
     return query_schema_error(engine, "query retrieval must be an object");
   scope = string_or_empty(metadata, "scope");
@@ -1689,28 +1700,39 @@ static ArchbirdStatus render_query_view(
                                         : "# Focused architecture map: %.*s",
                             (int)project->length, project->data));
   QUERY_TRY(ab_report_blank(out));
-  QUERY_TRY(
-      ab_buffer_literal(out, change_view ? "Change seeds: `" : "Focus: `"));
-  {
-    size_t focus_limit =
-        compact_header && focus->as.array.count > 3 ? 3 : focus->as.array.count;
-    for (index = 0; index < focus_limit; index++) {
-      const AbValue *item = &focus->as.array.items[index];
-      if (item->kind != AB_VALUE_STRING) {
-        status = query_schema_error(engine, "query focus is malformed");
-        goto cleanup;
-      }
-      if (index)
-        QUERY_TRY(ab_buffer_literal(out, ", "));
+  if (named_plan) {
+    QUERY_TRY(ab_report_appendf(out, "Named query: `%.*s`",
+                                (int)plan_id->length, plan_id->data));
+  }
+  if (focus->as.array.count || !named_plan) {
+    if (named_plan)
+      QUERY_TRY(ab_buffer_literal(out, "; focus: `"));
+    else
       QUERY_TRY(
-          ab_buffer_append(out, item->as.text.data, item->as.text.length));
+          ab_buffer_literal(out, change_view ? "Change seeds: `" : "Focus: `"));
+    {
+      size_t focus_limit = compact_header && focus->as.array.count > 3
+                               ? 3
+                               : focus->as.array.count;
+      for (index = 0; index < focus_limit; index++) {
+        const AbValue *item = &focus->as.array.items[index];
+        if (item->kind != AB_VALUE_STRING) {
+          status = query_schema_error(engine, "query focus is malformed");
+          goto cleanup;
+        }
+        if (index)
+          QUERY_TRY(ab_buffer_literal(out, ", "));
+        QUERY_TRY(
+            ab_buffer_append(out, item->as.text.data, item->as.text.length));
+      }
+      if (focus->as.array.count > focus_limit)
+        QUERY_TRY(ab_report_appendf(out, ", …+%zu",
+                                    focus->as.array.count - focus_limit));
     }
-    if (focus->as.array.count > focus_limit)
-      QUERY_TRY(ab_report_appendf(out, ", …+%zu",
-                                  focus->as.array.count - focus_limit));
+    QUERY_TRY(ab_buffer_literal(out, "`"));
   }
   QUERY_TRY(ab_report_appendf(out,
-                              "`; direction=%.*s; depth=%zu; test-depth=%zu; ",
+                              "; direction=%.*s; depth=%zu; test-depth=%zu; ",
                               (int)direction->length, direction->data,
                               ab_report_size(metadata, "depth", 0),
                               ab_report_size(metadata, "test_depth", 0)));
@@ -2593,6 +2615,9 @@ static ArchbirdStatus render_query_view(
         (include_routed && (test_candidate_collapsed_count ||
                             test_conservative_collapsed_count))) {
       QUERY_TRY(ab_buffer_literal(out, "Continue with: `archbird query"));
+      if (named_plan)
+        QUERY_TRY(ab_report_appendf(out, " %.*s", (int)plan_id->length,
+                                    plan_id->data));
       if (visible_start + visible_count < eligible_files)
         QUERY_TRY(ab_report_appendf(out, " --context-offset files=%zu",
                                     visible_start + visible_count));

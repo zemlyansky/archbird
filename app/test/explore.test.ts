@@ -256,7 +256,13 @@ test("verification overlays map relations and findings onto the visible frontier
         message: "unexpected symbol",
       }],
       id: "ARCH-1",
+      owner: "architecture",
+      rationale: "Calls remain within the reviewed component boundary.",
+      requirements: ["ARCH-CALL-001"],
+      severity: "warning",
       status: "fail",
+      tags: ["dependencies"],
+      witnesses: [{ detail: "component edge call a -> b" }],
     }],
   });
   const file = overlay.graph.nodes.find((row) => row.attributes.canonical_path === "src/a.c");
@@ -264,4 +270,13 @@ test("verification overlays map relations and findings onto the visible frontier
   assert.equal(file?.attributes.verification_findings, 1);
   assert.equal(overlay.graph.edges[0].attributes?.verification_status, "fail");
   assert.deepEqual(overlay.unmappedFindings, []);
+  assert.equal(overlay.constraints[0].owner, "architecture");
+  assert.equal(
+    overlay.constraints[0].rationale,
+    "Calls remain within the reviewed component boundary.",
+  );
+  assert.deepEqual(overlay.constraints[0].requirements, ["ARCH-CALL-001"]);
+  assert.equal(overlay.constraints[0].severity, "warning");
+  assert.deepEqual(overlay.constraints[0].tags, ["dependencies"]);
+  assert.equal(overlay.constraints[0].witnesses.length, 1);
 });

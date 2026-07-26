@@ -137,7 +137,7 @@ def check_public_readmes(repository: Path) -> None:
                 raise AssertionError(f"{readme}: missing relative link target {target}")
 
 
-def run(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+def execute(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     source_python = str(Path(__file__).resolve().parents[1] / "py")
     environment["PYTHONPATH"] = (
@@ -145,7 +145,7 @@ def run(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
         if not environment.get("PYTHONPATH")
         else source_python + os.pathsep + environment["PYTHONPATH"]
     )
-    result = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-m", "archbird", *arguments],
         cwd=cwd,
         env=environment,
@@ -154,12 +154,26 @@ def run(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=False,
     )
+
+
+def run(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    result = execute(*arguments, cwd=cwd)
     if result.returncode:
         raise AssertionError(
             f"command failed ({result.returncode}): {' '.join(arguments)}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
+
+
+def expect_error(*arguments: str, cwd: Path, match: str) -> None:
+    result = execute(*arguments, cwd=cwd)
+    if result.returncode != 2 or match not in result.stderr:
+        raise AssertionError(
+            f"command did not fail as expected: {' '.join(arguments)}\n"
+            f"status: {result.returncode}\nstdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
 
 
 def main() -> None:
@@ -268,6 +282,21 @@ def main() -> None:
         zero_config = json.loads(
             run("--no-config", "--format", "json", "--check", cwd=root).stdout
         )
+        top_help = run("--help", cwd=root).stdout
+        if "usage: archbird COMMAND" not in top_help or "verify" not in top_help:
+            raise AssertionError("top-level help did not expose Archbird stages")
+        if "archbird config" not in run("config", "--help", cwd=root).stdout:
+            raise AssertionError("config help did not expose configuration actions")
+        expect_error("verfiy", cwd=root, match="unknown command")
+        expect_error(
+            "map",
+            "--no-config",
+            "--format",
+            "markdown",
+            "--pretty",
+            cwd=root,
+            match="--pretty applies only to JSON",
+        )
         if not zero_config["files"] or not zero_config["project"]:
             raise AssertionError("zero-config Map did not discover the fixture")
         resolution = json.loads(run("config", "show", ".", cwd=root).stdout)
@@ -331,6 +360,15 @@ def main() -> None:
             cwd=root,
         )
         run(
+            "config",
+            "show",
+            ".",
+            "--output",
+            ".archbird/resolution.json",
+            "--check",
+            cwd=root,
+        )
+        run(
             "query",
             "--map",
             ".archbird/map.json",
@@ -370,6 +408,64 @@ def main() -> None:
             "--output",
             ".archbird/public-api-impact.json",
             cwd=root,
+        )
+        named_report = run(
+            "query",
+            "public-api-impact",
+            "--map",
+            ".archbird/map.json",
+            "--config",
+            "archbird.json",
+            cwd=root,
+        ).stdout
+        if "Named query: `public-api-impact`" not in named_report:
+            raise AssertionError("named Query report omitted its reusable identity")
+        run(
+            "freshness",
+            ".",
+            "--snapshot",
+            ".archbird/map.json",
+            "--check",
+            cwd=root,
+        )
+        expect_error(
+            "query",
+            "--map",
+            ".archbird/map.json",
+            "--symbol",
+            "demo_open",
+            "--format",
+            "json",
+            "--full",
+            cwd=root,
+            match="apply only to Markdown",
+        )
+        expect_error(
+            "verify",
+            "--map",
+            ".archbird/map.json",
+            "--resolution",
+            ".archbird/resolution.json",
+            "--format",
+            "json",
+            "--full",
+            cwd=root,
+            match="apply only to Markdown",
+        )
+        expect_error(
+            "verify",
+            "--no-config",
+            cwd=root,
+            match="--no-config is not supported",
+        )
+        expect_error(
+            "verify",
+            "--format",
+            "markdown",
+            "--max-findings",
+            "-1",
+            cwd=root,
+            match="--max-findings must be nonnegative",
         )
         run(
             "verify",

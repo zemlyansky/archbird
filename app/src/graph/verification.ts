@@ -12,7 +12,13 @@ export interface VerificationConstraint {
   coverage: string[];
   findings: VerificationFinding[];
   id: string;
+  owner: string;
+  rationale: string;
+  requirements: string[];
+  severity: string;
   status: string;
+  tags: string[];
+  witnesses: Array<Record<string, unknown>>;
 }
 
 export interface VerificationOverlay {
@@ -76,7 +82,18 @@ export function verificationConstraints(
         })
         : [],
       id: row.id,
+      owner: typeof row.owner === "string" ? row.owner : "",
+      rationale: typeof row.rationale === "string" ? row.rationale : "",
+      requirements: strings(row.requirements),
+      severity: typeof row.severity === "string" ? row.severity : "error",
       status: typeof row.status === "string" ? row.status : "unknown",
+      tags: strings(row.tags),
+      witnesses: Array.isArray(row.witnesses)
+        ? row.witnesses.flatMap((entry) => {
+          const witness = object(entry);
+          return witness ? [witness] : [];
+        })
+        : [],
     }];
   });
 }

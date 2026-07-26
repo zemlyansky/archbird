@@ -31,11 +31,16 @@ const emit = defineEmits<{ select: [id: string | null] }>();
       <span class="constraint-status"></span>
       <span>
         <strong>{{ constraint.id }}</strong>
-        <small>{{ constraint.assert }} · {{ constraint.findings.length }} findings</small>
+        <small>
+          {{ constraint.assert }} · {{ constraint.findings.length }}
+          {{ constraint.findings.length === 1 ? 'finding' : 'findings' }}
+        </small>
       </span>
     </button>
     <p v-if="unmappedFindings" class="unmapped-findings">
-      {{ unmappedFindings }} findings have no visible graph location.
+      {{ unmappedFindings }}
+      {{ unmappedFindings === 1 ? 'finding has' : 'findings have' }}
+      no visible graph location.
     </p>
   </section>
 </template>

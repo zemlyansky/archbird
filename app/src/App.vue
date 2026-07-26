@@ -176,6 +176,27 @@ const canReturnLive = computed(() =>
 const workspaceLabel = computed(() => workspaceMode.value === "saved"
   ? "saved"
   : `${transportMode.value}-${workspaceMode.value}`);
+const inputStatus = computed(() => {
+  if (workspaceMode.value === "saved") {
+    return artifact.value
+      ? "Saved artifact · opened in this browser"
+      : "Artifact, project folder, or source ZIP · nothing is uploaded";
+  }
+  if (transportMode.value === "server") {
+    if (!artifact.value) {
+      return "Live project · analysis in progress on the local Archbird server";
+    }
+    return workspaceMode.value === "live"
+      ? "Live project · analyzed by the local Archbird server"
+      : "Repository snapshot · served by the local Archbird server";
+  }
+  if (transportMode.value === "browser") {
+    return artifact.value
+      ? "Local project snapshot · analyzed in this browser"
+      : "Local project snapshot · analysis in progress in this browser";
+  }
+  return "Artifact, project folder, or source ZIP · nothing is uploaded";
+});
 const canExportGraph = computed(() =>
   Boolean(graph.value && artifact.value?.artifact === "map"));
 const emptyMappedScope = computed(() =>
@@ -208,6 +229,8 @@ const overlay = computed(() => explorationGraph.value
   : null);
 const presentedGraph = computed(() => overlay.value?.graph || null);
 const constraintRows = computed(() => verificationConstraints(verification.value));
+const selectedConstraint = computed(() =>
+  constraintRows.value.find((row) => row.id === selectedConstraintId.value) || null);
 const edgeKinds = computed(() =>
   [...new Set((presentedGraph.value?.edges || []).map((edge) => edge.kind))].sort());
 const edgeClassifications = computed(() =>
@@ -292,7 +315,18 @@ function resetMapProjections() {
 
 function selectGraphElement(id: string | null) {
   selectedId.value = id;
-  if (id) inspectorOpen.value = true;
+  if (id) {
+    selectedConstraintId.value = null;
+    inspectorOpen.value = true;
+  }
+}
+
+function selectConstraint(id: string | null) {
+  selectedConstraintId.value = id;
+  if (id) {
+    selectedId.value = null;
+    inspectorOpen.value = true;
+  }
 }
 
 function replaceSet(
@@ -1164,6 +1198,7 @@ onMounted(async () => {
         </div>
       </div>
       <ArtifactDrop
+        :status="inputStatus"
         @select="open"
         @directory="openLive({ kind: 'directory', files: $event })"
         @zip="openLive({ kind: 'zip', file: $event })"
@@ -1375,7 +1410,7 @@ onMounted(async () => {
           :constraints="constraintRows"
           :selected-id="selectedConstraintId"
           :unmapped-findings="overlay?.unmappedFindings.length || 0"
-          @select="selectedConstraintId = $event"
+          @select="selectConstraint"
         />
 
         <details v-if="baseMap" class="query-panel">
@@ -1501,6 +1536,7 @@ onMounted(async () => {
         <InspectorPanel
           v-if="!emptyMappedScope"
           v-show="inspectorOpen"
+          :constraint="selectedConstraint"
           :file-graph="fileGraph"
           :graph="visibleGraph"
           :selected-id="selectedId"

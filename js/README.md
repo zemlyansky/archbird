@@ -58,6 +58,8 @@ repository state:
 mkdir -p .archbird
 npx archbird map . --format json --pretty \
   --output .archbird/map.json --check
+npx archbird config show . --pretty \
+  --output .archbird/resolution.json --check
 
 npx archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000
@@ -78,6 +80,11 @@ npx archbird query --git-diff HEAD \
 npx archbird query --git-diff HEAD --view changes \
   --verification-result .archbird/verify.json --check
 ```
+
+Archbird excludes `.archbird/**` by default, so saving generated artifacts
+there does not change repository discovery or freshness. Use
+`--no-default-excludes` only when that tool-output tree is intentionally part
+of the analyzed scope.
 
 `--search KEYWORDS` is deterministic lexical retrieval, not natural-language
 or semantic search. Use concise repository vocabulary such as
@@ -296,6 +303,10 @@ npx archbird query --symbol demo_open --direction upstream
 npx archbird verify --check
 npx archbird verify CORE-PUBLIC-API --check
 
+# Preserve exhaustive repository-inventory operands when verifying a saved Map.
+npx archbird verify --map .archbird/map.json \
+  --resolution .archbird/resolution.json --check
+
 # Emit CI-native reports from the same constraints.
 npx archbird verify --format sarif --output .archbird/architecture.sarif --check
 npx archbird verify --format junit --output .archbird/architecture.junit.xml --check
@@ -317,6 +328,12 @@ accept an unambiguous path-shaped positional root, such as
 `npx archbird impact ../project --path src/api.c` works similarly. A bare
 positional token remains a saved query ID; use `./project` rather than
 `project` when selecting a relative repository path.
+
+A saved Map contains mapped facts, not the complete discovery inventory.
+Pass its matching `config show` artifact with `--resolution` when constraints
+depend on ignored, unsupported, oversized, or forbidden repository paths.
+Archbird validates the Map/resolution identities and rejects a mismatched pair.
+Live `verify` derives both from one repository state automatically.
 
 Common typed constraints cover required/forbidden paths and symbols, file-size
 bounds, symbol cardinality, component membership and cycles, allowed/forbidden/

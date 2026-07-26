@@ -60,6 +60,9 @@ async function loadArtifact(page, file, kind) {
     await page.locator('.graph-canvas[data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
   }
+  await page.locator(".artifact-drop small")
+    .getByText("Saved artifact · opened in this browser", { exact: true })
+    .waitFor();
 }
 
 async function saveDownload(page, button, output) {
@@ -382,7 +385,13 @@ async function main() {
       .waitFor({ timeout: 30_000 });
     await page.getByText("Constraints", { exact: true }).waitFor({ timeout: 10_000 });
     await changeMapAxis(page, "component", "group-by", "component");
+    const firstConstraint = page.locator(".constraint-row").first();
+    await firstConstraint.click();
+    await page.getByText("Architecture constraint", { exact: true }).waitFor();
     await selectGraphResult(page, "javascript");
+    if (await firstConstraint.evaluate((row) => row.classList.contains("active"))) {
+      throw new Error("graph selection left the previous constraint selected");
+    }
     await activateSelected(page, "Expand member files");
     await selectGraphResult(page, "js/");
     await activateSelected(page, "Expand directory");
