@@ -222,6 +222,16 @@ the resulting typed ProjectionResult drives both Markdown and the application.
 `--detail` changes rendering density only. `--compact` and `--full` are aliases
 for its corresponding values. `--max-chars` is a final presentation guard; it
 never changes the canonical Map or turns incomplete evidence into success.
+Compact and standard Markdown rank structural groups, aggregated dependency
+flows, and file landmarks while reporting what the presentation omitted.
+`--detail full` enumerates the exhaustive selected graph records. Dependency
+flow is shown provider to consumer; the underlying canonical relation remains
+consumer to provider (`A` uses `B`).
+
+Graph completeness and repository coverage are reported separately. A graph can
+exhaustively represent every selected supported fact while discovery still
+reports unsupported, ignored, oversized, or otherwise unknown repository
+inputs. Presentation omissions never change either classification.
 Query context profiles (`exact`, `change`, `architecture`, `audit`), per-kind
 quotas, route provenance/confidence, and candidate/conservative policies remain
 separate Query behavior.

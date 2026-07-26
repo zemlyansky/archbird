@@ -360,13 +360,14 @@ def main() -> None:
     }
     graph = json.loads(evaluate_projection_json(report_map, graph_definition))
     assert graph["fact"]["shape"] == "graph"
-    assert graph["completeness"]["classification"] == "incomplete"
+    assert graph["completeness"]["classification"] == "complete"
     coverage = next(
         row
         for row in graph["fact"]["items"]
         if row["attributes"]["record_kind"] == "coverage"
     )
     assert coverage["state"] == "unknown"
+    assert coverage["attributes"]["completeness_scope"] == "contextual"
     assert "discovery coverage" in coverage["message"]
     graph_records = {
         kind: [
@@ -374,7 +375,15 @@ def main() -> None:
             for row in graph["fact"]["items"]
             if row["attributes"]["record_kind"] == kind
         ]
-        for kind in ("diagnostic", "group", "ledger", "membership", "node", "relation")
+        for kind in (
+            "diagnostic",
+            "group",
+            "group_relation",
+            "ledger",
+            "membership",
+            "node",
+            "relation",
+        )
     }
     assert all(graph_records.values())
     graph_node_ids = {row["attributes"]["id"] for row in graph_records["node"]}
@@ -387,6 +396,44 @@ def main() -> None:
     assert all(
         row["attributes"]["source"] in graph_node_ids
         and row["attributes"]["target"] in graph_node_ids
+        for row in graph_records["relation"]
+    )
+    graph_group_ids = {
+        row["attributes"]["id"] for row in graph_records["group"]
+    }
+    assert {"inventory:build", "inventory:external", "inventory:package"} <= (
+        graph_group_ids
+    )
+    assert all(
+        row["attributes"]["source"] in graph_group_ids
+        and row["attributes"]["target"] in graph_group_ids
+        and row["attributes"]["canonical_relation_keys"]
+        and row["attributes"]["relation_kinds"]
+        and row["attributes"]["relation_count"] >= 1
+        for row in graph_records["group_relation"]
+    )
+    canonical_relation_keys = {
+        key
+        for row in graph_records["group_relation"]
+        for key in row["attributes"]["canonical_relation_keys"]
+    }
+    assert canonical_relation_keys
+    assert canonical_relation_keys <= {
+        row["key"] for row in graph_records["relation"]
+    }
+    assert sum(
+        row["attributes"].get("uses_count", 0)
+        for row in graph_records["node"]
+    ) == len(graph_records["relation"])
+    assert sum(
+        row["attributes"].get("used_by_count", 0)
+        for row in graph_records["node"]
+    ) == len(graph_records["relation"])
+    assert sum(
+        row["attributes"].get("relation_witness_count", 0)
+        for row in graph_records["node"]
+    ) == 2 * sum(
+        row["attributes"]["witness_count"]
         for row in graph_records["relation"]
     )
     assert all(
@@ -485,7 +532,7 @@ def main() -> None:
     ):
         report = render_map_markdown(report_map, view=view, detail="compact")
         assert report.startswith(b"# sample architecture evidence\n")
-        assert b"## Projection completeness\n" in report
+        assert b"## Graph completeness\n" in report
         assert report == _native.map_markdown_view(
             report_map, view_index, 0, max_chars=0
         )

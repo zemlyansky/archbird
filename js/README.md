@@ -121,7 +121,14 @@ component, layer, or language; `--level` selects component, file, or symbol
 nodes; and repeatable comma-separated `--relations` overrides the preset.
 These semantic axes compile to one exhaustive graph ProjectionPlan shared with
 the application. `--detail` changes presentation density only; `--compact` and
-`--full` are aliases, and `--max-chars` is a final rendering guard.
+`--full` are aliases, and `--max-chars` is a final rendering guard. Compact and
+standard Markdown rank structural groups, aggregated provider-to-consumer
+dependency flows, and file landmarks while accounting for presentation
+omissions. Full detail enumerates the exhaustive selected records.
+
+Graph completeness is distinct from repository coverage. Unsupported, ignored,
+or oversized inputs remain an explicit coverage frontier without falsely
+making a fully evaluated selected graph incomplete.
 
 Query context separately uses the `exact`, `change`, `architecture`, and
 `audit` profiles plus per-kind quotas, route provenance/confidence, and

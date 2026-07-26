@@ -1105,14 +1105,12 @@ assert.deepEqual(zeroMap.discovery, {
   profile: zeroResolution.profile,
   sha256: zeroResolution.sha256,
 });
-assert.match(
-  zeroProject.mapMarkdown({ view: "evidence" }).toString("utf8"),
-  /unsupported-known=1/,
-);
-assert.match(
-  zeroProject.mapMarkdown({ view: "evidence" }).toString("utf8"),
-  /Classification: \*\*incomplete\*\*/,
-);
+const zeroEvidenceReport = zeroProject
+  .mapMarkdown({ view: "evidence" })
+  .toString("utf8");
+assert.match(zeroEvidenceReport, /unsupported-known=1/);
+assert.match(zeroEvidenceReport, /Coverage frontier: \*\*unknown\*\*/);
+assert.match(zeroEvidenceReport, /Classification: \*\*complete\*\*/);
 assert.deepEqual(
   zeroMap.files.filter((row) => row.roles).map((row) => [row.path, row.roles]),
   [
@@ -1159,14 +1157,15 @@ assert.deepEqual(cRegistryTest.cases[2].routes, {
   "test/test_widget.c": 1,
 });
 const standardMapReport = repositoryProject.mapMarkdown();
+const standardMapText = standardMapReport.toString("utf8");
 assert.equal(
-  standardMapReport
-    .toString("utf8")
-    .startsWith("# map-base architecture evidence\n"),
+  standardMapText.startsWith("# map-base architecture evidence\n"),
   true,
 );
-assert.match(standardMapReport.toString("utf8"), /## Entities/);
-assert.match(standardMapReport.toString("utf8"), /## Relations/);
+assert.match(standardMapText, /## Architecture groups/);
+assert.match(standardMapText, /## File landmarks/);
+assert.match(standardMapText, /## Presentation accounting/);
+assert.doesNotMatch(standardMapText, /## Entities/);
 assert.deepEqual(
   standardMapReport,
   renderMapMarkdown(repositoryMapJson, {

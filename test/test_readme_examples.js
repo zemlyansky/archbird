@@ -119,7 +119,7 @@ try {
   const explicitMap = run(["map", ".", "--format", "json", "--check"]);
   assert.match(
     run([]),
-    /^# demo architecture evidence\n[\s\S]*Projection `map-overview`[\s\S]*## Projection completeness\n[\s\S]*Projection result: `[0-9a-f]{64}`/,
+    /^# demo architecture evidence\n[\s\S]*Projection `map-overview`[\s\S]*## Graph completeness\n[\s\S]*Projection result: `[0-9a-f]{64}`/,
   );
   assert.equal(run(["--format", "json", "--check"]), explicitMap);
   assert.equal(run([".", "--format", "json", "--check"]), explicitMap);

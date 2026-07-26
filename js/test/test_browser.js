@@ -143,7 +143,7 @@ function markedNames(relative, name) {
   );
   assert.match(
     project.mapMarkdown({ view: "tests", detail: "compact" }).toString("utf8"),
-    /## Projection completeness/,
+    /## Graph completeness/,
   );
   const componentGraphJson = project.graphViewJson();
   const verificationJson = project.verifyJson();

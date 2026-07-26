@@ -697,9 +697,12 @@ def main() -> int:
     if (
         "unsupported-known=1" not in zero_report
         or "## Repository coverage" not in zero_report
-        or "Classification: **incomplete**" not in zero_report
+        or "Coverage frontier: **unknown**" not in zero_report
+        or "Classification: **complete**" not in zero_report
     ):
-        raise AssertionError("Map Markdown hid unsupported-language coverage")
+        raise AssertionError(
+            "Map Markdown conflated graph completeness with repository coverage"
+        )
     if {row["path"] for row in zero_map["files"]} & {
         "ignored/drop.py",
         "nested/local.py",
@@ -726,12 +729,22 @@ def main() -> int:
     standard_map = project.map_markdown()
     if not standard_map.startswith(b"# map-base architecture evidence\n"):
         raise AssertionError("native Python standard Map report is invalid")
-    if b"## Entities" not in standard_map or b"## Relations" not in standard_map:
-        raise AssertionError("native Python overview omitted graph evidence")
+    if (
+        b"## Architecture groups" not in standard_map
+        or b"## File landmarks" not in standard_map
+        or b"## Presentation accounting" not in standard_map
+        or b"## Entities" in standard_map
+    ):
+        raise AssertionError(
+            "native Python overview is not architecture-first"
+        )
     language_map = project.map_markdown(
         view="architecture", group_by="language"
     )
-    if b"group `language`" not in language_map or b"## Groups" not in language_map:
+    if (
+        b"group `language`" not in language_map
+        or b"## Architecture groups" not in language_map
+    ):
         raise AssertionError("native Python language grouping is unavailable")
     if len(project.map_markdown(detail="compact")) >= len(standard_map):
         raise AssertionError("native Python compact detail was not compact")

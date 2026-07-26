@@ -272,6 +272,25 @@ static int attribute_compare(const void *left_raw, const void *right_raw) {
   return ab_string_compare(&left->name, &right->name);
 }
 
+static int item_affects_selection_completeness(const AbProjectionItem *item) {
+  const AbValue *record_kind = NULL;
+  const AbValue *scope = NULL;
+  size_t index;
+  for (index = 0; index < item->attribute_count; index++) {
+    if (item->attributes[index].name.length == 11 &&
+        !memcmp(item->attributes[index].name.data, "record_kind", 11))
+      record_kind = &item->attributes[index].value;
+    if (item->attributes[index].name.length == 18 &&
+        !memcmp(item->attributes[index].name.data, "completeness_scope", 18))
+      scope = &item->attributes[index].value;
+  }
+  return !record_kind || record_kind->kind != AB_VALUE_STRING ||
+         record_kind->as.text.length != 8 ||
+         memcmp(record_kind->as.text.data, "coverage", 8) != 0 || !scope ||
+         scope->kind != AB_VALUE_STRING || scope->as.text.length != 10 ||
+         memcmp(scope->as.text.data, "contextual", 10) != 0;
+}
+
 static ArchbirdStatus append_evidence_copy(ArchbirdEngine *engine,
                                            AbProjectionItem *target,
                                            const AbProjectionEvidence *source) {
@@ -590,6 +609,8 @@ ArchbirdStatus ab_projection_data_finish(ArchbirdEngine *engine,
     uint64_t unknown = 0;
     for (item_index = 0; item_index < fact->item_count; item_index++) {
       const AbString *state = &fact->items[item_index].state;
+      if (!item_affects_selection_completeness(&fact->items[item_index]))
+        continue;
       if (state->length == 7 && memcmp(state->data, "unknown", 7) == 0)
         unknown++;
       else

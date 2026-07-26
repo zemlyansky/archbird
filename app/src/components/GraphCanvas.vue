@@ -136,7 +136,21 @@ function updateSelectedPosition() {
   const selected = cy.getElementById(props.selectedId);
   if (selected.length && selected.isNode()) {
     selectedModel.value = { ...selected.position() };
-    selectedRendered.value = { ...selected.renderedPosition() };
+    if (selected.isParent()) {
+      const bounds = selected.renderedBoundingBox({
+        includeEdges: false,
+        includeLabels: false,
+        includeNodes: true,
+        includeOverlays: false,
+      });
+      const inset = Math.max(3, Math.min(8, bounds.w / 4, bounds.h / 4));
+      selectedRendered.value = {
+        x: bounds.x1 + inset,
+        y: bounds.y1 + inset,
+      };
+    } else {
+      selectedRendered.value = { ...selected.renderedPosition() };
+    }
   } else {
     selectedModel.value = null;
     selectedRendered.value = null;

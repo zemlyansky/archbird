@@ -84,6 +84,16 @@ function membership(groupId: string, path: string): Item {
   });
 }
 
+function nodeMembership(groupId: string, nodeId: string): Item {
+  return item(`membership:${groupId}:${nodeId}`, nodeId, {
+    entity_kind: "membership",
+    group: groupId,
+    id: `${groupId}:${nodeId}`,
+    node: nodeId,
+    record_kind: "membership",
+  });
+}
+
 function relation(source: string, target: string): Item {
   return item(`relation:${source}:${target}`, `${source} imports ${target}`, {
     entity_kind: "relation",
@@ -121,6 +131,31 @@ function typedRelation(
     target,
     witness_count: 1,
   });
+}
+
+function groupRelation(
+  source: string,
+  target: string,
+  canonicalRelationKeys: string[],
+  names: string[],
+): Item {
+  return item(
+    `group-relation:${source}:${target}`,
+    `${source} imports ${target}`,
+    {
+      canonical_relation_keys: canonicalRelationKeys,
+      entity_kind: "group_relation",
+      family: "imports",
+      names,
+      record_kind: "group_relation",
+      relation_count: canonicalRelationKeys.length,
+      relation_kind: "imports",
+      relation_kinds: ["import"],
+      source,
+      target,
+      witness_count: canonicalRelationKeys.length,
+    },
+  );
 }
 
 function result(
@@ -298,6 +333,53 @@ test("high-cardinality grouped relations aggregate once rather than quadraticall
   );
 });
 
+test("current graph projections consume core group relations without regrouping raw edges", () => {
+  const first = relation("consumer/first.c", "provider/api.h");
+  const second = relation("consumer/second.c", "provider/api.h");
+  const projection = result("directory", [
+    group("directory", "directory:consumer", "consumer"),
+    group("directory", "directory:provider", "provider"),
+    node("consumer/first.c", "c"),
+    node("consumer/second.c", "c"),
+    node("provider/api.h", "c"),
+    membership("directory:consumer", "consumer/first.c"),
+    membership("directory:consumer", "consumer/second.c"),
+    membership("directory:provider", "provider/api.h"),
+    first,
+    second,
+    groupRelation(
+      "directory:consumer",
+      "directory:provider",
+      [first.key, second.key],
+      ["first_api", "second_api"],
+    ),
+  ]);
+  const architecture = presentGraphProjection(projection, "architecture");
+  assert.equal(architecture.overview.edges.length, 1);
+  assert.deepEqual(
+    architecture.overview.edges[0].attributes?.canonical_edge_ids,
+    [first.key, second.key],
+  );
+  assert.equal(architecture.overview.edges[0].attributes?.witness_count, 2);
+  assert.deepEqual(
+    architecture.overview.edges[0].names,
+    ["first_api", "second_api"],
+  );
+});
+
+test("current intra-group relations do not become aggregate self-loops", () => {
+  const projection = result("directory", [
+    group("directory", "directory:src", "src"),
+    node("src/consumer.c", "c"),
+    node("src/provider.h", "c"),
+    membership("directory:src", "src/consumer.c"),
+    membership("directory:src", "src/provider.h"),
+    relation("src/consumer.c", "src/provider.h"),
+  ]);
+  const architecture = presentGraphProjection(projection, "architecture");
+  assert.deepEqual(architecture.overview.edges, []);
+});
+
 test("configured and unassigned component groups remain semantically distinct", () => {
   const architecture = presentGraphProjection(result("component", [
     group("component", "component:runtime", "runtime", "configured", {
@@ -386,17 +468,41 @@ test("edge direction distinguishes provider flow from consumer uses", () => {
 });
 
 test("peripheral inventories collapse into expandable typed groups", () => {
+  const canonical = typedRelation(
+    "packages",
+    "external",
+    "file:src/core.c",
+    "package:yyjson",
+  );
   const presentation = presentGraphProjection(result("directory", [
     group("directory", "directory:src", "src"),
+    item("group:inventory:package", "Packages", {
+      entity_kind: "inventory",
+      group_by: "inventory",
+      id: "inventory:package",
+      inventory_kind: "package",
+      member_count: 1,
+      origin: "derived",
+      record_kind: "group",
+    }),
     node("src/core.c", "c"),
     membership("directory:src", "src/core.c"),
     peripheral("package", "package:yyjson", "yyjson"),
-    typedRelation(
-      "packages",
-      "external",
-      "file:src/core.c",
-      "package:yyjson",
-    ),
+    nodeMembership("inventory:package", "package:yyjson"),
+    canonical,
+    item("group-relation:packages", "src packages yyjson", {
+      canonical_relation_keys: [canonical.key],
+      entity_kind: "group_relation",
+      family: "packages",
+      names: [],
+      record_kind: "group_relation",
+      relation_count: 1,
+      relation_kind: "packages",
+      relation_kinds: ["external"],
+      source: "directory:src",
+      target: "inventory:package",
+      witness_count: 1,
+    }),
   ]), "overview");
   const packages = presentation.overview.nodes.find((row) =>
     row.kind === "package" && row.attributes.presentation_role === "group");
@@ -441,6 +547,30 @@ test("layer labels and projection frontiers are carried from typed graph records
   assert.match(
     String(architecture.overview.diagnostics[0].message),
     /explicit evidence frontier/,
+  );
+});
+
+test("repository coverage frontiers remain visible without degrading graph completeness", () => {
+  const coverage = item("coverage:repository", "Repository discovery", {
+    completeness_scope: "contextual",
+    inventory_files: 3,
+    record_kind: "coverage",
+    selected: 2,
+    unsupported_known: 1,
+  });
+  coverage.state = "unknown";
+  coverage.message = "repository discovery contains unsupported inputs";
+  const architecture = presentGraphProjection(result("directory", [
+    group("directory", "directory:src", "src"),
+    node("src/core.c", "c"),
+    membership("directory:src", "src/core.c"),
+    coverage,
+  ]), "evidence");
+  assert.equal(architecture.overview.diagnostics.length, 1);
+  assert.equal(architecture.overview.diagnostics[0].state, "unknown");
+  assert.match(
+    String(architecture.overview.diagnostics[0].message),
+    /unsupported inputs/,
   );
 });
 

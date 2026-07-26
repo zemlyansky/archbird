@@ -1,5 +1,6 @@
 #include "projection_reports.h"
 
+#include "archbird_internal.h"
 #include "report_utils.h"
 
 #include <inttypes.h>
@@ -45,6 +46,20 @@ static uint64_t item_u64(const AbProjectionItem *item, const char *name) {
   return result;
 }
 
+static size_t count_kind(const AbProjectionData *data, const char *kind) {
+  size_t index;
+  size_t count = 0;
+  for (index = 0; index < data->item_count; index++)
+    count += item_is(&data->items[index], kind);
+  return count;
+}
+
+static int text_is(const AbString *value, const char *literal) {
+  size_t length = strlen(literal);
+  return value && value->length == length &&
+         (!length || !memcmp(value->data, literal, length));
+}
+
 static ArchbirdStatus render_names(AbBuffer *out,
                                    const AbProjectionItem *item) {
   const AbValue *names = item_attribute(item, "names");
@@ -61,6 +76,22 @@ static ArchbirdStatus render_names(AbBuffer *out,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus render_relation_kinds(AbBuffer *out,
+                                            const AbProjectionItem *item) {
+  const AbValue *kinds = item_attribute(item, "relation_kinds");
+  size_t index;
+  if (!kinds || kinds->kind != AB_VALUE_ARRAY || !kinds->as.array.count)
+    return ARCHBIRD_OK;
+  REPORT_TRY(ab_buffer_literal(out, "; kinds="));
+  for (index = 0; index < kinds->as.array.count; index++) {
+    const AbValue *kind = &kinds->as.array.items[index];
+    if (index)
+      REPORT_TRY(ab_buffer_literal(out, ", "));
+    REPORT_TRY(ab_buffer_append(out, kind->as.text.data, kind->as.text.length));
+  }
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus render_evidence(AbBuffer *out,
                                       const AbProjectionItem *item) {
   size_t index;
@@ -71,7 +102,7 @@ static ArchbirdStatus render_evidence(AbBuffer *out,
     if (evidence->line)
       REPORT_TRY(ab_report_appendf(out, ":%" PRIu64, evidence->line));
     if (evidence->detail.length)
-      REPORT_TRY(ab_report_appendf(out, " — %.*s", (int)evidence->detail.length,
+      REPORT_TRY(ab_report_appendf(out, " - %.*s", (int)evidence->detail.length,
                                    evidence->detail.data));
     REPORT_TRY(ab_buffer_literal(out, "\n"));
   }
@@ -82,10 +113,11 @@ static ArchbirdStatus render_group(AbBuffer *out, const AbProjectionItem *item,
                                    int full_detail) {
   const AbString *id = item_text(item, "id");
   const AbString *origin = item_text(item, "origin");
+  uint64_t members = item_u64(item, "member_count");
   REPORT_TRY(ab_report_linef(
-      out, "- **%.*s** (`%.*s`) — %" PRIu64 " members; %.*s",
+      out, "- **%.*s** (`%.*s`) - %" PRIu64 " member%s; %.*s",
       (int)item->label.length, item->label.data, id ? (int)id->length : 0,
-      id ? id->data : "", item_u64(item, "member_count"),
+      id ? id->data : "", members, members == 1 ? "" : "s",
       origin ? (int)origin->length : 0, origin ? origin->data : ""));
   return full_detail ? render_evidence(out, item) : ARCHBIRD_OK;
 }
@@ -95,7 +127,7 @@ static ArchbirdStatus render_node(AbBuffer *out, const AbProjectionItem *item,
   const AbString *id = item_text(item, "id");
   const AbString *kind = item_text(item, "entity_kind");
   const AbString *path = item_text(item, "path");
-  REPORT_TRY(ab_report_appendf(out, "- `%.*s` — %.*s", id ? (int)id->length : 0,
+  REPORT_TRY(ab_report_appendf(out, "- `%.*s` - %.*s", id ? (int)id->length : 0,
                                id ? id->data : "", kind ? (int)kind->length : 0,
                                kind ? kind->data : ""));
   if (path)
@@ -108,6 +140,18 @@ static ArchbirdStatus render_node(AbBuffer *out, const AbProjectionItem *item,
   return full_detail ? render_evidence(out, item) : ARCHBIRD_OK;
 }
 
+static ArchbirdStatus render_membership(AbBuffer *out,
+                                        const AbProjectionItem *item,
+                                        int full_detail) {
+  const AbString *group = item_text(item, "group");
+  const AbString *node = item_text(item, "node");
+  REPORT_TRY(
+      ab_report_linef(out, "- `%.*s` contains `%.*s`",
+                      group ? (int)group->length : 0, group ? group->data : "",
+                      node ? (int)node->length : 0, node ? node->data : ""));
+  return full_detail ? render_evidence(out, item) : ARCHBIRD_OK;
+}
+
 static ArchbirdStatus render_relation(AbBuffer *out,
                                       const AbProjectionItem *item,
                                       int standard_detail, int full_detail) {
@@ -116,7 +160,7 @@ static ArchbirdStatus render_relation(AbBuffer *out,
   const AbString *family = item_text(item, "family");
   const AbString *kind = item_text(item, "relation_kind");
   REPORT_TRY(ab_report_appendf(
-      out, "- `%.*s` → `%.*s` — %.*s/%.*s; witnesses=%" PRIu64,
+      out, "- `%.*s` -> `%.*s` - %.*s/%.*s; witnesses=%" PRIu64,
       source ? (int)source->length : 0, source ? source->data : "",
       target ? (int)target->length : 0, target ? target->data : "",
       family ? (int)family->length : 0, family ? family->data : "",
@@ -144,7 +188,7 @@ static ArchbirdStatus render_diagnostic(AbBuffer *out,
 
 static ArchbirdStatus render_coverage(AbBuffer *out,
                                       const AbProjectionItem *item) {
-  return ab_report_linef(
+  REPORT_TRY(ab_report_linef(
       out,
       "- selected=%" PRIu64 "; inventory=%" PRIu64
       "; unsupported-known=%" PRIu64 "; oversized=%" PRIu64 "; assets=%" PRIu64
@@ -152,7 +196,12 @@ static ArchbirdStatus render_coverage(AbBuffer *out,
       item_u64(item, "selected"), item_u64(item, "inventory_files"),
       item_u64(item, "unsupported_known"), item_u64(item, "oversized"),
       item_u64(item, "assets"), item_u64(item, "ignored"),
-      item_u64(item, "pruned_directories"));
+      item_u64(item, "pruned_directories")));
+  if (!text_is(&item->state, "current"))
+    REPORT_TRY(ab_report_linef(out, "- Coverage frontier: **%.*s** - %.*s",
+                               (int)item->state.length, item->state.data,
+                               (int)item->message.length, item->message.data));
+  return ARCHBIRD_OK;
 }
 
 static ArchbirdStatus render_ledgers(AbBuffer *out,
@@ -179,47 +228,292 @@ static ArchbirdStatus render_ledgers(AbBuffer *out,
   return heading ? ab_report_blank(out) : ARCHBIRD_OK;
 }
 
-static size_t count_kind(const AbProjectionData *data, const char *kind) {
-  size_t index;
+static int item_pointer_key_compare(const void *left, const void *right) {
+  const AbProjectionItem *a = *(const AbProjectionItem *const *)left;
+  const AbProjectionItem *b = *(const AbProjectionItem *const *)right;
+  return ab_string_compare(&a->key, &b->key);
+}
+
+static int landmark_compare(const void *left, const void *right) {
+  const AbProjectionItem *a = *(const AbProjectionItem *const *)left;
+  const AbProjectionItem *b = *(const AbProjectionItem *const *)right;
+  uint64_t a_witnesses = item_u64(a, "relation_witness_count");
+  uint64_t b_witnesses = item_u64(b, "relation_witness_count");
+  uint64_t a_degree = item_u64(a, "used_by_count") + item_u64(a, "uses_count");
+  uint64_t b_degree = item_u64(b, "used_by_count") + item_u64(b, "uses_count");
+  if (a_witnesses != b_witnesses)
+    return a_witnesses > b_witnesses ? -1 : 1;
+  if (a_degree != b_degree)
+    return a_degree > b_degree ? -1 : 1;
+  if (item_u64(a, "symbol_count") != item_u64(b, "symbol_count"))
+    return item_u64(a, "symbol_count") > item_u64(b, "symbol_count") ? -1 : 1;
+  return ab_string_compare(&a->key, &b->key);
+}
+
+static int group_relation_compare(const void *left, const void *right) {
+  const AbProjectionItem *a = *(const AbProjectionItem *const *)left;
+  const AbProjectionItem *b = *(const AbProjectionItem *const *)right;
+  if (item_u64(a, "witness_count") != item_u64(b, "witness_count"))
+    return item_u64(a, "witness_count") > item_u64(b, "witness_count") ? -1 : 1;
+  return ab_string_compare(&a->key, &b->key);
+}
+
+static ArchbirdStatus collect_items(AbBuffer *out, const AbProjectionData *data,
+                                    const char *record_kind,
+                                    const char *entity_kind,
+                                    const AbProjectionItem ***items_out,
+                                    size_t *count_out) {
+  const AbProjectionItem **items;
   size_t count = 0;
-  for (index = 0; index < data->item_count; index++)
-    count += item_is(&data->items[index], kind);
-  return count;
+  size_t index;
+  for (index = 0; index < data->item_count; index++) {
+    const AbString *kind = item_text(&data->items[index], "entity_kind");
+    if (item_is(&data->items[index], record_kind) &&
+        (!entity_kind || text_is(kind, entity_kind)))
+      count++;
+  }
+  items = count ? (const AbProjectionItem **)ab_calloc(out->engine, count,
+                                                       sizeof(*items))
+                : NULL;
+  if (count && !items)
+    return ARCHBIRD_OUT_OF_MEMORY;
+  count = 0;
+  for (index = 0; index < data->item_count; index++) {
+    const AbString *kind = item_text(&data->items[index], "entity_kind");
+    if (item_is(&data->items[index], record_kind) &&
+        (!entity_kind || text_is(kind, entity_kind)))
+      items[count++] = &data->items[index];
+  }
+  *items_out = items;
+  *count_out = count;
+  return ARCHBIRD_OK;
+}
+
+static const AbProjectionItem *group_by_id(const AbProjectionData *data,
+                                           const AbString *id) {
+  size_t index;
+  for (index = 0; index < data->item_count; index++) {
+    const AbString *candidate;
+    if (!item_is(&data->items[index], "group"))
+      continue;
+    candidate = item_text(&data->items[index], "id");
+    if (candidate && ab_string_equal(candidate, id))
+      return &data->items[index];
+  }
+  return NULL;
+}
+
+static ArchbirdStatus render_group_endpoint(AbBuffer *out,
+                                            const AbProjectionData *data,
+                                            const AbString *id) {
+  const AbProjectionItem *group = group_by_id(data, id);
+  if (!group)
+    return ARCHBIRD_INVALID_SCHEMA;
+  return ab_report_appendf(out, "**%.*s**", (int)group->label.length,
+                           group->label.data);
+}
+
+static ArchbirdStatus render_architecture_groups(AbBuffer *out,
+                                                 const AbProjectionData *data,
+                                                 size_t limit,
+                                                 size_t *omitted) {
+  size_t index;
+  size_t shown = 0;
+  size_t total = 0;
+  for (index = 0; index < data->item_count; index++) {
+    const AbString *group_by;
+    if (!item_is(&data->items[index], "group"))
+      continue;
+    group_by = item_text(&data->items[index], "group_by");
+    if (!text_is(group_by, "inventory"))
+      total++;
+  }
+  if (!total)
+    return ARCHBIRD_OK;
+  REPORT_TRY(ab_report_literal_line(out, "## Architecture groups"));
+  REPORT_TRY(ab_report_blank(out));
+  for (index = 0; index < data->item_count && shown < limit; index++) {
+    const AbString *group_by;
+    if (!item_is(&data->items[index], "group"))
+      continue;
+    group_by = item_text(&data->items[index], "group_by");
+    if (text_is(group_by, "inventory"))
+      continue;
+    REPORT_TRY(render_group(out, &data->items[index], 0));
+    shown++;
+  }
+  if (shown < total) {
+    *omitted += total - shown;
+    REPORT_TRY(ab_report_linef(out, "- ... %zu architecture groups omitted",
+                               total - shown));
+  }
+  return ab_report_blank(out);
+}
+
+static ArchbirdStatus render_inventory_groups(AbBuffer *out,
+                                              const AbProjectionData *data) {
+  size_t index;
+  int heading = 0;
+  for (index = 0; index < data->item_count; index++) {
+    const AbProjectionItem *item = &data->items[index];
+    if (!item_is(item, "group") ||
+        !text_is(item_text(item, "group_by"), "inventory"))
+      continue;
+    if (!heading) {
+      REPORT_TRY(ab_report_literal_line(out, "## Inventories"));
+      REPORT_TRY(ab_report_blank(out));
+      heading = 1;
+    }
+    REPORT_TRY(ab_report_linef(out, "- **%.*s**: %" PRIu64,
+                               (int)item->label.length, item->label.data,
+                               item_u64(item, "member_count")));
+  }
+  return heading ? ab_report_blank(out) : ARCHBIRD_OK;
+}
+
+static ArchbirdStatus render_group_relations(AbBuffer *out,
+                                             const AbProjectionData *data,
+                                             size_t limit, int standard_detail,
+                                             size_t *omitted) {
+  const AbProjectionItem **items = NULL;
+  size_t count = 0;
+  size_t shown;
+  size_t index;
+  ArchbirdStatus status =
+      collect_items(out, data, "group_relation", NULL, &items, &count);
+  if (status != ARCHBIRD_OK || !count)
+    return status;
+  qsort(items, count, sizeof(*items), group_relation_compare);
+  shown = count < limit ? count : limit;
+  status =
+      ab_report_literal_line(out, "## Dependency flow (provider -> consumer)");
+  if (status == ARCHBIRD_OK)
+    status = ab_report_blank(out);
+  for (index = 0; index < shown; index++) {
+    const AbProjectionItem *item = items[index];
+    const AbString *source = item_text(item, "source");
+    const AbString *target = item_text(item, "target");
+    const AbString *family = item_text(item, "family");
+    if (status != ARCHBIRD_OK)
+      break;
+    status = ab_buffer_literal(out, "- ");
+    /* Canonical relations are consumer -> provider. */
+    if (status == ARCHBIRD_OK)
+      status = render_group_endpoint(out, data, target);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(out, " -> ");
+    if (status == ARCHBIRD_OK)
+      status = render_group_endpoint(out, data, source);
+    if (status == ARCHBIRD_OK)
+      status = ab_report_appendf(
+          out, " - %.*s; witnesses=%" PRIu64 "; relations=%" PRIu64,
+          family ? (int)family->length : 0, family ? family->data : "",
+          item_u64(item, "witness_count"), item_u64(item, "relation_count"));
+    if (status == ARCHBIRD_OK && standard_detail)
+      status = render_relation_kinds(out, item);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(out, "\n");
+  }
+  if (status == ARCHBIRD_OK && shown < count) {
+    *omitted += count - shown;
+    status = ab_report_linef(out, "- ... %zu aggregated flows omitted",
+                             count - shown);
+  }
+  ab_free(out->engine, items);
+  return status == ARCHBIRD_OK ? ab_report_blank(out) : status;
+}
+
+static ArchbirdStatus render_landmarks(AbBuffer *out,
+                                       const AbProjectionData *data,
+                                       size_t limit, int standard_detail,
+                                       size_t *omitted) {
+  const AbProjectionItem **items = NULL;
+  size_t count = 0;
+  size_t shown;
+  size_t index;
+  ArchbirdStatus status =
+      collect_items(out, data, "node", "file", &items, &count);
+  if (status != ARCHBIRD_OK || !count)
+    return status;
+  qsort(items, count, sizeof(*items), landmark_compare);
+  shown = count < limit ? count : limit;
+  status = ab_report_literal_line(out, "## File landmarks");
+  if (status == ARCHBIRD_OK)
+    status = ab_report_blank(out);
+  for (index = 0; index < shown; index++) {
+    const AbProjectionItem *item = items[index];
+    const AbString *path = item_text(item, "path");
+    if (status != ARCHBIRD_OK)
+      break;
+    if (standard_detail)
+      status = ab_report_linef(
+          out,
+          "- `%.*s` - used-by=%" PRIu64 "; uses=%" PRIu64
+          "; relation-witnesses=%" PRIu64 "; symbols=%" PRIu64,
+          path ? (int)path->length : (int)item->label.length,
+          path ? path->data : item->label.data, item_u64(item, "used_by_count"),
+          item_u64(item, "uses_count"),
+          item_u64(item, "relation_witness_count"),
+          item_u64(item, "symbol_count"));
+    else
+      status = ab_report_linef(
+          out, "- `%.*s` - relations=%" PRIu64 "; symbols=%" PRIu64,
+          path ? (int)path->length : (int)item->label.length,
+          path ? path->data : item->label.data,
+          item_u64(item, "relation_witness_count"),
+          item_u64(item, "symbol_count"));
+  }
+  if (status == ARCHBIRD_OK && shown < count) {
+    *omitted += count - shown;
+    status =
+        ab_report_linef(out, "- ... %zu file landmarks omitted", count - shown);
+  }
+  ab_free(out->engine, items);
+  return status == ARCHBIRD_OK ? ab_report_blank(out) : status;
 }
 
 static ArchbirdStatus
 render_section(AbBuffer *out, const AbProjectionData *data,
                const char *record_kind, const char *heading, size_t limit,
                int standard_detail, int full_detail, size_t *omitted) {
+  const AbProjectionItem **items = NULL;
+  size_t total = 0;
+  size_t shown;
   size_t index;
-  size_t shown = 0;
-  size_t total = count_kind(data, record_kind);
-  if (!total)
-    return ARCHBIRD_OK;
-  REPORT_TRY(ab_report_linef(out, "## %s", heading));
-  REPORT_TRY(ab_report_blank(out));
-  for (index = 0; index < data->item_count && shown < limit; index++) {
-    const AbProjectionItem *item = &data->items[index];
-    if (!item_is(item, record_kind))
-      continue;
+  ArchbirdStatus status =
+      collect_items(out, data, record_kind, NULL, &items, &total);
+  if (status != ARCHBIRD_OK || !total)
+    return status;
+  qsort(items, total, sizeof(*items), item_pointer_key_compare);
+  shown = total < limit ? total : limit;
+  status = ab_report_linef(out, "## %s", heading);
+  if (status == ARCHBIRD_OK)
+    status = ab_report_blank(out);
+  for (index = 0; index < shown; index++) {
+    const AbProjectionItem *item = items[index];
+    if (status != ARCHBIRD_OK)
+      break;
     if (!strcmp(record_kind, "group"))
-      REPORT_TRY(render_group(out, item, full_detail));
+      status = render_group(out, item, full_detail);
+    else if (!strcmp(record_kind, "membership"))
+      status = render_membership(out, item, full_detail);
     else if (!strcmp(record_kind, "node"))
-      REPORT_TRY(render_node(out, item, full_detail));
-    else if (!strcmp(record_kind, "relation"))
-      REPORT_TRY(render_relation(out, item, standard_detail, full_detail));
+      status = render_node(out, item, full_detail);
+    else if (!strcmp(record_kind, "relation") ||
+             !strcmp(record_kind, "group_relation"))
+      status = render_relation(out, item, standard_detail, full_detail);
     else if (!strcmp(record_kind, "coverage"))
-      REPORT_TRY(render_coverage(out, item));
+      status = render_coverage(out, item);
     else
-      REPORT_TRY(render_diagnostic(out, item));
-    shown++;
+      status = render_diagnostic(out, item);
   }
-  if (shown < total) {
+  if (status == ARCHBIRD_OK && shown < total) {
     *omitted += total - shown;
-    REPORT_TRY(ab_report_linef(out, "- … %zu %s records omitted", total - shown,
-                               record_kind));
+    status = ab_report_linef(out, "- ... %zu %s records omitted", total - shown,
+                             record_kind);
   }
-  return ab_report_blank(out);
+  ab_free(out->engine, items);
+  return status == ARCHBIRD_OK ? ab_report_blank(out) : status;
 }
 
 static ArchbirdStatus render_once(const AbProjectionPlan *plan,
@@ -230,12 +524,13 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
   const AbValue *level = ab_value_member(&plan->definition, "level");
   const char *classification = ab_projection_data_classification(&result->data);
   size_t omitted = 0;
+  size_t landmark_limit = limit < 12 ? limit : 12;
   REPORT_TRY(ab_report_linef(out, "# %.*s architecture evidence",
                              (int)result->data.project.length,
                              result->data.project.data));
   REPORT_TRY(ab_report_blank(out));
   REPORT_TRY(ab_report_linef(
-      out, "Projection `%.*s` · level `%.*s`%s%.*s%s · %s",
+      out, "Projection `%.*s` · level `%.*s`%s%.*s%s · graph %s",
       (int)plan->id.length, plan->id.data,
       level && level->kind == AB_VALUE_STRING ? (int)level->as.text.length : 0,
       level && level->kind == AB_VALUE_STRING ? level->as.text.data : "",
@@ -247,24 +542,49 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
                                result->data.message.data));
     REPORT_TRY(ab_report_blank(out));
   }
-  REPORT_TRY(render_section(out, &result->data, "group", "Groups", limit,
-                            standard_detail, full_detail, &omitted));
-  REPORT_TRY(render_section(out, &result->data, "node", "Entities", limit,
-                            standard_detail, full_detail, &omitted));
-  REPORT_TRY(render_section(out, &result->data, "relation", "Relations", limit,
-                            standard_detail, full_detail, &omitted));
+  if (full_detail) {
+    REPORT_TRY(render_section(out, &result->data, "group", "Groups", limit,
+                              standard_detail, 1, &omitted));
+    REPORT_TRY(render_section(out, &result->data, "membership", "Memberships",
+                              limit, standard_detail, 1, &omitted));
+    REPORT_TRY(render_section(out, &result->data, "node", "Entities", limit,
+                              standard_detail, 1, &omitted));
+    REPORT_TRY(render_section(out, &result->data, "relation", "Canonical uses",
+                              limit, standard_detail, 1, &omitted));
+    REPORT_TRY(render_section(out, &result->data, "group_relation",
+                              "Aggregated group relations", limit,
+                              standard_detail, 1, &omitted));
+  } else {
+    REPORT_TRY(render_architecture_groups(out, &result->data, limit, &omitted));
+    REPORT_TRY(render_group_relations(out, &result->data, limit,
+                                      standard_detail, &omitted));
+    REPORT_TRY(render_landmarks(out, &result->data, landmark_limit,
+                                standard_detail, &omitted));
+    REPORT_TRY(render_inventory_groups(out, &result->data));
+    REPORT_TRY(ab_report_literal_line(out, "## Presentation accounting"));
+    REPORT_TRY(ab_report_blank(out));
+    REPORT_TRY(ab_report_linef(
+        out,
+        "- Canonical entities: %zu; canonical relations: %zu; aggregated "
+        "group flows: %zu; displayed landmarks: at most %zu.",
+        count_kind(&result->data, "node"),
+        count_kind(&result->data, "relation"),
+        count_kind(&result->data, "group_relation"), landmark_limit));
+    REPORT_TRY(ab_report_blank(out));
+  }
   REPORT_TRY(render_section(out, &result->data, "coverage",
                             "Repository coverage", limit, standard_detail,
                             full_detail, &omitted));
   REPORT_TRY(render_section(out, &result->data, "diagnostic", "Diagnostics",
                             limit, standard_detail, full_detail, &omitted));
   REPORT_TRY(render_ledgers(out, &result->data));
-  REPORT_TRY(ab_report_literal_line(out, "## Projection completeness"));
+  REPORT_TRY(ab_report_literal_line(out, "## Graph completeness"));
   REPORT_TRY(ab_report_blank(out));
   REPORT_TRY(ab_report_linef(
       out,
-      "- Classification: **%s**; exhaustive=%s; unknown=%" PRIu64
-      "; unsupported=%" PRIu64,
+      "- Classification: **%s**; exhaustive=%s; "
+      "unknown-structural-records=%" PRIu64
+      "; unsupported-structural-records=%" PRIu64,
       classification, !strcmp(classification, "complete") ? "yes" : "no",
       result->data.selection.has_unknown ? result->data.selection.unknown : 0,
       result->data.selection.has_unsupported
@@ -273,8 +593,8 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
   if (omitted)
     REPORT_TRY(ab_report_linef(
         out,
-        "- Presentation omitted %zu records; the ProjectionResult remains "
-        "unchanged.",
+        "- Presentation omitted %zu display records; the exhaustive "
+        "ProjectionResult is unchanged.",
         omitted));
   REPORT_TRY(
       ab_report_linef(out, "- Projection result: `%s`", result->result_sha256));

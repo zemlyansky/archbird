@@ -29,6 +29,11 @@ typedef struct AbGraphEndpoints {
   size_t capacity;
 } AbGraphEndpoints;
 
+typedef struct AbGraphMembershipRef {
+  const AbString *group;
+  const AbString *node;
+} AbGraphMembershipRef;
+
 static int string_is(const AbString *value, const char *literal) {
   size_t length = strlen(literal);
   return value && value->length == length &&
@@ -418,6 +423,20 @@ static const char *peripheral_kind(const AbString *identity) {
   return "external";
 }
 
+static const char *inventory_label(const AbString *kind) {
+  if (string_is(kind, "build"))
+    return "Builds";
+  if (string_is(kind, "package"))
+    return "Packages";
+  if (string_is(kind, "builtin"))
+    return "Built-ins";
+  if (string_is(kind, "external"))
+    return "External";
+  if (string_is(kind, "unresolved"))
+    return "Unresolved";
+  return NULL;
+}
+
 static ArchbirdStatus node_id(ArchbirdEngine *engine, const char *kind,
                               const AbString *identity, AbString *out) {
   AbBuffer buffer;
@@ -464,11 +483,13 @@ add_group_membership(AbProjectionContext *context, AbProjectionData *graph,
                      const AbProjectionItem *metadata) {
   AbString group_kind = {(char *)group_by, strlen(group_by)};
   AbString group_id = {0};
+  AbString group_key = {0};
   AbProjectionItem *group = NULL;
   AbProjectionItem *membership = NULL;
   AbBuffer membership_identity;
   AbString membership_key;
   AbString membership_kind = {(char *)"membership", 10};
+  int new_membership = 0;
   ArchbirdStatus status =
       node_id(context->engine, group_by, identity, &group_id);
   if (status == ARCHBIRD_OK)
@@ -479,6 +500,10 @@ add_group_membership(AbProjectionContext *context, AbProjectionData *graph,
         add_literal_attribute(context->engine, group, "group_by", group_by);
   if (status == ARCHBIRD_OK && !attribute(group, "origin"))
     status = add_literal_attribute(context->engine, group, "origin", origin);
+  if (status == ARCHBIRD_OK && !strcmp(group_by, "inventory") &&
+      !attribute(group, "inventory_kind"))
+    status = add_string_attribute(context->engine, group, "inventory_kind",
+                                  identity);
   if (status == ARCHBIRD_OK && metadata)
     status = copy_evidence(context->engine, group, metadata);
   if (status == ARCHBIRD_OK && metadata)
@@ -493,9 +518,6 @@ add_group_membership(AbProjectionContext *context, AbProjectionData *graph,
                                metadata->attributes[attribute_index].name.data,
                                &metadata->attributes[attribute_index].value);
   }
-  if (status == ARCHBIRD_OK)
-    status = set_u64_attribute(context->engine, group, "member_count",
-                               u64_attribute(group, "member_count") + 1);
   ab_buffer_init(&membership_identity, context->engine);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_json_string(&membership_identity, group_id.data,
@@ -511,11 +533,25 @@ add_group_membership(AbProjectionContext *context, AbProjectionData *graph,
     status = graph_item(context, graph, "membership", &membership_kind,
                         &membership_key, label, source, &membership);
   if (status == ARCHBIRD_OK)
+    new_membership = !attribute(membership, "group");
+  if (status == ARCHBIRD_OK && !attribute(membership, "group"))
     status =
         add_string_attribute(context->engine, membership, "group", &group_id);
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && !attribute(membership, "node"))
     status = add_string_attribute(context->engine, membership, "node", node);
+  if (status == ARCHBIRD_OK && new_membership)
+    status = buffer_identity(context->engine, "group", &group_kind, &group_id,
+                             &group_key);
+  if (status == ARCHBIRD_OK && new_membership)
+    status = ab_projection_data_find_item(context->engine, graph, &group_key,
+                                          &group);
+  if (status == ARCHBIRD_OK && new_membership && !group)
+    status = ARCHBIRD_INVALID_SCHEMA;
+  if (status == ARCHBIRD_OK && new_membership)
+    status = set_u64_attribute(context->engine, group, "member_count",
+                               u64_attribute(group, "member_count") + 1);
   ab_buffer_free(&membership_identity);
+  ab_string_free(context->engine, &group_key);
   ab_string_free(context->engine, &group_id);
   return status;
 }
@@ -853,6 +889,569 @@ static ArchbirdStatus add_relation(AbProjectionContext *context,
   return status;
 }
 
+static int membership_ref_compare(const void *left, const void *right) {
+  const AbGraphMembershipRef *a = (const AbGraphMembershipRef *)left;
+  const AbGraphMembershipRef *b = (const AbGraphMembershipRef *)right;
+  int compared = ab_string_compare(a->node, b->node);
+  return compared ? compared : ab_string_compare(a->group, b->group);
+}
+
+static size_t membership_ref_lower_bound(const AbGraphMembershipRef *rows,
+                                         size_t count, const AbString *node) {
+  size_t low = 0;
+  size_t high = count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (ab_string_compare(rows[middle].node, node) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  return low;
+}
+
+static ArchbirdStatus add_peripheral_memberships(AbProjectionContext *context,
+                                                 const AbProjectionPlan *plan,
+                                                 AbProjectionData *graph) {
+  const AbValue *group_by = ab_value_member(&plan->definition, "group_by");
+  size_t initial_count = graph->item_count;
+  size_t index;
+  if (!group_by)
+    return ARCHBIRD_OK;
+  for (index = 0; index < initial_count; index++) {
+    const AbProjectionItem *node = &graph->items[index];
+    const AbValue *record = attribute(node, "record_kind");
+    const AbValue *kind = attribute(node, "entity_kind");
+    const AbValue *id = attribute(node, "id");
+    const char *label;
+    AbString label_text;
+    ArchbirdStatus status;
+    if (!ab_projection_value_is(record, "node") || !kind ||
+        kind->kind != AB_VALUE_STRING || !id || id->kind != AB_VALUE_STRING)
+      continue;
+    label = inventory_label(&kind->as.text);
+    if (!label)
+      continue;
+    label_text.data = (char *)label;
+    label_text.length = strlen(label);
+    status = add_group_membership(context, graph, &id->as.text, "inventory",
+                                  &kind->as.text, &label_text, "derived", NULL,
+                                  NULL);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus add_group_relation(AbProjectionContext *context,
+                                         AbProjectionData *graph,
+                                         size_t canonical_index,
+                                         const AbString *source_group,
+                                         const AbString *target_group) {
+  const AbProjectionItem *canonical = &graph->items[canonical_index];
+  const AbValue *family = attribute(canonical, "family");
+  const AbValue *kind = attribute(canonical, "relation_kind");
+  AbString item_kind = {(char *)"group_relation", 14};
+  AbString identity = {0};
+  AbProjectionItem *item = NULL;
+  uint64_t current;
+  uint64_t witnesses;
+  uint64_t name_occurrences = 0;
+  ArchbirdStatus status;
+  if (!family || family->kind != AB_VALUE_STRING || !kind ||
+      kind->kind != AB_VALUE_STRING)
+    return ARCHBIRD_INVALID_SCHEMA;
+  status = relation_key(context->engine, family->as.text.data, &family->as.text,
+                        source_group, target_group, &identity);
+  if (status == ARCHBIRD_OK)
+    status = graph_item(context, graph, "group_relation", &item_kind, &identity,
+                        &canonical->label, NULL, &item);
+  canonical = &graph->items[canonical_index];
+  family = attribute(canonical, "family");
+  kind = attribute(canonical, "relation_kind");
+  if (status == ARCHBIRD_OK && (!family || family->kind != AB_VALUE_STRING ||
+                                !kind || kind->kind != AB_VALUE_STRING))
+    status = ARCHBIRD_INVALID_SCHEMA;
+  if (status == ARCHBIRD_OK)
+    status = copy_evidence(context->engine, item, canonical);
+  if (status == ARCHBIRD_OK)
+    status = preserve_weaker_state(context->engine, item, canonical);
+  if (status == ARCHBIRD_OK && !attribute(item, "source"))
+    status =
+        add_string_attribute(context->engine, item, "source", source_group);
+  if (status == ARCHBIRD_OK && !attribute(item, "target"))
+    status =
+        add_string_attribute(context->engine, item, "target", target_group);
+  if (status == ARCHBIRD_OK && !attribute(item, "relation_kind"))
+    status = add_string_attribute(context->engine, item, "relation_kind",
+                                  &family->as.text);
+  if (status == ARCHBIRD_OK && !attribute(item, "family"))
+    status =
+        add_string_attribute(context->engine, item, "family", &family->as.text);
+  canonical = &graph->items[canonical_index];
+  if (attribute(canonical, "names")) {
+    const AbValue *names = attribute(canonical, "names");
+    if (names->kind != AB_VALUE_ARRAY)
+      status = ARCHBIRD_INVALID_SCHEMA;
+    else
+      name_occurrences = (uint64_t)names->as.array.count;
+  }
+  witnesses = u64_attribute(canonical, "witness_count");
+  current = u64_attribute(item, "witness_count");
+  if (status == ARCHBIRD_OK && UINT64_MAX - current < witnesses)
+    status = ARCHBIRD_LIMIT_EXCEEDED;
+  if (status == ARCHBIRD_OK)
+    status = set_u64_attribute(context->engine, item, "witness_count",
+                               current + witnesses);
+  current = u64_attribute(item, "relation_count");
+  if (status == ARCHBIRD_OK && current == UINT64_MAX)
+    status = ARCHBIRD_LIMIT_EXCEEDED;
+  if (status == ARCHBIRD_OK)
+    status =
+        set_u64_attribute(context->engine, item, "relation_count", current + 1);
+  current = u64_attribute(item, "name_occurrence_count");
+  if (status == ARCHBIRD_OK && UINT64_MAX - current < name_occurrences)
+    status = ARCHBIRD_LIMIT_EXCEEDED;
+  if (status == ARCHBIRD_OK)
+    status = set_u64_attribute(context->engine, item, "name_occurrence_count",
+                               current + name_occurrences);
+  current = u64_attribute(item, "relation_kind_occurrence_count");
+  if (status == ARCHBIRD_OK && current == UINT64_MAX)
+    status = ARCHBIRD_LIMIT_EXCEEDED;
+  if (status == ARCHBIRD_OK)
+    status = set_u64_attribute(context->engine, item,
+                               "relation_kind_occurrence_count", current + 1);
+  ab_string_free(context->engine, &identity);
+  return status;
+}
+
+static ArchbirdStatus
+annotate_node_connectivity(AbProjectionContext *context,
+                           AbProjectionData *graph,
+                           const AbProjectionItem *relation) {
+  const AbValue *source = attribute(relation, "source");
+  const AbValue *target = attribute(relation, "target");
+  const AbValue *kind = attribute(relation, "relation_kind");
+  const AbValue *family = attribute(relation, "family");
+  const AbValue *ids[] = {source, target};
+  const char *counts[] = {"uses_count", "used_by_count"};
+  uint64_t witnesses = u64_attribute(relation, "witness_count");
+  size_t index;
+  if (!source || source->kind != AB_VALUE_STRING || !target ||
+      target->kind != AB_VALUE_STRING || !kind ||
+      kind->kind != AB_VALUE_STRING || !family ||
+      family->kind != AB_VALUE_STRING)
+    return ARCHBIRD_INVALID_SCHEMA;
+  for (index = 0; index < 2; index++) {
+    const char *colon =
+        memchr(ids[index]->as.text.data, ':', ids[index]->as.text.length);
+    AbString entity_kind;
+    AbString key = {0};
+    AbProjectionItem *node = NULL;
+    ArchbirdStatus status;
+    if (!colon)
+      return ARCHBIRD_INVALID_SCHEMA;
+    entity_kind.data = ids[index]->as.text.data;
+    entity_kind.length = (size_t)(colon - ids[index]->as.text.data);
+    status = buffer_identity(context->engine, "node", &entity_kind,
+                             &ids[index]->as.text, &key);
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_projection_data_find_item(context->engine, graph, &key, &node);
+    if (status == ARCHBIRD_OK && !node)
+      status = ARCHBIRD_INVALID_SCHEMA;
+    if (status == ARCHBIRD_OK)
+      status = set_u64_attribute(context->engine, node, counts[index],
+                                 u64_attribute(node, counts[index]) + 1);
+    if (status == ARCHBIRD_OK)
+      status = set_u64_attribute(
+          context->engine, node, "relation_witness_count",
+          u64_attribute(node, "relation_witness_count") + witnesses);
+    ab_string_free(context->engine, &key);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  return ARCHBIRD_OK;
+}
+
+static AbValue *mutable_attribute(AbProjectionItem *item, const char *name) {
+  size_t index;
+  for (index = 0; index < item->attribute_count; index++)
+    if (string_is(&item->attributes[index].name, name))
+      return &item->attributes[index].value;
+  return NULL;
+}
+
+static ArchbirdStatus allocate_string_array_attribute(ArchbirdEngine *engine,
+                                                      AbProjectionItem *item,
+                                                      const char *name,
+                                                      size_t count) {
+  AbValue empty = {.kind = AB_VALUE_ARRAY};
+  AbValue *array;
+  ArchbirdStatus status = add_attribute(engine, item, name, &empty);
+  if (status != ARCHBIRD_OK)
+    return status;
+  array = mutable_attribute(item, name);
+  if (!array || array->kind != AB_VALUE_ARRAY)
+    return ARCHBIRD_INVALID_SCHEMA;
+  if (!count)
+    return ARCHBIRD_OK;
+  array->as.array.items =
+      (AbValue *)ab_calloc(engine, count, sizeof(*array->as.array.items));
+  if (!array->as.array.items)
+    return ARCHBIRD_OUT_OF_MEMORY;
+  array->as.array.count = count;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus group_relation_item(AbProjectionContext *context,
+                                          AbProjectionData *graph,
+                                          const AbProjectionItem *canonical,
+                                          const AbString *source_group,
+                                          const AbString *target_group,
+                                          AbProjectionItem **out) {
+  const AbValue *family = attribute(canonical, "family");
+  const AbValue *kind = attribute(canonical, "relation_kind");
+  AbString item_kind = {(char *)"group_relation", 14};
+  AbString identity = {0};
+  AbString key = {0};
+  ArchbirdStatus status;
+  if (!family || family->kind != AB_VALUE_STRING || !kind ||
+      kind->kind != AB_VALUE_STRING)
+    return ARCHBIRD_INVALID_SCHEMA;
+  status = relation_key(context->engine, family->as.text.data, &family->as.text,
+                        source_group, target_group, &identity);
+  if (status == ARCHBIRD_OK)
+    status = buffer_identity(context->engine, "group_relation", &item_kind,
+                             &identity, &key);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_find_item(context->engine, graph, &key, out);
+  if (status == ARCHBIRD_OK && !*out)
+    status = ARCHBIRD_INVALID_SCHEMA;
+  ab_string_free(context->engine, &key);
+  ab_string_free(context->engine, &identity);
+  return status;
+}
+
+static ArchbirdStatus fill_group_relation_arrays(
+    AbProjectionContext *context, AbProjectionData *graph,
+    const AbProjectionItem *canonical, const AbString *source_group,
+    const AbString *target_group, size_t *key_cursors, size_t *name_cursors,
+    size_t *kind_cursors) {
+  AbProjectionItem *group_relation = NULL;
+  const AbValue *names = attribute(canonical, "names");
+  const AbValue *kind = attribute(canonical, "relation_kind");
+  AbValue *keys;
+  AbValue *group_names;
+  AbValue *group_kinds;
+  size_t item_index;
+  size_t name_index;
+  ArchbirdStatus status = group_relation_item(
+      context, graph, canonical, source_group, target_group, &group_relation);
+  if (status != ARCHBIRD_OK)
+    return status;
+  item_index = (size_t)(group_relation - graph->items);
+  keys = mutable_attribute(group_relation, "canonical_relation_keys");
+  group_names = mutable_attribute(group_relation, "names");
+  group_kinds = mutable_attribute(group_relation, "relation_kinds");
+  if (!keys || keys->kind != AB_VALUE_ARRAY || !group_names ||
+      group_names->kind != AB_VALUE_ARRAY || !group_kinds ||
+      group_kinds->kind != AB_VALUE_ARRAY || !kind ||
+      kind->kind != AB_VALUE_STRING ||
+      key_cursors[item_index] >= keys->as.array.count)
+    return ARCHBIRD_INVALID_SCHEMA;
+  keys->as.array.items[key_cursors[item_index]].kind = AB_VALUE_STRING;
+  status = ab_string_copy(
+      context->engine, &keys->as.array.items[key_cursors[item_index]].as.text,
+      canonical->key.data, canonical->key.length);
+  if (status == ARCHBIRD_OK)
+    key_cursors[item_index]++;
+  if (status == ARCHBIRD_OK &&
+      kind_cursors[item_index] >= group_kinds->as.array.count)
+    status = ARCHBIRD_INVALID_SCHEMA;
+  if (status == ARCHBIRD_OK) {
+    group_kinds->as.array.items[kind_cursors[item_index]].kind =
+        AB_VALUE_STRING;
+    status = ab_string_copy(
+        context->engine,
+        &group_kinds->as.array.items[kind_cursors[item_index]].as.text,
+        kind->as.text.data, kind->as.text.length);
+    if (status == ARCHBIRD_OK)
+      kind_cursors[item_index]++;
+  }
+  for (name_index = 0;
+       status == ARCHBIRD_OK && names && name_index < names->as.array.count;
+       name_index++) {
+    const AbValue *name = &names->as.array.items[name_index];
+    if (name->kind != AB_VALUE_STRING ||
+        name_cursors[item_index] >= group_names->as.array.count)
+      return ARCHBIRD_INVALID_SCHEMA;
+    group_names->as.array.items[name_cursors[item_index]].kind =
+        AB_VALUE_STRING;
+    status = ab_string_copy(
+        context->engine,
+        &group_names->as.array.items[name_cursors[item_index]].as.text,
+        name->as.text.data, name->as.text.length);
+    if (status == ARCHBIRD_OK)
+      name_cursors[item_index]++;
+  }
+  return status;
+}
+
+static int string_value_compare(const void *left, const void *right) {
+  const AbValue *a = (const AbValue *)left;
+  const AbValue *b = (const AbValue *)right;
+  return ab_string_compare(&a->as.text, &b->as.text);
+}
+
+static ArchbirdStatus normalize_group_relation_arrays(
+    ArchbirdEngine *engine, AbProjectionData *graph, const size_t *key_cursors,
+    const size_t *name_cursors, const size_t *kind_cursors) {
+  size_t index;
+  for (index = 0; index < graph->item_count; index++) {
+    AbProjectionItem *item = &graph->items[index];
+    AbValue *keys;
+    AbValue *names;
+    AbValue *kinds;
+    size_t read;
+    size_t write = 0;
+    if (!ab_projection_value_is(attribute(item, "record_kind"),
+                                "group_relation"))
+      continue;
+    keys = mutable_attribute(item, "canonical_relation_keys");
+    names = mutable_attribute(item, "names");
+    kinds = mutable_attribute(item, "relation_kinds");
+    if (!keys || keys->kind != AB_VALUE_ARRAY || !names ||
+        names->kind != AB_VALUE_ARRAY || !kinds ||
+        kinds->kind != AB_VALUE_ARRAY ||
+        key_cursors[index] != keys->as.array.count ||
+        name_cursors[index] != names->as.array.count ||
+        kind_cursors[index] != kinds->as.array.count)
+      return ARCHBIRD_INVALID_SCHEMA;
+    if (keys->as.array.count > 1)
+      qsort(keys->as.array.items, keys->as.array.count,
+            sizeof(*keys->as.array.items), string_value_compare);
+    if (names->as.array.count > 1)
+      qsort(names->as.array.items, names->as.array.count,
+            sizeof(*names->as.array.items), string_value_compare);
+    if (kinds->as.array.count > 1)
+      qsort(kinds->as.array.items, kinds->as.array.count,
+            sizeof(*kinds->as.array.items), string_value_compare);
+    for (read = 0; read < names->as.array.count; read++) {
+      if (write && ab_string_equal(&names->as.array.items[write - 1].as.text,
+                                   &names->as.array.items[read].as.text)) {
+        ab_value_free(engine, &names->as.array.items[read]);
+        continue;
+      }
+      if (write != read) {
+        names->as.array.items[write] = names->as.array.items[read];
+        memset(&names->as.array.items[read], 0,
+               sizeof(names->as.array.items[read]));
+      }
+      write++;
+    }
+    names->as.array.count = write;
+    write = 0;
+    for (read = 0; read < kinds->as.array.count; read++) {
+      if (write && ab_string_equal(&kinds->as.array.items[write - 1].as.text,
+                                   &kinds->as.array.items[read].as.text)) {
+        ab_value_free(engine, &kinds->as.array.items[read]);
+        continue;
+      }
+      if (write != read) {
+        kinds->as.array.items[write] = kinds->as.array.items[read];
+        memset(&kinds->as.array.items[read], 0,
+               sizeof(kinds->as.array.items[read]));
+      }
+      write++;
+    }
+    kinds->as.array.count = write;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus add_group_relations(AbProjectionContext *context,
+                                          AbProjectionData *graph) {
+  AbGraphMembershipRef *memberships = NULL;
+  size_t membership_count = 0;
+  size_t relation_count = 0;
+  size_t member_index = 0;
+  size_t initial_count = graph->item_count;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0; index < initial_count; index++) {
+    const AbValue *record = attribute(&graph->items[index], "record_kind");
+    membership_count += ab_projection_value_is(record, "membership");
+    relation_count += ab_projection_value_is(record, "relation");
+  }
+  if (membership_count)
+    memberships = (AbGraphMembershipRef *)ab_calloc(
+        context->engine, membership_count, sizeof(*memberships));
+  if (membership_count && !memberships)
+    return ARCHBIRD_OUT_OF_MEMORY;
+  for (index = 0; index < initial_count; index++) {
+    const AbProjectionItem *item = &graph->items[index];
+    if (ab_projection_value_is(attribute(item, "record_kind"), "membership")) {
+      const AbValue *group = attribute(item, "group");
+      const AbValue *node = attribute(item, "node");
+      if (!group || group->kind != AB_VALUE_STRING || !node ||
+          node->kind != AB_VALUE_STRING) {
+        status = ARCHBIRD_INVALID_SCHEMA;
+        break;
+      }
+      memberships[member_index].group = &group->as.text;
+      memberships[member_index].node = &node->as.text;
+      member_index++;
+    }
+  }
+  if (status == ARCHBIRD_OK && membership_count)
+    qsort(memberships, membership_count, sizeof(*memberships),
+          membership_ref_compare);
+  for (index = 0;
+       status == ARCHBIRD_OK && index < initial_count && relation_count;
+       index++) {
+    const AbProjectionItem *relation = &graph->items[index];
+    const AbValue *source;
+    const AbValue *target;
+    size_t source_start;
+    size_t source_end;
+    size_t target_start;
+    size_t target_end;
+    size_t source_index;
+    size_t target_index;
+    if (!ab_projection_value_is(attribute(relation, "record_kind"), "relation"))
+      continue;
+    source = attribute(relation, "source");
+    target = attribute(relation, "target");
+    if (!source || source->kind != AB_VALUE_STRING || !target ||
+        target->kind != AB_VALUE_STRING) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    status = annotate_node_connectivity(context, graph, relation);
+    if (status != ARCHBIRD_OK)
+      break;
+    if (!membership_count)
+      continue;
+    source_start = membership_ref_lower_bound(memberships, membership_count,
+                                              &source->as.text);
+    source_end = source_start;
+    while (source_end < membership_count &&
+           ab_string_equal(memberships[source_end].node, &source->as.text))
+      source_end++;
+    target_start = membership_ref_lower_bound(memberships, membership_count,
+                                              &target->as.text);
+    target_end = target_start;
+    while (target_end < membership_count &&
+           ab_string_equal(memberships[target_end].node, &target->as.text))
+      target_end++;
+    if (source_start == source_end || target_start == target_end) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    for (source_index = source_start;
+         status == ARCHBIRD_OK && source_index < source_end; source_index++)
+      for (target_index = target_start;
+           status == ARCHBIRD_OK && target_index < target_end; target_index++)
+        if (!ab_string_equal(memberships[source_index].group,
+                             memberships[target_index].group))
+          status = add_group_relation(context, graph, index,
+                                      memberships[source_index].group,
+                                      memberships[target_index].group);
+  }
+  if (status == ARCHBIRD_OK && membership_count) {
+    size_t *key_cursors = (size_t *)ab_calloc(
+        context->engine, graph->item_count, sizeof(*key_cursors));
+    size_t *name_cursors = (size_t *)ab_calloc(
+        context->engine, graph->item_count, sizeof(*name_cursors));
+    size_t *kind_cursors = (size_t *)ab_calloc(
+        context->engine, graph->item_count, sizeof(*kind_cursors));
+    if (!key_cursors || !name_cursors || !kind_cursors)
+      status = ARCHBIRD_OUT_OF_MEMORY;
+    for (index = 0; status == ARCHBIRD_OK && index < graph->item_count;
+         index++) {
+      AbProjectionItem *item = &graph->items[index];
+      uint64_t keys;
+      uint64_t names;
+      uint64_t kinds;
+      if (!ab_projection_value_is(attribute(item, "record_kind"),
+                                  "group_relation"))
+        continue;
+      keys = u64_attribute(item, "relation_count");
+      names = u64_attribute(item, "name_occurrence_count");
+      kinds = u64_attribute(item, "relation_kind_occurrence_count");
+      if (keys > SIZE_MAX || names > SIZE_MAX || kinds > SIZE_MAX)
+        status = ARCHBIRD_LIMIT_EXCEEDED;
+      if (status == ARCHBIRD_OK)
+        status = allocate_string_array_attribute(
+            context->engine, item, "canonical_relation_keys", (size_t)keys);
+      if (status == ARCHBIRD_OK)
+        status = allocate_string_array_attribute(context->engine, item, "names",
+                                                 (size_t)names);
+      if (status == ARCHBIRD_OK)
+        status = allocate_string_array_attribute(
+            context->engine, item, "relation_kinds", (size_t)kinds);
+    }
+    for (index = 0;
+         status == ARCHBIRD_OK && index < initial_count && relation_count;
+         index++) {
+      const AbProjectionItem *relation = &graph->items[index];
+      const AbValue *source;
+      const AbValue *target;
+      size_t source_start;
+      size_t source_end;
+      size_t target_start;
+      size_t target_end;
+      size_t source_index;
+      size_t target_index;
+      if (!ab_projection_value_is(attribute(relation, "record_kind"),
+                                  "relation"))
+        continue;
+      source = attribute(relation, "source");
+      target = attribute(relation, "target");
+      if (!source || source->kind != AB_VALUE_STRING || !target ||
+          target->kind != AB_VALUE_STRING) {
+        status = ARCHBIRD_INVALID_SCHEMA;
+        break;
+      }
+      source_start = membership_ref_lower_bound(memberships, membership_count,
+                                                &source->as.text);
+      source_end = source_start;
+      while (source_end < membership_count &&
+             ab_string_equal(memberships[source_end].node, &source->as.text))
+        source_end++;
+      target_start = membership_ref_lower_bound(memberships, membership_count,
+                                                &target->as.text);
+      target_end = target_start;
+      while (target_end < membership_count &&
+             ab_string_equal(memberships[target_end].node, &target->as.text))
+        target_end++;
+      if (source_start == source_end || target_start == target_end) {
+        status = ARCHBIRD_INVALID_SCHEMA;
+        break;
+      }
+      for (source_index = source_start;
+           status == ARCHBIRD_OK && source_index < source_end; source_index++)
+        for (target_index = target_start;
+             status == ARCHBIRD_OK && target_index < target_end; target_index++)
+          if (!ab_string_equal(memberships[source_index].group,
+                               memberships[target_index].group))
+            status = fill_group_relation_arrays(
+                context, graph, relation, memberships[source_index].group,
+                memberships[target_index].group, key_cursors, name_cursors,
+                kind_cursors);
+    }
+    if (status == ARCHBIRD_OK)
+      status = normalize_group_relation_arrays(
+          context->engine, graph, key_cursors, name_cursors, kind_cursors);
+    ab_free(context->engine, kind_cursors);
+    ab_free(context->engine, name_cursors);
+    ab_free(context->engine, key_cursors);
+  }
+  ab_free(context->engine, memberships);
+  return status;
+}
+
 static const char *file_edge_family(const AbString *kind) {
   if (string_is(kind, "import"))
     return "imports";
@@ -976,8 +1575,15 @@ static ArchbirdStatus add_symbol_relations(AbProjectionContext *context,
         status = ensure_endpoint_node(context, graph, &source_id,
                                       &source->as.text, row);
       if (status == ARCHBIRD_OK)
+        status = group_node(context, plan, inputs, graph, NULL, &source_id,
+                            &source_path->as.text);
+      if (status == ARCHBIRD_OK)
         status = ensure_endpoint_node(context, graph, &target_id,
                                       &target->as.text, row);
+      if (status == ARCHBIRD_OK && target_path &&
+          target_path->kind == AB_VALUE_STRING)
+        status = group_node(context, plan, inputs, graph, NULL, &target_id,
+                            &target_path->as.text);
       if (status == ARCHBIRD_OK)
         status = add_relation(context, graph, family, &kind->as.text,
                               &source_id, &target_id, row,
@@ -1226,6 +1832,10 @@ static ArchbirdStatus add_discovery_coverage(AbProjectionContext *context,
                                      &identity, &label, NULL, &item);
   if (status != ARCHBIRD_OK)
     return status;
+  status = add_literal_attribute(context->engine, item, "completeness_scope",
+                                 "contextual");
+  if (status != ARCHBIRD_OK)
+    return status;
   if (!coverage || coverage->kind != AB_VALUE_OBJECT || !profile ||
       profile->kind != AB_VALUE_OBJECT || !sha ||
       sha->kind != AB_VALUE_STRING) {
@@ -1361,16 +1971,33 @@ static ArchbirdStatus add_ledgers(AbProjectionContext *context,
   return ARCHBIRD_OK;
 }
 
-static uint64_t unknown_graph_records(const AbProjectionData *graph) {
+static uint64_t unknown_structural_records(const AbProjectionData *graph) {
   uint64_t unsupported = 0;
   size_t index;
-  for (index = 0; index < graph->item_count; index++)
-    if (string_is(&graph->items[index].state, "unknown")) {
+  for (index = 0; index < graph->item_count; index++) {
+    const AbValue *record = attribute(&graph->items[index], "record_kind");
+    if (!ab_projection_value_is(record, "coverage") &&
+        string_is(&graph->items[index].state, "unknown")) {
       if (unsupported == UINT64_MAX)
         break;
       unsupported++;
     }
+  }
   return unsupported;
+}
+
+static uint64_t structural_record_count(const AbProjectionData *graph) {
+  uint64_t count = 0;
+  size_t index;
+  for (index = 0; index < graph->item_count; index++)
+    if (!ab_projection_value_is(
+            attribute(&graph->items[index], "completeness_scope"),
+            "contextual")) {
+      if (count == UINT64_MAX)
+        break;
+      count++;
+    }
+  return count;
 }
 
 static int inputs_truncated(const AbGraphInputs *inputs) {
@@ -1424,6 +2051,10 @@ ArchbirdStatus ab_projection_extract_graph(AbProjectionContext *context,
   if (status == ARCHBIRD_OK)
     status = add_package_entrypoints(context, plan, &inputs, out, collapsed);
   if (status == ARCHBIRD_OK)
+    status = add_peripheral_memberships(context, plan, out);
+  if (status == ARCHBIRD_OK)
+    status = add_group_relations(context, out);
+  if (status == ARCHBIRD_OK)
     status = add_discovery_coverage(context, out);
   if (status == ARCHBIRD_OK && request_has(plan, "overlays", "diagnostics"))
     status = add_diagnostics(context, out);
@@ -1432,11 +2063,12 @@ ArchbirdStatus ab_projection_extract_graph(AbProjectionContext *context,
     status = annotate_evidence_quality(context, out);
   if (status == ARCHBIRD_OK)
     status = add_ledgers(context, plan, &inputs, out, collapsed);
-  unsupported = unknown_graph_records(out);
+  unsupported = unknown_structural_records(out);
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_completeness_exact(
-        context->engine, out, "graph_record", (uint64_t)out->item_count,
-        (uint64_t)out->item_count, 0, unsupported, inputs_truncated(&inputs));
+        context->engine, out, "graph_record", structural_record_count(out),
+        structural_record_count(out), 0, unsupported,
+        inputs_truncated(&inputs));
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(context->engine, out);
   if (status != ARCHBIRD_OK)

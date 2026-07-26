@@ -141,7 +141,11 @@ function graphBase(
 ): Omit<GraphView, "edges" | "nodes" | "summary"> {
   const diagnostics: Record<string, unknown>[] = projection.fact.items
     .filter((item) => ["coverage", "diagnostic"].includes(recordKind(item)))
-    .map((item) => ({ ...item.attributes }));
+    .map((item) => ({
+      ...item.attributes,
+      message: item.message || item.label,
+      state: item.state,
+    }));
   if (!projection.completeness.exhaustive
     || projection.completeness.classification !== "complete") {
     diagnostics.push({
@@ -200,12 +204,17 @@ function groupNode(
     typeof node.attributes.path === "string" ? [node.attributes.path] : []);
   const languages = new Set(members.flatMap((node) =>
     typeof node.attributes.language === "string" ? [node.attributes.language] : []));
+  const inventory = groupBy === "inventory";
   const unassigned = groupBy === "component" && origin === "unassigned";
   const root = groupBy === "directory" && item.label === ".";
-  const kind = unassigned
+  const kind = inventory
+    ? nonblank(item.attributes.inventory_kind, `${item.key}.inventory_kind`)
+    : unassigned
     ? (item.label === "." ? "root" : "directory")
     : (root ? "root" : groupBy);
-  const label = unassigned
+  const label = inventory
+    ? item.label
+    : unassigned
     ? (item.label === "."
       ? "Repository root · unassigned"
       : `${item.label}/ · unassigned`)
@@ -220,6 +229,9 @@ function groupNode(
       files: paths.length,
       languages: [...languages].sort(utf8Compare),
       member_files: paths.sort(utf8Compare),
+      member_node_ids: inventory
+        ? members.map((node) => node.id).sort(utf8Compare)
+        : [],
       origin: origin === "configured" ? "configured" : "inferred",
       presentation_kind: kind,
       presentation_role: "group",
@@ -236,6 +248,8 @@ function groupNode(
   };
 }
 
+// Compatibility for schema-1 ProjectionResults saved before the core emitted
+// explicit inventory groups and memberships.
 function peripheralGroupNode(kind: string, members: GraphNode[]): GraphNode {
   const labels: Readonly<Record<string, string>> = {
     build: "Builds",
@@ -391,8 +405,9 @@ export function presentGraphProjection(
     return node;
   });
   const peripheral = nodes.filter((node) => node.kind !== "file");
+  const ungroupedPeripheral = peripheral.filter((node) => !nodeGroups.has(node.id));
   const peripheralByKind = new Map<string, GraphNode[]>();
-  for (const node of peripheral) {
+  for (const node of ungroupedPeripheral) {
     const members = peripheralByKind.get(node.kind) || [];
     members.push(node);
     peripheralByKind.set(node.kind, members);
@@ -409,16 +424,51 @@ export function presentGraphProjection(
       throw new Error(`graph projection file ${node.id} has no group membership`);
     }
   }
-  const aggregated = new Map<string, EdgeAggregation>();
-  for (const edge of edges) {
-    for (const source of nodeGroups.get(edge.source) || []) {
-      for (const target of nodeGroups.get(edge.target) || []) {
-        aggregateEdge(aggregated, edge, source, target);
+  const groupNodeId = new Map(
+    [...groups, ...peripheralGroups].map((node) => [
+      String(node.attributes.id),
+      node.id,
+    ]),
+  );
+  const groupRelationItems = projection.fact.items
+    .filter((item) => recordKind(item) === "group_relation");
+  const projectedGroupEdges = groupRelationItems.map((item) => {
+    const edge = canonicalEdge(item);
+    const source = groupNodeId.get(edge.source);
+    const target = groupNodeId.get(edge.target);
+    if (!source || !target) {
+      throw new Error(`graph projection group relation ${edge.id} has an unknown endpoint`);
+    }
+    return {
+      ...edge,
+      attributes: {
+        ...edge.attributes,
+        canonical_edge_ids: strings(
+          edge.attributes?.canonical_relation_keys,
+        ),
+        presentation_aggregate: true,
+      },
+      source,
+      target,
+    };
+  });
+  let overviewEdges: GraphEdge[] = projectedGroupEdges;
+  const hasUnrepresentedCrossGroupRelation = !groupRelationItems.length
+    && edges.some((edge) =>
+      (nodeGroups.get(edge.source) || []).some((source) =>
+        (nodeGroups.get(edge.target) || []).some((target) => source !== target)));
+  if (hasUnrepresentedCrossGroupRelation) {
+    const aggregated = new Map<string, EdgeAggregation>();
+    for (const edge of edges) {
+      for (const source of nodeGroups.get(edge.source) || []) {
+        for (const target of nodeGroups.get(edge.target) || []) {
+          aggregateEdge(aggregated, edge, source, target);
+        }
       }
     }
+    overviewEdges = [...aggregated.values()].map(finishAggregatedEdge);
   }
   const overviewNodes = [...groups, ...peripheralGroups];
-  const overviewEdges = [...aggregated.values()].map(finishAggregatedEdge);
   const files: GraphView = {
     ...graphBase(projection, "files"),
     edges,
