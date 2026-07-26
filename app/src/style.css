@@ -227,13 +227,16 @@ textarea { min-height: 76px; resize: vertical; }
 }
 
 .workspace {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   padding-top: 70px;
   display: grid;
   grid-template-columns: 268px minmax(0, 1fr) 340px;
 }
 .workspace.inspector-hidden { grid-template-columns: 268px minmax(0, 1fr); }
 .rail, .inspector {
+  min-height: 0;
   min-width: 0;
   padding: 15px;
   overflow: auto;
@@ -670,6 +673,9 @@ pre {
   }
   .welcome h1 { font-size: 1.9rem; }
   .workspace, .workspace.inspector-hidden {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
     padding-top: 0;
     grid-template-columns: 1fr;
   }

@@ -127,6 +127,39 @@ async function hoverSelected(page) {
   await page.locator(".graph-tooltip").waitFor({ timeout: 10_000 });
 }
 
+async function assertDesktopWorkspaceVisible(page, operation) {
+  const geometry = await page.evaluate(() => {
+    const canvas = document.querySelector(".graph-canvas");
+    const topbar = document.querySelector(".topbar");
+    if (!(canvas instanceof HTMLElement) || !(topbar instanceof HTMLElement)) {
+      return null;
+    }
+    const canvasBounds = canvas.getBoundingClientRect();
+    const topbarBounds = topbar.getBoundingClientRect();
+    return {
+      canvasBottom: canvasBounds.bottom,
+      canvasTop: canvasBounds.top,
+      documentHeight: document.documentElement.scrollHeight,
+      scrollY: window.scrollY,
+      topbarBottom: topbarBounds.bottom,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  if (!geometry) {
+    throw new Error(`${operation} has no rendered graph workspace`);
+  }
+  if (
+    Math.abs(geometry.scrollY) > 1
+    || geometry.documentHeight > geometry.viewportHeight + 1
+    || geometry.canvasTop < geometry.topbarBottom - 1
+    || geometry.canvasBottom > geometry.viewportHeight + 1
+  ) {
+    throw new Error(
+      `${operation} left graph outside desktop viewport: ${JSON.stringify(geometry)}`,
+    );
+  }
+}
+
 function zoomControl(page) {
   return page.locator("label.zoom-control").filter({ hasText: "Zoom" });
 }
@@ -268,6 +301,9 @@ async function main() {
       undefined,
       { timeout: 30_000 },
     );
+    await page.locator('.graph-canvas[data-layout-ready="true"]')
+      .waitFor({ timeout: 30_000 });
+    await assertDesktopWorkspaceVisible(page, "Query to Map navigation");
     await changeMapAxis(page, "component", "group-by", "component");
     const zoomBeforeSelection = await zoomControl(page).locator("output").textContent();
     await selectGraphResult(page, "javascript");
