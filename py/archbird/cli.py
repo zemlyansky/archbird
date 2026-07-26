@@ -163,9 +163,35 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--view",
-        choices=("overview", "architecture", "audit"),
+        choices=("overview", "architecture", "tests", "evidence"),
         default="overview",
         help="human Markdown projection (default: overview)",
+    )
+    result.add_argument(
+        "--group-by",
+        choices=("component", "directory", "language", "layer", "none"),
+        default="",
+        help="override the view's graph grouping",
+    )
+    result.add_argument(
+        "--level",
+        choices=("component", "file", "symbol"),
+        default="",
+        help="override the view's graph entity level",
+    )
+    result.add_argument(
+        "--relations",
+        action="append",
+        default=None,
+        metavar="KINDS",
+        help="override relation families with a comma-separated list; repeatable",
+    )
+    result.add_argument(
+        "--overlay",
+        action="append",
+        default=None,
+        metavar="KINDS",
+        help="override Map-derived overlays with a comma-separated list; repeatable",
     )
     result.add_argument(
         "--detail",
@@ -187,7 +213,7 @@ def parser() -> argparse.ArgumentParser:
         "--max-chars",
         type=int,
         default=0,
-        help="maximum Markdown characters; omit only whole sections and ranked file blocks",
+        help="maximum Markdown characters; omit only complete displayed records",
     )
     result.add_argument("--pretty", action="store_true", help="pretty JSON")
     result.add_argument(
@@ -2041,9 +2067,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.format == "json" and args.max_chars:
             raise ValueError("--max-chars applies only to Markdown")
         if args.format == "json" and (
-            args.full or args.compact or args.detail != "standard" or args.view != "overview"
+            args.full
+            or args.compact
+            or args.detail != "standard"
+            or args.view != "overview"
+            or args.group_by
+            or args.level
+            or args.relations is not None
+            or args.overlay is not None
         ):
-            raise ValueError("--view, --detail, --compact, and --full apply only to Markdown")
+            raise ValueError(
+                "--view, graph projection axes, and detail options apply only to Markdown"
+            )
         if args.compact and args.full:
             raise ValueError("--compact and --full conflict")
         if args.compact and args.detail != "standard":
@@ -2071,6 +2106,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 detail="compact" if args.compact else args.detail,
                 full=args.full,
                 max_chars=args.max_chars,
+                group_by=args.group_by,
+                level=args.level,
+                relations=(
+                    tuple(
+                        part.strip()
+                        for value in args.relations
+                        for part in value.split(",")
+                        if part.strip()
+                    )
+                    if args.relations is not None
+                    else None
+                ),
+                overlays=(
+                    tuple(
+                        part.strip()
+                        for value in args.overlay
+                        for part in value.split(",")
+                        if part.strip()
+                    )
+                    if args.overlay is not None
+                    else None
+                ),
+                resolution_json=project.resolution_json or b"",
             )
         )
         _write(encoded, args.output)

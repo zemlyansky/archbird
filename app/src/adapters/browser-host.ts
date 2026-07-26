@@ -104,20 +104,55 @@ export class BrowserHost {
     return artifactPayload(await this.request("load", payload));
   }
 
-  async map(): Promise<ArtifactPayload> {
-    return artifactPayload(await this.request("map"));
+  async map(generation?: string): Promise<ArtifactPayload> {
+    return artifactPayload(await this.request("map", generation ? { generation } : {}));
   }
 
-  async view(view: GraphViewName): Promise<ArtifactPayload> {
-    return artifactPayload(await this.request("view", { max_edge_names: 3, max_nodes: 0, view }));
+  async projection(
+    plan: Record<string, unknown>,
+    generation?: string,
+  ): Promise<ArtifactPayload> {
+    return artifactPayload(await this.request("projection", {
+      ...(generation ? { generation } : {}),
+      plan,
+    }));
   }
 
-  async query(query: Record<string, unknown>): Promise<ArtifactPayload> {
-    return artifactPayload(await this.request("query", { query }));
+  async view(
+    view: GraphViewName,
+    query: Record<string, unknown> = {},
+    generation?: string,
+  ): Promise<ArtifactPayload> {
+    return artifactPayload(await this.request("view", {
+      ...(generation ? { generation } : {}),
+      max_edge_names: 3,
+      max_nodes: 0,
+      query,
+      view,
+    }));
   }
 
-  async source(path: string): Promise<Record<string, unknown>> {
-    return await this.request("source", { path }) as Record<string, unknown>;
+  async query(query: Record<string, unknown>, generation?: string): Promise<ArtifactPayload> {
+    return artifactPayload(await this.request("query", {
+      ...(generation ? { generation } : {}),
+      query,
+    }));
+  }
+
+  async verification(generation?: string): Promise<ArtifactPayload | null> {
+    const value = await this.request("verification", generation ? { generation } : {});
+    return value === null ? null : artifactPayload(value);
+  }
+
+  async diff(before: string, after: string): Promise<ArtifactPayload> {
+    return artifactPayload(await this.request("diff", { after, before }));
+  }
+
+  async source(path: string, generation?: string): Promise<Record<string, unknown>> {
+    return await this.request("source", {
+      ...(generation ? { generation } : {}),
+      path,
+    }) as Record<string, unknown>;
   }
 
   async snapshots(): Promise<SnapshotSummary[]> {

@@ -8,11 +8,26 @@ import {
   type HostResponse,
   type SnapshotSummary,
 } from "../adapters/protocol";
-import { readDirectoryFiles, readZipFile, type RepositoryInputFile } from "../sources/input";
+import {
+  directoryInventory,
+  readSelectedDirectoryFiles,
+  readZipFile,
+  type RepositoryInputFile,
+} from "../sources/input";
 
 interface BrowserRuntime {
   Project: {
+    discoveryContentPaths(paths: string[], options?: Record<string, unknown>): string[];
     fromFiles(sources: unknown[], options?: Record<string, unknown>): BrowserProject;
+    fromResolvedFiles(
+      sources: unknown[],
+      resolved: BrowserDiscovery,
+      options?: Record<string, unknown>,
+    ): BrowserProject;
+    resolveInventory(
+      files: Array<{ bytes: number; data?: Uint8Array; path: string }>,
+      options?: Record<string, unknown>,
+    ): BrowserDiscovery;
   };
   Source: new (path: string, data: Uint8Array) => unknown;
   VERSION: string;
@@ -26,8 +41,22 @@ interface BrowserRuntime {
       maxNodes: number,
       maxEdgeNames: number,
     ): Uint8Array;
+    projectionEvaluate(
+      map: Uint8Array,
+      resolution: Uint8Array,
+      projection: Uint8Array,
+      pretty?: boolean,
+    ): Uint8Array;
     sha256(bytes: Uint8Array): string;
   };
+}
+
+interface BrowserDiscovery {
+  resolution: {
+    effective_config: Record<string, unknown>;
+    files: Array<{ path: string }>;
+  };
+  resolutionJson: Uint8Array;
 }
 
 interface BrowserProject {
@@ -35,6 +64,8 @@ interface BrowserProject {
   graphViewJson(options: Record<string, unknown>): Uint8Array;
   mapJson(options?: { pretty?: boolean }): Uint8Array;
   queryJson(options?: Record<string, unknown>): Uint8Array;
+  verifyJson(options?: Record<string, unknown>): Uint8Array;
+  readonly verificationConfigured: boolean;
 }
 
 interface SnapshotRecord extends SnapshotSummary {
@@ -47,6 +78,7 @@ interface CurrentGeneration {
   map: Uint8Array;
   project: BrowserProject | null;
   projectName: string;
+  verification: Uint8Array | null;
 }
 
 const context = self as unknown as DedicatedWorkerGlobalScope;
@@ -88,12 +120,20 @@ function artifact(bytes: Uint8Array, generation: CurrentGeneration): Record<stri
   };
 }
 
-function requireCurrent(): CurrentGeneration {
+function requireCurrent(expected = ""): CurrentGeneration {
   if (!current) throw new Error("no repository generation is loaded");
+  if (expected && current.generation !== expected) {
+    throw new Error(`repository generation changed: expected ${expected}, got ${current.generation}`);
+  }
   return current;
 }
 
-function mapIdentity(bytes: Uint8Array): { generation: string; project: string; files: number } {
+function mapIdentity(bytes: Uint8Array): {
+  files: number;
+  generation: string;
+  project: string;
+  schemaVersion: number;
+} {
   let document: Record<string, unknown>;
   try {
     document = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
@@ -104,13 +144,25 @@ function mapIdentity(bytes: Uint8Array): { generation: string; project: string; 
   const generation = evidence?.input_sha256;
   const project = document.project;
   const files = document.files;
+  const schemaVersion = document.schema_version;
   if (typeof generation !== "string" || !/^[0-9a-f]{64}$/.test(generation)) {
     throw new Error("native Map has no valid evidence.input_sha256");
   }
-  if (typeof project !== "string" || !project || !Array.isArray(files)) {
+  if (
+    typeof project !== "string"
+    || !project
+    || !Array.isArray(files)
+    || !Number.isSafeInteger(schemaVersion)
+    || Number(schemaVersion) <= 0
+  ) {
     throw new Error("native Map identity is incomplete");
   }
-  return { files: files.length, generation, project };
+  return {
+    files: files.length,
+    generation,
+    project,
+    schemaVersion: Number(schemaVersion),
+  };
 }
 
 function openDatabase(): Promise<IDBDatabase | null> {
@@ -153,7 +205,10 @@ function snapshotSort(left: SnapshotRecord, right: SnapshotRecord): number {
 }
 
 async function persistSnapshot(row: SnapshotRecord): Promise<void> {
-  memorySnapshots.set(row.generation, row);
+  memorySnapshots.set(row.generation, {
+    ...row,
+    bytes: row.bytes.slice(0),
+  });
   const database = await openDatabase();
   if (database) {
     try {
@@ -180,7 +235,8 @@ async function persistSnapshot(row: SnapshotRecord): Promise<void> {
 
 async function findSnapshot(generation: string): Promise<SnapshotRecord> {
   const memory = memorySnapshots.get(generation);
-  if (memory) return memory;
+  if (memory?.bytes.byteLength) return memory;
+  memorySnapshots.delete(generation);
   const database = await openDatabase();
   if (!database) throw new Error(`snapshot is unavailable: ${generation}`);
   try {
@@ -196,17 +252,35 @@ async function findSnapshot(generation: string): Promise<SnapshotRecord> {
 }
 
 function rootConfig(files: RepositoryInputFile[]): Uint8Array | undefined {
-  const matches = files.filter((file) => file.path === "archbird.json" || file.path === ".archbird.json");
-  if (matches.length > 1) throw new Error("repository contains both archbird.json and .archbird.json");
-  return matches[0]?.data;
+  return files.find((file) => file.path === "archbird.json")?.data;
 }
 
 async function loadRepository(request: HostRequest): Promise<Record<string, unknown>> {
   const runtime = await requireRuntime();
   emit("scan-started", { kind: request.payload.kind || "unknown" });
   let files: RepositoryInputFile[];
+  let resolved: BrowserDiscovery | null = null;
   if (request.payload.kind === "directory" && Array.isArray(request.payload.files)) {
-    files = await readDirectoryFiles(request.payload.files as File[], (progress) => {
+    const inventory = directoryInventory(request.payload.files as File[]);
+    emit("progress", { completed: 0, phase: "inventory", total: inventory.length });
+    const paths = inventory.map((row) => row.path);
+    const contentPaths = new Set(runtime.Project.discoveryContentPaths(paths));
+    if (paths.includes("archbird.json")) contentPaths.add("archbird.json");
+    const controls = contentPaths.size
+      ? await readSelectedDirectoryFiles(inventory, contentPaths)
+      : [];
+    const controlByPath = new Map(controls.map((file) => [file.path, file.data]));
+    const config = rootConfig(controls);
+    resolved = runtime.Project.resolveInventory(
+      inventory.map((row) => ({
+        bytes: row.bytes,
+        ...(controlByPath.has(row.path) ? { data: controlByPath.get(row.path) } : {}),
+        path: row.path,
+      })),
+      { config },
+    );
+    const selected = new Set(resolved.resolution.files.map((row) => row.path));
+    files = await readSelectedDirectoryFiles(inventory, selected, (progress) => {
       emit("progress", progress as unknown as Record<string, unknown>);
     });
   } else if (request.payload.kind === "zip" && request.payload.file instanceof File) {
@@ -220,11 +294,16 @@ async function loadRepository(request: HostRequest): Promise<Record<string, unkn
   const sources = files.map((file) => new runtime.Source(file.path, file.data));
   let candidate: BrowserProject | null = null;
   try {
-    candidate = runtime.Project.fromFiles(sources, {
-      config: rootConfig(files),
-      typescript: true,
-    });
-    const map = candidate.mapJson();
+    candidate = resolved
+      ? runtime.Project.fromResolvedFiles(sources, resolved, { typescript: true })
+      : runtime.Project.fromFiles(sources, {
+        config: rootConfig(files),
+        typescript: true,
+      });
+    const map = new Uint8Array(candidate.mapJson());
+    const verification = candidate.verificationConfigured
+      ? new Uint8Array(candidate.verifyJson())
+      : null;
     const identity = mapIdentity(map);
     const next: CurrentGeneration = {
       files: new Map(files.map((file) => [file.path, file.data])),
@@ -232,6 +311,7 @@ async function loadRepository(request: HostRequest): Promise<Record<string, unkn
       map,
       project: candidate,
       projectName: identity.project,
+      verification,
     };
     const prior = current;
     current = next;
@@ -242,6 +322,7 @@ async function loadRepository(request: HostRequest): Promise<Record<string, unkn
       files: identity.files,
       generation: identity.generation,
       project: identity.project,
+      schema_version: identity.schemaVersion,
       stored_at: Date.now(),
     };
     try {
@@ -250,6 +331,9 @@ async function loadRepository(request: HostRequest): Promise<Record<string, unkn
       emit("progress", { phase: "snapshot-warning", message: errorMessage(error) }, identity.generation);
     }
     emit("snapshot-ready", { files: identity.files, project: identity.project }, identity.generation);
+    if (verification) {
+      emit("verification-ready", { project: identity.project }, identity.generation);
+    }
     return artifact(map, next);
   } catch (error) {
     candidate?.dispose();
@@ -280,7 +364,10 @@ async function handle(request: HostRequest): Promise<unknown> {
     activeSession = request.session;
     const runtime = await requireRuntime(String(request.payload.wasm_url || ""));
     return {
-      capabilities: ["directory", "zip", "map", "view", "query", "diff", "source", "snapshots"],
+      capabilities: [
+        "directory", "zip", "map", "view", "query", "diff", "source",
+        "verification", "snapshots",
+      ],
       engine: "wasm",
       version: runtime.VERSION,
     };
@@ -295,11 +382,28 @@ async function handle(request: HostRequest): Promise<unknown> {
     } : { generation: null, project: null, source_available: false };
   }
   if (request.method === "map") {
-    const generation = requireCurrent();
+    const generation = requireCurrent(String(request.payload.generation || ""));
     return artifact(generation.map, generation);
   }
+  if (request.method === "projection") {
+    const generation = requireCurrent(String(request.payload.generation || ""));
+    const plan = request.payload.plan;
+    if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+      throw new Error("projection request requires a plan object");
+    }
+    const runtime = await requireRuntime();
+    return artifact(
+      runtime.core.projectionEvaluate(
+        generation.map,
+        new Uint8Array(),
+        new TextEncoder().encode(JSON.stringify(plan)),
+        false,
+      ),
+      generation,
+    );
+  }
   if (request.method === "view") {
-    const generation = requireCurrent();
+    const generation = requireCurrent(String(request.payload.generation || ""));
     const view = request.payload.view;
     if (view !== "components" && view !== "files" && view !== "symbols") {
       throw new Error(`unsupported graph view: ${String(view)}`);
@@ -328,7 +432,7 @@ async function handle(request: HostRequest): Promise<unknown> {
     return artifact(bytes, generation);
   }
   if (request.method === "query") {
-    const generation = requireCurrent();
+    const generation = requireCurrent(String(request.payload.generation || ""));
     if (!generation.project) throw new Error("saved snapshot has no live query provider");
     return artifact(
       generation.project.queryJson(
@@ -348,7 +452,7 @@ async function handle(request: HostRequest): Promise<unknown> {
     };
   }
   if (request.method === "source") {
-    const generation = requireCurrent();
+    const generation = requireCurrent(String(request.payload.generation || ""));
     const path = String(request.payload.path || "");
     const bytes = generation.files.get(path);
     if (!bytes) throw new Error(`source is unavailable in the current generation: ${path}`);
@@ -380,17 +484,17 @@ async function handle(request: HostRequest): Promise<unknown> {
   }
   if (request.method === "open-snapshot") {
     const snapshot = await findSnapshot(String(request.payload.generation || ""));
-    current?.project?.dispose();
-    current = {
-      files: new Map(),
+    return {
+      bytes: snapshot.bytes.slice(0),
       generation: snapshot.generation,
-      map: new Uint8Array(snapshot.bytes.slice(0)),
-      project: null,
-      projectName: snapshot.project,
+      project: snapshot.project,
     };
-    return artifact(current.map, current);
   }
-  if (["verification", "act-proposal", "act-contract", "act-result"].includes(request.method)) {
+  if (request.method === "verification") {
+    const generation = requireCurrent(String(request.payload.generation || ""));
+    return generation.verification ? artifact(generation.verification, generation) : null;
+  }
+  if (["act-proposal", "act-contract", "act-result"].includes(request.method)) {
     return null;
   }
   if (request.method === "dispose") {

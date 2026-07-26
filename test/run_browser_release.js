@@ -43,6 +43,7 @@ async function main() {
     await page.goto(url, { waitUntil: "load", timeout: 30_000 });
     await page.waitForFunction(
       () => document.body.textContent !== "pending",
+      undefined,
       { timeout: 30_000 },
     );
     const result = await page.textContent("body");

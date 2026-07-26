@@ -57,6 +57,26 @@ def main() -> int:
             raise AssertionError(f"initial live candidate did not become ready: {state!r}")
         if state["project"] != "map-base" or not state["source_available"]:
             raise AssertionError(f"invalid ready state: {state!r}")
+        plan = {"id": "app-membership", "select": "component_membership"}
+        first = server.repository.request(
+            {"method": "projection", "payload": {"plan": plan}, "session": "test"}
+        )
+        second = server.repository.request(
+            {
+                "method": "projection",
+                "payload": {
+                    "plan": {
+                        "select": "component_membership",
+                        "id": "app-membership",
+                    }
+                },
+                "session": "test",
+            }
+        )
+        if first["blob_sha256"] != second["blob_sha256"]:
+            raise AssertionError("equivalent projection requests changed artifact bytes")
+        if len(server.repository.current["derived"]) != 1:
+            raise AssertionError("equivalent projection plans were evaluated more than once")
         time.sleep(0.8)
         if candidate_calls != 1:
             raise AssertionError(

@@ -298,7 +298,10 @@ def main() -> None:
             cwd=root,
         ).stdout
         bare = run(cwd=root)
-        if not bare.stdout.startswith("# demo architecture\n") or "\nMap `" not in bare.stdout:
+        if (
+            not bare.stdout.startswith("# demo architecture evidence\n")
+            or "\nProjection `map-overview`" not in bare.stdout
+        ):
             raise AssertionError("bare archbird shortcut did not render a Map")
         bare_stdout = run(
             "--format",

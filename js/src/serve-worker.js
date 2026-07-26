@@ -30,22 +30,29 @@ function main() {
   });
   try {
     const map = project.mapJson();
+    const verification = project.verificationConfigured ? project.verifyJson() : null;
     const document = JSON.parse(map.toString("utf8"));
     const generation = document.evidence?.input_sha256;
     if (typeof generation !== "string" || !/^[0-9a-f]{64}$/.test(generation)) {
       throw new Error("generated Map has no valid evidence.input_sha256");
     }
     const bytes = Uint8Array.from(map);
+    const verificationBytes = verification ? Uint8Array.from(verification) : null;
     parentPort.postMessage({
       files: document.files.map((row) => ({
         bytes: row.bytes,
         path: row.path,
         sha256: row.sha256,
       })),
-      generation,
-      map: bytes.buffer,
-      project: document.project,
-    }, [bytes.buffer]);
+          generation,
+          map: bytes.buffer,
+          project: document.project,
+          schemaVersion: document.schema_version,
+          verification: verificationBytes?.buffer || null,
+    }, [
+      bytes.buffer,
+      ...(verificationBytes ? [verificationBytes.buffer] : []),
+    ]);
   } finally {
     project.dispose();
   }

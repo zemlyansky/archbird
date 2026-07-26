@@ -5,11 +5,24 @@ const crypto = require("node:crypto");
 const http = require("node:http");
 const path = require("node:path");
 const { Worker } = require("node:worker_threads");
-const { diffMaps, exportGraph, queryMap } = require("./index");
+const {
+  diffMaps,
+  evaluateProjection,
+  exportGraph,
+  jsonCanonicalize,
+  queryMap,
+} = require("./index");
 
 const PROTOCOL_VERSION = 1;
+const STATIC_HOST_MARKER = 'name="archbird-host" content="static"';
+const SERVER_HOST_MARKER = 'name="archbird-host" content="server"';
 const SNAPSHOT_LIMIT = 4;
+const DERIVED_LIMIT = 16;
 const BODY_LIMIT = 2 * 1024 * 1024;
+const CAPABILITIES = [
+  "map", "projection", "view", "export", "query", "diff", "source",
+  "verification", "snapshots", "events",
+];
 const DEFAULT_SKIPPED_DIRECTORIES = new Set([
   ".git", ".hg", ".svn", ".venv", "__pycache__", "build", "dist", "node_modules",
 ]);
@@ -54,6 +67,17 @@ function appRoot(explicit) {
   throw new Error("visualization application is unavailable; build app/dist or package app assets");
 }
 
+function liveAppBytes(candidate) {
+  const bytes = fs.readFileSync(candidate);
+  if (!candidate.endsWith("index.html")) return bytes;
+  const document = bytes.toString("utf8");
+  const first = document.indexOf(STATIC_HOST_MARKER);
+  if (first < 0 || document.indexOf(STATIC_HOST_MARKER, first + STATIC_HOST_MARKER.length) >= 0) {
+    throw new Error("visualization index must contain exactly one static Archbird host marker");
+  }
+  return Buffer.from(document.replace(STATIC_HOST_MARKER, SERVER_HOST_MARKER));
+}
+
 class LiveRepository {
   constructor({
     root,
@@ -94,6 +118,7 @@ class LiveRepository {
       last_error: this.lastError,
       phase: this.phase,
       project: this.current?.project || null,
+      schema_version: this.current?.schemaVersion || null,
       source_available: Boolean(this.current),
     };
   }
@@ -150,11 +175,14 @@ class LiveRepository {
         settled = true;
         if (result.error) reject(new Error(result.error));
         else resolve({
+          derived: new Map(),
           files: result.files,
           generation: result.generation,
           map: Buffer.from(result.map),
           project: result.project,
+          schemaVersion: result.schemaVersion,
           stored_at: Date.now(),
+          verification: result.verification ? Buffer.from(result.verification) : null,
         });
       });
       worker.once("error", (error) => {
@@ -178,7 +206,6 @@ class LiveRepository {
     this.event("scan-started", { phase: "analyzing", root: "." }, this.current?.generation);
     this.building = this.candidate().then((snapshot) => {
       if (this.closed) return;
-      const changed = !this.current || snapshot.generation !== this.current.generation;
       this.current = snapshot;
       this.snapshots.set(snapshot.generation, snapshot);
       const ordered = [...this.snapshots.values()]
@@ -188,10 +215,15 @@ class LiveRepository {
       this.watchState = this.inputSignature();
       this.phase = "ready";
       this.lastError = null;
-      if (changed) {
+      this.event(
+        "snapshot-ready",
+        { files: snapshot.files.length, phase: "ready", project: snapshot.project },
+        snapshot.generation,
+      );
+      if (snapshot.verification) {
         this.event(
-          "snapshot-ready",
-          { files: snapshot.files.length, phase: "ready", project: snapshot.project },
+          "verification-ready",
+          { phase: "ready", project: snapshot.project },
           snapshot.generation,
         );
       }
@@ -318,6 +350,24 @@ class LiveRepository {
     };
   }
 
+  derived(snapshot, operation, request, evaluate) {
+    const canonical = jsonCanonicalize(Buffer.from(JSON.stringify(request)));
+    const digest = crypto.createHash("sha256").update(canonical).digest("hex");
+    const key = `${operation}:${digest}`;
+    const cached = snapshot.derived.get(key);
+    if (cached) {
+      snapshot.derived.delete(key);
+      snapshot.derived.set(key, cached);
+      return cached;
+    }
+    const bytes = Buffer.from(evaluate());
+    snapshot.derived.set(key, bytes);
+    while (snapshot.derived.size > DERIVED_LIMIT) {
+      snapshot.derived.delete(snapshot.derived.keys().next().value);
+    }
+    return bytes;
+  }
+
   source(snapshot, sourcePath) {
     const allowed = new Map(snapshot.files.map((row) => [row.path, row]));
     const { candidate, relative } = safeRelative(this.root, sourcePath);
@@ -429,16 +479,24 @@ function requestSnapshot(repository, selections, request) {
 
 async function hostRequest(repository, selections, request) {
   if (request.method === "bootstrap") {
-    return { capabilities: ["map", "view", "query", "diff", "source", "snapshots", "events"], engine: "native" };
+    return {
+      capabilities: CAPABILITIES,
+      engine: "native",
+    };
   }
   if (request.method === "state") {
-    const snapshot = repository.current;
-    return snapshot ? { generation: snapshot.generation, project: snapshot.project, source_available: true } : { generation: null, project: null, source_available: false };
+    return repository.state();
   }
   if (request.method === "snapshots") {
     return [...repository.snapshots.values()]
       .sort((left, right) => right.stored_at - left.stored_at || utf8Compare(left.generation, right.generation))
-      .map(({ map: _map, ...row }) => ({ files: row.files.length, generation: row.generation, project: row.project, stored_at: row.stored_at }));
+      .map((row) => ({
+        files: row.files.length,
+        generation: row.generation,
+        project: row.project,
+        schema_version: row.schemaVersion,
+        stored_at: row.stored_at,
+      }));
   }
   if (request.method === "open-snapshot") {
     const snapshot = repository.snapshot(request.payload.generation);
@@ -447,12 +505,40 @@ async function hostRequest(repository, selections, request) {
   }
   const snapshot = requestSnapshot(repository, selections, request);
   if (request.method === "map") return repository.artifact(snapshot, snapshot.map);
+  if (request.method === "projection") {
+    const plan = request.payload.plan;
+    if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+      throw new Error("projection request requires a plan object");
+    }
+    return repository.artifact(
+      snapshot,
+      repository.derived(snapshot, "projection", plan, () =>
+        evaluateProjection(snapshot.map, Buffer.from(JSON.stringify(plan)))),
+    );
+  }
   if (request.method === "view") {
-    return repository.artifact(snapshot, exportGraph(snapshot.map, {
+    const view = request.payload.view || "components";
+    const input = view === "symbols"
+      ? queryMap(snapshot.map, request.payload.query || {})
+      : snapshot.map;
+    return repository.artifact(snapshot, exportGraph(input, {
       format: "json",
       maxEdgeNames: Number(request.payload.max_edge_names ?? 3),
       maxNodes: Number(request.payload.max_nodes ?? 0),
-      view: request.payload.view || "components",
+      view,
+    }));
+  }
+  if (request.method === "export") {
+    const view = request.payload.view || "components";
+    const input = view === "symbols"
+      ? queryMap(snapshot.map, request.payload.query || {})
+      : snapshot.map;
+    return repository.artifact(snapshot, exportGraph(input, {
+      direction: request.payload.direction || "LR",
+      format: request.payload.format || "graphml",
+      maxEdgeNames: Number(request.payload.max_edge_names ?? 0),
+      maxNodes: Number(request.payload.max_nodes ?? 0),
+      view,
     }));
   }
   if (request.method === "query") {
@@ -464,7 +550,12 @@ async function hostRequest(repository, selections, request) {
     return repository.artifact(after, diffMaps(before.map, after.map));
   }
   if (request.method === "source") return repository.source(snapshot, request.payload.path);
-  if (["verification", "act-proposal", "act-contract", "act-result"].includes(request.method)) return null;
+  if (request.method === "verification") {
+    return snapshot.verification
+      ? repository.artifact(snapshot, snapshot.verification)
+      : null;
+  }
+  if (["act-proposal", "act-contract", "act-result"].includes(request.method)) return null;
   if (request.method === "dispose") {
     selections.delete(request.session);
     return { disposed: true };
@@ -495,6 +586,7 @@ async function createLiveServer({
     typescript,
   });
   const staticRoot = appRoot(app);
+  liveAppBytes(path.join(staticRoot, "index.html"));
   const selections = new Map();
   const server = http.createServer(async (request, response) => {
     securityHeaders(response);
@@ -522,7 +614,7 @@ async function createLiveServer({
     }
     if (pathname === "/api/v1/bootstrap" && request.method === "GET") {
       json(response, 200, {
-        capabilities: ["map", "view", "query", "diff", "source", "snapshots", "events"],
+        capabilities: CAPABILITIES,
         protocol_version: PROTOCOL_VERSION,
         ...repository.state(),
       });
@@ -607,7 +699,7 @@ async function createLiveServer({
       }
       candidate = path.join(staticRoot, "index.html");
     }
-    const bytes = fs.readFileSync(candidate);
+    const bytes = liveAppBytes(candidate);
     response.writeHead(200, {
       "Cache-Control": candidate.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable",
       "Content-Length": bytes.length,

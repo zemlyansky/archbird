@@ -61,6 +61,27 @@ function markedNames(relative, name) {
       fs.readFileSync(path.join(fixture, sourcePath)),
     ),
   );
+  const resolved = archbird.Project.resolveInventory([
+    ...sources.map((source) => ({
+      bytes: source.data.length,
+      path: source.path,
+    })),
+    {
+      bytes: 40 * 1024 * 1024,
+      path: "node_modules/tf/libtensorflow.so",
+    },
+  ], { config });
+  assert.equal(
+    resolved.resolution.files.some((row) => row.path.includes("node_modules")),
+    false,
+  );
+  const resolvedProject = archbird.Project.fromResolvedFiles(
+    sources,
+    resolved,
+    { typescript: false },
+  );
+  assert.equal(JSON.parse(resolvedProject.mapJson()).project, "map-base");
+  resolvedProject.dispose();
   const project = new archbird.Project(config, sources, { typescript: false });
   assert.match(project.mapInputSha256, /^[0-9a-f]{64}$/);
   const first = project.mapJson();
@@ -108,13 +129,30 @@ function markedNames(relative, name) {
   }).toString("utf8");
   assert.match(overlayBrief, /## Architecture constraints/);
   assert.match(overlayBrief, /fail error JAVASCRIPT-ENTRY/);
-  assert.match(project.mapMarkdown().toString("utf8"), /^# map-base/);
+  assert.match(
+    project.mapMarkdown().toString("utf8"),
+    /^# map-base architecture evidence/,
+  );
+  assert.match(
+    project.mapMarkdown({
+      view: "architecture",
+      groupBy: "language",
+      relations: ["imports"],
+    }).toString("utf8"),
+    /group `language`/,
+  );
+  assert.match(
+    project.mapMarkdown({ view: "tests", detail: "compact" }).toString("utf8"),
+    /## Projection completeness/,
+  );
   const componentGraphJson = project.graphViewJson();
+  const verificationJson = project.verifyJson();
   const symbolGraphJson = project.graphViewJson({
     view: "symbols",
     query: { symbols: ["js/index.js:add"], depth: 1, testDepth: 1 },
   });
   assert.equal(JSON.parse(componentGraphJson).artifact, "archbird-graph-view");
+  assert.equal(JSON.parse(verificationJson).artifact, "verification");
   assert.equal(JSON.parse(componentGraphJson).request.view, "components");
   assert.equal(JSON.parse(symbolGraphJson).request.view, "symbols");
   assert.ok(

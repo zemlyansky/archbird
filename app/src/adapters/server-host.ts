@@ -10,6 +10,7 @@ import {
   type SnapshotSummary,
 } from "./protocol";
 import type { GraphViewName } from "../artifacts/model";
+import type { GraphDirection, GraphFormat } from "./saved-artifact";
 
 type Listener = (event: HostEvent) => void;
 
@@ -29,6 +30,8 @@ export class ServerHost {
   private events: EventSource | null = null;
 
   static async connect(): Promise<ServerHost | null> {
+    const mode = document.querySelector<HTMLMetaElement>('meta[name="archbird-host"]')?.content;
+    if (mode !== "server") return null;
     try {
       const response = await fetch(`${import.meta.env.BASE_URL}api/v1/bootstrap`, {
         cache: "no-store",
@@ -92,8 +95,7 @@ export class ServerHost {
     return value.result;
   }
 
-  private async artifact(method: HostMethod, payload: Record<string, unknown> = {}): Promise<ArtifactPayload> {
-    const value = await this.request(method, payload);
+  private async artifactResult(value: unknown): Promise<ArtifactPayload> {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("local host artifact descriptor is invalid");
     }
@@ -115,24 +117,81 @@ export class ServerHost {
     return artifactPayload({ ...descriptor, bytes });
   }
 
-  map(): Promise<ArtifactPayload> {
-    return this.artifact("map");
+  private async artifact(method: HostMethod, payload: Record<string, unknown> = {}): Promise<ArtifactPayload> {
+    return this.artifactResult(await this.request(method, payload));
   }
 
-  view(view: GraphViewName): Promise<ArtifactPayload> {
-    return this.artifact("view", { max_edge_names: 3, max_nodes: 0, view });
+  map(generation?: string): Promise<ArtifactPayload> {
+    return this.artifact("map", generation ? { generation } : {});
   }
 
-  query(query: Record<string, unknown>): Promise<ArtifactPayload> {
-    return this.artifact("query", { query });
+  projection(
+    plan: Record<string, unknown>,
+    generation?: string,
+  ): Promise<ArtifactPayload> {
+    return this.artifact("projection", {
+      ...(generation ? { generation } : {}),
+      plan,
+    });
+  }
+
+  view(
+    view: GraphViewName,
+    query: Record<string, unknown> = {},
+    generation?: string,
+  ): Promise<ArtifactPayload> {
+    return this.artifact("view", {
+      ...(generation ? { generation } : {}),
+      max_edge_names: 3,
+      max_nodes: 0,
+      query,
+      view,
+    });
+  }
+
+  exportGraph(
+    format: Exclude<GraphFormat, "json">,
+    view: GraphViewName,
+    direction: GraphDirection,
+    query: Record<string, unknown> = {},
+    generation?: string,
+  ): Promise<ArtifactPayload> {
+    return this.artifact("export", {
+      direction,
+      format,
+      ...(generation ? { generation } : {}),
+      max_edge_names: 0,
+      max_nodes: 0,
+      query,
+      view,
+    });
+  }
+
+  query(query: Record<string, unknown>, generation?: string): Promise<ArtifactPayload> {
+    return this.artifact("query", {
+      ...(generation ? { generation } : {}),
+      query,
+    });
+  }
+
+  async verification(generation?: string): Promise<ArtifactPayload | null> {
+    const value = await this.request("verification", generation ? { generation } : {});
+    return value === null ? null : this.artifactResult(value);
+  }
+
+  diff(before: string, after: string): Promise<ArtifactPayload> {
+    return this.artifact("diff", { after, before });
   }
 
   async state(): Promise<Record<string, unknown>> {
     return await this.request("state") as Record<string, unknown>;
   }
 
-  async source(path: string): Promise<Record<string, unknown>> {
-    return await this.request("source", { path }) as Record<string, unknown>;
+  async source(path: string, generation?: string): Promise<Record<string, unknown>> {
+    return await this.request("source", {
+      ...(generation ? { generation } : {}),
+      path,
+    }) as Record<string, unknown>;
   }
 
   async snapshots(): Promise<SnapshotSummary[]> {

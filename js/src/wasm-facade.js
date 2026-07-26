@@ -525,6 +525,31 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
           )),
       );
     },
+    projectionRenderMarkdown(
+      map,
+      resolution,
+      projection,
+      detail = 1,
+      maxChars = 0,
+    ) {
+      if (!Number.isInteger(detail) || detail < 0 || detail > 2) {
+        throw new RangeError("detail must be 0, 1, or 2");
+      }
+      return withInputs(
+        [map, resolution, projection],
+        ([mapInput, resolutionInput, projectionInput]) =>
+          result(module._ab_wasm_projection_render_markdown(
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            projectionInput.pointer,
+            projectionInput.length,
+            detail,
+            sizeValue(maxChars, "maxChars"),
+          )),
+      );
+    },
     queryPlanCompile(
       config,
       queryId,

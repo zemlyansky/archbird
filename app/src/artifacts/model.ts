@@ -15,6 +15,7 @@ export interface GraphNode {
 }
 
 export interface GraphEdge {
+  attributes?: Record<string, unknown>;
   id: string;
   source: string;
   target: string;
@@ -49,6 +50,22 @@ export interface ParsedArtifact {
   document: Record<string, unknown>;
   bytes: Uint8Array;
   name: string;
+}
+
+export interface LiveMapReference {
+  artifact: "map";
+  generation: string;
+  name: string;
+  project: string;
+  schemaVersion: number;
+}
+
+export type WorkspaceArtifact = ParsedArtifact | LiveMapReference;
+
+export function isParsedArtifact(
+  artifact: WorkspaceArtifact,
+): artifact is ParsedArtifact {
+  return "document" in artifact && "bytes" in artifact;
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {

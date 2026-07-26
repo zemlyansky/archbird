@@ -20,6 +20,12 @@ static int field_compare(const void *left_raw, const void *right_raw) {
   return ab_string_compare(&left->name, &right->name);
 }
 
+static int string_value_compare(const void *left_raw, const void *right_raw) {
+  const AbValue *left = (const AbValue *)left_raw;
+  const AbValue *right = (const AbValue *)right_raw;
+  return ab_string_compare(&left->as.text, &right->as.text);
+}
+
 static int stable_id(const AbString *value) {
   size_t index;
   if (!value || !value->length)
@@ -54,14 +60,32 @@ static int string_array(const AbValue *value) {
   return 1;
 }
 
+static int string_array_unique(const AbValue *value) {
+  size_t left;
+  size_t right;
+  if (!string_array(value))
+    return 0;
+  for (left = 0; left < value->as.array.count; left++)
+    for (right = left + 1; right < value->as.array.count; right++)
+      if (ab_string_equal(&value->as.array.items[left].as.text,
+                          &value->as.array.items[right].as.text))
+        return 0;
+  return 1;
+}
+
 static int select_supported(const AbValue *select) {
   static const char *const supported[] = {
-      "artifact_routes",      "component_edges",     "component_membership",
-      "constant_memberships", "constant_values",     "file_edges",
-      "file_metrics",         "inventory_paths",     "macro_members",
-      "mapped_paths",         "package_entrypoints", "package_exports",
-      "provider_surface",     "search_domain",       "symbols",
-      "test_routes",          "test_selectors",
+      "artifact_routes", "build_routes",
+      "component_edges", "component_membership",
+      "components",      "constant_memberships",
+      "constant_values", "file_edges",
+      "file_metrics",    "graph",
+      "inventory_paths", "macro_members",
+      "mapped_paths",    "package_entrypoints",
+      "package_exports", "provider_surface",
+      "search_domain",   "symbols",
+      "symbol_entities", "symbol_relations",
+      "test_routes",     "test_selectors",
   };
   size_t index;
   if (!select || select->kind != AB_VALUE_STRING)
@@ -101,12 +125,21 @@ static int projection_field_allowed(const AbValue *select,
     static const char *const fields[] = {"artifacts"};
     return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
   }
+  if (select_is(select, "build_routes")) {
+    static const char *const fields[] = {"builds"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
   if (select_is(select, "component_edges")) {
-    static const char *const fields[] = {"kinds"};
+    static const char *const fields[] = {"kind_patterns", "kinds",
+                                         "name_patterns"};
     return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
   }
   if (select_is(select, "component_membership")) {
     static const char *const fields[] = {"components"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "components")) {
+    static const char *const fields[] = {"names"};
     return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
   }
   if (select_is(select, "constant_memberships")) {
@@ -124,6 +157,11 @@ static int projection_field_allowed(const AbValue *select,
   }
   if (select_is(select, "file_metrics")) {
     static const char *const fields[] = {"metric"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "graph")) {
+    static const char *const fields[] = {"group_by", "level", "overlays",
+                                         "relations"};
     return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
   }
   if (select_is(select, "macro_members")) {
@@ -153,6 +191,16 @@ static int projection_field_allowed(const AbValue *select,
                                          "names", "paths", "public_only"};
     return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
   }
+  if (select_is(select, "symbol_entities")) {
+    static const char *const fields[] = {"kinds", "layer", "name_patterns",
+                                         "names", "paths", "public_only"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "symbol_relations")) {
+    static const char *const fields[] = {"from_paths", "kinds", "resolutions",
+                                         "to_paths"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
   if (select_is(select, "test_routes")) {
     static const char *const fields[] = {"configured_only", "group", "paths",
                                          "selectors", "target_paths"};
@@ -169,14 +217,16 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
                                           const AbValue *definition,
                                           const AbString *id) {
   static const char *const arrays[] = {
-      "artifacts", "components",    "exclude",  "from_paths",
-      "include",   "kind_patterns", "kinds",    "name_patterns",
-      "names",     "packages",      "paths",    "routes",
-      "selectors", "target_paths",  "to_paths",
+      "artifacts",     "builds",       "components",    "exclude",
+      "from_paths",    "include",      "kind_patterns", "kinds",
+      "name_patterns", "names",        "overlays",      "packages",
+      "paths",         "relations",    "resolutions",   "routes",
+      "selectors",     "target_paths", "to_paths",
   };
   static const char *const strings[] = {
-      "call", "container", "group",        "layer",        "metric",
-      "name", "selector",  "strip_prefix", "strip_suffix",
+      "call",     "container",    "group",        "group_by",
+      "layer",    "level",        "metric",       "name",
+      "selector", "strip_prefix", "strip_suffix",
   };
   const AbValue *declared_id;
   const AbValue *select;
@@ -215,6 +265,53 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
   if (string_is(&select->as.text, "file_metrics") &&
       !ab_value_string_is(ab_value_member(definition, "metric"), "bytes"))
     return invalid(engine, "file_metrics requires metric bytes");
+  if (string_is(&select->as.text, "graph")) {
+    const AbValue *level = ab_value_member(definition, "level");
+    const AbValue *group = ab_value_member(definition, "group_by");
+    const AbValue *relations = ab_value_member(definition, "relations");
+    const AbValue *overlays = ab_value_member(definition, "overlays");
+    size_t item;
+    if (!level || (!ab_value_string_is(level, "component") &&
+                   !ab_value_string_is(level, "file") &&
+                   !ab_value_string_is(level, "symbol")))
+      return invalid(engine, "graph requires level component, file, or symbol");
+    if (group && !ab_value_string_is(group, "component") &&
+        !ab_value_string_is(group, "directory") &&
+        !ab_value_string_is(group, "language") &&
+        !ab_value_string_is(group, "layer"))
+      return invalid(
+          engine,
+          "graph group_by must be component, directory, language, or layer");
+    if (ab_value_string_is(level, "component") && group)
+      return invalid(engine, "component graph level cannot also be grouped");
+    if ((relations && !string_array_unique(relations)) ||
+        (overlays && !string_array_unique(overlays)))
+      return invalid(
+          engine, "graph relations and overlays must not contain duplicates");
+    for (item = 0; relations && item < relations->as.array.count; item++) {
+      const AbValue *value = &relations->as.array.items[item];
+      if (!ab_value_string_is(value, "builds") &&
+          !ab_value_string_is(value, "bridges") &&
+          !ab_value_string_is(value, "calls") &&
+          !ab_value_string_is(value, "declarations") &&
+          !ab_value_string_is(value, "imports") &&
+          !ab_value_string_is(value, "packages") &&
+          !ab_value_string_is(value, "references") &&
+          !ab_value_string_is(value, "tests"))
+        return invalid(engine, "graph relations contains an unsupported kind");
+      if (ab_value_string_is(level, "symbol") &&
+          !ab_value_string_is(value, "calls") &&
+          !ab_value_string_is(value, "references"))
+        return invalid(engine,
+                       "symbol graph level supports calls and references");
+    }
+    for (item = 0; overlays && item < overlays->as.array.count; item++) {
+      const AbValue *value = &overlays->as.array.items[item];
+      if (!ab_value_string_is(value, "diagnostics") &&
+          !ab_value_string_is(value, "evidence-quality"))
+        return invalid(engine, "graph overlays contains an unsupported kind");
+    }
+  }
   if (string_is(&select->as.text, "provider_surface") &&
       !ab_projection_nonblank(ab_value_member(definition, "name")))
     return invalid(engine, "provider_surface requires a name");
@@ -268,6 +365,10 @@ static ArchbirdStatus normalize_definition(ArchbirdEngine *engine,
                             source->name.length);
     if (status == ARCHBIRD_OK)
       status = ab_value_copy(engine, &target->value, &source->value);
+    if (status == ARCHBIRD_OK && target->value.kind == AB_VALUE_ARRAY &&
+        target->value.as.array.count > 1)
+      qsort(target->value.as.array.items, target->value.as.array.count,
+            sizeof(*target->value.as.array.items), string_value_compare);
   }
   if (status == ARCHBIRD_OK && output != count)
     status = ARCHBIRD_CONFLICT;

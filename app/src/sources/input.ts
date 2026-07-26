@@ -12,6 +12,12 @@ export interface RepositoryInputFile {
   data: Uint8Array;
 }
 
+export interface DirectoryInputFile {
+  bytes: number;
+  file: File;
+  path: string;
+}
+
 export interface SourceProgress {
   completed: number;
   phase: "inventory" | "read" | "unpack";
@@ -85,20 +91,34 @@ function validateRows(rows: Array<{ path: string; bytes: number }>): void {
   }
 }
 
-export async function readDirectoryFiles(
-  files: readonly File[],
-  progress: (progress: SourceProgress) => void = () => undefined,
-): Promise<RepositoryInputFile[]> {
+export function directoryInventory(files: readonly File[]): DirectoryInputFile[] {
   if (!files.length) throw new Error("selected directory contains no files");
   const rawPaths = files.map((file) => normalizeRepositoryPath(file.webkitRelativePath || file.name));
   const normalized = files.every((file) => Boolean(file.webkitRelativePath))
     ? stripSharedRoot(rawPaths)
     : rawPaths;
-  const rows = files.map((file, index) => ({
+  const rows: DirectoryInputFile[] = files.map((file, index) => ({
     bytes: file.size,
     file,
     path: normalizeRepositoryPath(normalized[index]),
   })).sort((left, right) => utf8Compare(left.path, right.path));
+  if (rows.length > SOURCE_LIMITS.files) {
+    throw new Error(`repository input exceeds ${SOURCE_LIMITS.files} files`);
+  }
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (seen.has(row.path)) throw new Error(`duplicate repository path: ${row.path}`);
+    seen.add(row.path);
+  }
+  return rows;
+}
+
+export async function readSelectedDirectoryFiles(
+  inventory: readonly DirectoryInputFile[],
+  selected: ReadonlySet<string>,
+  progress: (progress: SourceProgress) => void = () => undefined,
+): Promise<RepositoryInputFile[]> {
+  const rows = inventory.filter((row) => selected.has(row.path));
   validateRows(rows);
   progress({ completed: 0, phase: "inventory", total: rows.length });
   const result: RepositoryInputFile[] = [];
@@ -109,6 +129,18 @@ export async function readDirectoryFiles(
     }
   }
   return result;
+}
+
+export async function readDirectoryFiles(
+  files: readonly File[],
+  progress: (progress: SourceProgress) => void = () => undefined,
+): Promise<RepositoryInputFile[]> {
+  const inventory = directoryInventory(files);
+  return readSelectedDirectoryFiles(
+    inventory,
+    new Set(inventory.map((row) => row.path)),
+    progress,
+  );
 }
 
 function findEndOfCentralDirectory(bytes: Uint8Array): number {

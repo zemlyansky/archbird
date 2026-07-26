@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   base: "./",
@@ -9,6 +9,9 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ["archbird/wasm"],
+  },
+  test: {
+    include: ["test/**/*.spec.ts"],
   },
   build: {
     chunkSizeWarningLimit: 1500,

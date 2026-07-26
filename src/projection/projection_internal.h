@@ -42,6 +42,9 @@ ArchbirdStatus ab_projection_extract_map(ArchbirdEngine *engine,
                                          const AbValue *resolution,
                                          const AbProjectionPlan *plan,
                                          AbProjectionData *out);
+ArchbirdStatus ab_projection_extract_graph(AbProjectionContext *context,
+                                           const AbProjectionPlan *plan,
+                                           AbProjectionData *out);
 ArchbirdStatus ab_projection_extract_literal(ArchbirdEngine *engine,
                                              const AbObjectField *operand,
                                              AbProjectionData *out);

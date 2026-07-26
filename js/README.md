@@ -109,17 +109,25 @@ selected file and mapped fact; Markdown is only a human projection:
 
 ```bash
 npx archbird map --view overview --detail compact
-npx archbird map --view architecture
-npx archbird map --view audit --detail standard
-npx archbird map --view audit --full
+npx archbird map --view architecture \
+  --group-by component --level file --relations imports,calls
+npx archbird map --view tests --group-by directory
+npx archbird map --view evidence --detail full
 ```
 
-`--compact` and `--full` alias the corresponding detail levels. Query context
-uses the `exact`, `change`, `architecture`, and `audit` profiles plus per-kind
-quotas, route provenance/confidence, candidate/conservative policy, and finally
-`--max-chars` as a guard. `--progress auto` updates one terminal line for long
-interactive runs and stays silent when output is piped; use `always` or `never`
-to override it.
+`--view` chooses an overview, architecture, tests, or evidence preset.
+`--group-by` independently organizes entities by directory, configured
+component, layer, or language; `--level` selects component, file, or symbol
+nodes; and repeatable comma-separated `--relations` overrides the preset.
+These semantic axes compile to one exhaustive graph ProjectionPlan shared with
+the application. `--detail` changes presentation density only; `--compact` and
+`--full` are aliases, and `--max-chars` is a final rendering guard.
+
+Query context separately uses the `exact`, `change`, `architecture`, and
+`audit` profiles plus per-kind quotas, route provenance/confidence, and
+candidate/conservative policy. `--progress auto` updates one terminal line for
+long interactive runs and stays silent when output is piped; use `always` or
+`never` to override it.
 
 `direct`, `candidate`, and `conservative` are static evidence strengths, not
 claims that a test ran. Use project-runner observations for executed routes.
@@ -127,11 +135,14 @@ claims that a test ran. Use project-runner observations for executed routes.
 Run the local application while source changes:
 
 ```bash
-npx archbird serve --config archbird.json
+npx archbird serve
 ```
 
 `serve` prints a loopback URL immediately, analyzes in a worker, publishes only
 valid generations, and retains the last good Map when a later candidate fails.
+Live Map, projection, Query, Verify, and source work runs in the native Node
+host; the page receives typed ProjectionResults and does not load browser Wasm.
+Normal exploration does not download the canonical Map; saving it is explicit.
 
 ## Configuration
 

@@ -1505,6 +1505,43 @@ static napi_value projection_evaluate(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value projection_render_markdown(napi_env env,
+                                             napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5];
+  const uint8_t *map;
+  const uint8_t *resolution;
+  const uint8_t *projection;
+  size_t map_length;
+  size_t resolution_length;
+  size_t projection_length;
+  int32_t detail;
+  size_t max_chars;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 5 || !get_buffer(env, argv[0], &map, &map_length) ||
+      !get_buffer(env, argv[1], &resolution, &resolution_length) ||
+      !get_buffer(env, argv[2], &projection, &projection_length) ||
+      napi_get_value_int32(env, argv[3], &detail) != napi_ok ||
+      !get_optional_size(env, argc, argv, 4, 0, "maxChars", &max_chars))
+    return NULL;
+  status = saved_artifact_engine(
+      larger_input(larger_input(map_length, resolution_length),
+                   projection_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projection_render_markdown(
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, projection, projection_length,
+        (ArchbirdReportDetail)detail, max_chars, output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value query_plan_compile(napi_env env, napi_callback_info info) {
   size_t argc = 4;
   napi_value argv[4];
@@ -1903,6 +1940,8 @@ static napi_value init(napi_env env, napi_value exports) {
        napi_default, NULL},
       {"projectionEvaluate", NULL, projection_evaluate, NULL, NULL, NULL,
        napi_default, NULL},
+      {"projectionRenderMarkdown", NULL, projection_render_markdown, NULL, NULL,
+       NULL, napi_default, NULL},
       {"projectConfigurationCompile", NULL, project_configuration_compile, NULL,
        NULL, NULL, napi_default, NULL},
       {"changeVerify", NULL, change_verify, NULL, NULL, NULL, napi_default,

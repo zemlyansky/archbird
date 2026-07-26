@@ -5,7 +5,9 @@ export type HostMethod =
   | "load"
   | "state"
   | "map"
+  | "projection"
   | "view"
+  | "export"
   | "query"
   | "diff"
   | "source"
@@ -65,6 +67,7 @@ export interface SnapshotSummary {
   files: number;
   generation: string;
   project: string;
+  schema_version: number;
   stored_at: number;
 }
 

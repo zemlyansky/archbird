@@ -13,6 +13,7 @@ const {
   emptyMapCacheStats,
   emptyProviderCacheStats,
 } = require("./provider-cache");
+const { mapProjectionRequest } = require("./map-view");
 const { typescriptProviderBundles } = require("./providers/typescript");
 
 const NATIVE_LEXICAL_PROVIDERS = Object.freeze([
@@ -149,6 +150,18 @@ function canonicalForDigest(value) {
   return value;
 }
 
+function projectConfigurationForResolution(configJson, effectiveConfig) {
+  let authored = {};
+  if (configJson && configJson.length) {
+    authored = JSON.parse(Buffer.from(configJson).toString("utf8"));
+  }
+  const result = { ...effectiveConfig };
+  for (const field of ["projections", "queries", "constraints"]) {
+    if (Object.hasOwn(authored, field)) result[field] = authored[field];
+  }
+  return Buffer.from(JSON.stringify(canonicalForDigest(result)));
+}
+
 class Source {
   constructor(path, data, { language = "", layer = "", roles = ["source"] } = {}) {
     if (!Buffer.isBuffer(data)) data = Buffer.from(data);
@@ -221,6 +234,7 @@ class Project {
     this.cacheStats = emptyProviderCacheStats();
     this.mapCacheStats = emptyMapCacheStats();
     this._configJson = null;
+    this._projectConfigurationJson = null;
     this._cachedMap = null;
     this._mapCache = null;
     this._mapCacheParameters = null;
@@ -260,7 +274,13 @@ class Project {
     );
     project.resolutionJson = resolutionJson;
     project.root = repository;
-    project.setConfig(configJson);
+    const effectiveConfig = Buffer.from(
+      JSON.stringify(canonicalForDigest(resolution.effective_config)),
+    );
+    project.setConfig(
+      effectiveConfig,
+      projectConfigurationForResolution(configJson, resolution.effective_config),
+    );
     if (scan) project.scan("primary", {
       typescript, cacheDir, cacheMaxBytes, mapCache,
     });
@@ -318,7 +338,10 @@ class Project {
     );
     current.root = repository;
     current.resolutionJson = resolutionJson;
-    current.setConfig(effectiveConfig);
+    current.setConfig(
+      effectiveConfig,
+      projectConfigurationForResolution(configJson, resolution.effective_config),
+    );
     if (scan) current.scan("primary", {
       typescript, cacheDir, cacheMaxBytes, mapCache,
     });
@@ -342,10 +365,18 @@ class Project {
     return native.projectConfigSha256(this._handle);
   }
 
-  setConfig(configJson) {
+  setConfig(configJson, projectConfigurationJson = configJson) {
     if (this._providersFinalized) throw new Error("providers are already finalized");
     this._configJson = Buffer.from(configJson);
+    this._projectConfigurationJson = Buffer.from(projectConfigurationJson);
     native.projectSetConfig(this._handle, this._configJson);
+  }
+
+  get verificationConfigured() {
+    if (this._projectConfigurationJson === null) return false;
+    const document = JSON.parse(this._projectConfigurationJson.toString("utf8"));
+    return document.constraints && typeof document.constraints === "object"
+      && Object.keys(document.constraints).length > 0;
   }
 
   addProvider(providerJson, mode = "primary") {
@@ -676,7 +707,10 @@ class Project {
   }
 
   mapMarkdown(options = {}) {
-    return renderMapMarkdown(this.mapJson(), options);
+    return renderMapMarkdown(this.mapJson(), {
+      ...options,
+      resolutionJson: options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+    });
   }
 
   queryJson(options = {}) {
@@ -694,6 +728,32 @@ class Project {
     return queryMapMarkdown(this.mapJson(), {
       ...options,
       resolutionJson: options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+    });
+  }
+
+  verifyJson({
+    constraintIds = [],
+    baseline = null,
+    maps = null,
+    observations = null,
+    policyDate = null,
+    pretty = false,
+  } = {}) {
+    if (this._projectConfigurationJson === null) {
+      throw new Error("verification requires project configuration");
+    }
+    const request = {};
+    if (constraintIds.length) request.ids = [...constraintIds];
+    if (baseline !== null) request.baseline = baseline;
+    if (maps !== null) request.maps = maps;
+    if (observations !== null) request.observations = observations;
+    if (policyDate !== null) request.policy_date = policyDate;
+    return evaluateConstraints(this._projectConfigurationJson, this.mapJson(), {
+      pretty,
+      requestJson: Object.keys(request).length
+        ? Buffer.from(JSON.stringify(canonicalForDigest(request)))
+        : Buffer.alloc(0),
+      resolutionJson: this.resolutionJson ?? Buffer.alloc(0),
     });
   }
 
@@ -1177,32 +1237,15 @@ function queryMap(mapJson, options = {}) {
 
 function renderMapMarkdown(
   mapJson,
-  {
-    view = "overview",
-    detail = "standard",
-    compact = false,
-    full = false,
-    maxChars = 0,
-  } = {},
+  options = {},
 ) {
-  const views = { overview: 0, architecture: 1, audit: 2 };
-  const details = { compact: 0, standard: 1, full: 2 };
-  if (!Object.hasOwn(views, view)) {
-    throw new RangeError("view must be overview, architecture, or audit");
-  }
-  if (!Object.hasOwn(details, detail)) {
-    throw new RangeError("detail must be compact, standard, or full");
-  }
-  if (compact && full) throw new RangeError("compact and full conflict");
-  if ((compact || full) && detail !== "standard") {
-    throw new RangeError("detail conflicts with compact/full alias");
-  }
-  const selectedDetail = compact ? "compact" : (full ? "full" : detail);
-  return native.mapMarkdownView(
+  const request = mapProjectionRequest(options);
+  return native.projectionRenderMarkdown(
     Buffer.from(mapJson),
-    views[view],
-    details[selectedDetail],
-    maxChars,
+    Buffer.from(options.resolutionJson ?? Buffer.alloc(0)),
+    Buffer.from(JSON.stringify(request.definition)),
+    request.detail,
+    request.maxChars,
   );
 }
 

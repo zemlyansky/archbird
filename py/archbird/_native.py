@@ -684,6 +684,32 @@ def projection_evaluate(
     )
 
 
+def projection_render_markdown(
+    map_json: bytes,
+    projection_json: bytes,
+    *,
+    resolution_json: bytes = b"",
+    detail: int = 1,
+    max_chars: int = 0,
+) -> bytes:
+    """Evaluate and render one graph projection as Markdown."""
+
+    if max_chars < 0:
+        raise ValueError("projection max_chars must be a nonnegative integer")
+    return _simple_render(
+        "archbird_projection_render_markdown",
+        [
+            _bytes(map_json, "Map"),
+            _bytes(resolution_json),
+            _bytes(projection_json, "projection definition"),
+        ],
+        suffix_types=(ctypes.c_int, ctypes.c_size_t),
+        suffix_values=(detail, max_chars),
+        include_flags=False,
+        saved_artifact=True,
+    )
+
+
 def query_plan_compile(
     config: bytes,
     query_id: str,

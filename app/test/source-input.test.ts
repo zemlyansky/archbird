@@ -4,9 +4,11 @@ import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 import {
   SOURCE_LIMITS,
+  directoryInventory,
   extractZipBytes,
   normalizeRepositoryPath,
   readDirectoryFiles,
+  readSelectedDirectoryFiles,
 } from "../src/sources/input";
 
 function directoryFile(path: string, source: string): globalThis.File {
@@ -26,6 +28,21 @@ test("directory input strips only the user-selected root and sorts paths", async
   assert.deepEqual(rows.map((row) => row.path), ["README.md", "src/a.c", "src/z.c"]);
   assert.equal(new TextDecoder().decode(rows[1].data), "int a;\n");
   assert.deepEqual(progress, ["inventory:0", "read:3"]);
+});
+
+test("directory limits apply after discovery selection", async () => {
+  const source = directoryFile("fixture/src/a.c", "int a;\n");
+  const excluded = {
+    arrayBuffer: async () => {
+      throw new Error("excluded dependency was read");
+    },
+    name: "libtensorflow.so",
+    size: SOURCE_LIMITS.fileBytes + 1,
+    webkitRelativePath: "fixture/node_modules/tf/libtensorflow.so",
+  } as unknown as globalThis.File;
+  const inventory = directoryInventory([excluded, source]);
+  const rows = await readSelectedDirectoryFiles(inventory, new Set(["src/a.c"]));
+  assert.deepEqual(rows.map((row) => row.path), ["src/a.c"]);
 });
 
 test("bounded ZIP input strips a shared archive root and retains exact bytes", () => {

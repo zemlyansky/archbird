@@ -21,6 +21,7 @@ from archbird.native import (
     freeze_constraints_json,
     publish_okf_bundle,
     query_map_json,
+    render_map_markdown,
 )
 from archbird.project_configuration import compile_ad_hoc_query, compile_named_query
 
@@ -322,7 +323,353 @@ def main() -> None:
     ] == ["archbird_engine_create"]
     assert len(exact_symbol_projection["fact"]["items"][0]["evidence"]) >= 2
 
+    edge_projection = json.loads(
+        evaluate_projection_json(
+            modern_map,
+            {"id": "file-edge-names", "select": "file_edges"},
+        )
+    )
+    edge_items = edge_projection["fact"]["items"]
+    assert edge_items
+    edge = edge_items[0]["attributes"]
+    source_edge = next(
+        row
+        for row in json.loads(modern_map)["edges"]
+        if row["source"] == edge["source"]
+        and row["kind"] == edge["kind"]
+        and row["target"] == edge["target"]
+    )
+    assert edge["names"] == source_edge["names"]
+
     inventory_map = json.loads(_fixture_map(ROOT / "test/fixtures/map_packages"))
+    report_map = (ROOT / "test/fixtures/report_map.json").read_bytes()
+    graph_definition = {
+        "id": "architecture-graph",
+        "select": "graph",
+        "group_by": "directory",
+        "level": "file",
+        "relations": [
+            "builds",
+            "bridges",
+            "declarations",
+            "imports",
+            "packages",
+            "tests",
+        ],
+        "overlays": ["diagnostics", "evidence-quality"],
+    }
+    graph = json.loads(evaluate_projection_json(report_map, graph_definition))
+    assert graph["fact"]["shape"] == "graph"
+    assert graph["completeness"]["classification"] == "incomplete"
+    coverage = next(
+        row
+        for row in graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "coverage"
+    )
+    assert coverage["state"] == "unknown"
+    assert "discovery coverage" in coverage["message"]
+    graph_records = {
+        kind: [
+            row
+            for row in graph["fact"]["items"]
+            if row["attributes"]["record_kind"] == kind
+        ]
+        for kind in ("diagnostic", "group", "ledger", "membership", "node", "relation")
+    }
+    assert all(graph_records.values())
+    graph_node_ids = {row["attributes"]["id"] for row in graph_records["node"]}
+    assert "file:src/core.c" in graph_node_ids
+    assert "package:npm" in graph_node_ids
+    assert "build:build" in graph_node_ids
+    assert {
+        row["attributes"]["family"] for row in graph_records["relation"]
+    } >= {"bridges", "builds", "declarations", "imports", "packages", "tests"}
+    assert all(
+        row["attributes"]["source"] in graph_node_ids
+        and row["attributes"]["target"] in graph_node_ids
+        for row in graph_records["relation"]
+    )
+    assert all(
+        row["attributes"]["evidence_class"] in {"direct", "stale", "unknown"}
+        for row in graph_records["node"] + graph_records["relation"]
+    )
+    external_build_map = json.loads(report_map)
+    external_build_map["builds"][0]["paths"].append("/")
+    external_build_graph = json.loads(
+        evaluate_projection_json(
+            json.dumps(external_build_map, separators=(",", ":")).encode(),
+            graph_definition,
+        )
+    )
+    external_build_nodes = {
+        row["attributes"]["id"]
+        for row in external_build_graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "node"
+    }
+    assert "external:/" in external_build_nodes
+    assert any(
+        row["attributes"].get("family") == "builds"
+        and row["attributes"].get("source") == "build:build"
+        and row["attributes"].get("target") == "external:/"
+        for row in external_build_graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "relation"
+    )
+    file_level_test_map = json.loads(report_map)
+    file_level_test_map["tests"][0]["cases"] = []
+    file_level_test_graph = json.loads(
+        evaluate_projection_json(
+            json.dumps(file_level_test_map, separators=(",", ":")).encode(),
+            {
+                "id": "file-level-tests",
+                "select": "graph",
+                "group_by": "directory",
+                "level": "file",
+                "relations": ["tests"],
+            },
+        )
+    )
+    assert any(
+        row["attributes"].get("family") == "tests"
+        and row["attributes"].get("source") == "external:test/test_api.js"
+        and row["attributes"].get("target") == "file:js/runtime.js"
+        for row in file_level_test_graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "relation"
+    )
+    reordered_graph = json.loads(
+        evaluate_projection_json(
+            report_map,
+            {
+                "relations": list(reversed(graph_definition["relations"])),
+                "level": "file",
+                "overlays": list(reversed(graph_definition["overlays"])),
+                "group_by": "directory",
+                "select": "graph",
+                "id": "same-architecture-graph",
+            },
+        )
+    )
+    assert graph["projection_definition_sha256"] == reordered_graph[
+        "projection_definition_sha256"
+    ]
+    assert graph["projection_result_sha256"] == reordered_graph[
+        "projection_result_sha256"
+    ]
+    incomplete_graph = json.loads(
+        evaluate_projection_json(
+            report_map,
+            {
+                "id": "incomplete-call-graph",
+                "select": "graph",
+                "group_by": "directory",
+                "level": "file",
+                "relations": ["calls"],
+            },
+        )
+    )
+    assert incomplete_graph["completeness"]["classification"] == "incomplete"
+    assert any(
+        row["attributes"]["record_kind"] == "node"
+        for row in incomplete_graph["fact"]["items"]
+    )
+    assert [
+        (
+            row["attributes"]["family"],
+            row["attributes"]["unknown"],
+            row["state"],
+        )
+        for row in incomplete_graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "ledger"
+    ] == [("calls", 1, "unknown")]
+    for view_index, view in enumerate(
+        ("overview", "architecture", "tests", "evidence")
+    ):
+        report = render_map_markdown(report_map, view=view, detail="compact")
+        assert report.startswith(b"# sample architecture evidence\n")
+        assert b"## Projection completeness\n" in report
+        assert report == _native.map_markdown_view(
+            report_map, view_index, 0, max_chars=0
+        )
+    budgeted_report = render_map_markdown(
+        report_map, view="overview", detail="standard", max_chars=1_800
+    )
+    assert len(budgeted_report.decode("utf-8")) <= 1_800
+    assert b"Presentation omitted" in budgeted_report
+    try:
+        render_map_markdown(
+            report_map, view="overview", detail="full", max_chars=1_800
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("full graph report accepted a presentation budget")
+    component_graph = json.loads(
+        evaluate_projection_json(
+            report_map,
+            {
+                "id": "component-graph",
+                "select": "graph",
+                "level": "component",
+                "relations": ["declarations", "imports"],
+            },
+        )
+    )
+    component_nodes = {
+        row["attributes"]["id"]: row
+        for row in component_graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "node"
+    }
+    assert "component:core" in component_nodes
+    assert any(
+        node["attributes"]["entity_kind"] == "unassigned"
+        for node in component_nodes.values()
+    )
+    grouped_component_graph = json.loads(
+        evaluate_projection_json(
+            report_map,
+            {
+                "id": "component-file-graph",
+                "select": "graph",
+                "group_by": "component",
+                "level": "file",
+                "relations": ["imports"],
+            },
+        )
+    )
+    core_group = next(
+        row
+        for row in grouped_component_graph["fact"]["items"]
+        if row["attributes"].get("record_kind") == "group"
+        and row["attributes"].get("id") == "component:core"
+    )
+    assert core_group["attributes"]["description"] == ""
+    assert core_group["attributes"]["files"] == ["src/core.c", "src/core.h"]
+    assert core_group["attributes"]["symbol_count"] == 8
+    assert core_group["attributes"]["member_count"] == 2
+    no_component_inventory = json.loads(report_map)
+    del no_component_inventory["components"]
+    unavailable_component_graph = json.loads(
+        evaluate_projection_json(
+            json.dumps(
+                no_component_inventory, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            {
+                "id": "missing-component-graph",
+                "select": "graph",
+                "group_by": "component",
+                "level": "file",
+                "relations": [],
+            },
+        )
+    )
+    assert unavailable_component_graph["completeness"]["classification"] == "unknown"
+    assert unavailable_component_graph["fact"]["state"] == "unknown"
+    assert [
+        (row["key"], row["state"], row["message"])
+        for row in unavailable_component_graph["fact"]["items"]
+    ] == [
+        (
+            "projection",
+            "unknown",
+            "project map has no component/file inventory",
+        )
+    ]
+    many_component_map = json.loads(report_map)
+    many_component_map["components"] = [
+        {
+            "description": "",
+            "files": ["src/core.h"] if index == 0 else ["src/core.c"],
+            "name": f"overlap-{index:02d}",
+            "outgoing": {},
+            "symbol_count": 0,
+        }
+        for index in range(21)
+    ]
+    many_component_graph = json.loads(
+        evaluate_projection_json(
+            json.dumps(many_component_map, separators=(",", ":")).encode(),
+            {
+                "id": "many-component-graph",
+                "select": "graph",
+                "level": "component",
+                "relations": ["declarations"],
+            },
+        )
+    )
+    assert len(
+        [
+            row
+            for row in many_component_graph["fact"]["items"]
+            if row["attributes"]["record_kind"] == "node"
+            and row["attributes"]["entity_kind"] == "component"
+        ]
+    ) == 21
+    assert len(
+        {
+            row["attributes"]["target"]
+            for row in many_component_graph["fact"]["items"]
+            if row["attributes"]["record_kind"] == "relation"
+            and row["attributes"]["family"] == "declarations"
+        }
+    ) == 20
+    symbol_graph = json.loads(
+        evaluate_projection_json(
+            modern_map,
+            {
+                "id": "symbol-graph",
+                "select": "graph",
+                "group_by": "layer",
+                "level": "symbol",
+                "relations": ["calls", "references"],
+            },
+        )
+    )
+    assert any(
+        row["attributes"]["record_kind"] == "node"
+        and row["attributes"]["entity_kind"] == "symbol"
+        for row in symbol_graph["fact"]["items"]
+    )
+    assert {
+        row["attributes"]["family"]
+        for row in symbol_graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "ledger"
+    } == {"calls", "references"}
+    for invalid_graph in (
+        {
+            "id": "missing-level",
+            "select": "graph",
+        },
+        {
+            "id": "grouped-components",
+            "select": "graph",
+            "level": "component",
+            "group_by": "directory",
+        },
+        {
+            "id": "duplicate-relations",
+            "select": "graph",
+            "level": "file",
+            "relations": ["imports", "imports"],
+        },
+        {
+            "id": "invalid-symbol-relation",
+            "select": "graph",
+            "level": "symbol",
+            "relations": ["imports"],
+        },
+        {
+            "id": "verification-is-not-map-derived",
+            "select": "graph",
+            "level": "file",
+            "overlays": ["verification"],
+        },
+    ):
+        try:
+            evaluate_projection_json(report_map, invalid_graph)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"invalid graph projection accepted: {invalid_graph}")
+
     malformed = json.loads(json.dumps(inventory_map))
     malformed["files"][0]["symbols"][0].pop("kind")
     _assert_invalid_projection(

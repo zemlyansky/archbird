@@ -693,10 +693,11 @@ def main() -> int:
         raise AssertionError(
             f"zero-config C registry routes are inaccurate: {c_registry_cases!r}"
         )
-    zero_report = zero_project.map_markdown(view="audit").decode("utf-8")
+    zero_report = zero_project.map_markdown(view="evidence").decode("utf-8")
     if (
         "unsupported-known=1" not in zero_report
-        or "Coverage warning:" not in zero_report
+        or "## Repository coverage" not in zero_report
+        or "Classification: **incomplete**" not in zero_report
     ):
         raise AssertionError("Map Markdown hid unsupported-language coverage")
     if {row["path"] for row in zero_map["files"]} & {
@@ -723,12 +724,15 @@ def main() -> int:
         if first_clone_map != second_clone_map:
             raise AssertionError("checkout path changed canonical Map evidence")
     standard_map = project.map_markdown()
-    if not standard_map.startswith(b"# map-base architecture\n"):
+    if not standard_map.startswith(b"# map-base architecture evidence\n"):
         raise AssertionError("native Python standard Map report is invalid")
-    if b"## Key files and symbols" not in standard_map:
-        raise AssertionError("native Python overview omitted key files")
-    if b"## Languages" not in project.map_markdown(view="architecture"):
-        raise AssertionError("native Python architecture view omitted languages")
+    if b"## Entities" not in standard_map or b"## Relations" not in standard_map:
+        raise AssertionError("native Python overview omitted graph evidence")
+    language_map = project.map_markdown(
+        view="architecture", group_by="language"
+    )
+    if b"group `language`" not in language_map or b"## Groups" not in language_map:
+        raise AssertionError("native Python language grouping is unavailable")
     if len(project.map_markdown(detail="compact")) >= len(standard_map):
         raise AssertionError("native Python compact detail was not compact")
     if project.map_markdown(full=True) == standard_map:
@@ -821,6 +825,7 @@ def main() -> int:
     graphml = export_graph(first, format="graphml", view="files")
     mermaid = export_graph(first, format="mermaid", view="components")
     graph_json = project.graph_view_json(view="components")
+    project_verification_json = project.verify_json()
     symbol_graph_json = project.graph_view_json(
         view="symbols",
         query={"symbols": ["js/index.js:add"], "depth": 1, "test_depth": 1},
@@ -830,6 +835,7 @@ def main() -> int:
     if not mermaid.startswith(b"%% Archbird components graph"):
         raise AssertionError("native Python Mermaid export is invalid")
     graph_document = json.loads(graph_json)
+    project_verification_document = json.loads(project_verification_json)
     symbol_graph_document = json.loads(symbol_graph_json)
     if (
         graph_document["artifact"] != "archbird-graph-view"
@@ -837,6 +843,8 @@ def main() -> int:
         or graph_document["source"]["artifact"] != "map"
     ):
         raise AssertionError("native Python component graph JSON is invalid")
+    if project_verification_document["artifact"] != "verification":
+        raise AssertionError("native Python Project Verify artifact is invalid")
     if (
         symbol_graph_document["request"]["view"] != "symbols"
         or symbol_graph_document["source"]["artifact"] != "query"
@@ -1746,7 +1754,7 @@ def main() -> int:
             ]
         )
         if status or not map_report.read_text(encoding="utf-8").startswith(
-            "# map-base architecture\n"
+            "# map-base architecture evidence\n"
         ):
             raise AssertionError("native Python default Map Markdown CLI failed")
         merge_conflicts = json.loads(merge_conflicts_report.read_bytes())

@@ -453,6 +453,11 @@
           {
             "source": "api",
             "kind": "*",
+            "target": "projection"
+          },
+          {
+            "source": "api",
+            "kind": "*",
             "target": "query"
           },
           {
@@ -669,6 +674,11 @@
             "source": "interchange",
             "kind": "*",
             "target": "base"
+          },
+          {
+            "source": "interchange",
+            "kind": "*",
+            "target": "projection"
           },
           {
             "source": "interchange",

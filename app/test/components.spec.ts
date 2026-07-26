@@ -1,0 +1,242 @@
+// @vitest-environment happy-dom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createApp, nextTick, type App as VueApp } from "vue";
+import type { ParsedArtifact } from "../src/artifacts/model";
+import DocumentPanel from "../src/components/DocumentPanel.vue";
+import InspectorPanel from "../src/components/InspectorPanel.vue";
+import VerificationEditor from "../src/components/VerificationEditor.vue";
+
+const encoder = new TextEncoder();
+let mounted: VueApp<Element> | null = null;
+
+function artifact(document: Record<string, unknown>, name: string): ParsedArtifact {
+  return {
+    artifact: String(document.artifact || "project-configuration"),
+    bytes: encoder.encode(JSON.stringify(document)),
+    document,
+    name,
+  };
+}
+
+function mount(component: Parameters<typeof createApp>[0], props: Record<string, unknown>) {
+  const root = document.createElement("div");
+  document.body.append(root);
+  mounted = createApp(component, props);
+  mounted.mount(root);
+  return root;
+}
+
+beforeEach(() => {
+  document.body.replaceChildren();
+  vi.stubGlobal("URL", {
+    ...URL,
+    createObjectURL: vi.fn(() => "blob:archbird-test"),
+    revokeObjectURL: vi.fn(),
+  });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  mounted?.unmount();
+  mounted = null;
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("artifact workspaces", () => {
+  it("explains configured component dependencies with concrete file relations", () => {
+    const graph = {
+      artifact: "archbird-graph-view",
+      diagnostics: [],
+      edges: [{
+        attributes: {
+          verification_constraints: ["ARCH-EDGE", "ARCH-CYCLE"],
+          verification_findings: 0,
+          verification_status: "pass",
+        },
+        classification: "direct",
+        evidence: [],
+        id: "edge",
+        kind: "import",
+        names: ["parser.h"],
+        omitted_names: 0,
+        source: "base",
+        target: "parser",
+      }],
+      nodes: [{
+        attributes: {
+          description: "Base utilities",
+          member_files: ["src/a.c", "src/b.c"],
+          presentation_role: "group",
+          symbol_count: 2,
+        },
+        evidence: [],
+        id: "base",
+        identity: "component:base",
+        kind: "component",
+        label: "base",
+        parent: null,
+      }, {
+        attributes: {
+          description: "Parser",
+          member_files: ["vendor/parser.h"],
+          presentation_role: "group",
+          symbol_count: 1,
+        },
+        evidence: [],
+        id: "parser",
+        identity: "component:parser",
+        kind: "component",
+        label: "parser",
+        parent: null,
+      }],
+      omissions: [],
+      project: "demo",
+      request: { max_edge_names: 10, max_nodes: 100, view: "components" },
+      schema_version: 1,
+      source: {},
+      summary: { edges: 1, nodes: 2 },
+      tool: {},
+    };
+    const root = mount(InspectorPanel, {
+      fileGraph: {
+        ...graph,
+        edges: [{
+          ...graph.edges[0],
+          id: "file-edge-a",
+          source: "file-a",
+          target: "file-parser",
+        }, {
+          ...graph.edges[0],
+          id: "file-edge-b",
+          source: "file-b",
+          target: "file-parser",
+        }],
+        nodes: [{
+          ...graph.nodes[0],
+          id: "file-a",
+          identity: "src/a.c",
+          kind: "file",
+          label: "src/a.c",
+        }, {
+          ...graph.nodes[0],
+          id: "file-b",
+          identity: "src/b.c",
+          kind: "file",
+          label: "src/b.c",
+        }, {
+          ...graph.nodes[1],
+          id: "file-parser",
+          identity: "vendor/parser.h",
+          kind: "file",
+          label: "vendor/parser.h",
+        }],
+        request: { ...graph.request, view: "files" },
+        summary: { edges: 2, nodes: 3 },
+      },
+      graph,
+      selectedId: "edge",
+      source: null,
+      sourcePath: null,
+    });
+
+    expect(root.textContent).toContain("base → parser");
+    expect(root.textContent).toContain(
+      "base depends on parser through import relations between their member files.",
+    );
+    expect(root.textContent).toContain("Referenced names");
+    expect(root.textContent).toContain("Underlying file relations · 2");
+    expect(root.textContent).toContain("src/a.c");
+    expect(root.textContent).toContain("src/b.c");
+    expect(root.textContent).toContain("All applicable evaluated constraints pass");
+  });
+
+  it("mounts a Verification result and creates a reviewed waiver", async () => {
+    const root = mount(VerificationEditor, {
+      artifact: artifact({
+        artifact: "verification",
+        schema_version: 2,
+        policy: { project: "demo" },
+        constraints: [{
+          id: "ARCH-1",
+          findings: [{
+            comparison: "extra",
+            fingerprint: "a".repeat(64),
+            key: "ui->storage",
+            message: "forbidden edge",
+          }],
+        }],
+      }, "verification.json"),
+    });
+
+    expect(root.querySelector(".contract-editor")).not.toBeNull();
+    expect(root.querySelectorAll("select option")).toHaveLength(1);
+    const inputs = root.querySelectorAll("input");
+    (inputs[0] as HTMLInputElement).value = "architecture";
+    inputs[0].dispatchEvent(new Event("input"));
+    (root.querySelector("textarea") as HTMLTextAreaElement).value = "Temporary migration.";
+    root.querySelector("textarea")?.dispatchEvent(new Event("input"));
+    (inputs[1] as HTMLInputElement).value = "2026-08-31";
+    inputs[1].dispatchEvent(new Event("input"));
+    (root.querySelector("button") as HTMLButtonElement).click();
+    await nextTick();
+    expect(root.textContent).toContain("Saved a waiver entry");
+  });
+
+  it("mounts keyed schema-2 constraints and exports a reviewed configuration", async () => {
+    const root = mount(VerificationEditor, {
+      artifact: artifact({
+        schema_version: 2,
+        project: "demo",
+        layers: [{ name: "core", language: "c", globs: ["src/**"] }],
+        constraints: {
+          "NO-CYCLES": {
+            actual: { projection: { select: "component_edges" } },
+            assert: "acyclic",
+            owner: "architecture",
+            rationale: "Keep component dependencies acyclic.",
+          },
+        },
+      }, "archbird.json"),
+    });
+
+    expect(root.querySelectorAll(".check-editor")).toHaveLength(1);
+    expect(root.textContent).toContain("NO-CYCLES");
+    (root.querySelector(".contract-editor > button") as HTMLButtonElement).click();
+    await nextTick();
+    expect(root.textContent).toContain("Saved the schema-2 project configuration");
+  });
+
+  it("renders Diff and Act artifacts as task-oriented summaries", () => {
+    const diff = mount(DocumentPanel, {
+      artifact: artifact({
+        artifact: "diff",
+        schema_version: 7,
+        sections: {
+          symbols: {
+            added: [{ name: "demo_open" }],
+            changed: [],
+            removed: [{ name: "demo_close" }],
+          },
+        },
+      }, "diff.json"),
+    });
+    expect(diff.textContent).toContain("Structural comparison");
+    expect(diff.textContent).toContain("1 added");
+    mounted?.unmount();
+
+    const proposal = mount(DocumentPanel, {
+      artifact: artifact({
+        artifact: "change-proposal",
+        schema_version: 2,
+        candidates: [{ id: "candidate-1", kind: "edit_site", path: "src/api.c", reason: "current evidence" }],
+        postconditions: [{}],
+        preserved_invariants: [],
+        unknowns: [],
+      }, "proposal.json"),
+    });
+    expect(proposal.textContent).toContain("Change proposal");
+    expect(proposal.textContent).toContain("src/api.c");
+  });
+});

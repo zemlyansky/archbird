@@ -916,6 +916,23 @@ ab_wasm_projection_evaluate(const uint8_t *map, size_t map_length,
   return stateless_end(engine, status);
 }
 
+AB_WASM_EXPORT int ab_wasm_projection_render_markdown(
+    const uint8_t *map, size_t map_length, const uint8_t *resolution,
+    size_t resolution_length, const uint8_t *projection,
+    size_t projection_length, int detail, size_t max_chars) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(larger_input(map_length, resolution_length),
+                   projection_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projection_render_markdown(
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, projection, projection_length,
+        (ArchbirdReportDetail)detail, max_chars, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
 AB_WASM_EXPORT int
 ab_wasm_query_plan_compile(const uint8_t *config, size_t config_length,
                            const char *query_id, size_t query_id_length,

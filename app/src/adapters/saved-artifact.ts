@@ -14,6 +14,9 @@ export interface Projection {
   graph: GraphView;
 }
 
+export type GraphDirection = "BT" | "LR" | "RL" | "TB";
+export type GraphFormat = "graphml" | "json" | "mermaid";
+
 let corePromise: ReturnType<typeof wasm.createArchbirdCore> | null = null;
 
 async function core() {
@@ -31,6 +34,22 @@ export async function loadArtifact(file: File): Promise<ParsedArtifact> {
   return parseArtifact(new Uint8Array(await file.arrayBuffer()), file.name);
 }
 
+export async function evaluateArtifactProjection(
+  artifact: ParsedArtifact,
+  plan: Record<string, unknown>,
+): Promise<Uint8Array> {
+  if (artifact.artifact !== "map") {
+    throw new Error("projection evaluation requires a canonical Map");
+  }
+  const archbird = await core();
+  return archbird.projectionEvaluate(
+    artifact.bytes,
+    new Uint8Array(),
+    new TextEncoder().encode(JSON.stringify(plan)),
+    false,
+  );
+}
+
 export async function projectArtifact(
   artifact: ParsedArtifact,
   requestedView?: GraphViewName,
@@ -40,17 +59,34 @@ export async function projectArtifact(
   const views = supportedViews(artifact.artifact);
   if (views.length === 0) return null;
   const view = requestedView && views.includes(requestedView) ? requestedView : views[0];
-  const archbird = await core();
-  const output = archbird.mapExportGraph(
-    artifact.bytes,
-    "json",
-    view,
-    "LR",
-    0,
-    3,
-  );
+  const output = await exportArtifact(artifact, "json", view);
   return {
     bytes: output,
     graph: parseGraphView(JSON.parse(new TextDecoder().decode(output))),
   };
+}
+
+export async function exportArtifact(
+  artifact: ParsedArtifact,
+  format: GraphFormat,
+  view: GraphViewName,
+  direction: GraphDirection = "LR",
+): Promise<Uint8Array> {
+  const archbird = await core();
+  return archbird.mapExportGraph(artifact.bytes, format, view, direction, 0, 3);
+}
+
+export async function queryArtifact(
+  artifact: ParsedArtifact,
+  request: Record<string, unknown>,
+): Promise<ParsedArtifact> {
+  if (artifact.artifact !== "map") throw new Error("focused Query requires a canonical Map");
+  const archbird = await core();
+  const bytes = archbird.mapQuery(
+    artifact.bytes,
+    new Uint8Array(),
+    new TextEncoder().encode(JSON.stringify(request)),
+    false,
+  );
+  return parseArtifact(bytes, `${String(artifact.document.project || "project")}.query.json`);
 }

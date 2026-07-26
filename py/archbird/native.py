@@ -181,6 +181,17 @@ def _canonical(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _project_configuration_for_resolution(
+    config_json: bytes, effective_config: Mapping[str, object]
+) -> bytes:
+    authored = json.loads(config_json) if config_json else {}
+    result = dict(effective_config)
+    for field in ("projections", "queries", "constraints"):
+        if field in authored:
+            result[field] = authored[field]
+    return _canonical(result)
+
+
 def _native_cache_namespace() -> str:
     return hashlib.sha256(
         b"archbird-native-provider-cache-v1\0"
@@ -243,6 +254,7 @@ class Project:
         self.cache_stats: Mapping[str, int] = ProviderCacheStats().as_dict()
         self.map_cache_stats: Mapping[str, int] = MapCacheStats().as_dict()
         self._config_json: Optional[bytes] = None
+        self._project_configuration_json: Optional[bytes] = None
         self._cached_map: Optional[bytes] = None
         self._map_cache: Optional[ProviderCache] = None
         self._map_cache_parameters: Optional[dict[str, str]] = None
@@ -337,7 +349,13 @@ class Project:
         )
         project.root = repository
         project.resolution_json = resolution_json
-        project.set_config(config_json)
+        effective_config = _canonical(resolution["effective_config"])
+        project.set_config(
+            effective_config,
+            project_configuration_json=_project_configuration_for_resolution(
+                config_json, resolution["effective_config"]
+            ),
+        )
         if scan:
             project.scan(
                 jobs=jobs,
@@ -398,7 +416,12 @@ class Project:
         )
         current.root = repository
         current.resolution_json = resolution_json
-        current.set_config(effective_config)
+        current.set_config(
+            effective_config,
+            project_configuration_json=_project_configuration_for_resolution(
+                config_json, resolution["effective_config"]
+            ),
+        )
         if scan:
             current.scan(
                 jobs=jobs,
@@ -427,11 +450,28 @@ class Project:
     def config_sha256(self) -> str:
         return _native.project_config_sha256(self._capsule)
 
-    def set_config(self, config_json: bytes) -> None:
+    def set_config(
+        self,
+        config_json: bytes,
+        *,
+        project_configuration_json: Optional[bytes] = None,
+    ) -> None:
         if self._providers_finalized:
             raise RuntimeError("providers are already finalized")
         self._config_json = bytes(config_json)
+        self._project_configuration_json = bytes(
+            project_configuration_json
+            if project_configuration_json is not None
+            else config_json
+        )
         _native.project_set_config(self._capsule, self._config_json)
+
+    @property
+    def verification_configured(self) -> bool:
+        if self._project_configuration_json is None:
+            return False
+        constraints = json.loads(self._project_configuration_json).get("constraints")
+        return isinstance(constraints, dict) and bool(constraints)
 
     def add_provider(self, provider_json: bytes, mode: str = "primary") -> None:
         if self._providers_finalized:
@@ -920,17 +960,28 @@ class Project:
         *,
         view: str = "overview",
         detail: str = "standard",
+        compact: bool = False,
         full: bool = False,
         max_chars: int = 0,
+        group_by: str = "",
+        level: str = "",
+        relations: Optional[Sequence[str]] = None,
+        overlays: Optional[Sequence[str]] = None,
     ) -> bytes:
-        """Render a human view of the current complete canonical Map."""
+        """Render one exhaustive graph projection of the current Map."""
 
         return render_map_markdown(
             self.map_json(),
             view=view,
             detail=detail,
+            compact=compact,
             full=full,
             max_chars=max_chars,
+            group_by=group_by,
+            level=level,
+            relations=relations,
+            overlays=overlays,
+            resolution_json=self.resolution_json or b"",
         )
 
     def query_json(
@@ -972,6 +1023,32 @@ class Project:
 
     def query(self, **kwargs: object) -> Mapping[str, object]:
         return json.loads(self.query_json(**kwargs))
+
+    def verify_json(
+        self,
+        *,
+        constraint_ids: Sequence[str] = (),
+        baseline: Optional[Mapping[str, object]] = None,
+        maps: Optional[Mapping[str, Mapping[str, object]]] = None,
+        observations: Optional[Mapping[str, Mapping[str, object]]] = None,
+        policy_date: Optional[str] = None,
+        pretty: bool = False,
+    ) -> bytes:
+        """Evaluate reviewed project constraints against this exact Map."""
+
+        if self._project_configuration_json is None:
+            raise RuntimeError("verification requires project configuration")
+        return evaluate_constraints_json(
+            self._project_configuration_json,
+            self.map_json(),
+            constraint_ids=constraint_ids,
+            baseline=baseline,
+            maps=maps,
+            observations=observations,
+            policy_date=policy_date,
+            resolution_json=self.resolution_json or b"",
+            pretty=pretty,
+        )
 
     def query_markdown(
         self,
@@ -1231,25 +1308,102 @@ def render_map_markdown(
     *,
     view: str = "overview",
     detail: str = "standard",
+    compact: bool = False,
     full: bool = False,
     max_chars: int = 0,
+    group_by: str = "",
+    level: str = "",
+    relations: Optional[Sequence[str]] = None,
+    overlays: Optional[Sequence[str]] = None,
+    resolution_json: bytes = b"",
 ) -> bytes:
-    """Project a canonical saved Map without changing its complete IR."""
+    """Render one exhaustive graph projection of a canonical saved Map."""
 
     if max_chars < 0:
         raise ValueError("max_chars must be nonnegative")
-    views = {"overview": 0, "architecture": 1, "audit": 2}
+    views = {
+        "overview": {
+            "group_by": "directory",
+            "level": "file",
+            "relations": ("builds", "bridges", "imports", "packages", "tests"),
+            "overlays": ("diagnostics", "evidence-quality"),
+        },
+        "architecture": {
+            "group_by": "directory",
+            "level": "file",
+            "relations": (
+                "bridges",
+                "calls",
+                "declarations",
+                "imports",
+                "packages",
+                "references",
+            ),
+            "overlays": ("diagnostics", "evidence-quality"),
+        },
+        "tests": {
+            "group_by": "directory",
+            "level": "file",
+            "relations": ("tests",),
+            "overlays": ("diagnostics", "evidence-quality"),
+        },
+        "evidence": {
+            "group_by": "directory",
+            "level": "file",
+            "relations": (),
+            "overlays": ("diagnostics", "evidence-quality"),
+        },
+    }
     details = {"compact": 0, "standard": 1, "full": 2}
     if view not in views:
-        raise ValueError("view must be overview, architecture, or audit")
+        raise ValueError("view must be overview, architecture, tests, or evidence")
     if detail not in details:
         raise ValueError("detail must be compact, standard, or full")
-    if full:
-        if detail != "standard":
-            raise ValueError("full and an explicit non-standard detail conflict")
-        detail = "full"
-    return _native.map_markdown_view(
-        map_json, views[view], details[detail], max_chars=max_chars
+    if compact and full:
+        raise ValueError("compact and full conflict")
+    if (compact or full) and detail != "standard":
+        raise ValueError("detail conflicts with compact/full alias")
+    selected_detail = "compact" if compact else ("full" if full else detail)
+    preset = views[view]
+    selected_level = level or str(preset["level"])
+    selected_group = group_by or str(preset["group_by"])
+    if selected_group not in {"component", "directory", "language", "layer", "none"}:
+        raise ValueError(
+            "group_by must be component, directory, language, layer, or none"
+        )
+    if selected_level not in {"component", "file", "symbol"}:
+        raise ValueError("level must be component, file, or symbol")
+    if selected_level == "component":
+        if group_by and selected_group != "none":
+            raise ValueError("component level cannot also be grouped")
+        selected_group = "none"
+    selected_relations = tuple(
+        relations
+        if relations is not None
+        else (
+            ("calls", "references")
+            if selected_level == "symbol"
+            else preset["relations"]
+        )
+    )
+    selected_overlays = tuple(
+        overlays if overlays is not None else preset["overlays"]
+    )
+    definition: dict[str, object] = {
+        "id": f"map-{view}",
+        "level": selected_level,
+        "overlays": sorted(selected_overlays),
+        "relations": sorted(selected_relations),
+        "select": "graph",
+    }
+    if selected_group != "none":
+        definition["group_by"] = selected_group
+    return _native.projection_render_markdown(
+        map_json,
+        json.dumps(definition, sort_keys=True, separators=(",", ":")).encode(),
+        resolution_json=resolution_json,
+        detail=details[selected_detail],
+        max_chars=max_chars,
     )
 
 

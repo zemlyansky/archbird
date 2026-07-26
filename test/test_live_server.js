@@ -79,13 +79,31 @@ async function main() {
     write(value) { events.push(value); },
   });
   try {
+    const appResponse = await fetch(server.url);
+    assert.equal(appResponse.status, 200);
+    const appDocument = await appResponse.text();
+    assert.match(appDocument, /<meta name="archbird-host" content="server"/);
+    assert.doesNotMatch(appDocument, /<meta name="archbird-host" content="static"/);
+
     const bootstrapResponse = await fetch(new URL("api/v1/bootstrap", server.url));
     assert.equal(bootstrapResponse.status, 200);
     const bootstrap = await bootstrapResponse.json();
     assert.equal(bootstrap.protocol_version, 1);
+    assert.deepEqual(bootstrap.capabilities, [
+      "map", "projection", "view", "export", "query", "diff", "source",
+      "verification", "snapshots", "events",
+    ]);
     assert.equal(bootstrap.project, null);
     assert.match(bootstrap.phase, /^(waiting|analyzing)$/);
     await waitFor(() => server.repository.current !== null, "initial live generation");
+    const readyState = server.repository.state();
+    assert.ok(Number.isSafeInteger(readyState.schema_version));
+    const transportedState = (await request(server, "state")).result;
+    assert.deepEqual(
+      transportedState,
+      readyState,
+      "state request diverged from the authoritative repository state",
+    );
     assert.equal(candidateCalls, 1);
     server.repository.schedule(path.join(repositoryRoot, "js/index.js"));
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -96,10 +114,43 @@ async function main() {
     const initial = await artifact(server, "map");
     const initialMap = JSON.parse(initial.bytes);
     assert.equal(initialMap.project, "map-base");
+    assert.equal(readyState.schema_version, initialMap.schema_version);
     assert.equal(initial.descriptor.generation, initialMap.evidence.input_sha256);
+    const verification = JSON.parse((await artifact(server, "verification")).bytes);
+    assert.equal(verification.artifact, "verification");
+    assert.equal(verification.policy.project, "map-base");
+    const membershipArtifact = await artifact(server, "projection", {
+      plan: { id: "app-membership", select: "component_membership" },
+    });
+    const membership = JSON.parse(membershipArtifact.bytes);
+    assert.equal(membership.artifact, "projection-result");
+    assert.equal(membership.completeness.classification, "complete");
+    assert.equal(membership.fact.items.length, initialMap.files.length);
+    assert.equal(server.repository.current.derived.size, 1);
+    const repeatedMembership = await artifact(server, "projection", {
+      plan: { select: "component_membership", id: "app-membership" },
+    });
+    assert.equal(
+      repeatedMembership.descriptor.blob_sha256,
+      membershipArtifact.descriptor.blob_sha256,
+    );
+    assert.equal(
+      server.repository.current.derived.size,
+      1,
+      "equivalent projection plans were evaluated more than once",
+    );
 
     const view = await artifact(server, "view", { max_edge_names: 3, max_nodes: 0, view: "files" });
     assert.equal(JSON.parse(view.bytes).artifact, "archbird-graph-view");
+    const symbols = JSON.parse((await artifact(server, "view", {
+      max_edge_names: 3,
+      max_nodes: 0,
+      query: { depth: 0, paths: ["js/index.js"], testDepth: 0 },
+      view: "symbols",
+    })).bytes);
+    assert.equal(symbols.artifact, "archbird-graph-view");
+    assert.equal(symbols.request.view, "symbols");
+    assert.ok(symbols.nodes.some((row) => row.kind === "symbol" && row.label === "add"));
 
     const source = await request(server, "source", { path: "js/index.js" });
     assert.equal(source.result.encoding, "utf-8");
@@ -117,7 +168,18 @@ async function main() {
     );
     assert.equal(server.repository.current.generation, initialGeneration);
 
+    const recoveryEvents = events.length;
     fs.writeFileSync(configurationPath, configuration);
+    await waitFor(
+      () => server.repository.phase === "ready" && server.repository.lastError === null,
+      "unchanged live generation recovery",
+    );
+    assert.equal(server.repository.current.generation, initialGeneration);
+    assert.ok(
+      events.slice(recoveryEvents).some((value) => value.includes("snapshot-ready")),
+      "successful unchanged rebuild did not publish readiness",
+    );
+
     fs.appendFileSync(path.join(repositoryRoot, "js/index.js"), "\nexport const three = 3;\n");
     await waitFor(
       () => server.repository.current.generation !== initialGeneration,
@@ -127,6 +189,9 @@ async function main() {
     assert.match(currentGeneration, /^[0-9a-f]{64}$/);
     const snapshots = await request(server, "snapshots");
     assert.equal(snapshots.result.length, 2);
+    assert.ok(snapshots.result.every(
+      (row) => row.schema_version === initialMap.schema_version,
+    ));
 
     const staleSource = await request(
       server,
@@ -148,7 +213,7 @@ async function main() {
       before: initialGeneration,
     });
     assert.equal(JSON.parse(diff.bytes).artifact, "diff");
-    console.log("local live server Map/view/source/watch/last-good passed");
+    console.log("local live server Map/view/Verification/source/watch/last-good passed");
   } finally {
     LiveRepository.prototype.candidate = candidate;
     await server.close();

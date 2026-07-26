@@ -1382,6 +1382,49 @@ static PyObject *py_projection_evaluate(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_projection_render_markdown(PyObject *self, PyObject *args,
+                                               PyObject *kwargs) {
+  static char *keywords[] = {"map_json", "projection_json", "resolution_json",
+                             "detail",   "max_chars",       NULL};
+  const char *map;
+  const char *projection;
+  const char *resolution = "";
+  Py_ssize_t map_length;
+  Py_ssize_t projection_length;
+  Py_ssize_t resolution_length = 0;
+  int detail = ARCHBIRD_REPORT_DETAIL_STANDARD;
+  Py_ssize_t max_chars = 0;
+  ArchbirdEngine *engine = NULL;
+  PyOutput output = {0};
+  ArchbirdStatus status;
+  PyObject *result;
+  size_t budget;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#|y#in:projection_render_markdown", keywords, &map,
+          &map_length, &projection, &projection_length, &resolution,
+          &resolution_length, &detail, &max_chars))
+    return NULL;
+  if (max_chars < 0) {
+    PyErr_SetString(PyExc_ValueError, "max_chars must be nonnegative");
+    return NULL;
+  }
+  budget =
+      larger_input(larger_input((size_t)map_length, (size_t)resolution_length),
+                   (size_t)projection_length);
+  status = saved_artifact_engine(budget, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projection_render_markdown(
+        engine, (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, (const uint8_t *)projection,
+        (size_t)projection_length, (ArchbirdReportDetail)detail,
+        (size_t)max_chars, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_query_plan_compile(PyObject *self, PyObject *args,
                                        PyObject *kwargs) {
   static char *keywords[] = {"config", "query_id", "overrides_json", "pretty",
@@ -1755,6 +1798,8 @@ static PyMethodDef archbird_methods[] = {
      METH_VARARGS | METH_KEYWORDS, "Compile one named schema-2 query."},
     {"projection_evaluate", (PyCFunction)py_projection_evaluate,
      METH_VARARGS | METH_KEYWORDS, "Evaluate one exhaustive projection."},
+    {"projection_render_markdown", (PyCFunction)py_projection_render_markdown,
+     METH_VARARGS | METH_KEYWORDS, "Render one graph projection as Markdown."},
     {"project_configuration_compile",
      (PyCFunction)py_project_configuration_compile,
      METH_VARARGS | METH_KEYWORDS,

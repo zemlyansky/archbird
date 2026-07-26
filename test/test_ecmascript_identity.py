@@ -308,7 +308,21 @@ def check_map(extension, mapped: dict) -> None:
         report = extension.map_markdown_view(
             canonical(mapped), view, 2, 0
         ).decode()
-        assert "jsFactory.Product" in report, (view, report)
+        assert "js/factory.js" in report, (view, report)
+    symbol_report = extension.projection_render_markdown(
+        canonical(mapped),
+        canonical(
+            {
+                "id": "ecmascript-symbols",
+                "select": "graph",
+                "group_by": "directory",
+                "level": "symbol",
+                "relations": ["calls", "references"],
+            }
+        ),
+        detail=2,
+    ).decode()
+    assert "jsFactory.Product" in symbol_report, symbol_report
 
 
 def check_diff(extension, before: dict) -> None:

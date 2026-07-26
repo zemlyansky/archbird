@@ -12,6 +12,7 @@ if (process.argv.length !== 4) {
   throw new Error("usage: test_node_frontend.js ADDON REPOSITORY_ROOT");
 }
 process.env.ARCHBIRD_NATIVE_ADDON = path.resolve(process.argv[2]);
+const nativeBinding = require(process.env.ARCHBIRD_NATIVE_ADDON);
 const {
   ChangeProposal,
   auditMapFreshness,
@@ -19,6 +20,7 @@ const {
   compileProjectConfiguration,
   compileQueryPlan,
   evaluateConstraints,
+  evaluateProjection,
   exportGraph,
   freezeConstraints,
   IMPLEMENTATION_SHA256,
@@ -631,6 +633,19 @@ assert.deepEqual(
 assert.equal(repositoryProject.map().project, "map-base");
 assert.deepEqual(repositoryProject.mapJson(), repositoryProject.mapJson());
 const repositoryMapJson = repositoryProject.mapJson();
+const repositoryEdges = JSON.parse(evaluateProjection(
+  repositoryMapJson,
+  Buffer.from(JSON.stringify({ id: "file-edge-names", select: "file_edges" })),
+));
+assert.deepEqual(
+  repositoryEdges.fact.items[0].attributes,
+  {
+    kind: "import",
+    names: [".api"],
+    source: "py/pkg/__init__.py",
+    target: "py/pkg/api.py",
+  },
+);
 const currentProducerQuery = JSON.parse(queryMap(repositoryMapJson, {
   paths: ["py/pkg"],
   depth: 0,
@@ -1091,12 +1106,12 @@ assert.deepEqual(zeroMap.discovery, {
   sha256: zeroResolution.sha256,
 });
 assert.match(
-  zeroProject.mapMarkdown({ view: "audit" }).toString("utf8"),
+  zeroProject.mapMarkdown({ view: "evidence" }).toString("utf8"),
   /unsupported-known=1/,
 );
 assert.match(
-  zeroProject.mapMarkdown({ view: "audit" }).toString("utf8"),
-  /Coverage warning:/,
+  zeroProject.mapMarkdown({ view: "evidence" }).toString("utf8"),
+  /Classification: \*\*incomplete\*\*/,
 );
 assert.deepEqual(
   zeroMap.files.filter((row) => row.roles).map((row) => [row.path, row.roles]),
@@ -1144,21 +1159,42 @@ assert.deepEqual(cRegistryTest.cases[2].routes, {
   "test/test_widget.c": 1,
 });
 const standardMapReport = repositoryProject.mapMarkdown();
-assert.match(
-  repositoryProject.mapMarkdown({ view: "audit" }).toString("utf8"),
-  /Rendered detail for \d+ of \d+ mapped files; the canonical Map contains all \d+\./,
-);
 assert.equal(
   standardMapReport
     .toString("utf8")
-    .startsWith("# map-base architecture\n"),
+    .startsWith("# map-base architecture evidence\n"),
   true,
 );
-assert.match(standardMapReport.toString("utf8"), /## Key files and symbols/);
-assert.deepEqual(standardMapReport, renderMapMarkdown(repositoryMapJson));
+assert.match(standardMapReport.toString("utf8"), /## Entities/);
+assert.match(standardMapReport.toString("utf8"), /## Relations/);
+assert.deepEqual(
+  standardMapReport,
+  renderMapMarkdown(repositoryMapJson, {
+    resolutionJson: repositoryProject.resolutionJson,
+  }),
+);
+const reportFixture = fs.readFileSync(path.resolve(
+  process.argv[3],
+  "test/fixtures/report_map.json",
+));
+for (const [viewIndex, view] of [
+  "overview",
+  "architecture",
+  "tests",
+  "evidence",
+].entries()) {
+  assert.deepEqual(
+    renderMapMarkdown(reportFixture, { detail: "compact", view }),
+    nativeBinding.mapMarkdownView(reportFixture, viewIndex, 0, 0),
+    `${view} preset drifted from the native Map view`,
+  );
+}
 assert.match(
-  repositoryProject.mapMarkdown({ view: "architecture" }).toString("utf8"),
-  /## Languages/,
+  repositoryProject.mapMarkdown({
+    view: "architecture",
+    groupBy: "language",
+  }).toString("utf8"),
+  /group `language`/,
 );
 assert.ok(
   repositoryProject.mapMarkdown({ detail: "compact" }).length <
@@ -1190,12 +1226,14 @@ assert.equal(
   true,
 );
 const componentGraphJson = repositoryProject.graphViewJson();
+const projectVerificationJson = repositoryProject.verifyJson();
 const symbolGraphJson = repositoryProject.graphViewJson({
   view: "symbols",
   query: { symbols: ["js/index.js:add"], depth: 1, testDepth: 1 },
 });
 assert.deepEqual(componentGraphJson, repositoryProject.graphViewJson());
 assert.equal(JSON.parse(componentGraphJson).artifact, "archbird-graph-view");
+assert.equal(JSON.parse(projectVerificationJson).artifact, "verification");
 assert.equal(JSON.parse(componentGraphJson).request.view, "components");
 assert.equal(JSON.parse(componentGraphJson).source.artifact, "map");
 assert.deepEqual(

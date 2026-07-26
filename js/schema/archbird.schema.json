@@ -98,7 +98,15 @@
           "type": "object",
           "allOf": [
             {"$ref": "#/$defs/projection_base"},
-            {"properties": {"select": {"const": "component_edges"}, "kinds": {"$ref": "#/$defs/strings"}}}
+            {"properties": {"select": {"const": "build_routes"}, "builds": {"$ref": "#/$defs/strings"}}}
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "allOf": [
+            {"$ref": "#/$defs/projection_base"},
+            {"properties": {"select": {"const": "component_edges"}, "kinds": {"$ref": "#/$defs/strings"}, "kind_patterns": {"$ref": "#/$defs/strings"}, "name_patterns": {"$ref": "#/$defs/strings"}}}
           ],
           "unevaluatedProperties": false
         },
@@ -108,6 +116,14 @@
             {"$ref": "#/$defs/projection_base"},
             {"$ref": "#/$defs/projection_normalization"},
             {"properties": {"select": {"const": "component_membership"}, "components": {"$ref": "#/$defs/strings"}}}
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "allOf": [
+            {"$ref": "#/$defs/projection_base"},
+            {"properties": {"select": {"const": "components"}, "names": {"$ref": "#/$defs/strings"}}}
           ],
           "unevaluatedProperties": false
         },
@@ -143,6 +159,28 @@
             {"$ref": "#/$defs/projection_base"},
             {"$ref": "#/$defs/projection_normalization"},
             {"required": ["metric"], "properties": {"select": {"const": "file_metrics"}, "metric": {"const": "bytes"}}}
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "allOf": [
+            {"$ref": "#/$defs/projection_base"},
+            {"required": ["level"], "properties": {
+              "select": {"const": "graph"},
+              "group_by": {"enum": ["component", "directory", "language", "layer"]},
+              "level": {"enum": ["component", "file", "symbol"]},
+              "relations": {"type": "array", "uniqueItems": true, "items": {"enum": ["builds", "bridges", "calls", "declarations", "imports", "packages", "references", "tests"]}},
+              "overlays": {"type": "array", "uniqueItems": true, "items": {"enum": ["diagnostics", "evidence-quality"]}}
+            }},
+            {
+              "if": {"properties": {"level": {"const": "component"}}, "required": ["level"]},
+              "then": {"not": {"required": ["group_by"]}}
+            },
+            {
+              "if": {"properties": {"level": {"const": "symbol"}}, "required": ["level"]},
+              "then": {"properties": {"relations": {"items": {"enum": ["calls", "references"]}}}}
+            }
           ],
           "unevaluatedProperties": false
         },
@@ -212,6 +250,22 @@
             {"$ref": "#/$defs/projection_base"},
             {"$ref": "#/$defs/projection_normalization"},
             {"properties": {"select": {"const": "symbols"}, "paths": {"$ref": "#/$defs/collection_patterns"}, "kinds": {"$ref": "#/$defs/strings"}, "names": {"$ref": "#/$defs/strings"}, "name_patterns": {"$ref": "#/$defs/strings"}, "layer": {"type": "string", "minLength": 1}, "public_only": {"type": "boolean"}}}
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "allOf": [
+            {"$ref": "#/$defs/projection_base"},
+            {"properties": {"select": {"const": "symbol_entities"}, "paths": {"$ref": "#/$defs/collection_patterns"}, "kinds": {"$ref": "#/$defs/strings"}, "names": {"$ref": "#/$defs/strings"}, "name_patterns": {"$ref": "#/$defs/strings"}, "layer": {"type": "string", "minLength": 1}, "public_only": {"type": "boolean"}}}
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "allOf": [
+            {"$ref": "#/$defs/projection_base"},
+            {"properties": {"select": {"const": "symbol_relations"}, "from_paths": {"$ref": "#/$defs/collection_patterns"}, "to_paths": {"$ref": "#/$defs/collection_patterns"}, "kinds": {"type": "array", "uniqueItems": true, "items": {"enum": ["calls", "references"]}}, "resolutions": {"type": "array", "uniqueItems": true, "items": {"enum": ["ambiguous", "builtin", "candidate", "unique", "unresolved"]}}}}
           ],
           "unevaluatedProperties": false
         },

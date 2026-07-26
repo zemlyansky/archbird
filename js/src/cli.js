@@ -57,7 +57,7 @@ const DISCOVERY = {
 
 function usage(command = "map") {
   const rows = {
-    map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|audit] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
+    map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|tests|evidence] [--group-by KIND] [--level KIND] [--relations KINDS] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
     observe: "archbird observe [ROOT] --map MAP.json --request COVERAGE.json [--output OBSERVATIONS.json]",
     query: "archbird query [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
     impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
@@ -455,6 +455,10 @@ function mapMain(argv) {
     ...DISCOVERY,
     format: { default: "markdown", type: "string" },
     view: { default: "overview", type: "string" },
+    groupBy: { flag: "group-by", default: "", type: "string" },
+    level: { default: "", type: "string" },
+    relations: { type: "multiple" },
+    overlay: { type: "multiple" },
     detail: { default: "standard", type: "string" },
     compact: { type: "boolean" },
     full: { type: "boolean" },
@@ -471,8 +475,8 @@ function mapMain(argv) {
     return 0;
   }
   if (!["json", "markdown"].includes(options.format)) throw new Error("--format must be json or markdown");
-  if (!["overview", "architecture", "audit"].includes(options.view)) {
-    throw new Error("--view must be overview, architecture, or audit");
+  if (!["overview", "architecture", "tests", "evidence"].includes(options.view)) {
+    throw new Error("--view must be overview, architecture, tests, or evidence");
   }
   if (!["compact", "standard", "full"].includes(options.detail)) {
     throw new Error("--detail must be compact, standard, or full");
@@ -483,9 +487,11 @@ function mapMain(argv) {
   }
   if (options.format === "json" && (
     options.compact || options.full || options.maxChars ||
-    options.detail !== "standard" || options.view !== "overview"
+    options.detail !== "standard" || options.view !== "overview" ||
+    options.groupBy || options.level || options.relations.length ||
+    options.overlay.length
   )) {
-    throw new Error("--view, --detail, --compact, --full, and --max-chars apply only to Markdown");
+    throw new Error("--view, graph projection axes, and detail options apply only to Markdown");
   }
   const progress = new Progress(options.progress);
   const current = project(options, progress);
@@ -499,7 +505,18 @@ function mapMain(argv) {
       detail: options.detail,
       compact: options.compact,
       full: options.full,
+      groupBy: options.groupBy,
+      level: options.level,
       maxChars: options.maxChars,
+      overlays: options.overlay.length
+        ? options.overlay.flatMap((value) =>
+          value.split(",").map((part) => part.trim()).filter(Boolean))
+        : undefined,
+      relations: options.relations.length
+        ? options.relations.flatMap((value) =>
+          value.split(",").map((part) => part.trim()).filter(Boolean))
+        : undefined,
+      resolutionJson: current.resolutionJson || Buffer.alloc(0),
     });
   progress.finish();
   write(output, options.output);

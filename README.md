@@ -94,10 +94,12 @@ archbird query . --search 'provider registry'
 archbird serve --root .
 ```
 
-`map` scans the repository and builds Archbird's complete model of its files,
-symbols, dependencies, public interfaces, tests, build routes, artifacts, and
-components. The default Markdown output is a readable architecture overview;
-use JSON when you want to save the complete Map for later commands.
+`map` scans the configured/discovered scope and builds Archbird's canonical
+derived evidence model of files, symbols, dependencies, public interfaces,
+tests, build routes, artifacts, and components. Unsupported inputs, unresolved
+relationships, provider recovery, and other unknown frontiers remain explicit.
+The default Markdown output is a readable architecture overview; use JSON when
+you want to save the canonical Map for later commands.
 
 `query` loads or builds that Map, selects a starting point, follows its recorded
 relationships, and returns a focused neighborhood. Use typed selectors such as
@@ -112,11 +114,13 @@ typos, but it does not interpret a natural-language question or turn a text
 match into a proven code relationship.
 
 `serve` starts a browser-based architecture explorer and immediately prints its
-loopback URL. Use it to browse the repository as component, file, and symbol
-graphs; search for code; run focused queries; inspect connections at their
-source locations; and compare Map snapshots as the repository changes.
-Analysis runs in the background and watches the source tree. If an update
-fails, the explorer reports the failure and keeps showing the last valid Map.
+loopback URL. Use it to expand selected components into files and selected files
+into symbols while the rest of the architecture stays collapsed; inspect typed
+connections and source witnesses; overlay configured constraint coverage and
+findings; run focused queries; and compare Map snapshots as the repository
+changes. Analysis progress is visible from the first page render. If an update
+fails, the explorer reports the failure and keeps showing the last valid Map
+and generation-matched Verification.
 
 ### Save and reuse evidence
 
@@ -198,17 +202,29 @@ canonical JSON still contains every selected file and mapped fact. Choose the
 human projection and its amount of detail independently:
 
 ```bash
-archbird map --view overview --detail compact     # shortest repository brief
-archbird map --view architecture                  # components and connections
-archbird map --view audit --detail standard       # complete analysis accounting
-archbird map --view audit --full                  # all human-readable Map detail
+archbird map --view overview --detail compact
+archbird map --view architecture \
+  --group-by component --level file --relations imports,calls
+archbird map --view tests --group-by directory
+archbird map --view evidence --detail full
 ```
 
-`--compact` and `--full` are aliases for the corresponding `--detail` values.
-`--max-chars` is a final output guard; it never changes the canonical Map.
-Query profiles (`exact`, `change`, `architecture`, `audit`), per-kind quotas,
-route provenance/confidence, and candidate/conservative policies control which
-focused evidence is shown.
+`--view` selects a question-oriented preset. `overview` includes project
+landmarks and broad package/build/test connections; `architecture` emphasizes
+code dependencies; `tests` isolates test routes; and `evidence` exposes
+coverage, diagnostics, and completeness. `--group-by` reorganizes the same
+selected entities by directory, configured component, layer, or language.
+`--level` chooses component, file, or symbol nodes. `--relations` overrides the
+preset's relation families and accepts comma-separated values or repeated
+flags. These semantic axes compile to one exhaustive graph ProjectionPlan and
+the resulting typed ProjectionResult drives both Markdown and the application.
+
+`--detail` changes rendering density only. `--compact` and `--full` are aliases
+for its corresponding values. `--max-chars` is a final presentation guard; it
+never changes the canonical Map or turns incomplete evidence into success.
+Query context profiles (`exact`, `change`, `architecture`, `audit`), per-kind
+quotas, route provenance/confidence, and candidate/conservative policies remain
+separate Query behavior.
 
 Plain saved-Map queries accept every supported Map schema even when another
 Archbird core produced the artifact. Add `--check` when the result will drive a
@@ -238,17 +254,65 @@ archbird freshness . --snapshot .archbird/map.json \
 
 ```bash
 archbird serve
+archbird serve --no-config
+archbird serve --root ../project
 ```
 
 `serve` prints a loopback URL immediately, analyzes in a worker, publishes only
 valid generations, and retains the last good Map when a later candidate fails.
-The application provides component/file/symbol views, typed edge filters,
-search, exact source witnesses, focused Query controls, source views, snapshots,
-and structural diffs.
+Live Map, Query, projection, Verify, and graph-view work runs in the server's
+native Archbird core; the page does not fetch browser Wasm for live repository
+exploration. Wasm is reserved for the static app's local folder/ZIP and saved
+artifact workflows.
+The application provides:
+
+- useful zero-config exploration from the same exhaustive graph
+  ProjectionResult used by Markdown: switch overview, architecture, tests, and
+  evidence views, then independently group by directory, configured component,
+  layer, or language; configured components and constraints refine the graph
+  when `archbird.json` exists but never gate the zero-config path;
+- one mixed-resolution architecture graph: double-click, press Enter, or use
+  the inspector to expand a component or inferred layer through directories
+  into files, then expand one file into symbols while unrelated groups remain
+  collapsed; collapse, hide, and restore controls are presentation state and
+  never rewrite Map or Projection evidence;
+- entity-type colors, generation-matched constraint/finding overlays, keyboard
+  navigation, pointer-centered normalized wheel zoom, slider zoom, layout
+  direction, evidence-class, and edge-kind controls; selecting never changes
+  the viewport, while expanding animates children from the activated node and
+  keeps that node at the same screen position; dependency arrows default to
+  provider → consumer flow and can switch explicitly to consumer → provider
+  uses;
+- compact node and edge hover details for identity, relation counts, evidence,
+  and verification state; external symbol relations stay at the file frontier
+  until explicitly revealed for one symbol;
+- graph-local filtering plus focused typed or lexical Query from the current
+  canonical Map;
+- exact source witnesses for live repositories, retained last-good evidence,
+  repository snapshots, and structural comparison between saved generations;
+- canonical artifact and graph-view JSON downloads plus GraphML and Mermaid
+  graph exports;
+- task-oriented Diff and change-artifact summaries, Verification finding
+  review with explicit waiver candidates, and schema-2 configuration review;
+- system, light, and dark themes with responsive graph and inspector layouts.
 
 The same application can run statically on GitHub Pages. A browser can open a
 saved artifact, local directory, or ZIP and analyze supplied files through the
-Wasm Worker without uploading source or requiring a server.
+Wasm Worker without uploading source or requiring a server. Directory input
+passes path/size metadata and discovery documents through native discovery
+before reading selected source bytes, so default-excluded dependency/build
+trees do not fail merely because they contain large binaries. Saved artifacts
+do not contain repository source bytes, so source viewing is available only
+while a live server or browser repository session owns those bytes. Browser
+directory and ZIP inputs are explicit snapshots rather than watched filesystem
+handles; reload changed input to create another generation.
+Server mode evaluates Map and ProjectionPlans in the native Node/Python host
+and sends typed ProjectionResults to the page. Normal live exploration does not
+download the canonical Map; `Save canonical artifact` fetches those bytes
+explicitly. Static folder/ZIP and saved-Map workflows evaluate the same plans
+in the browser Wasm host. A successfully
+mapped repository with no supported source files shows an explicit empty-scope
+state rather than a blank graph.
 
 ## Project configuration
 
@@ -570,6 +634,8 @@ project = Project.from_repository(".")
 map_json = project.map_json(pretty=True)
 print(project.map_markdown(max_chars=12_000).decode())
 print(project.query_markdown(symbols=["runtime_start"], depth=1).decode())
+if project.verification_configured:
+    print(project.verify_json(pretty=True).decode())
 print(project.query_markdown(
     symbols=["runtime_start"], depth=1, view="changes", detail="compact"
 ).decode())
@@ -583,6 +649,9 @@ const { Project } = require("archbird");
 const project = Project.fromRepository(".");
 try {
   console.log(project.mapMarkdown({ maxChars: 12000 }).toString("utf8"));
+  if (project.verificationConfigured) {
+    console.log(project.verifyJson({ pretty: true }).toString("utf8"));
+  }
   console.log(project.queryMarkdown({
     symbols: ["runtime_start"], depth: 1, view: "changes", detail: "compact",
   }).toString("utf8"));
@@ -662,7 +731,13 @@ Python folds report rendering into
 <!-- archbird-node-api:end -->
 
 `archbird/browser` exports `createBrowserArchbird()`. Browser repository input
-is supplied bytes, not filesystem discovery. The resolved facade is:
+is an explicit inventory/byte snapshot, not ambient filesystem access.
+`Project.fromFiles()` resolves discovery from supplied bytes. Hosts that receive
+large directory inventories can call `Project.discoveryContentPaths()`, read
+only those small discovery inputs, call `Project.resolveInventory()`, then read
+`resolution.files` and construct the project with
+`Project.fromResolvedFiles()`. This is the metadata-first path used by the app.
+The resolved facade is:
 
 <!-- archbird-browser-api:start -->
 `Project`, `Source`, `auditMapFreshness`, `ENGINE`, `NATIVE_ABI_VERSION`,
@@ -685,7 +760,7 @@ The complete C ABI is declared in
 | --- | --- |
 | Engine and JSON | `archbird_engine_create`, `archbird_engine_destroy`, `archbird_engine_error`, `archbird_engine_error_offset`, `archbird_engine_options_init`, `archbird_engine_options_init_for_input`, `archbird_graph_options_init`, `archbird_implementation_sha256`, `archbird_json_canonicalize`, `archbird_json_validate` |
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
-| Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_query_plan_compile` |
+| Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
 | Map, Query, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish` |
 | Workspace and change | `archbird_change_contract`, `archbird_change_contract_report`, `archbird_change_proposal`, `archbird_change_proposal_report`, `archbird_change_verify`, `archbird_change_verify_report`, `archbird_workspace_analyze`, `archbird_workspace_plan` |
@@ -808,6 +883,12 @@ make verify
 make native-wasm-smoke
 make app-test
 ```
+
+Native CMake builds and cppcheck use `BUILD_JOBS=2` by default so complete
+gates remain bounded on development hosts without swap. Increase the explicit
+bound on larger machines, for example `make verify BUILD_JOBS=8`; outer
+`make -jN` controls target scheduling but does not replace this nested-build
+limit.
 
 Use `make editable-install PYTHON=/path/to/python` for Python source development
 and `make build-c` after C edits. The root submodules are development inputs;

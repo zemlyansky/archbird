@@ -399,7 +399,8 @@ ARCHBIRD_API ArchbirdStatus archbird_map_render_markdown(
 typedef enum ArchbirdMapView {
   ARCHBIRD_MAP_VIEW_OVERVIEW = 0,
   ARCHBIRD_MAP_VIEW_ARCHITECTURE = 1,
-  ARCHBIRD_MAP_VIEW_AUDIT = 2
+  ARCHBIRD_MAP_VIEW_TESTS = 2,
+  ARCHBIRD_MAP_VIEW_EVIDENCE = 3
 } ArchbirdMapView;
 
 typedef enum ArchbirdReportDetail {
@@ -414,9 +415,23 @@ typedef enum ArchbirdQueryView {
 } ArchbirdQueryView;
 
 /*
- * Render a human projection of the complete Map IR. Views choose the question
- * being answered; detail controls how much evidence that projection exposes.
- * Neither option changes or truncates the canonical Map.
+ * Evaluate one exhaustive graph ProjectionPlan and render the resulting typed
+ * ProjectionResult as Markdown. detail affects presentation only. max_chars
+ * omits complete displayed records and reports their count; it never truncates
+ * or changes the ProjectionResult. Full detail requires max_chars == 0.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_projection_render_markdown(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
+    const uint8_t *projection_json, size_t projection_length,
+    ArchbirdReportDetail detail, size_t max_chars, ArchbirdWriteFn write_fn,
+    void *user_data);
+
+/*
+ * Render a human projection of the canonical Map evidence for its configured
+ * or discovered scope. Views choose the question being answered; detail
+ * controls how much evidence that projection exposes. Neither option changes
+ * or truncates the canonical Map.
  */
 ARCHBIRD_API ArchbirdStatus archbird_map_render_markdown_view(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,

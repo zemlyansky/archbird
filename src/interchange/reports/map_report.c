@@ -3700,7 +3700,7 @@ ArchbirdStatus ab_map_report_markdown_view(ArchbirdEngine *engine,
   MapReportContext context;
   ArchbirdStatus status;
   if (!engine || !map || !out || view < ARCHBIRD_MAP_VIEW_OVERVIEW ||
-      view > ARCHBIRD_MAP_VIEW_AUDIT ||
+      view > ARCHBIRD_MAP_VIEW_ARCHITECTURE ||
       detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
       detail > ARCHBIRD_REPORT_DETAIL_FULL)
     return ARCHBIRD_INVALID_ARGUMENT;
@@ -3708,12 +3708,6 @@ ArchbirdStatus ab_map_report_markdown_view(ArchbirdEngine *engine,
     return archbird_error_set(
         engine, ARCHBIRD_INVALID_ARGUMENT, ARCHBIRD_NO_OFFSET,
         "map.max_chars: cannot be combined with full detail");
-  if (view == ARCHBIRD_MAP_VIEW_AUDIT)
-    return ab_map_report_markdown(
-        engine, map, detail == ARCHBIRD_REPORT_DETAIL_FULL,
-        max_chars ? max_chars
-                  : (detail == ARCHBIRD_REPORT_DETAIL_COMPACT ? 12000 : 0),
-        out);
   status = map_context_build(&context, engine, map);
   if (status != ARCHBIRD_OK)
     return status;

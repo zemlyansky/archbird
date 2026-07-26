@@ -15,19 +15,30 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import unquote_to_bytes, urlsplit
 
-from .native import diff_maps_json, export_graph, query_map_json
+from .native import (
+    diff_maps_json,
+    evaluate_projection_json,
+    export_graph,
+    query_map_json,
+)
 
 
 PROTOCOL_VERSION = 1
+STATIC_HOST_MARKER = b'name="archbird-host" content="static"'
+SERVER_HOST_MARKER = b'name="archbird-host" content="server"'
 SNAPSHOT_LIMIT = 4
+DERIVED_LIMIT = 16
 BLOB_LIMIT = 32
 BODY_LIMIT = 2 * 1024 * 1024
 TEXT_LIMIT = 256 * 1024
 HEX_LIMIT = 64 * 1024
-CAPABILITIES = ["map", "view", "query", "diff", "source", "snapshots", "events"]
+CAPABILITIES = [
+    "map", "projection", "view", "export", "query", "diff", "source",
+    "verification", "snapshots", "events",
+]
 MIME = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
@@ -36,6 +47,25 @@ MIME = {
     ".svg": "image/svg+xml",
     ".wasm": "application/wasm",
 }
+
+
+def _query_options(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError("query payload must be an object")
+    aliases = {
+        "searchLimit": "search_limit",
+        "testDepth": "test_depth",
+    }
+    allowed = {
+        "focus", "paths", "symbols", "components", "packages", "artifacts",
+        "search", "search_limit", "direction", "depth", "test_depth",
+    }
+    options: dict[str, object] = {}
+    for key, item in value.items():
+        normalized = aliases.get(key, key)
+        if normalized in allowed:
+            options[normalized] = item
+    return options
 
 
 def _canonical(value: object) -> bytes:
@@ -57,6 +87,17 @@ def _app_root(explicit: Optional[Path | str]) -> Path:
     raise RuntimeError(
         "visualization application is unavailable; build app/dist or install package app assets"
     )
+
+
+def _live_app_bytes(candidate: Path) -> bytes:
+    data = candidate.read_bytes()
+    if candidate.name != "index.html":
+        return data
+    if data.count(STATIC_HOST_MARKER) != 1:
+        raise RuntimeError(
+            "visualization index must contain exactly one static Archbird host marker"
+        )
+    return data.replace(STATIC_HOST_MARKER, SERVER_HOST_MARKER)
 
 
 def _safe_relative(root: Path, value: object) -> tuple[Path, str]:
@@ -139,6 +180,7 @@ class LiveRepository:
                 "last_error": self._last_error,
                 "phase": self._phase,
                 "project": snapshot["project"] if snapshot else None,
+                "schema_version": snapshot["schema_version"] if snapshot else None,
                 "source_available": snapshot is not None,
             }
 
@@ -202,21 +244,30 @@ class LiveRepository:
                 if prefix:
                     message = message.replace(prefix, "")
             raise RuntimeError(message.rsplit("\n", 1)[-1] or "Map candidate failed")
-        header_bytes, separator, map_json = completed.stdout.partition(b"\n")
+        header_bytes, separator, artifacts = completed.stdout.partition(b"\n")
         if not separator:
             raise RuntimeError("Map candidate returned no framed artifact")
         header = json.loads(header_bytes)
-        if len(map_json) != header.get("map_bytes"):
+        map_bytes = header.get("map_bytes")
+        verification_bytes = header.get("verification_bytes")
+        if not isinstance(map_bytes, int) or not isinstance(verification_bytes, int):
+            raise RuntimeError("Map candidate framing is invalid")
+        if len(artifacts) != map_bytes + verification_bytes:
             raise RuntimeError("Map candidate artifact size changed in transport")
+        map_json = artifacts[:map_bytes]
+        verification_json = artifacts[map_bytes:]
         generation = header.get("generation")
         if not isinstance(generation, str) or len(generation) != 64:
             raise RuntimeError("Map candidate generation is invalid")
         return {
+            "derived": OrderedDict(),
             "files": list(header["files"]),
             "generation": generation,
             "map": map_json,
             "project": header["project"],
+            "schema_version": header["schema_version"],
             "stored_at": int(time.time() * 1000),
+            "verification": verification_json,
         }
 
     def _sync_watch_paths(self, files: Sequence[Mapping[str, object]]) -> None:
@@ -294,6 +345,12 @@ class LiveRepository:
                         "phase": "ready",
                         "project": candidate["project"],
                     },
+                    candidate["generation"],
+                )
+            if candidate["verification"]:
+                self._event(
+                    "verification-ready",
+                    {"phase": "ready", "project": candidate["project"]},
                     candidate["generation"],
                 )
 
@@ -375,6 +432,29 @@ class LiveRepository:
             "project": snapshot["project"],
         }
 
+    def derived(
+        self,
+        snapshot: Mapping[str, Any],
+        operation: str,
+        request: object,
+        evaluate: Callable[[], bytes],
+    ) -> bytes:
+        key = f"{operation}:{hashlib.sha256(_canonical(request)).hexdigest()}"
+        with self._lock:
+            cache = snapshot["derived"]
+            cached = cache.pop(key, None)
+            if cached is not None:
+                cache[key] = cached
+                return cached
+        data = bytes(evaluate())
+        with self._lock:
+            cache = snapshot["derived"]
+            existing = cache.pop(key, None)
+            cache[key] = existing if existing is not None else data
+            while len(cache) > DERIVED_LIMIT:
+                cache.popitem(last=False)
+            return cache[key]
+
     def source(self, snapshot: Mapping[str, Any], source_path: object) -> dict[str, object]:
         allowed = {str(row["path"]): row for row in snapshot["files"]}
         candidate, relative = _safe_relative(self.root, source_path)
@@ -412,6 +492,7 @@ class LiveRepository:
                     "files": len(row["files"]),
                     "generation": row["generation"],
                     "project": row["project"],
+                    "schema_version": row["schema_version"],
                     "stored_at": row["stored_at"],
                 }
                 for row in reversed(tuple(self.snapshots.values()))
@@ -424,30 +505,77 @@ class LiveRepository:
         snapshot = self.snapshot(generation)
         if method == "map":
             return self.artifact(snapshot, snapshot["map"])
+        if method == "projection":
+            plan = payload.get("plan")
+            if not isinstance(plan, dict):
+                raise ValueError("projection request requires a plan object")
+            return self.artifact(
+                snapshot,
+                self.derived(
+                    snapshot,
+                    "projection",
+                    plan,
+                    lambda: evaluate_projection_json(snapshot["map"], plan),
+                ),
+            )
         if method == "view":
+            view = str(payload.get("view") or "components")
+            source = (
+                query_map_json(
+                    snapshot["map"],
+                    **_query_options(payload.get("query") or {}),
+                )
+                if view == "symbols"
+                else snapshot["map"]
+            )
             data = export_graph(
-                snapshot["map"],
+                source,
                 format="json",
-                view=str(payload.get("view") or "components"),
+                view=view,
                 max_nodes=int(payload.get("max_nodes", 0)),
                 max_edge_names=int(payload.get("max_edge_names", 3)),
             )
             return self.artifact(snapshot, data)
+        if method == "export":
+            view = str(payload.get("view") or "components")
+            source = (
+                query_map_json(
+                    snapshot["map"],
+                    **_query_options(payload.get("query") or {}),
+                )
+                if view == "symbols"
+                else snapshot["map"]
+            )
+            data = export_graph(
+                source,
+                direction=str(payload.get("direction") or "LR"),
+                format=str(payload.get("format") or "graphml"),
+                view=view,
+                max_nodes=int(payload.get("max_nodes", 0)),
+                max_edge_names=int(payload.get("max_edge_names", 0)),
+            )
+            return self.artifact(snapshot, data)
         if method == "query":
-            raw = payload.get("query") or {}
-            allowed = {
-                "focus", "paths", "symbols", "components", "packages", "artifacts",
-                "direction", "depth", "test_depth",
-            }
-            query = {key: value for key, value in raw.items() if key in allowed}
-            return self.artifact(snapshot, query_map_json(snapshot["map"], **query))
+            return self.artifact(
+                snapshot,
+                query_map_json(
+                    snapshot["map"],
+                    **_query_options(payload.get("query") or {}),
+                ),
+            )
         if method == "diff":
             before = self.snapshot(payload.get("before"))
             after = self.snapshot(payload.get("after"))
             return self.artifact(after, diff_maps_json(before["map"], after["map"]))
         if method == "source":
             return self.source(snapshot, payload.get("path"))
-        if method in {"verification", "act-proposal", "act-contract", "act-result"}:
+        if method == "verification":
+            return (
+                self.artifact(snapshot, snapshot["verification"])
+                if snapshot["verification"]
+                else None
+            )
+        if method in {"act-proposal", "act-contract", "act-result"}:
             return None
         if method == "dispose":
             self._selections.pop(session, None)
@@ -614,7 +742,7 @@ def _handler(repository: LiveRepository, static_root: Path):
                     self.send_error(404, "not found")
                     return
                 candidate = static_root / "index.html"
-            data = candidate.read_bytes()
+            data = _live_app_bytes(candidate)
             self.send_response(200)
             self._headers()
             self.send_header(
@@ -707,6 +835,7 @@ def create_live_server(
         project_options=project_options,
     )
     static_root = _app_root(app)
+    _live_app_bytes(static_root / "index.html")
     family = socket.AF_INET6 if host == "::1" else socket.AF_INET
     server_class = type(
         "ArchbirdHTTPServer",

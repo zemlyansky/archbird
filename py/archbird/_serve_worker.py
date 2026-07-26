@@ -24,6 +24,7 @@ def main() -> int:
     options = dict(request.get("project_options") or {})
     project = Project.from_repository(root, config=config, **options)
     map_json = project.map_json()
+    verification_json = project.verify_json() if project.verification_configured else b""
     document = json.loads(map_json)
     generation = document.get("evidence", {}).get("input_sha256")
     if not isinstance(generation, str) or len(generation) != 64:
@@ -40,11 +41,14 @@ def main() -> int:
         "generation": generation,
         "map_bytes": len(map_json),
         "project": document["project"],
+        "schema_version": document["schema_version"],
+        "verification_bytes": len(verification_json),
     }
     sys.stdout.buffer.write(
         json.dumps(header, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
         + b"\n"
         + map_json
+        + verification_json
     )
     return 0
 

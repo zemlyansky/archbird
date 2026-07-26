@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, toRaw, watch } from "vue";
 import type { ParsedArtifact } from "../artifacts/model";
 import {
   reviewedProjectConfiguration,
@@ -27,7 +27,7 @@ const constraints = computed(() => Array.isArray(projectConfiguration.value.cons
 const findings = computed(() => verificationFindings(props.artifact.document));
 
 function editableDocument(artifact: ParsedArtifact): Record<string, unknown> {
-  const result = structuredClone(artifact.document);
+  const result = structuredClone(toRaw(artifact.document));
   if (artifact.artifact === "project-configuration" &&
       result.constraints && !Array.isArray(result.constraints) &&
       typeof result.constraints === "object") {
@@ -78,7 +78,7 @@ function documentElement(tag: string): HTMLAnchorElement {
 
 function saveProjectConfiguration() {
   try {
-    const configuration = reviewedProjectConfiguration(projectConfiguration.value);
+    const configuration = reviewedProjectConfiguration(toRaw(projectConfiguration.value));
     downloadJson(configuration, "archbird.json");
     message.value = "Saved the schema-2 project configuration for review.";
   } catch (error) {

@@ -11,8 +11,9 @@ const artifactInput = ref<HTMLInputElement | null>(null);
 const directoryInput = ref<HTMLInputElement | null>(null);
 const zipInput = ref<HTMLInputElement | null>(null);
 
-function select(files: FileList | null) {
-  if (files?.length) emit("select", files[0]);
+function select(input: HTMLInputElement) {
+  if (input.files?.length) emit("select", input.files[0]);
+  input.value = "";
 }
 
 function drop(event: DragEvent) {
@@ -24,12 +25,14 @@ function drop(event: DragEvent) {
   else emit("select", file);
 }
 
-function selectDirectory(files: FileList | null) {
-  if (files?.length) emit("directory", [...files]);
+function selectDirectory(input: HTMLInputElement) {
+  if (input.files?.length) emit("directory", [...input.files]);
+  input.value = "";
 }
 
-function selectZip(files: FileList | null) {
-  if (files?.length) emit("zip", files[0]);
+function selectZip(input: HTMLInputElement) {
+  if (input.files?.length) emit("zip", input.files[0]);
+  input.value = "";
 }
 </script>
 
@@ -47,13 +50,13 @@ function selectZip(files: FileList | null) {
       <button type="button" @click="directoryInput?.click()">Folder</button>
       <button type="button" @click="zipInput?.click()">ZIP</button>
     </div>
-    <small>Saved evidence or local source · nothing is uploaded</small>
+    <small>Artifact, project folder, or source ZIP · nothing is uploaded</small>
     <input
       ref="artifactInput"
       type="file"
       accept="application/json,.json"
       hidden
-      @change="select(($event.target as HTMLInputElement).files)"
+      @change="select($event.target as HTMLInputElement)"
     />
     <input
       ref="directoryInput"
@@ -61,14 +64,14 @@ function selectZip(files: FileList | null) {
       webkitdirectory
       multiple
       hidden
-      @change="selectDirectory(($event.target as HTMLInputElement).files)"
+      @change="selectDirectory($event.target as HTMLInputElement)"
     />
     <input
       ref="zipInput"
       type="file"
       accept="application/zip,.zip"
       hidden
-      @change="selectZip(($event.target as HTMLInputElement).files)"
+      @change="selectZip($event.target as HTMLInputElement)"
     />
   </div>
 </template>

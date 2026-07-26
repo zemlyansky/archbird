@@ -99,19 +99,52 @@ async function main() {
       ))),
     ]);
     assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+    const appResponse = await fetch(url);
+    assert.equal(appResponse.status, 200);
+    const appDocument = await appResponse.text();
+    assert.match(appDocument, /<meta name="archbird-host" content="server"/);
+    assert.doesNotMatch(appDocument, /<meta name="archbird-host" content="static"/);
+
     const firstBootstrap = await (await fetch(new URL("api/v1/bootstrap", url))).json();
     assert.equal(firstBootstrap.protocol_version, 1);
+    assert.deepEqual(firstBootstrap.capabilities, [
+      "map", "projection", "view", "export", "query", "diff", "source",
+      "verification", "snapshots", "events",
+    ]);
     assert.match(firstBootstrap.phase, /^(waiting|analyzing|ready)$/);
     await waitFor(async () => {
       const bootstrap = await (await fetch(new URL("api/v1/bootstrap", url))).json();
-      return bootstrap.project === "map-base" && bootstrap.phase === "ready";
+      return bootstrap.project === "map-base"
+        && Number.isSafeInteger(bootstrap.schema_version)
+        && bootstrap.phase === "ready";
     }, "initial Python live generation");
 
     const initial = await artifact(url, "map");
     const initialMap = JSON.parse(initial.bytes);
     assert.equal(initialMap.project, "map-base");
+    assert.equal(
+      (await (await fetch(new URL("api/v1/bootstrap", url))).json()).schema_version,
+      initialMap.schema_version,
+    );
     assert.equal(initial.descriptor.generation, initialMap.evidence.input_sha256);
+    const verification = JSON.parse((await artifact(url, "verification")).bytes);
+    assert.equal(verification.artifact, "verification");
+    assert.equal(verification.policy.project, "map-base");
+    const membership = JSON.parse((await artifact(url, "projection", {
+      plan: { id: "app-membership", select: "component_membership" },
+    })).bytes);
+    assert.equal(membership.artifact, "projection-result");
+    assert.equal(membership.completeness.classification, "complete");
+    assert.equal(membership.fact.items.length, initialMap.files.length);
     assert.equal(JSON.parse((await artifact(url, "view", { view: "files", max_nodes: 0 })).bytes).artifact, "archbird-graph-view");
+    const symbols = JSON.parse((await artifact(url, "view", {
+      max_nodes: 0,
+      query: { depth: 0, paths: ["js/index.js"], testDepth: 0 },
+      view: "symbols",
+    })).bytes);
+    assert.equal(symbols.artifact, "archbird-graph-view");
+    assert.equal(symbols.request.view, "symbols");
+    assert.ok(symbols.nodes.some((row) => row.kind === "symbol" && row.label === "add"));
     const source = await request(url, "source", { path: "js/index.js" });
     assert.match(source.result.text, /export function add/);
     assert.match((await request(url, "source", { path: "../outside" }, 400)).error.message, /escapes repository root/);
@@ -137,6 +170,9 @@ async function main() {
     }, "Python live generation");
     const snapshots = await request(url, "snapshots");
     assert.equal(snapshots.result.length, 2);
+    assert.ok(snapshots.result.every(
+      (row) => row.schema_version === initialMap.schema_version,
+    ));
     assert.match((await request(url, "source", {
       generation: initialGeneration,
       path: "js/index.js",
@@ -146,7 +182,7 @@ async function main() {
       after: currentGeneration,
     })).bytes);
     assert.equal(diff.artifact, "diff");
-    console.log("Python live server Map/view/source/watch/last-good passed");
+    console.log("Python live server Map/view/Verification/source/watch/last-good passed");
   } finally {
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve));

@@ -2,6 +2,7 @@
 
 const { Buffer } = require("buffer");
 const ts = require("typescript");
+const { mapProjectionRequest } = require("./map-view");
 const { typescriptProviderBundles } = require("./providers/typescript");
 const { createArchbirdCore } = require("./wasm");
 
@@ -17,6 +18,17 @@ function canonical(value) {
     );
   }
   return value;
+}
+
+function projectConfigurationForResolution(configJson, effectiveConfig) {
+  const authored = configJson && configJson.length
+    ? JSON.parse(Buffer.from(configJson).toString("utf8"))
+    : {};
+  const result = { ...effectiveConfig };
+  for (const field of ["projections", "queries", "constraints"]) {
+    if (Object.hasOwn(authored, field)) result[field] = authored[field];
+  }
+  return Buffer.from(JSON.stringify(canonical(result)));
 }
 
 function queryRequest(options = {}) {
@@ -122,9 +134,15 @@ async function createBrowserArchbird(moduleOptions = {}) {
     constructor(
       configJson,
       suppliedSources,
-      { typescript = true, resolution = null, resolutionJson = null } = {},
+      {
+        typescript = true,
+        resolution = null,
+        resolutionJson = null,
+        projectConfigurationJson = null,
+      } = {},
     ) {
       this.configJson = Buffer.from(configJson);
+      this.projectConfigurationJson = Buffer.from(projectConfigurationJson ?? configJson);
       const sourceList = [...suppliedSources];
       const byPath = new Map(
         sourceList.map((source) => {
@@ -254,27 +272,57 @@ async function createBrowserArchbird(moduleOptions = {}) {
       }
     }
 
-    static fromFiles(suppliedSources, options = {}) {
-      const sourceList = [...suppliedSources].map((source) =>
-        source instanceof Source ? source : new Source(source.path, source.data));
-      const byPath = new Map(sourceList.map((source) => [source.path, source]));
-      if (byPath.size !== sourceList.length) throw new Error("source paths must be unique");
+    static discoveryContentPaths(paths, options = {}) {
+      const normalized = [...new Set(paths.map(
+        (pathname) => new Source(pathname, Buffer.alloc(0)).path,
+      ))];
       const custom = [...new Set((options.ignoreFiles || []).map(
         (value) => new Source(value, Buffer.alloc(0)).path,
       ))];
       for (const pathname of custom) {
-        if (!byPath.has(pathname)) {
+        if (!normalized.includes(pathname)) {
           throw new Error(`custom ignore file is unavailable: ${pathname}`);
         }
       }
       const customSet = new Set(custom);
       const standard = options.ignore === false
         ? []
-        : [...byPath.keys()]
+        : normalized
           .filter((pathname) => standardIgnore(pathname) && !customSet.has(pathname));
-      const ignorePaths = [...standard, ...custom];
       const documents = ["package.json", "pyproject.toml", "DESCRIPTION", "configure.ac"]
-        .filter((pathname) => byPath.has(pathname))
+        .filter((pathname) => normalized.includes(pathname));
+      return [...new Set([...standard, ...custom, ...documents])].sort(utf8Compare);
+    }
+
+    static resolveInventory(suppliedFiles, options = {}) {
+      const rows = [...suppliedFiles].map((value) => {
+        const path = new Source(value.path, Buffer.alloc(0)).path;
+        if (!Number.isSafeInteger(value.bytes) || value.bytes < 0) {
+          throw new Error(`inventory byte size is invalid: ${path}`);
+        }
+        return {
+          bytes: value.bytes,
+          data: value.data === undefined ? null : Buffer.from(value.data),
+          path,
+        };
+      });
+      const byPath = new Map(rows.map((row) => [row.path, row]));
+      if (byPath.size !== rows.length) throw new Error("inventory paths must be unique");
+      const contentPaths = Project.discoveryContentPaths([...byPath.keys()], options);
+      const customIgnorePaths = new Set((options.ignoreFiles || []).map(
+        (pathname) => new Source(pathname, Buffer.alloc(0)).path,
+      ));
+      for (const pathname of contentPaths) {
+        const row = byPath.get(pathname);
+        if (!row?.data || row.data.length !== row.bytes) {
+          throw new Error(`discovery content is unavailable: ${pathname}`);
+        }
+      }
+      const ignorePaths = contentPaths.filter((pathname) =>
+        standardIgnore(pathname) || customIgnorePaths.has(pathname));
+      const documents = contentPaths
+        .filter((pathname) =>
+          ["package.json", "pyproject.toml", "DESCRIPTION", "configure.ac"].includes(pathname))
         .map((pathname) => ({
           content_hex: byPath.get(pathname).data.toString("hex"),
           path: pathname,
@@ -282,8 +330,8 @@ async function createBrowserArchbird(moduleOptions = {}) {
       const inventory = canonical({
         artifact: "archbird-repository-inventory",
         documents,
-        files: [...byPath.values()]
-          .map((source) => ({ bytes: source.data.length, path: source.path }))
+        files: rows
+          .map((row) => ({ bytes: row.bytes, path: row.path }))
           .sort((left, right) => utf8Compare(left.path, right.path)),
         ignore_files: ignorePaths.map((pathname) => ({
           content_hex: byPath.get(pathname).data.toString("hex"),
@@ -292,19 +340,53 @@ async function createBrowserArchbird(moduleOptions = {}) {
         schema_version: 1,
       });
       const config = options.config ? Buffer.from(options.config) : Buffer.alloc(0);
-      const request = mapRequest({ ...options, ignoreFiles: custom });
+      const request = mapRequest({
+        ...options,
+        ignoreFiles: [...customIgnorePaths],
+      });
       const resolutionJson = core.discoveryResolve(
         config,
         request,
         Buffer.from(JSON.stringify(inventory)),
       );
       const resolution = JSON.parse(resolutionJson.toString("utf8"));
+      return {
+        projectConfigurationJson: projectConfigurationForResolution(
+          config,
+          resolution.effective_config,
+        ),
+        resolution,
+        resolutionJson,
+      };
+    }
+
+    static fromResolvedFiles(suppliedSources, resolved, options = {}) {
+      const sourceList = [...suppliedSources].map((source) =>
+        source instanceof Source ? source : new Source(source.path, source.data));
+      const resolution = resolved?.resolution;
+      const resolutionJson = resolved?.resolutionJson;
+      if (!resolution || !resolutionJson) throw new Error("resolved discovery is required");
       const effective = Buffer.from(JSON.stringify(canonical(resolution.effective_config)));
       return new Project(effective, sourceList, {
+        projectConfigurationJson: resolved.projectConfigurationJson,
         resolution,
         resolutionJson,
         typescript: options.typescript ?? true,
       });
+    }
+
+    static fromFiles(suppliedSources, options = {}) {
+      const sourceList = [...suppliedSources].map((source) =>
+        source instanceof Source ? source : new Source(source.path, source.data));
+      const resolved = Project.resolveInventory(
+        sourceList.map((source) => ({
+          bytes: source.data.length,
+          data: source.data,
+          path: source.path,
+        })),
+        options,
+      );
+      return Project.fromResolvedFiles(sourceList, resolved, options);
     }
 
     get counts() {
@@ -330,28 +412,14 @@ async function createBrowserArchbird(moduleOptions = {}) {
       return JSON.parse(this.mapJson().toString("utf8"));
     }
 
-    mapMarkdown({
-      view = "overview",
-      detail = "standard",
-      compact = false,
-      full = false,
-      maxChars = 0,
-    } = {}) {
-      const views = { overview: 0, architecture: 1, audit: 2 };
-      const details = { compact: 0, standard: 1, full: 2 };
-      if (!Object.hasOwn(views, view)) {
-        throw new RangeError("view must be overview, architecture, or audit");
-      }
-      if (!Object.hasOwn(details, detail)) {
-        throw new RangeError("detail must be compact, standard, or full");
-      }
-      if (compact && full) throw new RangeError("compact and full conflict");
-      if ((compact || full) && detail !== "standard") {
-        throw new RangeError("detail conflicts with compact/full alias");
-      }
-      const selected = compact ? "compact" : (full ? "full" : detail);
-      return core.mapMarkdownView(
-        this.mapJson(), views[view], details[selected], maxChars,
+    mapMarkdown(options = {}) {
+      const request = mapProjectionRequest(options);
+      return core.projectionRenderMarkdown(
+        this.mapJson(),
+        options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+        Buffer.from(JSON.stringify(request.definition)),
+        request.detail,
+        request.maxChars,
       );
     }
 
@@ -387,6 +455,27 @@ async function createBrowserArchbird(moduleOptions = {}) {
         options.maxChars ?? 0,
         Buffer.from(verificationResult),
       );
+    }
+
+    verifyJson({ constraintIds = [], policyDate = null, pretty = false } = {}) {
+      const request = {};
+      if (constraintIds.length) request.ids = [...constraintIds];
+      if (policyDate !== null) request.policy_date = policyDate;
+      return core.constraintsEvaluate(
+        this.projectConfigurationJson,
+        this.mapJson(),
+        this.resolutionJson ?? Buffer.alloc(0),
+        Object.keys(request).length
+          ? Buffer.from(JSON.stringify(canonical(request)))
+          : Buffer.alloc(0),
+        pretty,
+      );
+    }
+
+    get verificationConfigured() {
+      const constraints = JSON.parse(this.projectConfigurationJson.toString("utf8")).constraints;
+      return constraints && typeof constraints === "object"
+        && Object.keys(constraints).length > 0;
     }
 
     graphViewJson({

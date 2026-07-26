@@ -24,14 +24,21 @@ function executableExists(candidate) {
 }
 
 function loadChromium() {
-  const moduleName = process.env.ARCHBIRD_PLAYWRIGHT || "playwright";
-  try {
-    return require(moduleName).chromium;
-  } catch (error) {
-    throw new Error(
-      `cannot load Playwright (${moduleName}); set ARCHBIRD_PLAYWRIGHT to a shared installation: ${error.message}`,
-    );
+  const explicit = process.env.ARCHBIRD_PLAYWRIGHT;
+  const candidates = explicit
+    ? [explicit]
+    : ["playwright", path.join(__dirname, "..", "app", "node_modules", "playwright")];
+  const errors = [];
+  for (const candidate of candidates) {
+    try {
+      return require(candidate).chromium;
+    } catch (error) {
+      errors.push(`${candidate}: ${error.message}`);
+    }
   }
+  throw new Error(
+    `cannot load Playwright; run the app install or set ARCHBIRD_PLAYWRIGHT: ${errors.join("; ")}`,
+  );
 }
 
 function sharedChromium(chromium) {

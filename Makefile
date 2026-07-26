@@ -6,7 +6,8 @@ CLANG ?= clang
 EMCMAKE ?= emcmake
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
-CPPCHECK_JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+BUILD_JOBS ?= 2
+CPPCHECK_JOBS ?= $(BUILD_JOBS)
 ESBUILD ?= $(CURDIR)/app/node_modules/.bin/esbuild
 AUDITWHEEL ?= auditwheel
 TWINE ?= twine
@@ -97,12 +98,33 @@ app-browser-test: app-test build-js
 		--output $(APP_BROWSER_SMOKE)/graph.json
 	$(NODE) test/run_app_browser.js app/dist \
 		$(APP_BROWSER_SMOKE)/graph.json $(APP_BROWSER_SMOKE)/map.json \
+		test/fuzz/corpus/act-verification/verification.json \
+		test/fuzz/corpus/act-proposal/proposal.json \
 		test/fixtures/map_base \
 		$(APP_BROWSER_SMOKE)/app.png
 	ARCHBIRD_ENGINE=native \
 	ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) test/run_live_app_browser.js app/dist test/fixtures/map_base \
 		$(APP_BROWSER_SMOKE)/live $(APP_BROWSER_SMOKE)/live-app.png
+	ARCHBIRD_ENGINE=native \
+	ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
+		$(NODE) test/run_live_app_browser.js app/dist test/fixtures/map_base \
+		$(APP_BROWSER_SMOKE)/live-no-config \
+		$(APP_BROWSER_SMOKE)/live-no-config-app.png --no-config
+	ARCHBIRD_ENGINE=native \
+	ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
+		$(NODE) test/run_live_app_browser.js app/dist test/fixtures/map_base \
+		$(APP_BROWSER_SMOKE)/live-empty \
+		$(APP_BROWSER_SMOKE)/live-empty-app.png --no-config --empty
+	PYTHON=$(PYTHON) \
+		$(NODE) test/run_live_app_browser.js app/dist test/fixtures/map_base \
+		$(APP_BROWSER_SMOKE)/python-live-no-config \
+		$(APP_BROWSER_SMOKE)/python-live-no-config-app.png \
+		--no-config --python
+	ARCHBIRD_ENGINE=native \
+	ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
+		$(NODE) test/run_large_live_app_browser.js app/dist $(CURDIR) \
+		$(APP_BROWSER_SMOKE)/large-live-no-config-app.png
 
 build-c: export TMPDIR := $(BUILD_TMP)
 build-c:
@@ -110,7 +132,8 @@ build-c:
 	command $(CMAKE) -S . -B $(CORE_BUILD) -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 		-DBUILD_TESTING=OFF -DARCHBIRD_BUILD_PYTHON=OFF \
 		-DARCHBIRD_BUILD_NODE=OFF -DARCHBIRD_BUILD_SHARED=ON
-	command $(CMAKE) --build $(CORE_BUILD) --target archbird_shared --parallel
+	command $(CMAKE) --build $(CORE_BUILD) --target archbird_shared \
+		--parallel $(BUILD_JOBS)
 
 build-py: export TMPDIR := $(BUILD_TMP)
 build-py: build-c
@@ -181,7 +204,8 @@ native-configure:
 		-DARCHBIRD_BUILD_NODE=OFF -DARCHBIRD_BUILD_SHARED=ON
 
 native-build: native-configure
-	TMPDIR=$(BUILD_TMP) command $(CMAKE) --build $(NATIVE_BUILD) --parallel
+	TMPDIR=$(BUILD_TMP) command $(CMAKE) --build $(NATIVE_BUILD) \
+		--parallel $(BUILD_JOBS)
 
 native-test: native-build
 	TMPDIR=$(BUILD_TMP) ctest --test-dir $(NATIVE_BUILD) --output-on-failure
@@ -212,7 +236,8 @@ native-sanitize:
 		-DARCHBIRD_REFERENCE_ROOT= \
 		-DARCHBIRD_BUILD_PYTHON=OFF -DARCHBIRD_BUILD_NODE=OFF \
 		-DARCHBIRD_BUILD_SHARED=OFF
-	TMPDIR=$(BUILD_TMP) command $(CMAKE) --build $(NATIVE_ASAN_BUILD) --parallel
+	TMPDIR=$(BUILD_TMP) command $(CMAKE) --build $(NATIVE_ASAN_BUILD) \
+		--parallel $(BUILD_JOBS)
 	TMPDIR=$(BUILD_TMP) ctest --test-dir $(NATIVE_ASAN_BUILD) --output-on-failure
 
 native-warnings:
@@ -222,7 +247,8 @@ native-warnings:
 		-DCMAKE_BUILD_TYPE=Release -DARCHBIRD_WARNINGS_AS_ERRORS=ON \
 		-DARCHBIRD_REFERENCE_ROOT= -DARCHBIRD_BUILD_PYTHON=OFF \
 		-DARCHBIRD_BUILD_NODE=OFF -DARCHBIRD_BUILD_SHARED=OFF
-	TMPDIR=$(BUILD_TMP) command $(CMAKE) --build $(NATIVE_WARNING_BUILD) --clean-first --parallel
+	TMPDIR=$(BUILD_TMP) command $(CMAKE) --build $(NATIVE_WARNING_BUILD) \
+		--clean-first --parallel $(BUILD_JOBS)
 
 native-wasm-smoke:
 	command mkdir -p $(BUILD_TMP) $(EMSCRIPTEN_CACHE)
@@ -232,7 +258,8 @@ native-wasm-smoke:
 		-DARCHBIRD_BUILD_PYTHON=OFF -DARCHBIRD_BUILD_NODE=OFF \
 		-DARCHBIRD_BUILD_SHARED=OFF
 	EM_CACHE=$(EMSCRIPTEN_CACHE) TMPDIR=$(BUILD_TMP) \
-		command $(CMAKE) --build $(NATIVE_WASM_BUILD) --parallel
+		command $(CMAKE) --build $(NATIVE_WASM_BUILD) \
+			--parallel $(BUILD_JOBS)
 
 native-fuzz-smoke:
 	command mkdir -p $(BUILD_TMP)
@@ -243,7 +270,7 @@ native-fuzz-smoke:
 		-DARCHBIRD_BUILD_NODE=OFF -DARCHBIRD_BUILD_SHARED=OFF \
 		-DBUILD_TESTING=OFF
 	TMPDIR=$(BUILD_TMP) command $(CMAKE) --build $(NATIVE_FUZZ_BUILD) \
-		--target archbird_fuzz_smoke --parallel
+		--target archbird_fuzz_smoke --parallel $(BUILD_JOBS)
 
 native-analyze: native-configure
 	@test -n "$(strip $(NATIVE_C_FILES))" || { \
@@ -301,7 +328,8 @@ release-js: app-test
 	command $(CMAKE) -S . -B $(NATIVE_RELEASE_BUILD) -DBUILD_TESTING=OFF \
 		-DCMAKE_BUILD_TYPE=Release -DARCHBIRD_BUILD_PYTHON=OFF \
 		-DARCHBIRD_BUILD_NODE=ON -DARCHBIRD_BUILD_SHARED=OFF
-	command $(CMAKE) --build $(NATIVE_RELEASE_BUILD) --target archbird_node --parallel
+	command $(CMAKE) --build $(NATIVE_RELEASE_BUILD) --target archbird_node \
+		--parallel $(BUILD_JOBS)
 	command mkdir -p $(RELEASE_DIR)
 	cd js && ARCHBIRD_NATIVE_ADDON=$(abspath $(NATIVE_RELEASE_BUILD)/node/_native.node) \
 		ARCHBIRD_WASM_BUILD=$(abspath $(NATIVE_WASM_BUILD)/wasm) \
@@ -375,7 +403,7 @@ release-check: release-py release-js
 
 release: release-check
 
-verify: evaluation-test schema-snapshots native-test test-py test-js app-test native-analyze native-warnings
+verify: evaluation-test schema-snapshots native-test test-py test-js app-browser-test native-analyze native-warnings
 	$(PYTHON) -m compileall -q \
 		-x '(^|/)test/(fixtures|fuzz/corpus)(/|$$)' \
 		py/archbird py/tests test

@@ -46,27 +46,34 @@ ArchbirdStatus archbird_map_render_markdown_view(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
     ArchbirdMapView view, ArchbirdReportDetail detail, size_t max_chars,
     ArchbirdWriteFn write_fn, void *user_data) {
-  AbValue map = {0};
-  AbBuffer report;
-  ArchbirdStatus status;
+  static const char *const plans[] = {
+      "{\"group_by\":\"directory\",\"id\":\"map-overview\","
+      "\"level\":\"file\",\"overlays\":[\"diagnostics\","
+      "\"evidence-quality\"],\"relations\":[\"builds\",\"bridges\","
+      "\"imports\",\"packages\",\"tests\"],\"select\":\"graph\"}",
+      "{\"group_by\":\"directory\",\"id\":\"map-architecture\","
+      "\"level\":\"file\",\"overlays\":[\"diagnostics\","
+      "\"evidence-quality\"],\"relations\":[\"bridges\",\"calls\","
+      "\"declarations\",\"imports\",\"packages\",\"references\"],"
+      "\"select\":\"graph\"}",
+      "{\"group_by\":\"directory\",\"id\":\"map-tests\","
+      "\"level\":\"file\",\"overlays\":[\"diagnostics\","
+      "\"evidence-quality\"],\"relations\":[\"tests\"],"
+      "\"select\":\"graph\"}",
+      "{\"group_by\":\"directory\",\"id\":\"map-evidence\","
+      "\"level\":\"file\",\"overlays\":[\"diagnostics\","
+      "\"evidence-quality\"],\"relations\":[],\"select\":\"graph\"}",
+  };
+  const char *plan;
   if (!engine || (!map_json && map_length) || !write_fn ||
-      view < ARCHBIRD_MAP_VIEW_OVERVIEW || view > ARCHBIRD_MAP_VIEW_AUDIT ||
+      view < ARCHBIRD_MAP_VIEW_OVERVIEW || view > ARCHBIRD_MAP_VIEW_EVIDENCE ||
       detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
       detail > ARCHBIRD_REPORT_DETAIL_FULL)
     return ARCHBIRD_INVALID_ARGUMENT;
-  status = ab_build_identity_validate(engine);
-  if (status != ARCHBIRD_OK)
-    return status;
-  ab_buffer_init(&report, engine);
-  status = ab_json_value_decode(engine, map_json, map_length, &map);
-  if (status == ARCHBIRD_OK)
-    status = ab_map_report_markdown_view(engine, &map, view, detail, max_chars,
-                                         &report);
-  if (status == ARCHBIRD_OK)
-    status = map_report_write(engine, &report, write_fn, user_data);
-  ab_buffer_free(&report);
-  ab_value_free(engine, &map);
-  return status;
+  plan = plans[(size_t)view];
+  return archbird_projection_render_markdown(
+      engine, map_json, map_length, NULL, 0, (const uint8_t *)plan,
+      strlen(plan), detail, max_chars, write_fn, user_data);
 }
 
 ArchbirdStatus
