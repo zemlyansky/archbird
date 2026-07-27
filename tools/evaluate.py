@@ -2478,9 +2478,17 @@ def evaluation_host() -> Mapping[str, Any]:
 def comparable_performance_environment(
     run: Mapping[str, Any],
 ) -> Optional[Mapping[str, Any]]:
+    evaluator = run.get("evaluator")
     host = run.get("host")
     tool_record = run.get("tool")
-    if not isinstance(host, dict) or not isinstance(tool_record, dict):
+    if (
+        not isinstance(evaluator, dict)
+        or set(evaluator) != {"implementation_sha256"}
+        or not isinstance(evaluator["implementation_sha256"], str)
+        or not SHA256_RE.fullmatch(evaluator["implementation_sha256"])
+        or not isinstance(host, dict)
+        or not isinstance(tool_record, dict)
+    ):
         return None
     required_host = {
         "available_cpus",
@@ -2512,6 +2520,7 @@ def comparable_performance_environment(
     ):
         return None
     return {
+        "evaluator": evaluator,
         "host": host,
         "tool": {
             "engine": engine,

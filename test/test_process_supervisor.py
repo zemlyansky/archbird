@@ -37,6 +37,24 @@ def assert_no_active_child(pid: int) -> None:
         raise AssertionError(f"worker process {pid} survived supervisor cleanup")
 
 
+def wait_for_pid(path: Path, timeout_seconds: float = 2.0) -> int:
+    deadline = time.monotonic() + timeout_seconds
+    last_value = ""
+    while time.monotonic() < deadline:
+        try:
+            last_value = path.read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            last_value = ""
+        if last_value.isascii() and last_value.isdigit():
+            pid = int(last_value)
+            if pid > 0:
+                return pid
+        time.sleep(0.01)
+    raise AssertionError(
+        f"worker PID fixture did not publish a valid PID: {path} ({last_value!r})"
+    )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: test_process_supervisor.py WORK_DIRECTORY")
@@ -99,7 +117,7 @@ def main() -> int:
     elapsed = time.monotonic() - started
     if elapsed > 5.0:
         raise AssertionError(f"worker termination was not bounded: {elapsed:.3f}s")
-    assert_no_active_child(int(timeout_pid.read_text(encoding="ascii")))
+    assert_no_active_child(wait_for_pid(timeout_pid))
 
     exit_pid = work / "exit.pid"
     started = time.monotonic()
@@ -121,7 +139,7 @@ def main() -> int:
     elapsed = time.monotonic() - started
     if elapsed > 5.0:
         raise AssertionError(f"worker exit detection was not bounded: {elapsed:.3f}s")
-    assert_no_active_child(int(exit_pid.read_text(encoding="ascii")))
+    assert_no_active_child(wait_for_pid(exit_pid))
 
     clean_exit_pid = work / "clean-exit.pid"
     started = time.monotonic()
@@ -147,7 +165,7 @@ def main() -> int:
         raise AssertionError(
             f"clean worker exit detection was not bounded: {elapsed:.3f}s"
         )
-    assert_no_active_child(int(clean_exit_pid.read_text(encoding="ascii")))
+    assert_no_active_child(wait_for_pid(clean_exit_pid))
 
     cancel_pid = work / "cancel.pid"
     results = supervised_ordered_map(
@@ -162,13 +180,9 @@ def main() -> int:
     )
     if next(results) != "ready":
         raise AssertionError("unexpected first supervised result")
-    deadline = time.monotonic() + 2.0
-    while not cancel_pid.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    if not cancel_pid.exists():
-        raise AssertionError("cancellation fixture worker did not start")
+    cancel_worker_pid = wait_for_pid(cancel_pid)
     results.close()
-    assert_no_active_child(int(cancel_pid.read_text(encoding="ascii")))
+    assert_no_active_child(cancel_worker_pid)
 
     print("process supervisor tests passed")
     return 0

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -76,9 +77,9 @@ def main() -> int:
     git(source, "commit", "-m", "change target")
     after = git(source, "rev-parse", "HEAD")
 
-    fake = TEMPORARY / "fake-archbird.py"
-    fake.write_text(
-        """#!/usr/bin/env python3
+    fake_program = TEMPORARY / "fake-archbird.py"
+    fake_program.write_text(
+        """\
 import json, os, pathlib, sys
 if sys.argv[1:] == ['--version']:
   assert 'ARCHBIRD_CACHE_DIR' not in os.environ
@@ -175,6 +176,13 @@ else:
   raise SystemExit(f'unsupported fake command: {command}')
 out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
 """,
+        encoding="utf-8",
+    )
+    fake = TEMPORARY / "fake-archbird"
+    fake.write_text(
+        "#!/bin/sh\nexec "
+        f"{shlex.quote(str(Path(sys.executable).resolve()))} "
+        f"{shlex.quote(str(fake_program.resolve()))} \"$@\"\n",
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -427,6 +435,47 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         "map_duration_ms"
     ]["classification"] == "incomparable"
     assert runtime_comparison["cases"][0]["metrics"][
+        "relevant_file_recall_all"
+    ]["classification"] == "unchanged"
+
+    evaluator_incompatible_run = json.loads(json.dumps(first))
+    evaluator_incompatible_run["evaluator"]["implementation_sha256"] = "f" * 64
+    evaluator_incompatible_bytes = (
+        json.dumps(
+            evaluator_incompatible_run,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    evaluator_incompatible_sha256 = __import__("hashlib").sha256(
+        evaluator_incompatible_bytes
+    ).hexdigest()
+    evaluator_incompatible_path = (
+        root / f"runs/{evaluator_incompatible_sha256}/result.json"
+    )
+    evaluator_incompatible_path.parent.mkdir()
+    evaluator_incompatible_path.write_bytes(evaluator_incompatible_bytes)
+    evaluator_comparison_path = root / "evaluator-incompatible-comparison.json"
+    run(
+        "compare",
+        "--before",
+        first_run,
+        "--after",
+        evaluator_incompatible_sha256,
+        "--output",
+        str(evaluator_comparison_path),
+        environment=environment,
+    )
+    evaluator_comparison = json.loads(evaluator_comparison_path.read_text())
+    assert evaluator_comparison["cache_relation"] == "same"
+    assert evaluator_comparison["performance_environment_relation"] == "changed"
+    assert evaluator_comparison["cases"][0]["performance_status"] == "incomparable"
+    assert evaluator_comparison["cases"][0]["metrics"][
+        "map_duration_ms"
+    ]["classification"] == "incomparable"
+    assert evaluator_comparison["cases"][0]["metrics"][
         "relevant_file_recall_all"
     ]["classification"] == "unchanged"
 
