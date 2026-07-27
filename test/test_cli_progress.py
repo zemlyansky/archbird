@@ -81,6 +81,8 @@ def run(
             str(fixture / "archbird.json"),
             "--progress",
             mode,
+            "--python-provider-timeout",
+            "30",
             *(
                 ["--no-cache"]
                 if cache_dir is None
@@ -122,6 +124,29 @@ def main() -> int:
             raise AssertionError(f"missing {phase} phase: {progress}")
     if automatic.stderr:
         raise AssertionError(f"auto progress wrote off-TTY: {automatic.stderr!r}")
+    invalid_timeout = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "archbird",
+            "map",
+            str(root / "test/fixtures/map_base"),
+            "--no-config",
+            "--python-provider-timeout",
+            "0",
+        ],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if (
+        invalid_timeout.returncode != 2
+        or b"--python-provider-timeout must be finite and positive"
+        not in invalid_timeout.stderr
+    ):
+        raise AssertionError(
+            f"invalid provider timeout was not rejected: {invalid_timeout!r}"
+        )
     cache_parent = root / "build"
     cache_parent.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=cache_parent) as raw:

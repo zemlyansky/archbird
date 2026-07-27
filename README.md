@@ -253,7 +253,8 @@ policy and its `current`, `different`, or `unknown` producer classification.
 
 Progress is adaptive: `--progress auto` updates one terminal line only when an
 analysis takes long enough to notice and stays silent for pipes and agents.
-Use `always` for logs or `never` for silence.
+Use `--progress always` for captured agent/CI logs or `--progress never` for
+silence.
 
 `direct`, `candidate`, and `conservative` are static evidence strengths, not
 claims that a test ran. Zero error diagnostics means selected analysis
@@ -840,11 +841,19 @@ Map when the configuration, selected source bytes, providers, and core are all
 unchanged. Both tiers share a 1 GiB default budget; use `--cache-max-bytes`,
 `ARCHBIRD_CACHE_MAX_BYTES`, `--cache-dir`, or `--no-cache` to control storage.
 Cache eviction or write failure never changes canonical analysis output.
+Concurrent writers use owned atomic temporaries: live or unverifiable writers
+are preserved, while abandoned same-execution-domain writes are reclaimed when
+the host has a safe process-liveness probe. The Python host supervises bounded
+multiprocess CPython-AST worker batches and terminates its workers when a batch
+does not return within
+`--python-provider-timeout` seconds; this execution policy does not enter
+canonical Map identity.
 
 ## CI and agent workflow
 
 ```bash
-archbird map . --format json --output .archbird/map.json --check
+archbird map . --progress always \
+  --format json --output .archbird/map.json --check
 archbird verify \
   --format sarif --output .archbird/architecture.sarif --check
 ```

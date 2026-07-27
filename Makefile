@@ -148,6 +148,10 @@ editable-install: build-py
 		"import archbird._native as n; assert n.__file__.endswith('_native.py'), n.__file__; print(n.__file__)"
 
 test-py: build-py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_process_supervisor.py \
+		$(CURDIR)/build/test-process-supervisor
+	ARCHBIRD_TEST_START_METHOD=spawn PYTHONPATH=$(CURDIR)/py $(PYTHON) \
+		test/test_process_supervisor.py $(CURDIR)/build/test-process-supervisor-spawn
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_coverage_observations.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_frontend_input_budget.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_map_report_scaling.py

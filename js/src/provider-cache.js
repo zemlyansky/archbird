@@ -8,6 +8,31 @@ const path = require("node:path");
 const CACHE_CONTRACT = Buffer.from("archbird-provider-cache-v1");
 const MAP_CACHE_CONTRACT = Buffer.from("archbird-map-result-cache-v1");
 const DEFAULT_MAX_BYTES = 1024 * 1024 * 1024;
+function temporaryDomain() {
+  const identity = [os.hostname(), process.platform];
+  for (const [candidate, link] of [
+    ["/proc/sys/kernel/random/boot_id", false],
+    ["/proc/self/ns/pid", true],
+  ]) {
+    try {
+      identity.push(
+        link
+          ? fs.readlinkSync(candidate)
+          : fs.readFileSync(candidate, "ascii").trim(),
+      );
+    } catch (_) {
+      identity.push("");
+    }
+  }
+  return crypto.createHash("sha256")
+    .update(identity.join("\0"), "utf8")
+    .digest("hex")
+    .slice(0, 16);
+}
+
+const TEMPORARY_DOMAIN = temporaryDomain();
+const TEMPORARY_NAME =
+  /^\..+\.([0-9a-f]{16})\.([1-9][0-9]*)\.([A-Za-z0-9_-]+)\.tmp$/;
 
 function defaultProviderCacheDir() {
   if (process.env.ARCHBIRD_CACHE_DIR) {
@@ -82,6 +107,31 @@ function mapCacheKey({ namespace, project, manifestSha256, configSha256 }) {
   return hash.digest("hex");
 }
 
+function cacheTemporaryName(
+  target,
+  {
+    domain = TEMPORARY_DOMAIN,
+    nonce = crypto.randomBytes(8).toString("hex"),
+    pid = process.pid,
+  } = {},
+) {
+  return path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.${domain}.${pid}.${nonce}.tmp`,
+  );
+}
+
+function temporaryOwnerIsDead(candidate) {
+  const match = path.basename(candidate).match(TEMPORARY_NAME);
+  if (match === null || match[1] !== TEMPORARY_DOMAIN) return false;
+  try {
+    process.kill(Number(match[2]), 0);
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+  return false;
+}
+
 class ProviderCache {
   constructor(root, { maxBytes = defaultProviderCacheMaxBytes() } = {}) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
@@ -117,11 +167,13 @@ class ProviderCache {
         }
         if (!entry.isFile()) continue;
         if (entry.name.startsWith(".") && entry.name.endsWith(".tmp")) {
-          try {
-            fs.unlinkSync(candidate);
-            this.stats.temporariesRemoved += 1;
-          } catch (error) {
-            if (error.code !== "ENOENT") this.stats.errors += 1;
+          if (temporaryOwnerIsDead(candidate)) {
+            try {
+              fs.unlinkSync(candidate);
+              this.stats.temporariesRemoved += 1;
+            } catch (error) {
+              if (error.code !== "ENOENT") this.stats.errors += 1;
+            }
           }
           continue;
         }
@@ -282,10 +334,7 @@ class ProviderCache {
       this.stats.skipped += 1;
       return;
     }
-    const temporary = path.join(
-      path.dirname(target),
-      `.${path.basename(target)}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`,
-    );
+    const temporary = cacheTemporaryName(target);
     try {
       fs.mkdirSync(path.dirname(target), { recursive: true });
       const descriptor = fs.openSync(temporary, "wx");
@@ -326,10 +375,7 @@ class ProviderCache {
       this.mapStats.skipped += 1;
       return;
     }
-    const temporary = path.join(
-      path.dirname(target),
-      `.${path.basename(target)}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`,
-    );
+    const temporary = cacheTemporaryName(target);
     try {
       fs.mkdirSync(path.dirname(target), { recursive: true });
       const descriptor = fs.openSync(temporary, "wx");
@@ -360,6 +406,7 @@ class ProviderCache {
 module.exports = {
   ProviderCache,
   cacheKey,
+  cacheTemporaryName,
   defaultProviderCacheDir,
   defaultProviderCacheMaxBytes,
   emptyProviderCacheStats,

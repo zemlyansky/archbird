@@ -92,6 +92,8 @@ if sys.argv[1:] == ['support']:
     'core_implementation_sha256':'2'*64,
     'engine':{'kind':'fixture','source':'test'},
     'frontend_implementation_sha256':'3'*64,
+    'pattern':{'engine':'fixture-pattern','unicode':'fixture-unicode'},
+    'providers':{'host':['fixture-host'],'portable':['fixture-portable']},
     'runtime':{
       'executable':str(pathlib.Path(sys.executable).resolve()),
       'implementation':'CPython',
@@ -322,7 +324,7 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         (REPOSITORY / "schema/evaluation-run.schema.json").read_text()
     )
     assert set(first).issubset(run_schema["properties"])
-    assert first["schema_version"] == 2
+    assert first["schema_version"] == 3
     assert first["cache_policy"] == {
         "provider_cache": {
             "initial_state": "empty",
@@ -341,6 +343,9 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert support["status"] == "available"
     assert support["report"]["runtime"]["kind"] == "python"
     assert support["report"]["runtime"]["executable"] == str(Path(sys.executable).resolve())
+    assert first["tool"]["support"]["report"]["runtime"]["version"] == (
+        ".".join(map(str, sys.version_info[:3]))
+    )
 
     incompatible_run = json.loads(json.dumps(first))
     incompatible_run["cache_policy"]["provider_cache"]["max_bytes"] //= 2
@@ -374,12 +379,94 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         incompatible_comparison_path.read_text()
     )
     assert incompatible_comparison["cache_relation"] == "changed"
+    assert incompatible_comparison["performance_environment_relation"] == "same"
     assert incompatible_comparison["cases"][0]["performance_status"] == (
         "incomparable"
     )
     assert incompatible_comparison["cases"][0]["metrics"][
         "map_duration_ms"
     ]["classification"] == "incomparable"
+
+    runtime_incompatible_run = json.loads(json.dumps(first))
+    runtime_incompatible_run["tool"]["support"]["report"]["runtime"][
+        "version"
+    ] = "different-runtime"
+    runtime_incompatible_bytes = (
+        json.dumps(
+            runtime_incompatible_run,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    runtime_incompatible_sha256 = __import__("hashlib").sha256(
+        runtime_incompatible_bytes
+    ).hexdigest()
+    runtime_incompatible_path = (
+        root / f"runs/{runtime_incompatible_sha256}/result.json"
+    )
+    runtime_incompatible_path.parent.mkdir()
+    runtime_incompatible_path.write_bytes(runtime_incompatible_bytes)
+    runtime_comparison_path = root / "runtime-incompatible-comparison.json"
+    run(
+        "compare",
+        "--before",
+        first_run,
+        "--after",
+        runtime_incompatible_sha256,
+        "--output",
+        str(runtime_comparison_path),
+        environment=environment,
+    )
+    runtime_comparison = json.loads(runtime_comparison_path.read_text())
+    assert runtime_comparison["cache_relation"] == "same"
+    assert runtime_comparison["performance_environment_relation"] == "changed"
+    assert runtime_comparison["cases"][0]["performance_status"] == "incomparable"
+    assert runtime_comparison["cases"][0]["metrics"][
+        "map_duration_ms"
+    ]["classification"] == "incomparable"
+    assert runtime_comparison["cases"][0]["metrics"][
+        "relevant_file_recall_all"
+    ]["classification"] == "unchanged"
+
+    legacy_run = json.loads(json.dumps(first))
+    legacy_run["schema_version"] = 2
+    legacy_run["host"] = {
+        "machine": first["host"]["machine"],
+        "platform": first["host"]["platform"],
+        "python": first["host"]["runtime"]["version"],
+    }
+    legacy_bytes = (
+        json.dumps(
+            legacy_run,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    legacy_sha256 = __import__("hashlib").sha256(legacy_bytes).hexdigest()
+    legacy_path = root / f"runs/{legacy_sha256}/result.json"
+    legacy_path.parent.mkdir()
+    legacy_path.write_bytes(legacy_bytes)
+    legacy_comparison_path = root / "legacy-comparison.json"
+    run(
+        "compare",
+        "--before",
+        legacy_sha256,
+        "--after",
+        first_run,
+        "--output",
+        str(legacy_comparison_path),
+        environment=environment,
+    )
+    legacy_comparison = json.loads(legacy_comparison_path.read_text())
+    assert legacy_comparison["performance_environment_relation"] == "unknown"
+    assert legacy_comparison["cases"][0]["performance_status"] == "incomparable"
+    assert legacy_comparison["cases"][0]["metrics"][
+        "relevant_file_recall_all"
+    ]["classification"] == "unchanged"
 
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "good"
     run("run", "--archbird", str(fake), "--label", "good", environment=environment)
@@ -388,8 +475,9 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert state["previous_run_sha256"] == first_run
     comparison_path = root / state["current_run_comparison"]
     comparison = json.loads(comparison_path.read_text())
-    assert comparison["schema_version"] == 2
+    assert comparison["schema_version"] == 3
     assert comparison["cache_relation"] == "same"
+    assert comparison["performance_environment_relation"] == "same"
     row = comparison["cases"][0]
     assert row["metrics"]["relevant_file_recall_all"]["classification"] == "improved"
     assert row["metrics"]["relevant_test_recall_all"]["classification"] == "improved"

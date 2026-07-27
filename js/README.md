@@ -473,8 +473,10 @@ content-addressed and revalidated against the native/Wasm core, configuration,
 selected source bytes, and provider implementations. Both tiers share a 1 GiB
 budget and evict the oldest entries;
 `--cache-max-bytes` or `ARCHBIRD_CACHE_MAX_BYTES` changes it, `--cache-dir`
-selects the root, and `--no-cache` disables it. Failed temporaries are removed
-on the next use, and a full cache warns without changing canonical output.
+selects the root, and `--no-cache` disables it. Active and unverifiable cache
+temporaries are preserved; abandoned same-execution-domain writes are removed
+on the next use. Ownership includes the boot and PID-namespace domain where
+available. A full cache warns without changing canonical output.
 
 ## Visualization, interchange, and commands
 

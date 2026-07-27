@@ -21,12 +21,12 @@ import statistics
 import subprocess
 import sys
 import tempfile
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
 SCHEMA_VERSION = 1
-RUN_SCHEMA_VERSION = 2
-COMPARISON_SCHEMA_VERSION = 2
+RUN_SCHEMA_VERSION = 3
+COMPARISON_SCHEMA_VERSION = 3
 ROOT_ENV = "ARCHBIRD_EVAL_ROOT"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -2343,11 +2343,7 @@ def run_evaluation(
             "cases": cases,
             "corpus_sha256": corpus_sha256,
             "evaluator": {"implementation_sha256": sha256_file(Path(__file__))},
-            "host": {
-                "machine": platform.machine(),
-                "platform": platform.platform(),
-                "python": platform.python_version(),
-            },
+            "host": evaluation_host(),
             "held_out_opened": open_held_out,
             "label": label,
             "provenance": "observed",
@@ -2460,6 +2456,76 @@ def compare_metric(name: str, before: float, after: float) -> Mapping[str, Any]:
     }
 
 
+def evaluation_host() -> Mapping[str, Any]:
+    try:
+        available_cpus: Optional[int] = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        available_cpus = None
+    return {
+        "available_cpus": available_cpus,
+        "logical_cpus": os.cpu_count(),
+        "machine": platform.machine(),
+        "node_sha256": sha256_bytes(platform.node().encode("utf-8")),
+        "platform": platform.platform(),
+        "processor": platform.processor(),
+        "runtime": {
+            "implementation": platform.python_implementation(),
+            "version": platform.python_version(),
+        },
+    }
+
+
+def comparable_performance_environment(
+    run: Mapping[str, Any],
+) -> Optional[Mapping[str, Any]]:
+    host = run.get("host")
+    tool_record = run.get("tool")
+    if not isinstance(host, dict) or not isinstance(tool_record, dict):
+        return None
+    required_host = {
+        "available_cpus",
+        "logical_cpus",
+        "machine",
+        "node_sha256",
+        "platform",
+        "processor",
+        "runtime",
+    }
+    support = tool_record.get("support")
+    if set(host) != required_host or not isinstance(support, dict):
+        return None
+    report = support.get("report")
+    if support.get("status") != "available" or not isinstance(report, dict):
+        return None
+    runtime = report.get("runtime")
+    engine = report.get("engine")
+    pattern = report.get("pattern")
+    providers = report.get("providers")
+    if (
+        not isinstance(runtime, dict)
+        or not isinstance(runtime.get("implementation"), str)
+        or not isinstance(runtime.get("kind"), str)
+        or not isinstance(runtime.get("version"), str)
+        or not isinstance(engine, dict)
+        or not isinstance(pattern, dict)
+        or not isinstance(providers, dict)
+    ):
+        return None
+    return {
+        "host": host,
+        "tool": {
+            "engine": engine,
+            "pattern": pattern,
+            "providers": providers,
+            "runtime": {
+                "implementation": runtime["implementation"],
+                "kind": runtime["kind"],
+                "version": runtime["version"],
+            },
+        },
+    }
+
+
 def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, Any]:
     for value in (before_sha, after_sha):
         if not SHA256_RE.fullmatch(value):
@@ -2474,6 +2540,17 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
         before.get("cache_policy") is not None
         and before.get("cache_policy") == after.get("cache_policy")
     )
+    before_environment = comparable_performance_environment(before)
+    after_environment = comparable_performance_environment(after)
+    environment_comparable = (
+        before_environment is not None
+        and before_environment == after_environment
+    )
+    if before_environment is None or after_environment is None:
+        environment_relation = "unknown"
+    else:
+        environment_relation = "same" if environment_comparable else "changed"
+    performance_comparable = cache_comparable and environment_comparable
     old = {str(case["id"]): case for case in before["cases"]}
     new = {str(case["id"]): case for case in after["cases"]}
     rows = []
@@ -2515,7 +2592,10 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
                 metric = compare_metric(
                     name, float(before_value), float(after_value)
                 )
-                if metric["family"] == "performance" and not cache_comparable:
+                if (
+                    metric["family"] == "performance"
+                    and not performance_comparable
+                ):
                     metric = {**metric, "classification": "incomparable"}
                 metrics[name] = metric
         quality_classes = {
@@ -2567,6 +2647,7 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
         "cases": rows,
         "corpus_relation": "same" if before["corpus_sha256"] == after["corpus_sha256"] else "changed",
         "evaluator": {"implementation_sha256": sha256_file(Path(__file__))},
+        "performance_environment_relation": environment_relation,
         "provenance": "derived",
         "schema_version": COMPARISON_SCHEMA_VERSION,
         "summary": summary,

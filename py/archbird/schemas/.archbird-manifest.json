@@ -44,9 +44,9 @@
       "source": "schema/evaluation-case.schema.json"
     },
     {
-      "bytes": 1424,
+      "bytes": 1568,
       "path": "evaluation-comparison.schema.json",
-      "sha256": "c5c9a847b4a7c65ce24a748925f17bd28fa27700b1e4e4748e0090d53c929d10",
+      "sha256": "cb2e5d536a785aac608e8e9ab1cda46294b496b90821e548e08640644dd7b9bf",
       "source": "schema/evaluation-comparison.schema.json"
     },
     {
@@ -80,9 +80,9 @@
       "source": "schema/evaluation-reservation.schema.json"
     },
     {
-      "bytes": 1959,
+      "bytes": 3016,
       "path": "evaluation-run.schema.json",
-      "sha256": "46fa9a45cb276f1bb8e0358727d2bfa87edf6f5b7c81a47440a3a63dee212f86",
+      "sha256": "835c22e02fb3d4323d5f29efd4d2a9e6b3ff564df38b2f8012759d795317618b",
       "source": "schema/evaluation-run.schema.json"
     },
     {

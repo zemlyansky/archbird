@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -25,6 +26,7 @@ from .provider_cache import (
     default_provider_cache_max_bytes,
 )
 from .native import (
+    DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS,
     Project,
     Workspace,
     audit_map_freshness,
@@ -165,12 +167,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--root", dest="root_override", help="repository root")
     _add_discovery_options(result)
-    result.add_argument(
-        "--jobs",
-        type=int,
-        default=0,
-        help="Python analyzer processes; 0 selects automatically",
-    )
+    _add_python_analysis_options(result)
     _add_cache_options(result)
     _add_progress_options(result)
     result.add_argument("-o", "--output", default="-", help="output path or -")
@@ -282,7 +279,7 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
     )
     result.add_argument("--root", dest="root_override", help="repository root (default: .)")
     _add_discovery_options(result)
-    result.add_argument("--jobs", type=int, default=0)
+    _add_python_analysis_options(result)
     _add_cache_options(result)
     _add_progress_options(result)
     result.add_argument(
@@ -446,7 +443,7 @@ def freshness_parser() -> argparse.ArgumentParser:
     result.add_argument("--root", dest="root_override", help="compatibility root override")
     result.add_argument("--snapshot", required=True, help="saved Map or Query JSON")
     _add_discovery_options(result)
-    result.add_argument("--jobs", type=int, default=0)
+    _add_python_analysis_options(result)
     _add_cache_options(result)
     _add_progress_options(result)
     result.add_argument("--pretty", action="store_true")
@@ -497,6 +494,36 @@ def _add_discovery_options(result: argparse.ArgumentParser) -> None:
         type=int,
         help="override the semantic-index read limit",
     )
+
+
+def _add_python_analysis_options(result: argparse.ArgumentParser) -> None:
+    result.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help="Python analyzer processes; 0 selects automatically",
+    )
+    result.add_argument(
+        "--python-provider-timeout",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "maximum wait for each ordered multiprocess CPython AST source batch "
+            f"(default: {DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS:g})"
+        ),
+    )
+
+
+def _python_provider_timeout(args: argparse.Namespace) -> float:
+    value = getattr(args, "python_provider_timeout", None)
+    resolved = (
+        DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS
+        if value is None
+        else value
+    )
+    if not math.isfinite(resolved) or resolved <= 0:
+        raise ValueError("--python-provider-timeout must be finite and positive")
+    return resolved
 
 
 def _add_cache_options(result: argparse.ArgumentParser) -> None:
@@ -620,7 +647,7 @@ def serve_parser() -> argparse.ArgumentParser:
     source.add_argument("--no-config", action="store_true")
     result.add_argument("--root", dest="root_override")
     _add_discovery_options(result)
-    result.add_argument("--jobs", type=int, default=0)
+    _add_python_analysis_options(result)
     _add_cache_options(result)
     result.add_argument("--host", default="127.0.0.1", choices=("127.0.0.1", "::1"))
     result.add_argument("--port", type=int, default=4177)
@@ -672,7 +699,7 @@ def workspace_parser() -> argparse.ArgumentParser:
     result.add_argument("-c", "--config", required=True)
     result.add_argument("--format", choices=("json",), default="json")
     result.add_argument("--pretty", action="store_true")
-    result.add_argument("--jobs", type=int, default=0)
+    _add_python_analysis_options(result)
     _add_cache_options(result)
     result.add_argument("--check", action="store_true")
     result.add_argument("-o", "--output", default="-")
@@ -706,12 +733,7 @@ def verification_parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--root", dest="root_override", help="repository root (default: .)")
     _add_discovery_options(result)
-    result.add_argument(
-        "--jobs",
-        type=int,
-        default=0,
-        help="Python analyzer processes; 0 selects automatically",
-    )
+    _add_python_analysis_options(result)
     _add_cache_options(result)
     _add_progress_options(result)
     result.add_argument(
@@ -1261,6 +1283,7 @@ def _project_from_args(
     try:
         current.scan(
             jobs=args.jobs,
+            python_provider_timeout=_python_provider_timeout(args),
             cache_dir=_cache_dir(args),
             cache_max_bytes=_cache_max_bytes(args),
             progress=progress.emit if progress is not None else None,
@@ -1357,8 +1380,10 @@ def _query_main(
             or _has_discovery_overrides(args)
         ):
             raise ValueError("--map cannot be combined with repository discovery options")
-        if args.map and args.jobs:
-            raise ValueError("--jobs applies only to a live repository")
+        if args.map and (args.jobs or args.python_provider_timeout is not None):
+            raise ValueError(
+                "--jobs and --python-provider-timeout apply only to a live repository"
+            )
         if args.map and args.test_symbol_observations:
             raise ValueError(
                 "--test-symbol-observations requires a live repository, not --map"
@@ -1714,6 +1739,7 @@ def _workspace_main(argv: Sequence[str]) -> int:
         encoded = Workspace.from_config(
             args.config,
             jobs=args.jobs,
+            python_provider_timeout=_python_provider_timeout(args),
             cache_dir=_cache_dir(args),
             cache_max_bytes=_cache_max_bytes(args),
         ).json(pretty=args.pretty)
@@ -1821,6 +1847,10 @@ def _verify_main(argv: Sequence[str]) -> int:
         if args.resolution and not args.map:
             raise ValueError("--resolution requires --map")
         if args.map:
+            if args.jobs or args.python_provider_timeout is not None:
+                raise ValueError(
+                    "--jobs and --python-provider-timeout apply only to a live repository"
+                )
             map_json = Path(args.map).read_bytes()
             resolution_json = (
                 Path(args.resolution).read_bytes() if args.resolution else b""
@@ -2041,6 +2071,7 @@ def _serve_main(argv: Sequence[str]) -> int:
     try:
         if args.jobs < 0:
             raise ValueError("--jobs must be zero or positive")
+        _python_provider_timeout(args)
         if args.port < 0 or args.port > 65535:
             raise ValueError("--port must be between 0 and 65535")
         repository, config_json, config_path = _repository_inputs(args)
@@ -2061,6 +2092,7 @@ def _serve_main(argv: Sequence[str]) -> int:
                 "ignore": not args.no_ignore,
                 "ignore_files": tuple(args.ignore_file),
                 "jobs": args.jobs,
+                "python_provider_timeout": _python_provider_timeout(args),
                 "cache_dir": (
                     str(_cache_dir(args)) if _cache_dir(args) is not None else None
                 ),

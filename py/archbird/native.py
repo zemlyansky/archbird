@@ -6,12 +6,11 @@ source bytes and normalized provider facts cross into the I/O-free C kernel.
 
 from __future__ import annotations
 
-from collections import deque
-from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass
 import html
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -22,6 +21,7 @@ import unicodedata
 from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple, Union
 
 from . import _native
+from ._process_supervisor import supervised_ordered_map
 from .errors import ConfigError
 from .provider_cache import MapCacheStats, ProviderCache, ProviderCacheStats
 from .providers import (
@@ -36,6 +36,7 @@ PATTERN_CONTRACT = _native.PATTERN_CONTRACT
 PATTERN_ENGINE = _native.PATTERN_ENGINE
 PATTERN_UNICODE = _native.PATTERN_UNICODE
 PATTERN_OPTIONS = _native.PATTERN_OPTIONS
+DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS = 300.0
 
 
 def validate_test_symbol_observations(observations_json: bytes) -> None:
@@ -143,28 +144,31 @@ def _python_provider_chunk(
 
 
 def _parallel_python_providers(
-    tasks: Sequence[Tuple[str, str, bytes]], workers: int
+    tasks: Sequence[Tuple[str, str, bytes]],
+    workers: int,
+    timeout_seconds: float,
 ) -> Iterable[bytes]:
-    """Yield provider bundles in input order with bounded process fan-out."""
+    """Yield supervised provider bundles in input order."""
 
-    chunk_size = max(1, len(tasks) // (workers * 4))
+    chunk_size = min(64, max(1, len(tasks) // (workers * 4)))
+    chunk_count = (len(tasks) + chunk_size - 1) // chunk_size
     chunks = (
         tasks[start : start + chunk_size]
         for start in range(0, len(tasks), chunk_size)
     )
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        pending: deque[Future[Tuple[bytes, ...]]] = deque()
-        for _ in range(workers * 2):
-            try:
-                pending.append(executor.submit(_python_provider_chunk, next(chunks)))
-            except StopIteration:
-                break
-        while pending:
-            yield from pending.popleft().result()
-            try:
-                pending.append(executor.submit(_python_provider_chunk, next(chunks)))
-            except StopIteration:
-                pass
+    results = supervised_ordered_map(
+        _python_provider_chunk,
+        chunks,
+        workers=min(workers, chunk_count),
+        timeout_seconds=timeout_seconds,
+        describe=lambda chunk: (
+            chunk[0][1]
+            if len(chunk) == 1
+            else f"{chunk[0][1]} through {chunk[-1][1]}"
+        ),
+    )
+    for bundles in results:
+        yield from bundles
 
 
 def _implementation_sha256() -> str:
@@ -315,6 +319,7 @@ class Project:
         root: Optional[Union[str, Path]] = None,
         scan: bool = True,
         jobs: int = 0,
+        python_provider_timeout: float = DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS,
         cache_dir: Optional[Union[str, Path]] = None,
         cache_max_bytes: Optional[int] = None,
         map_cache: bool = True,
@@ -359,6 +364,7 @@ class Project:
         if scan:
             project.scan(
                 jobs=jobs,
+                python_provider_timeout=python_provider_timeout,
                 cache_dir=cache_dir,
                 cache_max_bytes=cache_max_bytes,
                 map_cache=map_cache,
@@ -382,6 +388,7 @@ class Project:
         max_index_bytes: Optional[int] = None,
         scan: bool = True,
         jobs: int = 0,
+        python_provider_timeout: float = DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS,
         cache_dir: Optional[Union[str, Path]] = None,
         cache_max_bytes: Optional[int] = None,
         map_cache: bool = True,
@@ -425,6 +432,7 @@ class Project:
         if scan:
             current.scan(
                 jobs=jobs,
+                python_provider_timeout=python_provider_timeout,
                 cache_dir=cache_dir,
                 cache_max_bytes=cache_max_bytes,
                 map_cache=map_cache,
@@ -600,6 +608,7 @@ class Project:
         mode: str = "primary",
         *,
         jobs: int = 0,
+        python_provider_timeout: float = DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS,
         cache_dir: Optional[Union[str, Path]] = None,
         cache_max_bytes: Optional[int] = None,
         progress: Optional[Callable[[Mapping[str, object]], None]] = None,
@@ -611,6 +620,13 @@ class Project:
             raise RuntimeError("providers are already finalized")
         if jobs < 0:
             raise ValueError("jobs must be zero or positive")
+        if (
+            isinstance(python_provider_timeout, bool)
+            or not isinstance(python_provider_timeout, (int, float))
+            or not math.isfinite(python_provider_timeout)
+            or python_provider_timeout <= 0
+        ):
+            raise ValueError("python_provider_timeout must be finite and positive")
         support_mode = "augment" if mode == "primary" else mode
         cache = (
             ProviderCache(cache_dir, max_bytes=cache_max_bytes)
@@ -637,6 +653,7 @@ class Project:
                     self._deferred_scan = {
                         "mode": mode,
                         "jobs": jobs,
+                        "python_provider_timeout": python_provider_timeout,
                         "cache_dir": cache_dir,
                         "cache_max_bytes": cache_max_bytes,
                     }
@@ -775,10 +792,16 @@ class Project:
             state="start",
             total=len(python_sources),
         )
-        if workers == 1 or len(python_sources) < 2:
+        if not tasks:
+            bundles = ()
+        elif workers == 1 or len(python_sources) < 2:
             bundles = map(_python_provider_task, tasks)
         else:
-            bundles = _parallel_python_providers(tasks, workers)
+            bundles = _parallel_python_providers(
+                tasks,
+                workers,
+                python_provider_timeout,
+            )
         cached_python = len(python_sources) - len(missing_python_sources)
         for completed, (source, bundle) in enumerate(
             zip(missing_python_sources, bundles), cached_python + 1
@@ -1146,6 +1169,7 @@ class Workspace:
         config_path: Union[str, Path],
         *,
         jobs: int = 0,
+        python_provider_timeout: float = DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS,
         cache_dir: Optional[Union[str, Path]] = None,
         cache_max_bytes: Optional[int] = None,
     ) -> "Workspace":
@@ -1177,6 +1201,7 @@ class Workspace:
                     project_config,
                     root=project_root,
                     jobs=jobs,
+                    python_provider_timeout=python_provider_timeout,
                     cache_dir=cache_dir,
                     cache_max_bytes=cache_max_bytes,
                 )

@@ -7,6 +7,9 @@ import errno
 import hashlib
 import os
 from pathlib import Path
+import re
+import socket
+import sys
 import tempfile
 from typing import BinaryIO, Mapping
 
@@ -15,6 +18,30 @@ _CACHE_CONTRACT = b"archbird-provider-cache-v1"
 _MAP_CACHE_CONTRACT = b"archbird-map-result-cache-v1"
 _DEFAULT_MAX_BYTES = 1024 * 1024 * 1024
 _MAX_SAFE_INTEGER = (1 << 53) - 1
+
+
+def _temporary_domain() -> str:
+    identity = [socket.gethostname(), sys.platform]
+    for candidate, link in (
+        (Path("/proc/sys/kernel/random/boot_id"), False),
+        (Path("/proc/self/ns/pid"), True),
+    ):
+        try:
+            value = (
+                os.readlink(candidate)
+                if link
+                else candidate.read_text(encoding="ascii").strip()
+            )
+        except OSError:
+            value = ""
+        identity.append(value)
+    return hashlib.sha256("\0".join(identity).encode("utf-8")).hexdigest()[:16]
+
+
+_TEMPORARY_DOMAIN = _temporary_domain()
+_TEMPORARY_NAME = re.compile(
+    r"^\..+\.([0-9a-f]{16})\.([1-9][0-9]*)\.([A-Za-z0-9_-]+)\.tmp$"
+)
 
 
 def default_provider_cache_dir() -> Path:
@@ -90,6 +117,38 @@ def _map_cache_key(
     return digest.hexdigest()
 
 
+def _temporary_prefix(
+    target: Path, *, pid: int | None = None, domain: str = _TEMPORARY_DOMAIN
+) -> str:
+    owner = os.getpid() if pid is None else pid
+    return f".{target.name}.{domain}.{owner}."
+
+
+def _temporary_owner_is_dead(candidate: Path) -> bool:
+    match = _TEMPORARY_NAME.fullmatch(candidate.name)
+    if match is None or match.group(1) != _TEMPORARY_DOMAIN:
+        return False
+    if os.name != "posix":
+        return False
+    try:
+        owner = int(match.group(2), 10)
+    except ValueError:
+        return False
+    try:
+        os.kill(owner, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    except (OverflowError, ValueError):
+        return False
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return True
+        return False
+    return False
+
+
 @dataclass
 class ProviderCacheStats:
     bytes: int = 0
@@ -155,7 +214,7 @@ class _MapCacheWriter:
             target.parent.mkdir(parents=True, exist_ok=True)
             stream = tempfile.NamedTemporaryFile(
                 dir=target.parent,
-                prefix=f".{target.stem}.",
+                prefix=_temporary_prefix(target),
                 suffix=".tmp",
                 delete=False,
             )
@@ -276,8 +335,9 @@ class ProviderCache:
                     if candidate.name.startswith(
                         "."
                     ) and candidate.name.endswith(".tmp"):
-                        candidate.unlink()
-                        self.stats.temporaries_removed += 1
+                        if _temporary_owner_is_dead(candidate):
+                            candidate.unlink()
+                            self.stats.temporaries_removed += 1
                         continue
                     if (
                         candidate.suffix != ".json"
@@ -439,7 +499,7 @@ class ProviderCache:
             target.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(
                 dir=target.parent,
-                prefix=f".{target.stem}.",
+                prefix=_temporary_prefix(target),
                 suffix=".tmp",
                 delete=False,
             ) as temporary:

@@ -490,11 +490,16 @@ content-addressed and revalidated against the native core, configuration,
 selected source bytes, and provider implementations. The two tiers share a
 1 GiB budget and evict the oldest content-addressed entries;
 `--cache-max-bytes` or `ARCHBIRD_CACHE_MAX_BYTES` changes it, `--cache-dir`
-selects the root, and `--no-cache` disables it. Failed temporaries are removed
-on the next use, and a full cache produces a warning without invalidating the
-analysis. `--jobs 0` is automatic. Python analysis uses a bounded ordered
-process pool only for large Python source sets; worker count cannot change
-canonical output.
+selects the root, and `--no-cache` disables it. Active and unverifiable cache
+temporaries are preserved; abandoned same-execution-domain writes are removed
+on the next use when the host has a safe process-liveness probe; unverifiable
+owners are retained. Ownership includes the boot and PID-namespace domain
+where available. A full cache produces a warning without invalidating the analysis.
+`--jobs 0` is automatic. CPython-AST analysis uses a bounded ordered supervised
+process pool when more than one analyzer process is selected;
+`--python-provider-timeout` bounds the wait for each ordered multiprocess source
+batch and terminates its workers on failure or cancellation. Worker count and
+timeout are host execution policy and cannot change canonical output.
 
 ## Python API
 

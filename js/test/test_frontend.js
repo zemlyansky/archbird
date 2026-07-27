@@ -4,14 +4,18 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { scipFixture } = require("../../test/scip_fixture");
-const { ProviderCache } = require("../src/provider-cache");
+const {
+  ProviderCache,
+  cacheTemporaryName,
+} = require("../src/provider-cache");
 
 if (process.argv.length !== 4) {
   throw new Error("usage: test_node_frontend.js ADDON REPOSITORY_ROOT");
 }
 process.env.ARCHBIRD_NATIVE_ADDON = path.resolve(process.argv[2]);
+const repositoryRoot = path.resolve(process.argv[3]);
 const nativeBinding = require(process.env.ARCHBIRD_NATIVE_ADDON);
 const {
   ChangeProposal,
@@ -40,7 +44,7 @@ const {
   PATTERN_ENGINE,
   PATTERN_OPTIONS,
   PATTERN_UNICODE,
-} = require(path.resolve(process.argv[3], "js/src/index.js"));
+} = require(path.join(repositoryRoot, "js/src/index.js"));
 
 assert.equal(NATIVE_ABI_VERSION, 0);
 assert.equal(PATTERN_CONTRACT_VERSION, 1);
@@ -959,17 +963,90 @@ assert.equal(boundedCache.load(boundedParameters), null);
 assert.deepEqual(boundedCache.load(boundedSecond), Buffer.alloc(60, "b"));
 boundedCache.store(Buffer.alloc(101, "c"), boundedParameters);
 assert.equal(boundedCache.stats.skipped, 1);
-const staleCacheTemporary = path.join(
+const temporaryTarget = path.join(
   boundedCacheRoot,
   "providers-v1",
   "aa",
-  ".stale.tmp",
+  "active.json",
 );
-fs.mkdirSync(path.dirname(staleCacheTemporary), { recursive: true });
-fs.writeFileSync(staleCacheTemporary, "partial");
+fs.mkdirSync(path.dirname(temporaryTarget), { recursive: true });
+const activeCacheTemporary = cacheTemporaryName(temporaryTarget, {
+  nonce: "active",
+});
+fs.writeFileSync(activeCacheTemporary, "active");
+const pythonTemporary = spawnSync(
+  process.env.PYTHON || "python3",
+  [
+    "-c",
+    [
+      "import sys",
+      "from pathlib import Path",
+      "from archbird.provider_cache import _temporary_prefix",
+      "target = Path(sys.argv[1])",
+      "print(target.parent / (_temporary_prefix(target, pid=123) + 'shared.tmp'))",
+    ].join("\n"),
+    temporaryTarget,
+  ],
+  {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(repositoryRoot, "py"),
+    },
+  },
+);
+assert.equal(pythonTemporary.status, 0, pythonTemporary.stderr);
+assert.equal(
+  pythonTemporary.stdout.trim(),
+  cacheTemporaryName(temporaryTarget, { nonce: "shared", pid: 123 }),
+);
 const recoveredCache = new ProviderCache(boundedCacheRoot, { maxBytes: 100 });
-assert.equal(fs.existsSync(staleCacheTemporary), false);
-assert.equal(recoveredCache.stats.temporariesRemoved, 1);
+assert.equal(fs.existsSync(activeCacheTemporary), true);
+assert.equal(recoveredCache.stats.temporariesRemoved, 0);
+fs.unlinkSync(activeCacheTemporary);
+const activeOwner = spawn(
+  process.execPath,
+  ["-e", "setTimeout(() => {}, 60000)"],
+  { stdio: "ignore" },
+);
+assert.equal(Number.isSafeInteger(activeOwner.pid), true);
+const crossProcessTemporary = cacheTemporaryName(temporaryTarget, {
+  nonce: "cross-process",
+  pid: activeOwner.pid,
+});
+try {
+  fs.writeFileSync(crossProcessTemporary, "active");
+  const crossProcessObserver = new ProviderCache(boundedCacheRoot, {
+    maxBytes: 100,
+  });
+  assert.equal(fs.existsSync(crossProcessTemporary), true);
+  assert.equal(crossProcessObserver.stats.temporariesRemoved, 0);
+} finally {
+  activeOwner.kill("SIGKILL");
+  fs.rmSync(crossProcessTemporary, { force: true });
+}
+const exited = spawnSync(process.execPath, ["-e", ""]);
+assert.equal(exited.status, 0);
+const abandonedCacheTemporary = cacheTemporaryName(temporaryTarget, {
+  nonce: "abandoned",
+  pid: exited.pid,
+});
+fs.writeFileSync(abandonedCacheTemporary, "abandoned");
+const legacyCacheTemporary = path.join(path.dirname(temporaryTarget), ".legacy.tmp");
+fs.writeFileSync(legacyCacheTemporary, "unowned");
+const foreignCacheTemporary = cacheTemporaryName(temporaryTarget, {
+  domain: "f".repeat(16),
+  nonce: "foreign",
+  pid: exited.pid,
+});
+fs.writeFileSync(foreignCacheTemporary, "foreign");
+const reclaimedCache = new ProviderCache(boundedCacheRoot, { maxBytes: 100 });
+assert.equal(fs.existsSync(abandonedCacheTemporary), false);
+assert.equal(fs.existsSync(legacyCacheTemporary), true);
+assert.equal(fs.existsSync(foreignCacheTemporary), true);
+assert.equal(reclaimedCache.stats.temporariesRemoved, 1);
+fs.unlinkSync(legacyCacheTemporary);
+fs.unlinkSync(foreignCacheTemporary);
 const originalOpenSync = fs.openSync;
 fs.openSync = () => {
   const error = new Error("no space left on device");

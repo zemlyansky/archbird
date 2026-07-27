@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/evaluation-run.schema.json",
   "title": "Archbird historical-change evaluation run",
-  "description": "Immutable observed metrics and enforced cache policy from one Archbird executable over one frozen evaluation corpus.",
+  "description": "Immutable observed metrics, cache policy, and performance environment from one Archbird executable over one frozen evaluation corpus.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
     "aggregate"
   ],
   "properties": {
-    "schema_version": {"const": 2},
+    "schema_version": {"const": 3},
     "artifact": {"const": "archbird-evaluation-run"},
     "provenance": {"const": "observed"},
     "corpus_sha256": {"$ref": "#/$defs/sha256"},
@@ -51,7 +51,46 @@
         "implementation_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
-    "host": {"type": "object"},
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available_cpus",
+        "logical_cpus",
+        "machine",
+        "node_sha256",
+        "platform",
+        "processor",
+        "runtime"
+      ],
+      "properties": {
+        "available_cpus": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1},
+            {"type": "null"}
+          ]
+        },
+        "logical_cpus": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1},
+            {"type": "null"}
+          ]
+        },
+        "machine": {"type": "string"},
+        "node_sha256": {"$ref": "#/$defs/sha256"},
+        "platform": {"type": "string"},
+        "processor": {"type": "string"},
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["implementation", "version"],
+          "properties": {
+            "implementation": {"type": "string", "minLength": 1},
+            "version": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
     "tool": {"type": "object"},
     "cases": {"type": "array", "items": {"type": "object"}},
     "aggregate": {"type": "object"}

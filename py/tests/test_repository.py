@@ -12,8 +12,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 from unittest import mock
 
 
@@ -448,12 +450,155 @@ def main() -> int:
     bounded.reject_map(**map_parameters)
     if bounded.stats.bytes != 0:
         raise AssertionError("missing rejected Map cache entry stayed accounted")
-    stale = bounded_root / "providers-v1" / "aa" / ".stale.tmp"
-    stale.parent.mkdir(parents=True, exist_ok=True)
-    stale.write_bytes(b"partial")
+    temporary_parent = bounded_root / "providers-v1" / "aa"
+    temporary_parent.mkdir(parents=True, exist_ok=True)
+    active = temporary_parent / (
+        provider_cache_module._temporary_prefix(temporary_parent / "active.json")
+        + "active.tmp"
+    )
+    active.write_bytes(b"active")
     recovered = ProviderCache(bounded_root, max_bytes=100)
-    if stale.exists() or recovered.stats.temporaries_removed != 1:
-        raise AssertionError("Python cache did not remove a failed temporary")
+    if not active.exists() or recovered.stats.temporaries_removed:
+        raise AssertionError("Python cache removed an active writer temporary")
+    active.unlink()
+    owner = subprocess.Popen([sys.executable, "-c", "pass"])
+    owner.wait()
+    abandoned = temporary_parent / (
+        provider_cache_module._temporary_prefix(
+            temporary_parent / "abandoned.json", pid=owner.pid
+        )
+        + "abandoned.tmp"
+    )
+    abandoned.write_bytes(b"abandoned")
+    legacy = temporary_parent / ".legacy.tmp"
+    legacy.write_bytes(b"unowned")
+    foreign = temporary_parent / (
+        provider_cache_module._temporary_prefix(
+            temporary_parent / "foreign.json",
+            domain="f" * 16,
+            pid=owner.pid,
+        )
+        + "foreign.tmp"
+    )
+    foreign.write_bytes(b"foreign")
+    reclaimed = ProviderCache(bounded_root, max_bytes=100)
+    if (
+        abandoned.exists()
+        or not legacy.exists()
+        or not foreign.exists()
+        or reclaimed.stats.temporaries_removed != 1
+    ):
+        raise AssertionError(
+            "Python cache temporary ownership reclamation is unsafe"
+        )
+    with (
+        mock.patch.object(provider_cache_module.os, "name", "nt"),
+        mock.patch.object(provider_cache_module.os, "kill") as unsafe_kill,
+    ):
+        if provider_cache_module._temporary_owner_is_dead(abandoned):
+            raise AssertionError("non-POSIX cache owner was classified as dead")
+        unsafe_kill.assert_not_called()
+    oversized_owner = temporary_parent / (
+        provider_cache_module._temporary_prefix(
+            temporary_parent / "oversized.json",
+            pid=int("9" * 100),
+        )
+        + "oversized.tmp"
+    )
+    if provider_cache_module._temporary_owner_is_dead(oversized_owner):
+        raise AssertionError("oversized cache owner was classified as dead")
+    legacy.unlink()
+    foreign.unlink()
+    writer = bounded.open_map_writer(**map_parameters)
+    writer.write(b"{}")
+    if writer._temporary is None:
+        raise AssertionError("Python Map cache writer has no owned temporary")
+    concurrent = ProviderCache(bounded_root, max_bytes=100)
+    if (
+        not writer._temporary.exists()
+        or concurrent.stats.temporaries_removed
+    ):
+        raise AssertionError(
+            "concurrent Python cache inventory removed an active Map write"
+        )
+    writer.commit()
+    if bounded.load_map(**map_parameters) != b"{}":
+        raise AssertionError("Python Map cache writer failed after inventory")
+    cross_process_root = bounded_root / "cross-process"
+    ready = bounded_root / "cross-process.ready"
+    release = bounded_root / "cross-process.release"
+    child_code = """
+import sys
+import time
+from pathlib import Path
+from archbird.provider_cache import ProviderCache
+
+root, ready, release = map(Path, sys.argv[1:4])
+parameters = {
+    "namespace": "fixture",
+    "project": "cache-budget",
+    "manifest_sha256": "3" * 64,
+    "config_sha256": "4" * 64,
+}
+writer = ProviderCache(root, max_bytes=100).open_map_writer(**parameters)
+writer.write(b"{}")
+if writer._temporary is None:
+    raise RuntimeError("child writer did not create a temporary")
+ready.write_text(str(writer._temporary), encoding="utf-8")
+while not release.exists():
+    time.sleep(0.01)
+writer.commit()
+"""
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            child_code,
+            str(cross_process_root),
+            str(ready),
+            str(release),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(repository / "py"),
+        },
+    )
+    try:
+        deadline = time.monotonic() + 5.0
+        while not ready.exists() and child.poll() is None:
+            if time.monotonic() >= deadline:
+                raise AssertionError("cross-process cache writer did not start")
+            time.sleep(0.01)
+        if not ready.exists():
+            _, stderr = child.communicate(timeout=1.0)
+            raise AssertionError(
+                f"cross-process cache writer failed: {stderr.decode()}"
+            )
+        child_temporary = Path(ready.read_text(encoding="utf-8"))
+        observer = ProviderCache(cross_process_root, max_bytes=100)
+        if (
+            not child_temporary.exists()
+            or observer.stats.temporaries_removed
+        ):
+            raise AssertionError(
+                "concurrent process removed an active Map cache write"
+            )
+        release.touch()
+        _, stderr = child.communicate(timeout=5.0)
+        if child.returncode:
+            raise AssertionError(
+                f"cross-process cache writer failed: {stderr.decode()}"
+            )
+        if observer.load_map(**map_parameters) != b"{}":
+            raise AssertionError(
+                "cross-process Map cache publication was not reusable"
+            )
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
     with mock.patch.object(
         provider_cache_module.tempfile,
         "NamedTemporaryFile",
@@ -491,6 +636,19 @@ def main() -> int:
         pass
     else:
         raise AssertionError("negative Python process count was accepted")
+    for invalid_timeout in (0, -1, float("nan"), True):
+        try:
+            Project.from_config(
+                fixture / "archbird.json",
+                root=fixture,
+                python_provider_timeout=invalid_timeout,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"invalid Python provider timeout was accepted: {invalid_timeout!r}"
+            )
     document = json.loads(first)
     if document["project"] != "map-base" or len(document["files"]) != 3:
         raise AssertionError("repository Map does not describe the fixture")
