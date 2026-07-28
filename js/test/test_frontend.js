@@ -33,6 +33,7 @@ const {
   queryMap,
   queryMapMarkdown,
   renderMapMarkdown,
+  renderSourceMarkdown,
   resolveDiscovery,
   reportConstraints,
   Source,
@@ -271,6 +272,17 @@ function receive(event) { switch (event.data.type) { case "work": return render(
 let project = new Project("node-test", [
   new Source("js/core.js", source, { language: "javascript", layer: "js" }),
 ]);
+project.setConfig(JSON.stringify({
+  schema_version: 2,
+  project: "node-test",
+  layers: [
+    {
+      name: "js",
+      language: "javascript",
+      globs: ["js/**/*.js"],
+    },
+  ],
+}));
 project.scan();
 if (!/^[0-9a-f]{64}$/.test(IMPLEMENTATION_SHA256)) {
   throw new Error("native core implementation identity is invalid");
@@ -324,11 +336,121 @@ assert.equal(
   row.sha256,
   crypto.createHash("sha256").update(source).digest("hex"),
 );
+const sourceMap = project.mapJson();
+const sourceQuery = project.queryJson({
+  symbols: ["js/core.js:render"],
+  depth: 0,
+  testDepth: 0,
+});
+const standardSource = project.sourceMarkdown({
+  artifactJson: sourceQuery,
+}).toString("utf8");
+assert.match(standardSource, /function render\(x\) \{ return helper\(x\); \}/);
+assert.doesNotMatch(standardSource, /function receive/);
+const fullSource = project.sourceMarkdown({
+  artifactJson: sourceQuery,
+  full: true,
+}).toString("utf8");
+assert.match(fullSource, /function receive/);
+assert.deepEqual(
+  renderSourceMarkdown(project, sourceQuery),
+  project.sourceMarkdown({ artifactJson: sourceQuery }),
+);
+assert.doesNotMatch(
+  project.sourceMarkdown({ artifactJson: sourceMap, compact: true }).toString("utf8"),
+  /return helper/,
+);
 assert.throws(
   () => jsonCanonicalize(Buffer.from('{"a":1,"a":2}')),
   /duplicate/i,
 );
 project = null;
+
+const sourceCliFixture = path.resolve(
+  process.argv[3],
+  "build/test-source-view-node",
+);
+fs.rmSync(sourceCliFixture, { force: true, recursive: true });
+fs.mkdirSync(path.join(sourceCliFixture, "src"), { recursive: true });
+fs.writeFileSync(
+  path.join(sourceCliFixture, "src/api.js"),
+  "export function selected() { return 1; }\n" +
+    "export function peer() { return 2; }\n",
+);
+const sourceCli = path.resolve(process.argv[3], "js/src/cli.js");
+const sourceCliStandard = spawnSync(process.execPath, [
+  sourceCli, "query", sourceCliFixture,
+  "--symbol", "selected", "--depth", "0", "--test-depth", "0",
+  "--view", "source", "--no-cache", "--progress", "never", "--check",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliStandard.status, 0, sourceCliStandard.stderr);
+assert.match(sourceCliStandard.stdout, /export function selected/);
+assert.doesNotMatch(sourceCliStandard.stdout, /export function peer/);
+const sourceCliFull = spawnSync(process.execPath, [
+  sourceCli, "query", sourceCliFixture,
+  "--symbol", "selected", "--depth", "0", "--test-depth", "0",
+  "--dump", "--no-cache", "--progress", "never", "--check",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliFull.status, 0, sourceCliFull.stderr);
+assert.match(sourceCliFull.stdout, /export function peer/);
+const sourceCliOutline = spawnSync(process.execPath, [
+  sourceCli, "map", sourceCliFixture,
+  "--view", "source", "--compact", "--no-cache",
+  "--progress", "never", "--check",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliOutline.status, 0, sourceCliOutline.stderr);
+assert.match(sourceCliOutline.stdout, /selected/);
+assert.doesNotMatch(sourceCliOutline.stdout, /return 1/);
+const sourceCliMap = path.join(sourceCliFixture, "map.json");
+const sourceCliMapResult = spawnSync(process.execPath, [
+  sourceCli, "map", sourceCliFixture,
+  "--format", "json", "--output", sourceCliMap,
+  "--no-cache", "--progress", "never", "--check",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliMapResult.status, 0, sourceCliMapResult.stderr);
+const sourceCliSaved = spawnSync(process.execPath, [
+  sourceCli, "query", "--map", sourceCliMap, "--root", sourceCliFixture,
+  "--symbol", "selected", "--depth", "0", "--test-depth", "0",
+  "--view", "source", "--check",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliSaved.status, 0, sourceCliSaved.stderr);
+assert.equal(sourceCliSaved.stdout, sourceCliStandard.stdout);
+const sourceCliPath = path.join(sourceCliFixture, "src/api.js");
+const sourceCliBytes = fs.readFileSync(sourceCliPath);
+fs.appendFileSync(sourceCliPath, "export const changed = true;\n");
+const sourceCliChanged = spawnSync(process.execPath, [
+  sourceCli, "query", "--map", sourceCliMap, "--root", sourceCliFixture,
+  "--symbol", "selected", "--depth", "0", "--test-depth", "0",
+  "--view", "source",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliChanged.status, 2, sourceCliChanged.stderr);
+assert.match(sourceCliChanged.stderr, /source bytes changed/);
+fs.writeFileSync(sourceCliPath, sourceCliBytes);
+const sourceCliBackup = `${sourceCliPath}.original`;
+fs.renameSync(sourceCliPath, sourceCliBackup);
+fs.symlinkSync(path.basename(sourceCliBackup), sourceCliPath);
+const sourceCliSymlink = spawnSync(process.execPath, [
+  sourceCli, "query", "--map", sourceCliMap, "--root", sourceCliFixture,
+  "--symbol", "selected", "--depth", "0", "--test-depth", "0",
+  "--view", "source",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliSymlink.status, 2, sourceCliSymlink.stderr);
+assert.match(sourceCliSymlink.stderr, /source path traverses a symlink/);
+fs.unlinkSync(sourceCliPath);
+fs.renameSync(sourceCliBackup, sourceCliPath);
+for (const invalid of [
+  ["query", sourceCliFixture, "--symbol", "selected", "--dump",
+    "--max-chars", "100", "--no-cache", "--progress", "never"],
+  ["map", sourceCliFixture, "--view", "source", "--group-by", "directory",
+    "--no-cache", "--progress", "never"],
+]) {
+  const rejected = spawnSync(process.execPath, [sourceCli, ...invalid], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  assert.equal(rejected.status, 2, rejected.stderr);
+}
+fs.rmSync(sourceCliFixture, { force: true, recursive: true });
 
 function conflictingSymbolProvider(projectValue, providerName, factName) {
   return Buffer.from(JSON.stringify({

@@ -48,6 +48,7 @@ def main() -> int:
         export_graph,
         publish_okf_bundle,
         query_map_json,
+        render_source_markdown,
         resolve_discovery,
         write_okf_bundle,
     )
@@ -652,6 +653,531 @@ writer.commit()
     document = json.loads(first)
     if document["project"] != "map-base" or len(document["files"]) != 3:
         raise AssertionError("repository Map does not describe the fixture")
+
+    source_project = Project(
+        "source-views",
+        (
+            Source(
+                "js/api.js",
+                b"// ```` fence\n"
+                b"export function outer(x) {\n"
+                b"  class Inner { method() { return x; } }\n"
+                b"  return new Inner();\n"
+                b"}\n"
+                b"export const other = 2;\n",
+                language="javascript",
+                layer="javascript",
+            ),
+            Source(
+                "py/api.py",
+                b"@staticmethod\ndef decorated():\n    return 3\n\n"
+                b"def other():\n    return 4\n",
+                language="python",
+                layer="python",
+            ),
+            Source(
+                "py/unicode.py",
+                "def café():\r\n    return 'ready'\r\n\r\n"
+                "def peer():\r\n    return 'peer'\r\n".encode(),
+                language="python",
+                layer="python",
+            ),
+            Source(
+                "js/bindings.js",
+                b"export const Bound = class Internal { run() { return 1; } };\n"
+                b"const Local = class { stop() {} }, peer = 2;\n"
+                b"let Assigned;\n"
+                b"Assigned = class InternalAssignment { go() { return 3; } };\n",
+                language="javascript",
+                layer="javascript",
+            ),
+            Source(
+                "r/api.R",
+                b"run <- function(value) {\n  value + 1\n}\n"
+                b"peer <- function(value) {\n  value - 1\n}\n",
+                language="r",
+                layer="r",
+            ),
+            Source(
+                "ts/bindings.ts",
+                b"export const Bound = class Internal {\n"
+                b"  run(): number { return 1; }\n"
+                b"};\nconst peer = 2;\n",
+                language="typescript",
+                layer="typescript",
+            ),
+            Source(
+                "ts/view.tsx",
+                b"export const View = () => <div>ready</div>;\n"
+                b"const peer = 2;\n",
+                language="typescript",
+                layer="typescript",
+            ),
+            Source(
+                "src/api.c",
+                b"int first(void) { return 1; }\n"
+                b"int second(void) { return 2; }\n",
+                language="c",
+                layer="c",
+            ),
+            Source(
+                "src/same_line.c",
+                b"int left(void) { return 1; } int right(void) { return 2; }\n",
+                language="c",
+                layer="c",
+            ),
+            Source(
+                "src/template.cpp",
+                b"template <typename T>\n"
+                b"T identity(T value) { return value; }\n"
+                b"int peer(void) { return 2; }\n",
+                language="cpp",
+                layer="cpp",
+            ),
+            Source(
+                "src/overload.cpp",
+                b"int overload(void) { return 1; } "
+                b"int overload(int value) { return value; }\n",
+                language="cpp",
+                layer="cpp",
+            ),
+            Source(
+                "assets/raw.bin",
+                b"\xff\x00",
+                language="text",
+                layer="assets",
+            ),
+            Source(
+                "assets/control.txt",
+                b"safe\x1b[31munsafe\n",
+                language="text",
+                layer="assets",
+            ),
+            Source(
+                "assets/empty.txt",
+                b"",
+                language="text",
+                layer="assets",
+            ),
+        ),
+    )
+    source_project.set_config(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "project": "source-views",
+                "components": [
+                    {
+                        "name": "native",
+                        "paths": ["src/**"],
+                    }
+                ],
+                "layers": [
+                    {
+                        "name": "javascript",
+                        "role": "core",
+                        "language": "javascript",
+                        "globs": ["js/**/*.js"],
+                    },
+                    {
+                        "name": "python",
+                        "role": "core",
+                        "language": "python",
+                        "globs": ["py/**/*.py"],
+                    },
+                    {
+                        "name": "r",
+                        "role": "core",
+                        "language": "r",
+                        "globs": ["r/**/*.R"],
+                    },
+                    {
+                        "name": "c",
+                        "role": "core",
+                        "language": "c",
+                        "globs": ["src/**/*.c"],
+                    },
+                    {
+                        "name": "cpp",
+                        "role": "core",
+                        "language": "cpp",
+                        "globs": ["src/**/*.cpp"],
+                    },
+                    {
+                        "name": "typescript",
+                        "role": "core",
+                        "language": "typescript",
+                        "globs": ["ts/**/*.ts", "ts/**/*.tsx"],
+                    },
+                    {
+                        "name": "assets",
+                        "role": "support",
+                        "language": "text",
+                        "globs": ["assets/**"],
+                    },
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    )
+    source_project.scan(map_cache=False)
+    source_map = source_project.map_json()
+    source_map_document = json.loads(source_map)
+    by_path = {row["path"]: row for row in source_map_document["files"]}
+    expected_extents = {
+        ("js/api.js", "outer"),
+        ("js/api.js", "outer.Inner"),
+        ("js/bindings.js", "Assigned"),
+        ("js/bindings.js", "Bound"),
+        ("py/api.py", "decorated"),
+        ("py/unicode.py", "café"),
+        ("r/api.R", "run"),
+        ("src/api.c", "first"),
+        ("src/same_line.c", "left"),
+        ("src/template.cpp", "identity"),
+        ("ts/bindings.ts", "Bound"),
+        ("ts/view.tsx", "View"),
+    }
+    actual_extents = {
+        (path, symbol["name"])
+        for path, row in by_path.items()
+        for symbol in row["symbols"]
+        if "extent" in symbol
+    }
+    if not expected_extents.issubset(actual_extents):
+        raise AssertionError(
+            f"portable providers omitted exact declaration extents: "
+            f"{expected_extents - actual_extents!r}"
+        )
+    compact_source = render_source_markdown(
+        source_project, source_map, compact=True
+    ).decode()
+    if "outer.Inner" not in compact_source or "return new Inner()" in compact_source:
+        raise AssertionError("compact source view did not remain an outline")
+
+    def source_query(symbol: str) -> bytes:
+        return query_map_json(
+            source_map, symbols=(symbol,), depth=0, test_depth=0
+        )
+
+    nested_source = source_project.source_markdown(
+        artifact_json=source_query("js/api.js:outer.Inner"),
+    ).decode()
+    if (
+        "class Inner { method() { return x; } }" not in nested_source
+        or "export function outer" in nested_source
+        or "export const other" in nested_source
+    ):
+        raise AssertionError("standard source view did not isolate the exact class")
+    decorated_source = source_project.source_markdown(
+        artifact_json=source_query("py/api.py:decorated"),
+    ).decode()
+    if (
+        "@staticmethod\ndef decorated():" not in decorated_source
+        or "def other" in decorated_source
+    ):
+        raise AssertionError("Python source extent omitted a decorator or leaked a peer")
+    exported_source = source_project.source_markdown(
+        artifact_json=source_query("js/api.js:outer"),
+    ).decode()
+    if (
+        "export function outer" not in exported_source
+        or "export const other" in exported_source
+    ):
+        raise AssertionError("ECMAScript source extent lost its export wrapper")
+    bound_source = source_project.source_markdown(
+        artifact_json=source_query("js/bindings.js:Bound"),
+    ).decode()
+    if (
+        "export const Bound = class Internal" not in bound_source
+        or "peer = 2" in bound_source
+    ):
+        raise AssertionError("bound ECMAScript class extent lost its declaration")
+    local_source = source_project.source_markdown(
+        artifact_json=source_query("js/bindings.js:Local"),
+    ).decode()
+    if "Local = class" not in local_source or "peer = 2" in local_source:
+        raise AssertionError("multi-binding source extent leaked a sibling")
+    assigned_source = source_project.source_markdown(
+        artifact_json=source_query("js/bindings.js:Assigned"),
+    ).decode()
+    if (
+        "Assigned = class InternalAssignment" not in assigned_source
+        or "export const Bound" in assigned_source
+    ):
+        raise AssertionError("assignment-bound class extent lost its declaration")
+    typed_source = source_project.source_markdown(
+        artifact_json=source_query("ts/bindings.ts:Bound"),
+    ).decode()
+    if (
+        "export const Bound = class Internal" not in typed_source
+        or "const peer" in typed_source
+    ):
+        raise AssertionError("TypeScript binding extent lost its declaration")
+    tsx_source = source_project.source_markdown(
+        artifact_json=source_query("ts/view.tsx:View"),
+    ).decode()
+    if (
+        "export const View = () => <div>ready</div>;" not in tsx_source
+        or "const peer" in tsx_source
+    ):
+        raise AssertionError("TSX binding extent lost its declaration")
+    template_source = source_project.source_markdown(
+        artifact_json=source_query("src/template.cpp:identity"),
+    ).decode()
+    if (
+        "template <typename T>" not in template_source
+        or "int peer" in template_source
+    ):
+        raise AssertionError("C++ template extent lost its declaration wrapper")
+    overload_source = source_project.source_markdown(
+        artifact_json=source_query("src/overload.cpp:overload"),
+    ).decode()
+    if (
+        overload_source.count("overload") < 2
+        or "return 1" in overload_source
+        or "return value" in overload_source
+        or "could not be bound to one exact source extent" not in overload_source
+    ):
+        raise AssertionError(
+            "ambiguous same-line overloads were not kept as an outline"
+        )
+    unicode_source = source_project.source_markdown(
+        artifact_json=source_query("py/unicode.py:café"),
+    ).decode()
+    if (
+        "def café():\r\n    return 'ready'" not in unicode_source
+        or "def peer" in unicode_source
+    ):
+        raise AssertionError("Unicode/CRLF source extent was not byte-exact")
+    r_source = source_project.source_markdown(
+        artifact_json=source_query("r/api.R:run"),
+    ).decode()
+    if "run <- function(value)" not in r_source or "peer <-" in r_source:
+        raise AssertionError("R source extent leaked a peer declaration")
+    same_line_source = source_project.source_markdown(
+        artifact_json=source_query("src/same_line.c:left"),
+    ).decode()
+    if (
+        "int left(void) { return 1; }" not in same_line_source
+        or "int right" in same_line_source
+    ):
+        raise AssertionError("same-line source extent leaked a peer declaration")
+    multiple_selection = json.loads(
+        query_map_json(
+            source_map,
+            symbols=("py/unicode.py:café", "src/same_line.c:left"),
+            depth=0,
+            test_depth=0,
+        )
+    )
+    multiple_selection["files"].reverse()
+    multiple_source = source_project.source_markdown(
+        artifact_json=json.dumps(multiple_selection).encode(),
+    ).decode()
+    if (
+        "def café()" not in multiple_source
+        or "int left(void)" not in multiple_source
+        or "def peer" in multiple_source
+        or "int right" in multiple_source
+    ):
+        raise AssertionError("multi-file source selection changed exact ranges")
+    complete_source = source_project.source_markdown(
+        artifact_json=source_query("js/api.js:outer.Inner"),
+        full=True,
+    ).decode()
+    if (
+        "export const other = 2;" not in complete_source
+        or "\n`````javascript\n" not in complete_source
+        or "\n`````\n" not in complete_source
+    ):
+        raise AssertionError("full source view was not complete or fence-safe")
+    path_source = source_project.source_markdown(
+        artifact_json=query_map_json(
+            source_map, paths=("src/api.c",), depth=0, test_depth=0
+        ),
+    ).decode()
+    if "int first" not in path_source or "int second" not in path_source:
+        raise AssertionError("exact path source view did not return the complete file")
+    union_source = source_project.source_markdown(
+        artifact_json=query_map_json(
+            source_map,
+            paths=("src/api.c",),
+            symbols=("src/api.c:first",),
+            depth=0,
+            test_depth=0,
+        ),
+    ).decode()
+    if "int first" not in union_source or "int second" not in union_source:
+        raise AssertionError("path seed was weakened by a symbol seed in the same file")
+    bounded_source = source_project.source_markdown(
+        artifact_json=source_query("src/api.c:*"),
+        max_chars=725,
+    ).decode()
+    if (
+        len(bounded_source) > 725
+        or bounded_source.count("int first") + bounded_source.count("int second")
+        != 1
+        or "Declaration records: 1" not in bounded_source
+    ):
+        raise AssertionError(
+            "bounded source view did not preserve one complete declaration "
+            f"record: {bounded_source!r}"
+        )
+    component_source = source_project.source_markdown(
+        artifact_json=query_map_json(
+            source_map, components=("native",), depth=0, test_depth=0
+        ),
+    ).decode()
+    if (
+        "## src/api.c" not in component_source
+        or "int first(void) { return 1; }" in component_source
+    ):
+        raise AssertionError("component seed was incorrectly expanded as a file seed")
+    binary_source = source_project.source_markdown(
+        artifact_json=query_map_json(
+            source_map, paths=("assets/raw.bin",), depth=0, test_depth=0
+        ),
+        full=True,
+    ).decode()
+    if (
+        "Source is not safe UTF-8 text" not in binary_source
+        or "\ufffd" in binary_source
+    ):
+        raise AssertionError("non-UTF-8 source was silently decoded")
+    control_source = source_project.source_markdown(
+        artifact_json=query_map_json(
+            source_map, paths=("assets/control.txt",), depth=0, test_depth=0
+        ),
+        full=True,
+    ).decode()
+    if (
+        "Source is not safe UTF-8 text" not in control_source
+        or "\x1b" in control_source
+    ):
+        raise AssertionError("terminal control bytes leaked into source Markdown")
+    empty_source = source_project.source_markdown(
+        artifact_json=query_map_json(
+            source_map, paths=("assets/empty.txt",), depth=0, test_depth=0
+        ),
+        full=True,
+    ).decode()
+    if "## assets/empty.txt" not in empty_source or "\n```text\n\n```\n" not in empty_source:
+        raise AssertionError("empty source file was not represented exactly")
+    bounded_source = source_project.source_markdown(
+        artifact_json=source_map, compact=True, max_chars=800
+    )
+    if len(bounded_source) > 800 or b"Omitted source" not in bounded_source:
+        raise AssertionError("bounded source output violated its complete-block ledger")
+    try:
+        source_project.source_markdown(
+            artifact_json=source_map, compact=True, max_chars=1
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("source view accepted a budget smaller than metadata")
+    malformed_map = copy.deepcopy(source_map_document)
+    malformed_symbol = next(
+        row["symbols"][0] for row in malformed_map["files"] if row["symbols"]
+    )
+    malformed_symbol["extent"] = {
+        "start": 5,
+        "end": 2,
+    }
+    try:
+        source_project.source_markdown(
+            artifact_json=json.dumps(malformed_map).encode(), compact=True
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("source view accepted a malformed declaration extent")
+    valid_selection = json.loads(source_query("js/api.js:outer.Inner"))
+    invalid_selections = []
+    invalid_identity = copy.deepcopy(valid_selection)
+    invalid_identity["evidence"]["input_sha256"] = "broken"
+    invalid_selections.append(("invalid Map identity", invalid_identity))
+    duplicate_match = copy.deepcopy(valid_selection)
+    duplicate_match["matched_symbols"].append(
+        copy.deepcopy(duplicate_match["matched_symbols"][0])
+    )
+    if source_project.source_markdown(
+        artifact_json=json.dumps(duplicate_match).encode(),
+    ) != source_project.source_markdown(
+        artifact_json=json.dumps(valid_selection).encode(),
+    ):
+        raise AssertionError("duplicate Query matches changed source rendering")
+    empty_scope = copy.deepcopy(valid_selection)
+    empty_scope["matched_symbols"][0]["scope"] = ""
+    for symbol in empty_scope["files"][0]["symbols"]:
+        if (
+            symbol["name"] == empty_scope["matched_symbols"][0]["name"]
+            and symbol["kind"] == empty_scope["matched_symbols"][0]["kind"]
+            and symbol["line"] == empty_scope["matched_symbols"][0]["line"]
+        ):
+            symbol["scope"] = ""
+    if "class Inner" not in source_project.source_markdown(
+        artifact_json=json.dumps(empty_scope).encode(),
+    ).decode():
+        raise AssertionError("source view rejected an allowed empty symbol scope")
+    duplicate_file = copy.deepcopy(valid_selection)
+    duplicate_file["files"].append(copy.deepcopy(duplicate_file["files"][0]))
+    invalid_selections.append(("duplicate selected file", duplicate_file))
+    absent_match = copy.deepcopy(valid_selection)
+    absent_match["matched_symbols"][0]["name"] = "outer.Absent"
+    invalid_selections.append(("absent matched symbol", absent_match))
+    absent_scope = copy.deepcopy(valid_selection)
+    absent_scope["matched_symbols"][0]["scope"] = "unrelated"
+    invalid_selections.append(("mismatched symbol scope", absent_scope))
+    wrong_file = copy.deepcopy(valid_selection)
+    wrong_file["files"][0]["sha256"] = "0" * 64
+    invalid_selections.append(("wrong selected file", wrong_file))
+    for label, invalid_selection in invalid_selections:
+        try:
+            source_project.source_markdown(
+                artifact_json=json.dumps(invalid_selection).encode(),
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"source view accepted {label}")
+    unavailable_extent = copy.deepcopy(valid_selection)
+    unavailable_extent["files"][0]["symbols"][0].pop("extent")
+    unavailable_source = source_project.source_markdown(
+        artifact_json=json.dumps(unavailable_extent).encode(),
+    ).decode()
+    if (
+        "outer.Inner" not in unavailable_source
+        or "return x" in unavailable_source
+    ):
+        raise AssertionError(
+            "source view guessed a declaration boundary absent from evidence"
+        )
+    changed_project = Project(
+        "source-views",
+        (
+            Source(
+                source.path,
+                source.data + (b"changed" if source.path == "src/api.c" else b""),
+                language=source.language,
+                layer=source.layer,
+                roles=source.roles,
+            )
+            for source in source_project.sources
+        ),
+    )
+    try:
+        changed_project.source_markdown(
+            artifact_json=query_map_json(
+                source_map, paths=("src/api.c",), depth=0, test_depth=0
+            ),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("source view accepted bytes that differ from the Map")
 
     zero_fixture = repository / "test/fixtures/zero_config"
     zero_resolution_json = resolve_discovery(zero_fixture)
@@ -1910,6 +2436,143 @@ writer.commit()
             (row["path"], row["name"]) for row in qualified_document["matched_symbols"]
         ] != [("py/pkg/api.py", "add")]:
             raise AssertionError("path-qualified Python CLI symbol selection failed")
+        source_output = Path(directory) / "source.md"
+        status = cli_main(
+            [
+                "query",
+                "--map",
+                str(saved_map),
+                "--root",
+                str(fixture),
+                "--symbol",
+                "js/index.js:add",
+                "--depth",
+                "0",
+                "--test-depth",
+                "0",
+                "--view",
+                "source",
+                "--output",
+                str(source_output),
+            ]
+        )
+        source_text = source_output.read_text(encoding="utf-8")
+        if (
+            status
+            or "export function add" not in source_text
+            or "export const twice" in source_text
+        ):
+            raise AssertionError("saved-Map Python source view CLI failed")
+        live_source_path = fixture / "js/index.js"
+        live_source_bytes = live_source_path.read_bytes()
+        live_source_path.write_bytes(
+            live_source_bytes + b"export const changed = true;\n"
+        )
+        try:
+            if (
+                cli_main(
+                    [
+                        "query",
+                        "--map",
+                        str(saved_map),
+                        "--root",
+                        str(fixture),
+                        "--symbol",
+                        "js/index.js:add",
+                        "--depth",
+                        "0",
+                        "--test-depth",
+                        "0",
+                        "--view",
+                        "source",
+                    ]
+                )
+                != 2
+            ):
+                raise AssertionError("saved source view accepted changed bytes")
+        finally:
+            live_source_path.write_bytes(live_source_bytes)
+        live_source_backup = live_source_path.with_suffix(".js.original")
+        live_source_path.rename(live_source_backup)
+        live_source_path.symlink_to(live_source_backup.name)
+        try:
+            if (
+                cli_main(
+                    [
+                        "query",
+                        "--map",
+                        str(saved_map),
+                        "--root",
+                        str(fixture),
+                        "--symbol",
+                        "js/index.js:add",
+                        "--depth",
+                        "0",
+                        "--test-depth",
+                        "0",
+                        "--view",
+                        "source",
+                    ]
+                )
+                != 2
+            ):
+                raise AssertionError("saved source view accepted a symlink")
+        finally:
+            live_source_path.unlink()
+            live_source_backup.rename(live_source_path)
+        dump_output = Path(directory) / "dump.md"
+        status = cli_main(
+            [
+                "query",
+                str(fixture),
+                "--symbol",
+                "js/index.js:add",
+                "--depth",
+                "0",
+                "--test-depth",
+                "0",
+                "--dump",
+                "--no-cache",
+                "--output",
+                str(dump_output),
+            ]
+        )
+        if status or "export const twice" not in dump_output.read_text(
+            encoding="utf-8"
+        ):
+            raise AssertionError("Python --dump did not emit the selected file")
+        if (
+            cli_main(
+                [
+                    "query",
+                    str(fixture),
+                    "--symbol",
+                    "add",
+                    "--dump",
+                    "--max-chars",
+                    "100",
+                    "--no-cache",
+                    "--progress",
+                    "never",
+                ]
+            )
+            != 2
+            or cli_main(
+                [
+                    "map",
+                    str(fixture),
+                    "--view",
+                    "source",
+                    "--group-by",
+                    "directory",
+                    "--no-cache",
+                    "--progress",
+                    "never",
+                ]
+            )
+            != 2
+        ):
+            raise AssertionError("Python source-view option conflicts were accepted")
         map_report = Path(directory) / "map.md"
         merge_conflicts_report = Path(directory) / "provider-conflicts.json"
         status = cli_main(

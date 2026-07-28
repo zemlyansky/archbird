@@ -432,6 +432,8 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
     const AbString *scope = string_attribute(fact, "scope");
     const AbString *signature = string_attribute(fact, "signature");
     const AbString *syntax_recovery = string_attribute(fact, "syntax_recovery");
+    uint64_t extent_start = integer_attribute(fact, "extent_start");
+    uint64_t extent_end = integer_attribute(fact, "extent_end");
     if (index > 0 && same_symbol(refs.items[index - 1], fact))
       continue;
     if (!first)
@@ -456,6 +458,18 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
       status = ab_buffer_literal(buffer, ",\"signature\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, signature ? signature : &empty);
+    if (status == ARCHBIRD_OK && extent_end > extent_start &&
+        extent_end <= file->byte_length) {
+      status = ab_buffer_literal(buffer, ",\"extent\":{\"end\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_u64(buffer, extent_end);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, ",\"start\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_u64(buffer, extent_start);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, "}");
+    }
     if (status == ARCHBIRD_OK && syntax_recovery) {
       status = ab_buffer_literal(buffer, ",\"syntax_recovery\":");
       if (status == ARCHBIRD_OK)

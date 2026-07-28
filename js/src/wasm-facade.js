@@ -364,6 +364,22 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
       projectRender(handle, "_ab_wasm_project_merge_conflicts", pretty),
     projectMap: (handle, pretty = false) =>
       projectRender(handle, "_ab_wasm_project_map", pretty),
+    projectSourceMarkdown(
+      handle,
+      artifact,
+      detail = 1,
+      maxChars = 0,
+    ) {
+      const pointer = checkedProject(handle);
+      return withInputs([artifact], ([input]) =>
+        result(module._ab_wasm_project_source_markdown(
+          pointer,
+          input.pointer,
+          input.length,
+          sizeValue(detail, "detail"),
+          sizeValue(maxChars, "maxChars"),
+        )));
+    },
     projectProviderFacts,
     discoveryPlan,
     discoveryDescend,

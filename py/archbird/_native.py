@@ -710,6 +710,47 @@ def projection_render_markdown(
     )
 
 
+def project_source_markdown(
+    project: _Project,
+    artifact_json: bytes,
+    *,
+    detail: int = 1,
+    max_chars: int = 0,
+) -> bytes:
+    """Render Map- or Query-selected source from project-owned bytes."""
+
+    if max_chars < 0:
+        raise ValueError("source max_chars must be a nonnegative integer")
+    artifact = _bytes(artifact_json, "Map or Query artifact")
+    function = _declare(
+        "archbird_project_render_source_markdown",
+        [
+            _POINTER,
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_int,
+            ctypes.c_size_t,
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _one_shot(
+        lambda engine, write: function(
+            engine,
+            project.project,
+            artifact,
+            len(artifact),
+            detail,
+            max_chars,
+            write,
+            None,
+        ),
+        input_budget=len(artifact),
+        saved_artifact=True,
+    )
+
+
 def query_plan_compile(
     config: bytes,
     query_id: str,

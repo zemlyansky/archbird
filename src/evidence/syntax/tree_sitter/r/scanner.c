@@ -51,6 +51,8 @@ static ArchbirdStatus add_function(AbTreeSitterScan *scan, TSNode owner,
   if (status == ARCHBIRD_OK)
     status = ab_tree_sitter_add_line(scan, fact, name);
   if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_add_symbol_extent(scan, fact, owner);
+  if (status == ARCHBIRD_OK)
     status = ab_fact_add_string_attribute(scan->engine, fact, "syntax_kind",
                                           (const uint8_t *)ts_node_type(owner),
                                           strlen(ts_node_type(owner)));

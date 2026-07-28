@@ -119,6 +119,8 @@ static ArchbirdStatus add_symbol(AbTreeSitterScan *scan,
   if (status == ARCHBIRD_OK)
     status = ab_tree_sitter_add_line(scan, fact, name);
   if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_add_symbol_extent(scan, fact, owner);
+  if (status == ARCHBIRD_OK)
     status = ab_fact_add_string_attribute(scan->engine, fact, "syntax_kind",
                                           (const uint8_t *)ts_node_type(owner),
                                           strlen(ts_node_type(owner)));
@@ -180,6 +182,8 @@ static ArchbirdStatus add_module_variable(AbTreeSitterScan *scan,
       ab_tree_sitter_add_node_fact(scan, "symbols", "variable", left, &fact);
   if (status == ARCHBIRD_OK)
     status = ab_tree_sitter_add_line(scan, fact, left);
+  if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_add_symbol_extent(scan, fact, assignment);
   if (status == ARCHBIRD_OK)
     status = ab_fact_add_string_attribute(scan->engine, fact, "scope",
                                           (const uint8_t *)"module", 6);

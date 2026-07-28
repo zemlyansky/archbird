@@ -120,6 +120,8 @@ archbird map --view architecture \
   --group-by component --level file --relations imports,calls
 archbird map --view tests --group-by directory
 archbird map --view evidence --detail full
+archbird query --symbol runtime_start --view source
+archbird query --symbol runtime_start --dump
 ```
 
 `--view` chooses an overview, architecture, tests, or evidence preset.
@@ -136,6 +138,16 @@ omissions. Full detail enumerates the exhaustive selected records.
 Graph completeness is distinct from repository coverage. Unsupported, ignored,
 or oversized inputs remain an explicit coverage frontier without falsely
 making a fully evaluated selected graph incomplete.
+
+`--view source` materializes hash-checked source bytes for the Map or Query
+selection. Compact detail is a declaration outline. Standard detail expands
+exact symbol matches and complete directly selected paths while leaving
+related files as outlines. Full detail returns every selected file; `--dump`
+is an alias for `--view source --detail full` and cannot be combined with
+`--max-chars`. Saved Maps do not contain source bytes, so use
+`--root CHECKOUT` with a saved-Map source view. Archbird rejects changed bytes,
+does not guess missing declaration extents, and does not embed non-UTF-8 or
+terminal-control bytes in Markdown.
 
 Query context separately uses the `exact`, `change`, `architecture`, and
 `audit` profiles plus per-kind quotas, route provenance/confidence, and
@@ -519,9 +531,16 @@ context = project.query_markdown(
     context={"profile": "change"},
     max_chars=8_000,
 )
+selection = project.query_json(
+    symbols=["src/runtime.c:runtime_start"], depth=0
+)
+source = project.source_markdown(
+    artifact_json=selection
+)
 
 print(overview.decode())
 print(context.decode())
+print(source.decode())
 print(audit_map_freshness(map_json, project.map_json()).decode())
 ```
 
@@ -544,7 +563,7 @@ remain shared with Node and C.
 | Area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `resolve_discovery` |
+| Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
 | Change lifecycle | `ChangeContract`, `ChangeProposal`, `change_contract`, `change_proposal`, `change_verify` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |

@@ -713,6 +713,14 @@ class Project {
     });
   }
 
+  sourceMarkdown(options = {}) {
+    return renderSourceMarkdown(
+      this,
+      options.artifactJson ?? this.mapJson(),
+      options,
+    );
+  }
+
   queryJson(options = {}) {
     return queryMap(this.mapJson(), {
       ...options,
@@ -1283,6 +1291,37 @@ function queryMapMarkdown(mapJson, options = {}) {
   );
 }
 
+function renderSourceMarkdown(project, artifactJson, options = {}) {
+  if (!(project instanceof Project)) {
+    throw new TypeError("source Markdown requires a Project");
+  }
+  const details = { compact: 0, standard: 1, full: 2 };
+  const detail = options.detail ?? "standard";
+  const compact = options.compact ?? false;
+  const full = options.full ?? false;
+  const maxChars = options.maxChars ?? 0;
+  if (!Object.hasOwn(details, detail)) {
+    throw new RangeError("detail must be compact, standard, or full");
+  }
+  if (compact && full) throw new RangeError("compact and full conflict");
+  if ((compact || full) && detail !== "standard") {
+    throw new RangeError("detail conflicts with compact/full alias");
+  }
+  if (!Number.isSafeInteger(maxChars) || maxChars < 0) {
+    throw new RangeError("maxChars must be a nonnegative safe integer");
+  }
+  const selectedDetail = compact ? "compact" : (full ? "full" : detail);
+  if (selectedDetail === "full" && maxChars) {
+    throw new RangeError("full source detail cannot be combined with maxChars");
+  }
+  return native.projectSourceMarkdown(
+    project._handle,
+    Buffer.from(artifactJson),
+    details[selectedDetail],
+    maxChars,
+  );
+}
+
 function diffMaps(before, after, { pretty = false } = {}) {
   return native.mapDiff(Buffer.from(before), Buffer.from(after), pretty);
 }
@@ -1649,6 +1688,7 @@ module.exports = {
   queryMapMarkdown,
   reportConstraints,
   renderMapMarkdown,
+  renderSourceMarkdown,
   freezeConstraints,
   verifyChangeContract,
   jsonCanonicalize: native.jsonCanonicalize,

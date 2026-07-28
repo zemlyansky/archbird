@@ -315,6 +315,61 @@ ArchbirdStatus ab_tree_sitter_track_fact_region(AbTreeSitterScan *scan,
   return ARCHBIRD_OK;
 }
 
+static int single_variable_declarator(TSNode parent, TSNode declaration) {
+  uint32_t count = ts_node_named_child_count(parent);
+  uint32_t index;
+  uint32_t declarators = 0;
+  int owns_declaration = 0;
+  for (index = 0; index < count; index++) {
+    TSNode child = ts_node_named_child(parent, index);
+    if (strcmp(ts_node_type(child), "variable_declarator") != 0)
+      continue;
+    declarators++;
+    if (ts_node_eq(child, declaration))
+      owns_declaration = 1;
+  }
+  return declarators == 1 && owns_declaration;
+}
+
+static int source_extent_parent(TSNode parent, TSNode declaration) {
+  const char *type = ts_node_type(parent);
+  if (!strcmp(type, "lexical_declaration") ||
+      !strcmp(type, "variable_declaration"))
+    return single_variable_declarator(parent, declaration);
+  return !strcmp(type, "ambient_declaration") ||
+         !strcmp(type, "decorated_definition") ||
+         !strcmp(type, "export_declaration") ||
+         !strcmp(type, "export_statement") ||
+         !strcmp(type, "expression_statement") ||
+         !strcmp(type, "template_declaration");
+}
+
+ArchbirdStatus ab_tree_sitter_add_symbol_extent(AbTreeSitterScan *scan,
+                                                AbFact *fact,
+                                                TSNode declaration) {
+  TSNode parent;
+  size_t start;
+  size_t end;
+  ArchbirdStatus status;
+  if (!scan || !fact)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  parent = ts_node_parent(declaration);
+  while (!ts_node_is_null(parent) &&
+         source_extent_parent(parent, declaration)) {
+    declaration = parent;
+    parent = ts_node_parent(declaration);
+  }
+  if (!ab_tree_sitter_node_slice(scan, declaration, &start, &end) ||
+      start >= end)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_fact_add_u64_attribute(scan->engine, fact, "extent_start",
+                                     (uint64_t)start);
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_u64_attribute(scan->engine, fact, "extent_end",
+                                       (uint64_t)end);
+  return status;
+}
+
 static int file_role(const AbManifestFile *file, const char *role) {
   size_t index;
   size_t length = strlen(role);

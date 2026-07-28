@@ -297,6 +297,7 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
   ArchbirdEngine *engine = create_engine(allocator, &status);
   ArchbirdProject *project = NULL;
   FixedOutput map_output = {{0}, 0};
+  FixedOutput query_output = {{0}, 0};
   CountingOutput output = {0};
   if (!engine)
     return status;
@@ -330,6 +331,19 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
     status = archbird_map_query_markdown(
         engine, map_output.bytes, map_output.length, NULL, 0,
         (const uint8_t *)query, sizeof(query) - 1, 0, count_write, &output);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_render_source_markdown(
+        engine, project, map_output.bytes, map_output.length,
+        ARCHBIRD_REPORT_DETAIL_COMPACT, 0, count_write, &output);
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_map_query(engine, map_output.bytes, map_output.length, NULL, 0,
+                           (const uint8_t *)query, sizeof(query) - 1, 0,
+                           fixed_write, &query_output);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_render_source_markdown(
+        engine, project, query_output.bytes, query_output.length,
+        ARCHBIRD_REPORT_DETAIL_STANDARD, 0, count_write, &output);
   if (status == ARCHBIRD_OK)
     status = archbird_map_freshness(engine, map_output.bytes, map_output.length,
                                     map_output.bytes, map_output.length, 0,

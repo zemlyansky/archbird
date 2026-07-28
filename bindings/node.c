@@ -1144,6 +1144,35 @@ static napi_value map_query_markdown_view(napi_env env,
   return result;
 }
 
+static napi_value project_source_markdown(napi_env env,
+                                          napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4];
+  NodeProject *owned;
+  const uint8_t *artifact;
+  size_t artifact_length;
+  size_t detail;
+  size_t max_chars;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 3 || !(owned = get_project(env, argv[0])) ||
+      !get_buffer(env, argv[1], &artifact, &artifact_length) ||
+      !get_optional_size(env, argc, argv, 2, 1, "detail", &detail) ||
+      !get_optional_size(env, argc, argv, 3, 0, "maxChars", &max_chars))
+    return NULL;
+  status = saved_artifact_engine(artifact_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_render_source_markdown(
+        engine, owned->project, artifact, artifact_length,
+        (ArchbirdReportDetail)detail, max_chars, output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value map_diff(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -1968,6 +1997,8 @@ static napi_value init(napi_env env, napi_value exports) {
       {"mapQueryMarkdown", NULL, map_query_markdown, NULL, NULL, NULL,
        napi_default, NULL},
       {"mapQueryMarkdownView", NULL, map_query_markdown_view, NULL, NULL, NULL,
+       napi_default, NULL},
+      {"projectSourceMarkdown", NULL, project_source_markdown, NULL, NULL, NULL,
        napi_default, NULL},
       {"discoveryDescend", NULL, discovery_descend, NULL, NULL, NULL,
        napi_default, NULL},

@@ -63,6 +63,15 @@
         "scope": {"type": "string"},
         "line": {"type": "integer", "minimum": 1},
         "signature": {"type": "string"},
+        "extent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": {"type": "integer", "minimum": 0},
+            "end": {"type": "integer", "minimum": 1}
+          }
+        },
         "syntax_recovery": {"const": "intersects"}
       }
     },

@@ -214,6 +214,8 @@ archbird map --view architecture \
   --group-by component --level file --relations imports,calls
 archbird map --view tests --group-by directory
 archbird map --view evidence --detail full
+archbird query --symbol runtime_start --view source
+archbird query --symbol runtime_start --dump
 ```
 
 `--view` selects a question-oriented preset. `overview` includes project
@@ -242,6 +244,32 @@ inputs. Presentation omissions never change either classification.
 Query context profiles (`exact`, `change`, `architecture`, `audit`), per-kind
 quotas, route provenance/confidence, and candidate/conservative policies remain
 separate Query behavior.
+
+`--view source` materializes source bytes selected by the Map or Query instead
+of storing source text in the canonical artifact. Compact detail is an indexed
+declaration outline. Standard detail expands exact declarations matched by a
+symbol Query, returns a complete directly selected file for a path Query, and
+leaves related files as outlines. Full detail returns every selected file;
+`--dump` is an alias for `--view source --detail full`. Full source cannot be
+combined with `--max-chars`, because silently dropping part of a requested dump
+would make it misleading.
+
+Every emitted file is matched by repository-relative path and SHA-256 against
+the Map before its bytes are rendered. A saved Map therefore needs the source
+checkout explicitly:
+
+```bash
+archbird query --map .archbird/map.json --root . \
+  --symbol 'src/runtime.c:runtime_start' --view source
+archbird query --map .archbird/map.json --root . \
+  --symbol 'src/runtime.c:runtime_start' --dump \
+  --output .archbird/runtime-start-source.md
+```
+
+When a provider cannot establish an exact declaration extent, standard source
+shows the indexed outline and states that exact source is unavailable; it does
+not guess where the declaration ends. Non-UTF-8 bytes and terminal control
+sequences are hash-validated but are not embedded in Markdown.
 
 Plain saved-Map queries accept every supported Map schema even when another
 Archbird core produced the artifact. Add `--check` when the result will drive a
@@ -662,6 +690,10 @@ project = Project.from_repository(".")
 map_json = project.map_json(pretty=True)
 print(project.map_markdown(max_chars=12_000).decode())
 print(project.query_markdown(symbols=["runtime_start"], depth=1).decode())
+selection = project.query_json(symbols=["runtime_start"], depth=0)
+print(project.source_markdown(
+    artifact_json=selection
+).decode())
 if project.verification_configured:
     print(project.verify_json(pretty=True).decode())
 print(project.query_markdown(
@@ -677,6 +709,12 @@ const { Project } = require("archbird");
 const project = Project.fromRepository(".");
 try {
   console.log(project.mapMarkdown({ maxChars: 12000 }).toString("utf8"));
+  const selectionJson = project.queryJson({
+    symbols: ["runtime_start"], depth: 0,
+  });
+  console.log(project.sourceMarkdown({
+    artifactJson: selectionJson,
+  }).toString("utf8"));
   if (project.verificationConfigured) {
     console.log(project.verifyJson({ pretty: true }).toString("utf8"));
   }
@@ -702,6 +740,10 @@ const project = archbird.Project.fromFiles([
 ]);
 try {
   console.log(project.map());
+  const selectionJson = project.queryJson({ symbols: ["answer"], depth: 0 });
+  console.log(project.sourceMarkdown({
+    artifactJson: selectionJson,
+  }).toString("utf8"));
 } finally {
   project.dispose();
 }
@@ -726,7 +768,7 @@ statuses, and canonical JSON boundaries. It is experimental ABI v0.
 
 ### Complete API inventory
 
-Python and Node share 31 top-level capabilities after conventional
+Python and Node share 32 top-level capabilities after conventional
 snake_case/camelCase naming. The inventories below are checked against
 `archbird.__all__` and `Object.keys(require("archbird"))`. Their totals
 intentionally differ: Python adds schema readers, filesystem OKF output, and
@@ -739,7 +781,7 @@ Python folds report rendering into
 | Python area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `resolve_discovery` |
+| Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
 | Change lifecycle | `ChangeContract`, `ChangeProposal`, `change_contract`, `change_proposal`, `change_verify` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
@@ -750,7 +792,7 @@ Python folds report rendering into
 | Node area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `resolveDiscovery` |
+| Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
 | Change lifecycle | `ChangeContract`, `ChangeProposal`, `compileChangeProposal`, `createChangeContract`, `verifyChangeContract` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
@@ -789,7 +831,7 @@ The complete C ABI is declared in
 | Engine and JSON | `archbird_engine_create`, `archbird_engine_destroy`, `archbird_engine_error`, `archbird_engine_error_offset`, `archbird_engine_options_init`, `archbird_engine_options_init_for_input`, `archbird_graph_options_init`, `archbird_implementation_sha256`, `archbird_json_canonicalize`, `archbird_json_validate` |
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
 | Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
-| Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
+| Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
 | Map, Query, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish` |
 | Workspace and change | `archbird_change_contract`, `archbird_change_contract_report`, `archbird_change_proposal`, `archbird_change_proposal_report`, `archbird_change_verify`, `archbird_change_verify_report`, `archbird_workspace_analyze`, `archbird_workspace_plan` |
 <!-- archbird-c-api:end -->

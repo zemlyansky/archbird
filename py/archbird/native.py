@@ -1007,6 +1007,26 @@ class Project:
             resolution_json=self.resolution_json or b"",
         )
 
+    def source_markdown(
+        self,
+        *,
+        artifact_json: Optional[bytes] = None,
+        detail: str = "standard",
+        compact: bool = False,
+        full: bool = False,
+        max_chars: int = 0,
+    ) -> bytes:
+        """Render exact project-owned source for a Map or Query selection."""
+
+        return render_source_markdown(
+            self,
+            artifact_json if artifact_json is not None else self.map_json(),
+            detail=detail,
+            compact=compact,
+            full=full,
+            max_chars=max_chars,
+        )
+
     def query_json(
         self,
         *,
@@ -1500,6 +1520,37 @@ def query_map_markdown(
         max_chars=max_chars,
         verification=verification_result,
         resolution=resolution_json,
+    )
+
+
+def render_source_markdown(
+    project: Project,
+    artifact_json: bytes,
+    *,
+    detail: str = "standard",
+    compact: bool = False,
+    full: bool = False,
+    max_chars: int = 0,
+) -> bytes:
+    """Render hash-bound source for a canonical Map or Query selection."""
+
+    details = {"compact": 0, "standard": 1, "full": 2}
+    if detail not in details:
+        raise ValueError("detail must be compact, standard, or full")
+    if compact and full:
+        raise ValueError("compact and full conflict")
+    if (compact or full) and detail != "standard":
+        raise ValueError("detail conflicts with compact/full alias")
+    selected_detail = "compact" if compact else "full" if full else detail
+    if max_chars < 0:
+        raise ValueError("max_chars must be nonnegative")
+    if selected_detail == "full" and max_chars:
+        raise ValueError("full source detail cannot be combined with max_chars")
+    return _native.project_source_markdown(
+        project._capsule,
+        artifact_json,
+        detail=details[selected_detail],
+        max_chars=max_chars,
     )
 
 
@@ -2640,6 +2691,7 @@ __all__ = [
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",
+    "render_source_markdown",
     "resolve_discovery",
     "validate_test_symbol_observations",
     "write_okf_bundle",

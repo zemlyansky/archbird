@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import os
@@ -28,6 +29,7 @@ from .provider_cache import (
 from .native import (
     DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS,
     Project,
+    Source,
     Workspace,
     audit_map_freshness,
     change_contract,
@@ -43,6 +45,7 @@ from .native import (
     query_map_markdown,
     query_map_json,
     render_map_markdown,
+    render_source_markdown,
     resolve_discovery,
 )
 from .adapters.okf.parser import okf_query_input, parse_okf_bundle
@@ -194,7 +197,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--view",
-        choices=("overview", "architecture", "tests", "evidence"),
+        choices=("overview", "architecture", "tests", "evidence", "source"),
         default="overview",
         help="human Markdown projection (default: overview)",
     )
@@ -239,6 +242,11 @@ def parser() -> argparse.ArgumentParser:
         "--full",
         action="store_true",
         help="alias for --detail full",
+    )
+    result.add_argument(
+        "--dump",
+        action="store_true",
+        help="alias for --view source --detail full",
     )
     result.add_argument(
         "--max-chars",
@@ -397,7 +405,7 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
     )
     result.add_argument(
         "--view",
-        choices=("focused", "changes"),
+        choices=("focused", "changes", "source"),
         default="focused",
         help="human Markdown projection",
     )
@@ -409,6 +417,11 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
     )
     result.add_argument("--compact", action="store_true", help="alias for --detail compact")
     result.add_argument("--full", action="store_true", help="alias for --detail full")
+    result.add_argument(
+        "--dump",
+        action="store_true",
+        help="alias for --view source --detail full",
+    )
     result.add_argument(
         "--max-chars",
         type=int,
@@ -1303,6 +1316,69 @@ def _project_from_args(
     return current
 
 
+def _source_snapshot_project(
+    artifact_json: bytes,
+    *,
+    root: Path,
+) -> Project:
+    """Load the artifact's hash-matching source bytes from a checkout."""
+
+    artifact = json.loads(artifact_json)
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("artifact") not in {"map", "query"}
+    ):
+        raise ValueError("source view requires a canonical Map or Query")
+    project_name = artifact.get("project")
+    files = artifact.get("files")
+    if not isinstance(project_name, str) or not project_name:
+        raise ValueError("source artifact has no project identity")
+    if not isinstance(files, list):
+        raise ValueError("source artifact has no file inventory")
+    repository = root.resolve()
+    sources: list[Source] = []
+    seen: set[str] = set()
+    for row in files:
+        if not isinstance(row, dict):
+            raise ValueError("source selection contains a malformed file row")
+        path = row.get("path")
+        if not isinstance(path, str) or path in seen:
+            raise ValueError("source selection contains an invalid or duplicate path")
+        expected = row.get("sha256")
+        if not isinstance(expected, str) or len(expected) != 64:
+            raise ValueError(f"source artifact has an invalid digest for {path!r}")
+        candidate = repository.joinpath(*path.split("/"))
+        cursor = repository
+        for part in path.split("/"):
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError(f"source path traverses a symlink: {path}")
+        resolved = candidate.resolve(strict=True)
+        try:
+            resolved.relative_to(repository)
+        except ValueError as error:
+            raise ValueError(f"source path escapes repository root: {path}") from error
+        if not resolved.is_file():
+            raise ValueError(f"source path is not a regular file: {path}")
+        data = resolved.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != expected:
+            raise ValueError(
+                f"source bytes changed since artifact creation: {path} "
+                f"(artifact {expected}, live {actual})"
+            )
+        sources.append(
+            Source(
+                path=path,
+                data=data,
+                language=str(row.get("language") or ""),
+                layer=str(row.get("layer") or ""),
+            )
+        )
+        seen.add(path)
+    return Project(project_name, sources)
+
+
 def _resolution_from_args(args: argparse.Namespace, *, pretty: bool) -> bytes:
     repository, config_json, _ = _repository_inputs(args)
     return resolve_discovery(
@@ -1371,11 +1447,18 @@ def _query_main(
     _normalize_query_positional(args)
     progress = _Progress(args.progress)
     try:
+        if args.dump:
+            if args.view not in {"focused", "source"}:
+                raise ValueError("--dump conflicts with a non-source --view")
+            if args.compact or args.detail != "standard":
+                raise ValueError("--dump conflicts with compact/detail options")
+            args.view = "source"
+            args.full = True
         if args.resolution and not args.map:
             raise ValueError("--resolution requires --map")
         if args.map and (
             getattr(args, "root_path", None)
-            or args.root_override
+            or (args.root_override and args.view != "source")
             or args.no_config
             or _has_discovery_overrides(args)
         ):
@@ -1407,6 +1490,7 @@ def _query_main(
         if args.format == "json" and (
             args.compact
             or args.full
+            or args.dump
             or args.detail != "standard"
             or args.view != "focused"
         ):
@@ -1417,8 +1501,11 @@ def _query_main(
             raise ValueError("--compact and --full conflict")
         if (args.compact or args.full) and args.detail != "standard":
             raise ValueError("--detail conflicts with --compact/--full")
+        if args.view == "source" and args.full and args.max_chars:
+            raise ValueError("full source view cannot be combined with --max-chars")
         change_set = None
         config_json = b""
+        source_project: Optional[Project] = None
         if args.map:
             map_json = Path(args.map).read_bytes()
             resolution_json = (
@@ -1445,6 +1532,7 @@ def _query_main(
                 repository, _, _ = _repository_inputs(args)
                 change_set = _git_change_set(repository, args.git_diff)
             current = _project_from_args(args, progress)
+            source_project = current
             progress.emit({"phase": "rendering", "artifact": "canonical Map"})
             map_json = current.map_json()
             resolution_json = current.resolution_json or b""
@@ -1566,15 +1654,34 @@ def _query_main(
             }
         else:
             query_options = ad_hoc_options
-        encoded = (
-            query_map_json(
+        if args.format == "json":
+            encoded = query_map_json(
                 map_json,
                 resolution_json=resolution_json,
                 pretty=args.pretty,
                 **query_options,
             )
-            if args.format == "json"
-            else query_map_markdown(
+        elif args.view == "source":
+            query_json = query_map_json(
+                map_json,
+                resolution_json=resolution_json,
+                **query_options,
+            )
+            if source_project is None:
+                source_project = _source_snapshot_project(
+                    query_json,
+                    root=Path(args.root_override or "."),
+                )
+            encoded = render_source_markdown(
+                source_project,
+                query_json,
+                detail=args.detail,
+                compact=args.compact,
+                full=args.full,
+                max_chars=args.max_chars,
+            )
+        else:
+            encoded = query_map_markdown(
                 map_json,
                 view=args.view,
                 detail=args.detail,
@@ -1589,7 +1696,6 @@ def _query_main(
                 resolution_json=resolution_json,
                 **query_options,
             )
-        )
         progress.finish()
         _write(encoded, args.output)
         return 0
@@ -2183,6 +2289,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser().parse_args(arguments)
     progress = _Progress(args.progress)
     try:
+        if args.dump:
+            if args.view not in {"overview", "source"}:
+                raise ValueError("--dump conflicts with a non-source --view")
+            if args.compact or args.detail != "standard":
+                raise ValueError("--dump conflicts with compact/detail options")
+            args.view = "source"
+            args.full = True
         if args.max_chars < 0:
             raise ValueError("--max-chars must be nonnegative")
         if args.format == "json" and args.max_chars:
@@ -2190,6 +2303,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.format == "json" and (
             args.full
             or args.compact
+            or args.dump
             or args.detail != "standard"
             or args.view != "overview"
             or args.group_by
@@ -2206,6 +2320,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise ValueError("--compact conflicts with explicit --detail")
         if args.full and args.detail != "standard":
             raise ValueError("--full conflicts with explicit --detail")
+        if args.view == "source" and (
+            args.group_by
+            or args.level
+            or args.relations is not None
+            or args.overlay is not None
+        ):
+            raise ValueError(
+                "source view does not accept graph grouping, level, relations, or overlays"
+            )
+        if args.view == "source" and args.full and args.max_chars:
+            raise ValueError("full source view cannot be combined with --max-chars")
         if args.format == "markdown" and args.pretty:
             raise ValueError("--pretty applies only to JSON")
         project = _project_from_args(args, progress)
@@ -2221,6 +2346,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         encoded = (
             map_json
             if args.format == "json"
+            else render_source_markdown(
+                project,
+                map_json,
+                detail=args.detail,
+                compact=args.compact,
+                full=args.full,
+                max_chars=args.max_chars,
+            )
+            if args.view == "source"
             else render_map_markdown(
                 map_json,
                 view=args.view,

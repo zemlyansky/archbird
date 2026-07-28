@@ -5,12 +5,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { scipFixture } = require("../../test/scip_fixture");
 
-if (process.argv.length !== 4) {
-  throw new Error("usage: test_browser.js PACKAGE_ROOT REPOSITORY_ROOT");
+if (process.argv.length < 4 || process.argv.length > 5) {
+  throw new Error(
+    "usage: test_browser.js PACKAGE_ROOT REPOSITORY_ROOT [WASM_BINARY]",
+  );
 }
 
 const packageRoot = path.resolve(process.argv[2]);
 const repository = path.resolve(process.argv[3]);
+const wasmBinary = process.argv[4]
+  ? path.resolve(process.argv[4])
+  : path.join(packageRoot, "wasm/archbird.wasm");
 const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js"));
 
 function markedNames(relative, name) {
@@ -27,7 +32,7 @@ function markedNames(relative, name) {
 
 (async () => {
   const archbird = await createBrowserArchbird({
-    wasmBinary: fs.readFileSync(path.join(packageRoot, "wasm/archbird.wasm")),
+    wasmBinary: fs.readFileSync(wasmBinary),
   });
   assert.equal(archbird.ENGINE.kind, "wasm");
   assert.equal(archbird.VERSION, "0.0.1");
@@ -90,6 +95,23 @@ function markedNames(relative, name) {
   assert.equal(
     JSON.parse(archbird.auditMapFreshness(first, first)).status,
     "current",
+  );
+  const sourceSelection = project.queryJson({
+    symbols: ["js/index.js:add"],
+    depth: 0,
+    testDepth: 0,
+  });
+  const focusedSource = project.sourceMarkdown({
+    artifactJson: sourceSelection,
+  }).toString("utf8");
+  assert.match(focusedSource, /export function add\(left, right\)/);
+  assert.doesNotMatch(focusedSource, /export const twice/);
+  assert.match(
+    project.sourceMarkdown({
+      artifactJson: sourceSelection,
+      full: true,
+    }).toString("utf8"),
+    /export const twice/,
   );
   assert.equal(project.queryJson({ paths: ["py/pkg"], depth: 0 }).length > 0, true);
   const contextPolicy = { profile: "exact", quotas: { files: 1 } };

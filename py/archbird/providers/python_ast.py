@@ -128,6 +128,17 @@ def _absolute_span(node: ast.AST, starts: Sequence[int]) -> Tuple[int, int]:
     return starts[line - 1] + column, starts[end_line - 1] + end_column
 
 
+def _definition_span(node: ast.AST, starts: Sequence[int]) -> Tuple[int, int]:
+    start, end = _absolute_span(node, starts)
+    decorators = getattr(node, "decorator_list", ())
+    if decorators:
+        first_line = getattr(decorators[0], "lineno", None)
+        column = getattr(node, "col_offset", None)
+        if isinstance(first_line, int) and isinstance(column, int):
+            start = starts[first_line - 1] + column
+    return start, end
+
+
 def _line_for_span(starts: Sequence[int], span: Tuple[int, int]) -> int:
     """Return the one-based physical line containing a normalized fact span."""
 
@@ -1201,6 +1212,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         node_span = _absolute_span(node, self.starts)
+        definition_span = _definition_span(node, self.starts)
         name_span = self.tokens.named(node.name, node_span)
         bases = ", ".join(ast.unparse(base) for base in node.bases)
         signature = f"class {node.name}({bases})" if bases else f"class {node.name}"
@@ -1214,7 +1226,13 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             name_span,
             qualified,
             qualified,
-            {"line": node.lineno, "scope": "class", "signature": signature},
+            {
+                "extent_end": self.facts.source_offset(definition_span[1]),
+                "extent_start": self.facts.source_offset(definition_span[0]),
+                "line": node.lineno,
+                "scope": "class",
+                "signature": signature,
+            },
         )
         self._record_class_constants(node, qualified, enum_like)
         self._record_decorators(node, qualified)
@@ -1290,6 +1308,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self, node: ast.AST, name: str, args: ast.arguments, async_: bool
     ) -> None:
         node_span = _absolute_span(node, self.starts)
+        definition_span = _definition_span(node, self.starts)
         name_span = self.tokens.named(name, node_span)
         in_class = any(kind == "class" for _, kind in self.scope)
         kind = "method" if in_class else "function"
@@ -1306,6 +1325,8 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             qualified,
             qualified,
             {
+                "extent_end": self.facts.source_offset(definition_span[1]),
+                "extent_start": self.facts.source_offset(definition_span[0]),
                 "line": getattr(node, "lineno"),
                 "scope": kind,
                 "signature": signature,

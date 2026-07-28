@@ -134,7 +134,9 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
          ARCHBIRD_OK);
   if (!strstr(facts.bytes, "\"imports\":[\"api.h\"]") ||
       !strstr(facts.bytes, "\"calls\":[\"helper\"]") ||
-      !strstr(facts.bytes, "\"name\":\"run\"")) {
+      !strstr(facts.bytes, "\"name\":\"run\"") ||
+      !strstr(facts.bytes, "\"extent\":{\"end\":") ||
+      !strstr(facts.bytes, ",\"start\":")) {
     fputs("FAIL composed syntax facts were not reduced into common IR\n",
           stderr);
     failures++;
@@ -584,6 +586,8 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
   if (first.length != second.length ||
       memcmp(first.bytes, second.bytes, first.length) != 0 ||
       !strstr(first.bytes, "\"domain\":\"syntax-summaries\"") ||
+      !strstr(first.bytes, "\"extent_end\":") ||
+      !strstr(first.bytes, "\"extent_start\":") ||
       (expected_name && !strstr(first.bytes, expected_name)) ||
       (expected_call && !strstr(first.bytes, expected_call)) ||
       (expected_import && !strstr(first.bytes, expected_import))) {

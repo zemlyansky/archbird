@@ -116,6 +116,9 @@ void ab_tree_sitter_set_enclosing_fact(AbTreeSitterFrame *frame,
 ArchbirdStatus ab_tree_sitter_track_fact_region(AbTreeSitterScan *scan,
                                                 const AbFact *fact,
                                                 TSNode region);
+ArchbirdStatus ab_tree_sitter_add_symbol_extent(AbTreeSitterScan *scan,
+                                                AbFact *fact,
+                                                TSNode declaration);
 
 ArchbirdStatus ab_tree_sitter_scan_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,

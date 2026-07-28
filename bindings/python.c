@@ -1035,6 +1035,44 @@ static PyObject *py_map_query_markdown_view(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_project_source_markdown(PyObject *self, PyObject *args,
+                                            PyObject *kwargs) {
+  static char *keywords[] = {"project", "artifact", "detail", "max_chars",
+                             NULL};
+  PyObject *capsule;
+  PyArchbirdProject *owned;
+  const char *artifact;
+  Py_ssize_t artifact_length;
+  Py_ssize_t max_chars = 0;
+  int detail = ARCHBIRD_REPORT_DETAIL_STANDARD;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "Oy#|in:project_source_markdown", keywords, &capsule,
+          &artifact, &artifact_length, &detail, &max_chars))
+    return NULL;
+  if (max_chars < 0) {
+    PyErr_SetString(PyExc_ValueError,
+                    "source max_chars must be a nonnegative integer");
+    return NULL;
+  }
+  owned = get_project(capsule);
+  if (!owned)
+    return NULL;
+  status = saved_artifact_engine((size_t)artifact_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_render_source_markdown(
+        engine, owned->project, (const uint8_t *)artifact,
+        (size_t)artifact_length, (ArchbirdReportDetail)detail,
+        (size_t)max_chars, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_map_diff(PyObject *self, PyObject *args, PyObject *kwargs) {
   static char *keywords[] = {"before", "after", "pretty", NULL};
   const char *before;
@@ -1835,6 +1873,9 @@ static PyMethodDef archbird_methods[] = {
     {"map_query_markdown_view", (PyCFunction)py_map_query_markdown_view,
      METH_VARARGS | METH_KEYWORDS,
      "Project a canonical saved-map query by view and detail level."},
+    {"project_source_markdown", (PyCFunction)py_project_source_markdown,
+     METH_VARARGS | METH_KEYWORDS,
+     "Render Map- or Query-selected source from project-owned bytes."},
     {"discovery_descend", py_discovery_descend, METH_VARARGS,
      "Return C-owned safe traversal decisions for repository directories."},
     {"discovery_plan", (PyCFunction)py_discovery_plan,

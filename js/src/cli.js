@@ -2,6 +2,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const { createHash } = require("node:crypto");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { TextDecoder } = require("node:util");
@@ -57,10 +58,10 @@ const DISCOVERY = {
 
 function usage(command = "map") {
   const rows = {
-    map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|tests|evidence] [--group-by KIND] [--level KIND] [--relations KINDS] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
+    map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|tests|evidence|source] [--dump] [--group-by KIND] [--level KIND] [--relations KINDS] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
     observe: "archbird observe [ROOT] --map MAP.json --request COVERAGE.json [--output OBSERVATIONS.json]",
-    query: "archbird query [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
-    impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--check]",
+    query: "archbird query [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
+    impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
@@ -77,6 +78,7 @@ function usage(command = "map") {
     ? "\n--symbol accepts PATTERN or repository-relative PATH:PATTERN; repeated selectors form a union.\n" +
       "--search KEYWORDS ranks advisory lexical seeds from repository vocabulary; it does not interpret questions.\n" +
       "--git-diff REVISION seeds tracked current paths and retains deletions as change evidence.\n" +
+      "--view source renders hash-checked selected source; --dump renders every selected file in full.\n" +
       "Context profiles exact|change|architecture|audit control Markdown; " +
       "--max-chars is only the final guard.\n"
     : "";
@@ -476,6 +478,7 @@ function mapMain(argv) {
     detail: { default: "standard", type: "string" },
     compact: { type: "boolean" },
     full: { type: "boolean" },
+    dump: { type: "boolean" },
     maxChars: { flag: "max-chars", default: 0, type: "number" },
     mergeLedger: { flag: "merge-ledger", type: "string" },
     testSymbolObservations: { flag: "test-symbol-observations", type: "multiple" },
@@ -488,9 +491,19 @@ function mapMain(argv) {
     process.stdout.write(`${archbird.VERSION}\n`);
     return 0;
   }
+  if (options.dump) {
+    if (!["overview", "source"].includes(options.view)) {
+      throw new Error("--dump conflicts with a non-source --view");
+    }
+    if (options.compact || options.detail !== "standard") {
+      throw new Error("--dump conflicts with compact/detail options");
+    }
+    options.view = "source";
+    options.full = true;
+  }
   if (!["json", "markdown"].includes(options.format)) throw new Error("--format must be json or markdown");
-  if (!["overview", "architecture", "tests", "evidence"].includes(options.view)) {
-    throw new Error("--view must be overview, architecture, tests, or evidence");
+  if (!["overview", "architecture", "tests", "evidence", "source"].includes(options.view)) {
+    throw new Error("--view must be overview, architecture, tests, evidence, or source");
   }
   if (!["compact", "standard", "full"].includes(options.detail)) {
     throw new Error("--detail must be compact, standard, or full");
@@ -500,7 +513,7 @@ function mapMain(argv) {
     throw new Error("--detail conflicts with --compact/--full");
   }
   if (options.format === "json" && (
-    options.compact || options.full || options.maxChars ||
+    options.compact || options.full || options.dump || options.maxChars ||
     options.detail !== "standard" || options.view !== "overview" ||
     options.groupBy || options.level || options.relations.length ||
     options.overlay.length
@@ -510,6 +523,17 @@ function mapMain(argv) {
   if (options.format === "markdown" && options.pretty) {
     throw new Error("--pretty applies only to JSON");
   }
+  if (options.view === "source" && (
+    options.groupBy || options.level || options.relations.length ||
+    options.overlay.length
+  )) {
+    throw new Error(
+      "source view does not accept graph grouping, level, relations, or overlays",
+    );
+  }
+  if (options.view === "source" && options.full && options.maxChars) {
+    throw new Error("full source view cannot be combined with --max-chars");
+  }
   const progress = new Progress(options.progress);
   const current = project(options, progress);
   progress.emit({ phase: "rendering", artifact: "canonical Map" });
@@ -517,7 +541,15 @@ function mapMain(argv) {
   warnMapCacheStats(current.mapCacheStats);
   const output = options.format === "json"
     ? mapJson
-    : current.mapMarkdown({
+    : options.view === "source"
+      ? current.sourceMarkdown({
+        artifactJson: mapJson,
+        detail: options.detail,
+        compact: options.compact,
+        full: options.full,
+        maxChars: options.maxChars,
+      })
+      : current.mapMarkdown({
       view: options.view,
       detail: options.detail,
       compact: options.compact,
@@ -569,6 +601,7 @@ function selectorDefinitions() {
     detail: { default: "standard", type: "string" },
     compact: { type: "boolean" },
     full: { type: "boolean" },
+    dump: { type: "boolean" },
     maxChars: { flag: "max-chars", default: 0, type: "number" },
     testSymbolObservations: { flag: "test-symbol-observations", type: "multiple" },
     format: { default: "markdown", type: "string" },
@@ -717,6 +750,61 @@ function mapShortcut(argv) {
   }
 }
 
+function sourceSnapshotProject(artifactJson, root) {
+  const artifact = JSON.parse(Buffer.from(artifactJson).toString("utf8"));
+  if (!artifact || Array.isArray(artifact) ||
+      !["map", "query"].includes(artifact.artifact)) {
+    throw new Error("source view requires a canonical Map or Query");
+  }
+  if (typeof artifact.project !== "string" || !artifact.project ||
+      !Array.isArray(artifact.files)) {
+    throw new Error("source artifact identity or file inventory is invalid");
+  }
+  const repository = fs.realpathSync(path.resolve(root));
+  const sources = [];
+  const seen = new Set();
+  for (const row of artifact.files) {
+    const sourcePath = row?.path;
+    if (typeof sourcePath !== "string" || seen.has(sourcePath)) {
+      throw new Error("source selection contains an invalid or duplicate path");
+    }
+    if (typeof row.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(row.sha256)) {
+      throw new Error(
+        `source artifact has an invalid digest for ${JSON.stringify(sourcePath)}`,
+      );
+    }
+    let cursor = repository;
+    for (const part of sourcePath.split("/")) {
+      cursor = path.join(cursor, part);
+      if (fs.lstatSync(cursor).isSymbolicLink()) {
+        throw new Error(`source path traverses a symlink: ${sourcePath}`);
+      }
+    }
+    const resolved = fs.realpathSync(path.join(repository, ...sourcePath.split("/")));
+    if (resolved !== repository &&
+        !resolved.startsWith(`${repository}${path.sep}`)) {
+      throw new Error(`source path escapes repository root: ${sourcePath}`);
+    }
+    if (!fs.statSync(resolved).isFile()) {
+      throw new Error(`source path is not a regular file: ${sourcePath}`);
+    }
+    const data = fs.readFileSync(resolved);
+    const actual = createHash("sha256").update(data).digest("hex");
+    if (actual !== row.sha256) {
+      throw new Error(
+        `source bytes changed since artifact creation: ${sourcePath} ` +
+        `(artifact ${row.sha256}, live ${actual})`,
+      );
+    }
+    sources.push(new archbird.Source(sourcePath, data, {
+      language: row.language || "",
+      layer: row.layer || "",
+    }));
+    seen.add(sourcePath);
+  }
+  return new archbird.Project(artifact.project, sources);
+}
+
 function queryMain(argv, command) {
   const options = parse(argv, selectorDefinitions(), { positionals: 1 });
   const positional = options._[0] || null;
@@ -730,8 +818,22 @@ function queryMain(argv, command) {
     process.stdout.write(usage(command));
     return 0;
   }
+  if (options.dump) {
+    if (options.view && !["focused", "source"].includes(options.view)) {
+      throw new Error("--dump conflicts with a non-source --view");
+    }
+    if (options.compact || options.detail !== "standard") {
+      throw new Error("--dump conflicts with compact/detail options");
+    }
+    options.view = "source";
+    options.full = true;
+  }
+  if (options.view && !["focused", "changes", "source"].includes(options.view)) {
+    throw new Error("--view must be focused, changes, or source");
+  }
   if (options.map && (
-    positionalRoot || options.noConfig || options.root ||
+    positionalRoot || options.noConfig ||
+    (options.root && options.view !== "source") ||
     hasDiscoveryOverrides(options)
   )) {
     throw new Error("--map cannot be combined with repository discovery options");
@@ -765,7 +867,7 @@ function queryMain(argv, command) {
     throw new Error("--detail conflicts with --compact/--full");
   }
   if (options.format === "json" && (
-    options.compact || options.full || options.maxChars ||
+    options.compact || options.full || options.dump || options.maxChars ||
     options.detail !== "standard" || (options.view && options.view !== "focused")
   )) {
     throw new Error("--view and detail options apply only to Markdown");
@@ -773,8 +875,12 @@ function queryMain(argv, command) {
   if (options.format === "markdown" && options.pretty) {
     throw new Error("--pretty applies only to JSON");
   }
+  if (options.view === "source" && options.full && options.maxChars) {
+    throw new Error("full source view cannot be combined with --max-chars");
+  }
   const progress = new Progress(options.progress);
   let source;
+  let current = null;
   let configJson = Buffer.alloc(0);
   let resolutionJson = Buffer.alloc(0);
   let changeSet = null;
@@ -788,7 +894,7 @@ function queryMain(argv, command) {
       changeSet = gitChangeSet(repositoryInputs(repositoryOptions).repository, options.gitDiff);
     }
     ({ configJson } = repositoryInputs(repositoryOptions));
-    const current = project(repositoryOptions, progress);
+    current = project(repositoryOptions, progress);
     progress.emit({ phase: "rendering", artifact: "canonical Map" });
     source = current.mapJson();
     resolutionJson = current.resolutionJson || Buffer.alloc(0);
@@ -871,6 +977,18 @@ function queryMain(argv, command) {
     if (options.format === "json") {
       progress.finish();
       write(archbird.queryMap(source, { ...queryOptions, pretty: options.pretty }), options.output);
+    } else if (options.format === "markdown" && options.view === "source") {
+      const queryJson = archbird.queryMap(source, queryOptions);
+      const sourceProject =
+        current || sourceSnapshotProject(queryJson, options.root || ".");
+      progress.finish();
+      write(sourceProject.sourceMarkdown({
+        artifactJson: queryJson,
+        compact: options.compact,
+        detail: options.detail,
+        full: options.full,
+        maxChars: options.maxChars,
+      }), options.output);
     } else if (options.format === "markdown") {
       progress.finish();
       write(archbird.queryMapMarkdown(source, {

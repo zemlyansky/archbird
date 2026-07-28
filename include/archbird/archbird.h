@@ -438,6 +438,20 @@ ARCHBIRD_API ArchbirdStatus archbird_map_render_markdown_view(
     ArchbirdMapView view, ArchbirdReportDetail detail, size_t max_chars,
     ArchbirdWriteFn write_fn, void *user_data);
 
+/*
+ * Materialize a source-oriented view of a canonical Map or Query artifact from
+ * the exact source bytes owned by project. Every rendered source is matched by
+ * repository path and SHA-256 before use. Compact detail renders an outline,
+ * standard detail expands exact matched declarations for a symbol Query, and
+ * full detail renders complete selected files. Full detail requires
+ * max_chars == 0.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_project_render_source_markdown(
+    ArchbirdEngine *engine, const ArchbirdProject *project,
+    const uint8_t *artifact_json, size_t artifact_length,
+    ArchbirdReportDetail detail, size_t max_chars, ArchbirdWriteFn write_fn,
+    void *user_data);
+
 /* Query requests accept producer_policy="compatible" (the default) to read
  * any supported Map schema, or producer_policy="current" to require the
  * saved Map's core implementation digest to equal the active core. This

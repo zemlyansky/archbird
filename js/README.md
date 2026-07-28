@@ -120,6 +120,8 @@ npx archbird map --view architecture \
   --group-by component --level file --relations imports,calls
 npx archbird map --view tests --group-by directory
 npx archbird map --view evidence --detail full
+npx archbird query --symbol runtime_start --view source
+npx archbird query --symbol runtime_start --dump
 ```
 
 `--view` chooses an overview, architecture, tests, or evidence preset.
@@ -136,6 +138,16 @@ omissions. Full detail enumerates the exhaustive selected records.
 Graph completeness is distinct from repository coverage. Unsupported, ignored,
 or oversized inputs remain an explicit coverage frontier without falsely
 making a fully evaluated selected graph incomplete.
+
+`--view source` materializes hash-checked source bytes for the Map or Query
+selection. Compact detail is a declaration outline. Standard detail expands
+exact symbol matches and complete directly selected paths while leaving
+related files as outlines. Full detail returns every selected file; `--dump`
+is an alias for `--view source --detail full` and cannot be combined with
+`--max-chars`. Saved Maps do not contain source bytes, so use
+`--root CHECKOUT` with a saved-Map source view. Archbird rejects changed bytes,
+does not guess missing declaration extents, and does not embed non-UTF-8 or
+terminal-control bytes in Markdown.
 
 Query context separately uses the `exact`, `change`, `architecture`, and
 `audit` profiles plus per-kind quotas, route provenance/confidence, and
@@ -521,6 +533,13 @@ try {
     depth: 1,
     context: { profile: "change" },
   }).toString("utf8"));
+  const selectionJson = project.queryJson({
+    symbols: ["src/runtime.c:runtime_start"],
+    depth: 0,
+  });
+  console.log(project.sourceMarkdown({
+    artifactJson: selectionJson,
+  }).toString("utf8"));
   console.log(auditMapFreshness(mapJson, project.mapJson()).toString("utf8"));
 } finally {
   project.dispose();
@@ -536,7 +555,7 @@ are presentation views.
 | Area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `resolveDiscovery` |
+| Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
 | Change lifecycle | `ChangeContract`, `ChangeProposal`, `compileChangeProposal`, `createChangeContract`, `verifyChangeContract` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
@@ -544,7 +563,7 @@ are presentation views.
 | Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |
 <!-- archbird-node-api:end -->
 
-Node and Python share 31 top-level capabilities after conventional naming.
+Node and Python share 32 top-level capabilities after conventional naming.
 The inventory above is checked against `Object.keys(require("archbird"))`.
 Node's eight additional names expose engine/provider/cache diagnostics, raw
 discovery and canonicalization, and a separate report renderer. Python instead
@@ -565,9 +584,11 @@ const project = archbird.Project.fromFiles([
 ]);
 try {
   console.log(project.map());
-  console.log(JSON.parse(
-    project.queryJson({ symbols: ["answer"] }).toString("utf8"),
-  ));
+  const selectionJson = project.queryJson({ symbols: ["answer"], depth: 0 });
+  console.log(JSON.parse(selectionJson.toString("utf8")));
+  console.log(project.sourceMarkdown({
+    artifactJson: selectionJson,
+  }).toString("utf8"));
 } finally {
   project.dispose();
 }

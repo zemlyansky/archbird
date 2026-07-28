@@ -74,6 +74,29 @@ function queryProjection(options = {}) {
   };
 }
 
+function sourceRenderOptions(options = {}) {
+  const details = { compact: 0, standard: 1, full: 2 };
+  const detail = options.detail ?? "standard";
+  const compact = options.compact ?? false;
+  const full = options.full ?? false;
+  const maxChars = options.maxChars ?? 0;
+  if (!Object.hasOwn(details, detail)) {
+    throw new RangeError("detail must be compact, standard, or full");
+  }
+  if (compact && full) throw new RangeError("compact and full conflict");
+  if ((compact || full) && detail !== "standard") {
+    throw new RangeError("detail conflicts with compact/full alias");
+  }
+  if (!Number.isSafeInteger(maxChars) || maxChars < 0) {
+    throw new RangeError("maxChars must be a nonnegative safe integer");
+  }
+  const selectedDetail = compact ? "compact" : (full ? "full" : detail);
+  if (selectedDetail === "full" && maxChars) {
+    throw new RangeError("full source detail cannot be combined with maxChars");
+  }
+  return { detail: details[selectedDetail], maxChars };
+}
+
 function sourceRows(values) {
   return values.map((value) => {
     const split = value.indexOf("=");
@@ -420,6 +443,16 @@ async function createBrowserArchbird(moduleOptions = {}) {
         Buffer.from(JSON.stringify(request.definition)),
         request.detail,
         request.maxChars,
+      );
+    }
+
+    sourceMarkdown(options = {}) {
+      const renderOptions = sourceRenderOptions(options);
+      return core.projectSourceMarkdown(
+        this._handle,
+        options.artifactJson ?? this.mapJson(),
+        renderOptions.detail,
+        renderOptions.maxChars,
       );
     }
 

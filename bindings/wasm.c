@@ -560,6 +560,22 @@ AB_WASM_EXPORT int ab_wasm_project_map(uintptr_t handle, uint32_t flags) {
   return project_render(handle, flags, archbird_project_render_map);
 }
 
+AB_WASM_EXPORT int ab_wasm_project_source_markdown(uintptr_t handle,
+                                                   const uint8_t *artifact,
+                                                   size_t artifact_length,
+                                                   int detail,
+                                                   size_t max_chars) {
+  WasmProject *owned = checked_project(handle);
+  ArchbirdStatus status;
+  result_reset();
+  if (!owned)
+    return (int)invalid_argument("invalid Wasm project handle");
+  status = archbird_project_render_source_markdown(
+      owned->engine, owned->project, artifact, artifact_length,
+      (ArchbirdReportDetail)detail, max_chars, output_write, &wasm_output);
+  return (int)result_finish(owned->engine, status);
+}
+
 AB_WASM_EXPORT int
 ab_wasm_project_provider_facts(uintptr_t handle, size_t index, uint32_t flags) {
   WasmProject *owned = checked_project(handle);

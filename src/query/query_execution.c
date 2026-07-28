@@ -824,36 +824,11 @@ static int array_matches(const AbValue *patterns, const AbString *value) {
   return 0;
 }
 
-static int path_matches(const AbString *path, const AbString *raw_pattern) {
-  AbString pattern = *raw_pattern;
-  size_t index;
-  int wildcard = 0;
-  if (pattern.length >= 2 && pattern.data[0] == '.' && pattern.data[1] == '/') {
-    pattern.data += 2;
-    pattern.length -= 2;
-  }
-  while (pattern.length && pattern.data[pattern.length - 1] == '/')
-    pattern.length--;
-  if (!pattern.length)
-    return 0;
-  if (match_value(path, &pattern))
-    return 1;
-  for (index = 0; index < pattern.length; index++) {
-    if (pattern.data[index] == '*' || pattern.data[index] == '?' ||
-        pattern.data[index] == '[') {
-      wildcard = 1;
-      break;
-    }
-  }
-  return !wildcard && path->length > pattern.length &&
-         path->data[pattern.length] == '/' &&
-         memcmp(path->data, pattern.data, pattern.length) == 0;
-}
-
 static int path_array_matches(const AbValue *patterns, const AbString *path) {
   size_t index;
   for (index = 0; index < patterns->as.array.count; index++) {
-    if (path_matches(path, &patterns->as.array.items[index].as.text))
+    if (ab_map_path_selector_match(path,
+                                   &patterns->as.array.items[index].as.text))
       return 1;
   }
   return 0;

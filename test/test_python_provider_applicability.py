@@ -94,6 +94,15 @@ def main() -> int:
         "start": encoded_start,
     }:
         raise AssertionError(encoded_symbol)
+    if encoded_symbol["attributes"].get("extent_start") != encoded_raw.index(
+        b"def "
+    ) or encoded_symbol["attributes"].get("extent_end") != (
+        encoded_raw.rindex(b"label") + len(b"label")
+    ):
+        raise AssertionError(
+            f"encoded Python declaration extent is not source-byte exact: "
+            f"{encoded_symbol!r}"
+        )
     if encoded_document["inputs"][0]["source_sha256"] != hashlib.sha256(
         encoded_raw
     ).hexdigest():

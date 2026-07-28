@@ -68,6 +68,8 @@ app-test: native-wasm-smoke
 	cd app && $(NPM) ci --ignore-scripts --no-audit --no-fund
 	cd app && $(NPM) test
 	cd app && $(NPM) run build
+	$(NODE) js/test/test_browser.js js $(CURDIR) \
+		$(NATIVE_WASM_BUILD)/wasm/archbird.wasm
 
 app-live-test: app-test build-js
 	ARCHBIRD_ENGINE=native \
@@ -155,6 +157,7 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_coverage_observations.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_frontend_input_budget.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_map_report_scaling.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_source_report_scaling.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_python_provider_applicability.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_syntax_recovery.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_cli_progress.py $(CURDIR)

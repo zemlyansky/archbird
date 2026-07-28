@@ -29,6 +29,18 @@ static void expect_collection(const char *name, const char *path_text,
   }
 }
 
+static void expect_selector(const char *name, const char *path_text,
+                            const char *pattern_text, int wanted) {
+  AbString path = {(char *)path_text, strlen(path_text)};
+  AbString pattern = {(char *)pattern_text, strlen(pattern_text)};
+  int actual = ab_map_path_selector_match(&path, &pattern);
+  if (actual != wanted) {
+    fprintf(stderr, "FAIL %s: path=%s selector=%s actual=%d wanted=%d\n", name,
+            path_text, pattern_text, actual, wanted);
+    failures++;
+  }
+}
+
 int main(void) {
   expect("direct", "src/nested/file.c", "src/**/*.c", 1);
   expect("collapsed", "src/file.c", "src/**/*.c", 1);
@@ -57,6 +69,14 @@ int main(void) {
                     "src/lka/**/*.py", 0);
   expect_collection("collection-class-suffix", "src/lka/run.py",
                     "src/lka/run.[pP]y", 1);
+  expect_selector("selector-file", "src/lka/run.py", "src/lka/run.py", 1);
+  expect_selector("selector-relative", "src/lka/run.py", "./src/lka/run.py", 1);
+  expect_selector("selector-directory", "src/lka/run.py", "src/lka", 1);
+  expect_selector("selector-directory-trailing", "src/lka/run.py", "src/lka/",
+                  1);
+  expect_selector("selector-glob", "src/lka/run.py", "src/**/*.py", 1);
+  expect_selector("selector-no-prefix", "src/lkab/run.py", "src/lka", 0);
+  expect_selector("selector-empty", "src/lka/run.py", "./", 0);
   if (failures)
     return 1;
   puts("native path-match tests passed");
