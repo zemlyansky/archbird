@@ -1228,6 +1228,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             qualified,
             {
                 "extent_end": self.facts.source_offset(definition_span[1]),
+                "extent_fidelity": "semantic",
                 "extent_start": self.facts.source_offset(definition_span[0]),
                 "line": node.lineno,
                 "scope": "class",
@@ -1326,6 +1327,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             qualified,
             {
                 "extent_end": self.facts.source_offset(definition_span[1]),
+                "extent_fidelity": "semantic",
                 "extent_start": self.facts.source_offset(definition_span[0]),
                 "line": getattr(node, "lineno"),
                 "scope": kind,

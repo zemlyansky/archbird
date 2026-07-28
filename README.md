@@ -270,6 +270,9 @@ When a provider cannot establish an exact declaration extent, standard source
 shows the indexed outline and states that exact source is unavailable; it does
 not guess where the declaration ends. Non-UTF-8 bytes and terminal control
 sequences are hash-validated but are not embedded in Markdown.
+When valid semantic-AST and concrete-syntax extents differ, the concrete
+source boundary is canonical for rendering while every alternate boundary and
+provider remains recorded in the merge-variation ledger.
 
 Plain saved-Map queries accept every supported Map schema even when another
 Archbird core produced the artifact. Add `--check` when the result will drive a

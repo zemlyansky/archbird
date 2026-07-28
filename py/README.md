@@ -147,7 +147,9 @@ is an alias for `--view source --detail full` and cannot be combined with
 `--max-chars`. Saved Maps do not contain source bytes, so use
 `--root CHECKOUT` with a saved-Map source view. Archbird rejects changed bytes,
 does not guess missing declaration extents, and does not embed non-UTF-8 or
-terminal-control bytes in Markdown.
+terminal-control bytes in Markdown. Valid concrete-syntax boundaries outrank
+semantic-AST boundaries for source rendering; alternate provider boundaries
+remain recorded as merge variations.
 
 Query context separately uses the `exact`, `change`, `architecture`, and
 `audit` profiles plus per-kind quotas, route provenance/confidence, and

@@ -200,6 +200,23 @@ ArchbirdStatus ab_fact_merge_compatible(ArchbirdEngine *engine, AbFact *target,
                                         const AbFact *source);
 int ab_fact_names_compatible(const AbFact *left, const AbFact *right);
 int ab_fact_attribute_is_presentation(const AbString *name);
+int ab_fact_attribute_is_declaration_extent(const AbString *name);
+/*
+ * Return 1 for a complete valid declaration extent, 0 when absent, and -1
+ * when extent attributes are malformed or do not contain the fact anchor.
+ */
+int ab_fact_declaration_extent(const AbFact *fact, uint64_t *out_start,
+                               uint64_t *out_end);
+/*
+ * Return 3 for concrete-syntax extents, 2 for semantic extents, 1 for
+ * unspecified legacy extents, 0 when absent, and -1 when malformed.
+ */
+int ab_fact_declaration_extent_rank(const AbFact *fact);
+int ab_fact_declaration_extents_compatible(const AbFact *left,
+                                           const AbFact *right);
+ArchbirdStatus ab_fact_adopt_declaration_extent(ArchbirdEngine *engine,
+                                                AbFact *target,
+                                                const AbFact *source);
 
 void ab_source_manifest_free(ArchbirdEngine *engine,
                              AbSourceManifest *manifest);

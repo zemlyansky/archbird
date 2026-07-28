@@ -10,6 +10,7 @@
 #include "sha256.h"
 #include "test_observations.h"
 
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -590,11 +591,36 @@ static ArchbirdStatus validate_provider_binding(ArchbirdEngine *engine,
                               "provider subject does not match project");
   for (index = 0; index < bundle->fact_count; index++) {
     AbFact *fact = &bundle->facts[index];
+    uint64_t extent_start = 0;
+    uint64_t extent_end = 0;
+    int extent_state;
     ArchbirdStatus status = validate_fact_binding(
         engine, project, &fact->project, &fact->path, fact->span_start,
         fact->span_end, "provider fact");
     if (status != ARCHBIRD_OK)
       return status;
+    extent_state = ab_fact_declaration_extent_rank(fact);
+    if (extent_state < 0)
+      return archbird_error_set(
+          engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+          "provider %.*s has an invalid declaration extent for %.*s at "
+          "anchor %zu..%zu",
+          (int)bundle->producer.name.length, bundle->producer.name.data,
+          (int)fact->path.length, fact->path.data, fact->span_start,
+          fact->span_end);
+    if (extent_state > 0) {
+      AbManifestFile *file =
+          find_manifest_file(project, fact->path.data, fact->path.length, NULL);
+      if (ab_fact_declaration_extent(fact, &extent_start, &extent_end) != 1 ||
+          !file || extent_end > (uint64_t)file->byte_length)
+        return archbird_error_set(
+            engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+            "provider %.*s declaration extent %" PRIu64 "..%" PRIu64
+            " is outside %.*s (%zu bytes)",
+            (int)bundle->producer.name.length, bundle->producer.name.data,
+            extent_start, extent_end, (int)fact->path.length, fact->path.data,
+            file ? file->byte_length : (size_t)0);
+    }
   }
   for (index = 0; index < bundle->diagnostic_count; index++) {
     AbDiagnostic *diagnostic = &bundle->diagnostics[index];
@@ -1208,6 +1234,8 @@ static int fact_relation(const AbFact *left, const AbFact *right, int *varied) {
   *varied = 0;
   if (!ab_fact_names_compatible(left, right))
     return -1;
+  if (!ab_fact_declaration_extents_compatible(left, right))
+    return -1;
   if (left->has_name != right->has_name ||
       (left->has_name && !ab_string_equal(&left->name, &right->name)))
     enriched = 1;
@@ -1375,10 +1403,69 @@ static void record_conflict(ArchbirdProject *project, const char *reason,
 }
 
 static ArchbirdStatus
-record_variations(ArchbirdEngine *engine, ArchbirdProject *project,
-                  AbSubject *subject, AbString *domain,
-                  size_t canonical_provider, AbFact *canonical_fact,
-                  size_t alternate_provider, AbFact *alternate_fact) {
+provider_merge_conflict_error(ArchbirdEngine *engine,
+                              const ArchbirdProject *project) {
+  const AbMergeConflict *conflict;
+  const AbFact *fact;
+  const AbString *left_name;
+  const AbString *right_name;
+  if (!project->merge_conflict_count)
+    return ARCHBIRD_OK;
+  conflict = &project->merge_conflicts[0];
+  fact = conflict->left_fact ? conflict->left_fact : conflict->right_fact;
+  if (!fact || conflict->left_provider >= project->provider_count ||
+      conflict->right_provider >= project->provider_count)
+    return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+                              "provider merge contains %zu conflict(s); first "
+                              "reason: %s",
+                              project->merge_conflict_count, conflict->reason);
+  left_name = &project->providers[conflict->left_provider].producer.name;
+  right_name = &project->providers[conflict->right_provider].producer.name;
+  return archbird_error_set(
+      engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+      "provider merge contains %zu conflict(s); first %s at %.*s:%zu..%zu "
+      "between %.*s and %.*s",
+      project->merge_conflict_count, conflict->reason, (int)fact->path.length,
+      fact->path.data, fact->span_start, fact->span_end, (int)left_name->length,
+      left_name->data, (int)right_name->length, right_name->data);
+}
+
+static ArchbirdStatus
+ensure_merge_variation_capacity(ArchbirdEngine *engine,
+                                ArchbirdProject *project) {
+  AbMergeVariation *resized;
+  size_t next;
+  if (project->merge_variation_count < project->merge_variation_capacity)
+    return ARCHBIRD_OK;
+  if (project->merge_variation_capacity >= engine->options.max_values)
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "provider variation ledger is too large");
+  next = project->merge_variation_capacity
+             ? project->merge_variation_capacity * 2
+             : (size_t)16;
+  if (next < project->merge_variation_capacity ||
+      next > engine->options.max_values)
+    next = engine->options.max_values;
+  if (next > SIZE_MAX / sizeof(*resized))
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "provider variation ledger is too large");
+  resized = (AbMergeVariation *)ab_realloc(engine, project->merge_variations,
+                                           next * sizeof(*resized));
+  if (!resized)
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory storing provider variations");
+  project->merge_variations = resized;
+  project->merge_variation_capacity = next;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus record_variations(
+    ArchbirdEngine *engine, ArchbirdProject *project, AbSubject *subject,
+    AbString *domain, size_t canonical_provider, AbFact *canonical_fact,
+    size_t alternate_provider, AbFact *alternate_fact, int extent_attributes) {
   size_t canonical_index = 0;
   size_t alternate_index = 0;
   while (canonical_index < canonical_fact->attribute_count &&
@@ -1394,12 +1481,16 @@ record_variations(ArchbirdEngine *engine, ArchbirdProject *project,
       alternate_index++;
     } else {
       if (ab_fact_attribute_is_presentation(&canonical->name) &&
+          ab_fact_attribute_is_declaration_extent(&canonical->name) ==
+              extent_attributes &&
+          (!extent_attributes ||
+           !string_equals_literal(&canonical->name, "extent_fidelity")) &&
           !ab_value_equal(&canonical->value, &alternate->value)) {
         AbMergeVariation *variation;
-        if (project->merge_variation_count >= project->merge_variation_capacity)
-          return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
-                                    ARCHBIRD_NO_OFFSET,
-                                    "provider variation ledger is too large");
+        ArchbirdStatus status =
+            ensure_merge_variation_capacity(engine, project);
+        if (status != ARCHBIRD_OK)
+          return status;
         variation =
             &project->merge_variations[project->merge_variation_count++];
         variation->subject = subject;
@@ -1430,10 +1521,7 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
     return ARCHBIRD_INVALID_ARGUMENT;
   if (project->providers_finalized) {
     return project->merge_summary.conflicts
-               ? archbird_error_set(engine, ARCHBIRD_CONFLICT,
-                                    ARCHBIRD_NO_OFFSET,
-                                    "provider merge contains %zu conflict(s)",
-                                    project->merge_summary.conflicts)
+               ? provider_merge_conflict_error(engine, project)
                : ARCHBIRD_OK;
   }
   if (project->supplied_count != project->manifest.file_count)
@@ -1474,19 +1562,6 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
       return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
                                 "out of memory storing provider conflicts");
-    }
-  }
-  project->merge_variation_capacity = project->provider_fact_count;
-  if (project->merge_variation_capacity) {
-    project->merge_variations =
-        (AbMergeVariation *)ab_calloc(engine, project->merge_variation_capacity,
-                                      sizeof(*project->merge_variations));
-    if (!project->merge_variations) {
-      ab_free(engine, domains);
-      ab_free(engine, facts);
-      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                                ARCHBIRD_NO_OFFSET,
-                                "out of memory storing provider variations");
     }
   }
   for (domain_index = 0; domain_index < domain_count; domain_index++) {
@@ -1551,8 +1626,12 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
       }
     }
     if (selected != SIZE_MAX) {
+      size_t extent_selected = SIZE_MAX;
+      int extent_rank = ab_fact_declaration_extent_rank(facts[selected].fact);
       AbMergedFact *merged =
           &project->merged_facts[project->merged_fact_count++];
+      if (extent_rank > 0)
+        extent_selected = selected;
       merged->provider_index = facts[selected].provider_index;
       merged->value = facts[selected].fact;
       if (end - cursor > SIZE_MAX / sizeof(*merged->contributors)) {
@@ -1578,7 +1657,7 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
           status = record_variations(
               engine, project, domain->subject, domain->name,
               facts[selected].provider_index, facts[selected].fact,
-              facts[index].provider_index, facts[index].fact);
+              facts[index].provider_index, facts[index].fact, 0);
           if (status != ARCHBIRD_OK)
             goto merge_failed;
         }
@@ -1593,6 +1672,12 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
                           facts[selected].fact, facts[index].provider_index,
                           facts[index].fact);
         } else if (relation > 0) {
+          int candidate_extent_rank =
+              ab_fact_declaration_extent_rank(facts[index].fact);
+          if (candidate_extent_rank > extent_rank) {
+            extent_rank = candidate_extent_rank;
+            extent_selected = index;
+          }
           if (merged->value != &merged->fact) {
             status = ab_fact_copy(engine, &merged->fact, merged->value);
             if (status != ARCHBIRD_OK)
@@ -1609,11 +1694,42 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
             goto merge_failed;
           project->merge_summary.enriched++;
         } else {
+          int candidate_extent_rank =
+              ab_fact_declaration_extent_rank(facts[index].fact);
+          if (candidate_extent_rank > extent_rank) {
+            extent_rank = candidate_extent_rank;
+            extent_selected = index;
+          }
           status = merged_fact_add_contributor(engine, merged, end - cursor,
                                                facts[index]);
           if (status != ARCHBIRD_OK)
             goto merge_failed;
           project->merge_summary.deduplicated++;
+        }
+      }
+      if (extent_selected != SIZE_MAX) {
+        for (index = cursor; index < end; index++) {
+          if (index == extent_selected)
+            continue;
+          status = record_variations(
+              engine, project, domain->subject, domain->name,
+              facts[extent_selected].provider_index,
+              facts[extent_selected].fact, facts[index].provider_index,
+              facts[index].fact, 1);
+          if (status != ARCHBIRD_OK)
+            goto merge_failed;
+        }
+        if (extent_selected != selected) {
+          if (merged->value != &merged->fact) {
+            status = ab_fact_copy(engine, &merged->fact, merged->value);
+            if (status != ARCHBIRD_OK)
+              goto merge_failed;
+            merged->value = &merged->fact;
+          }
+          status = ab_fact_adopt_declaration_extent(
+              engine, &merged->fact, facts[extent_selected].fact);
+          if (status != ARCHBIRD_OK)
+            goto merge_failed;
         }
       }
     } else {
@@ -1650,9 +1766,7 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
   ab_free(engine, domains);
   ab_free(engine, facts);
   if (project->merge_summary.conflicts)
-    return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-                              "provider merge contains %zu conflict(s)",
-                              project->merge_summary.conflicts);
+    return provider_merge_conflict_error(engine, project);
   return ARCHBIRD_OK;
 
 merge_failed:

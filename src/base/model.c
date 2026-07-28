@@ -413,10 +413,162 @@ static ArchbirdStatus merge_fact_attributes(ArchbirdEngine *engine,
   return status;
 }
 
+int ab_fact_attribute_is_declaration_extent(const AbString *name) {
+  static const char extent_start[] = "extent_start";
+  static const char extent_end[] = "extent_end";
+  static const char extent_fidelity[] = "extent_fidelity";
+  return name &&
+         ((name->length == sizeof(extent_start) - 1 &&
+           memcmp(name->data, extent_start, sizeof(extent_start) - 1) == 0) ||
+          (name->length == sizeof(extent_end) - 1 &&
+           memcmp(name->data, extent_end, sizeof(extent_end) - 1) == 0) ||
+          (name->length == sizeof(extent_fidelity) - 1 &&
+           memcmp(name->data, extent_fidelity, sizeof(extent_fidelity) - 1) ==
+               0));
+}
+
 int ab_fact_attribute_is_presentation(const AbString *name) {
   static const char signature[] = "signature";
-  return name && name->length == sizeof(signature) - 1 &&
-         memcmp(name->data, signature, sizeof(signature) - 1) == 0;
+  return name && ((name->length == sizeof(signature) - 1 &&
+                   memcmp(name->data, signature, sizeof(signature) - 1) == 0) ||
+                  ab_fact_attribute_is_declaration_extent(name));
+}
+
+static const AbObjectField *fact_attribute(const AbFact *fact,
+                                           const char *name) {
+  size_t length = strlen(name);
+  size_t index;
+  if (!fact)
+    return NULL;
+  for (index = 0; index < fact->attribute_count; index++) {
+    const AbObjectField *field = &fact->attributes[index];
+    if (field->name.length == length &&
+        memcmp(field->name.data, name, length) == 0)
+      return field;
+  }
+  return NULL;
+}
+
+static int attribute_u64(const AbObjectField *field, uint64_t *out) {
+  uint64_t value = 0;
+  size_t index;
+  if (!field || !out || field->value.kind != AB_VALUE_INTEGER ||
+      !field->value.as.text.length)
+    return 0;
+  for (index = 0; index < field->value.as.text.length; index++) {
+    uint8_t digit = (uint8_t)field->value.as.text.data[index];
+    if (digit < '0' || digit > '9' ||
+        value > (UINT64_MAX - (uint64_t)(digit - '0')) / 10)
+      return 0;
+    value = value * 10 + (uint64_t)(digit - '0');
+  }
+  *out = value;
+  return 1;
+}
+
+int ab_fact_declaration_extent(const AbFact *fact, uint64_t *out_start,
+                               uint64_t *out_end) {
+  static const char symbols[] = "symbols";
+  const AbObjectField *start_field;
+  const AbObjectField *end_field;
+  uint64_t start = 0;
+  uint64_t end = 0;
+  if (!fact || !out_start || !out_end)
+    return -1;
+  *out_start = 0;
+  *out_end = 0;
+  start_field = fact_attribute(fact, "extent_start");
+  end_field = fact_attribute(fact, "extent_end");
+  if (!start_field && !end_field)
+    return 0;
+  if (!start_field || !end_field ||
+      fact->domain.length != sizeof(symbols) - 1 ||
+      memcmp(fact->domain.data, symbols, sizeof(symbols) - 1) != 0 ||
+      !attribute_u64(start_field, &start) || !attribute_u64(end_field, &end) ||
+      start >= end || start > (uint64_t)fact->span_start ||
+      (uint64_t)fact->span_end > end)
+    return -1;
+  *out_start = start;
+  *out_end = end;
+  return 1;
+}
+
+int ab_fact_declaration_extents_compatible(const AbFact *left,
+                                           const AbFact *right) {
+  uint64_t left_start;
+  uint64_t left_end;
+  uint64_t right_start;
+  uint64_t right_end;
+  int left_state = ab_fact_declaration_extent_rank(left);
+  int right_state = ab_fact_declaration_extent_rank(right);
+  if (left_state < 0 || right_state < 0)
+    return 0;
+  if (!left_state || !right_state)
+    return 1;
+  if (ab_fact_declaration_extent(left, &left_start, &left_end) != 1 ||
+      ab_fact_declaration_extent(right, &right_start, &right_end) != 1)
+    return 0;
+  return left_start < right_end && right_start < left_end;
+}
+
+int ab_fact_declaration_extent_rank(const AbFact *fact) {
+  static const char concrete[] = "concrete";
+  static const char semantic[] = "semantic";
+  const AbObjectField *fidelity;
+  uint64_t start;
+  uint64_t end;
+  int state = ab_fact_declaration_extent(fact, &start, &end);
+  if (state <= 0) {
+    fidelity = fact_attribute(fact, "extent_fidelity");
+    return fidelity ? -1 : state;
+  }
+  fidelity = fact_attribute(fact, "extent_fidelity");
+  if (!fidelity)
+    return 1;
+  if (fidelity->value.kind != AB_VALUE_STRING)
+    return -1;
+  if (fidelity->value.as.text.length == sizeof(concrete) - 1 &&
+      memcmp(fidelity->value.as.text.data, concrete, sizeof(concrete) - 1) == 0)
+    return 3;
+  if (fidelity->value.as.text.length == sizeof(semantic) - 1 &&
+      memcmp(fidelity->value.as.text.data, semantic, sizeof(semantic) - 1) == 0)
+    return 2;
+  return -1;
+}
+
+ArchbirdStatus ab_fact_adopt_declaration_extent(ArchbirdEngine *engine,
+                                                AbFact *target,
+                                                const AbFact *source) {
+  size_t source_index;
+  if (!engine || !target || !source ||
+      ab_fact_declaration_extent_rank(source) <= 0)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  for (source_index = 0; source_index < source->attribute_count;
+       source_index++) {
+    const AbObjectField *source_field = &source->attributes[source_index];
+    size_t target_index;
+    if (!ab_fact_attribute_is_declaration_extent(&source_field->name))
+      continue;
+    for (target_index = 0; target_index < target->attribute_count;
+         target_index++) {
+      AbObjectField *target_field = &target->attributes[target_index];
+      AbValue replacement;
+      ArchbirdStatus status;
+      if (!ab_string_equal(&target_field->name, &source_field->name))
+        continue;
+      status = ab_value_copy(engine, &replacement, &source_field->value);
+      if (status != ARCHBIRD_OK)
+        return status;
+      ab_value_free(engine, &target_field->value);
+      target_field->value = replacement;
+      break;
+    }
+    if (target_index == target->attribute_count)
+      return archbird_error_set(
+          engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+          "merged fact omitted canonical declaration extent attribute");
+  }
+  return ARCHBIRD_OK;
 }
 
 static int qualified_name_suffix(const AbString *qualified,
@@ -486,11 +638,17 @@ static ArchbirdStatus merge_fact_compatible_in_place(ArchbirdEngine *engine,
                                                      const AbFact *source) {
   size_t target_index = 0;
   size_t source_index = 0;
+  int target_extent_rank;
+  int source_extent_rank;
   ArchbirdStatus status;
   if (!engine || !target || !source)
     return ARCHBIRD_INVALID_ARGUMENT;
   if (!ab_fact_names_compatible(target, source))
     return ARCHBIRD_CONFLICT;
+  if (!ab_fact_declaration_extents_compatible(target, source))
+    return ARCHBIRD_CONFLICT;
+  target_extent_rank = ab_fact_declaration_extent_rank(target);
+  source_extent_rank = ab_fact_declaration_extent_rank(source);
   if (!target->has_name && source->has_name) {
     status = ab_string_copy(engine, &target->name, source->name.data,
                             source->name.length);
@@ -528,6 +686,11 @@ static ArchbirdStatus merge_fact_compatible_in_place(ArchbirdEngine *engine,
   status = merge_fact_attributes(engine, target, source);
   if (status != ARCHBIRD_OK)
     return status;
+  if (source_extent_rank > target_extent_rank) {
+    status = ab_fact_adopt_declaration_extent(engine, target, source);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
   if (target->has_resolution && source->has_resolution) {
     if (!ab_string_equal(&target->resolution.state,
                          &source->resolution.state) ||

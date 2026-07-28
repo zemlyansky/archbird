@@ -367,6 +367,9 @@ ArchbirdStatus ab_tree_sitter_add_symbol_extent(AbTreeSitterScan *scan,
   if (status == ARCHBIRD_OK)
     status = ab_fact_add_u64_attribute(scan->engine, fact, "extent_end",
                                        (uint64_t)end);
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(scan->engine, fact, "extent_fidelity",
+                                          (const uint8_t *)"concrete", 8);
   return status;
 }
 
