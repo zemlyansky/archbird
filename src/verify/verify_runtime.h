@@ -118,6 +118,7 @@ typedef struct AbVerificationContext {
   AbVerifyObservationState *observations;
   size_t observation_count;
 } AbVerificationContext;
+int ab_verification_blocks(const AbVerificationContext *context);
 ArchbirdStatus ab_constraints_render_summary(AbVerificationContext *context,
                                              AbBuffer *buffer);
 ArchbirdStatus ab_verify_render_diagnostics(AbVerificationContext *context,

@@ -830,6 +830,64 @@ def constraints_report(
     )
 
 
+def constraints_report_with_blocking(
+    config: bytes,
+    map_json: bytes,
+    format: str,
+    *,
+    resolution_json: bytes = b"",
+    request_json: bytes = b"",
+    max_findings: int = 200,
+    pretty: bool = False,
+) -> tuple[bytes, bool]:
+    """Render constraints and return the blocking state from one evaluation."""
+
+    try:
+        native_format = {"markdown": 1, "sarif": 2, "junit": 3}[format]
+    except KeyError as error:
+        raise ValueError(
+            "constraint report format must be markdown, sarif, or junit"
+        ) from error
+    values = [
+        _bytes(config, "project configuration"),
+        _bytes(map_json, "Map"),
+        _bytes(resolution_json),
+        _bytes(request_json),
+    ]
+    arguments: list[object] = []
+    types: list[object] = [_POINTER]
+    for value in values:
+        arguments.extend((value, len(value)))
+        types.extend((ctypes.c_char_p, ctypes.c_size_t))
+    types.extend(
+        (
+            ctypes.c_int,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_int),
+            _WRITE,
+            _POINTER,
+        )
+    )
+    function = _declare("archbird_constraints_report_with_blocking", types)
+    blocking = ctypes.c_int()
+    report = _one_shot(
+        lambda engine, write: function(
+            engine,
+            *arguments,
+            native_format,
+            _SIZE_MAX if max_findings < 0 else max_findings,
+            _json_flags(pretty, native_format == 2),
+            ctypes.byref(blocking),
+            write,
+            None,
+        ),
+        input_budget=max((len(value) for value in values), default=0),
+        saved_artifact=True,
+    )
+    return report, bool(blocking.value)
+
+
 def constraints_freeze(
     config: bytes,
     map_json: bytes,

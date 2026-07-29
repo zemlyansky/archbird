@@ -682,30 +682,6 @@ static void markdown_views_free(ArchbirdEngine *engine,
   ab_free(engine, views);
 }
 
-static int report_verification_blocks(const AbVerificationContext *context) {
-  size_t index;
-  for (index = 0; index < context->diagnostic_count; index++)
-    if (string_literal(&context->diagnostics[index].severity, "error"))
-      return 1;
-  if (context->baseline.coverage_regression_count)
-    return 1;
-  for (index = 0; index < context->check_count; index++) {
-    size_t finding_index;
-    for (finding_index = 0;
-         finding_index < context->checks[index].finding_count;
-         finding_index++) {
-      const AbVerifyFinding *finding =
-          &context->checks[index].findings[finding_index];
-      if (finding_blocks(finding, context->checks[index].spec) &&
-          (!context->baseline.enabled ||
-           string_literal(&finding->baseline_state, "new") ||
-           string_literal(&finding->baseline_state, "reintroduced")))
-        return 1;
-    }
-  }
-  return 0;
-}
-
 static ArchbirdStatus markdown_upper(AbBuffer *buffer, const AbString *value) {
   size_t index;
   for (index = 0; index < value->length; index++) {
@@ -916,7 +892,7 @@ ArchbirdStatus ab_constraints_render_markdown(AbVerificationContext *context,
   MD_TRY(ab_buffer_u64(buffer, context->check_count));
   MD_TRY(ab_buffer_literal(buffer, "; blocking="));
   MD_TRY(ab_buffer_literal(buffer,
-                           report_verification_blocks(context) ? "yes" : "no"));
+                           ab_verification_blocks(context) ? "yes" : "no"));
   MD_TRY(ab_buffer_literal(
       buffer,
       ".\n\nProjection operands are exhaustive; literals and mappings are "
@@ -1241,7 +1217,7 @@ ArchbirdStatus ab_constraints_render_markdown(AbVerificationContext *context,
   }
   MD_TRY(ab_buffer_literal(buffer, "## Result\n\nResult: blocking="));
   MD_TRY(ab_buffer_literal(buffer,
-                           report_verification_blocks(context) ? "yes" : "no"));
+                           ab_verification_blocks(context) ? "yes" : "no"));
   MD_TRY(ab_buffer_literal(buffer, "; constraints pass="));
   MD_TRY(ab_buffer_u64(buffer, markdown_status_count(context, "pass")));
   MD_TRY(ab_buffer_literal(buffer, " fail="));

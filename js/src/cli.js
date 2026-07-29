@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { TextDecoder } = require("node:util");
 const archbird = require("./index");
+const native = require("./native");
 
 const COMMANDS = new Set([
   "config",
@@ -1290,7 +1291,7 @@ function verifyMain(argv) {
     ? Buffer.from(JSON.stringify(selectedRequest))
     : Buffer.alloc(0);
 
-  let verification = null;
+  let blocking = false;
   let encoded;
   if (options.format === "json") {
     encoded = archbird.evaluateConstraints(configJson, mapJson, {
@@ -1298,15 +1299,19 @@ function verifyMain(argv) {
       requestJson,
       pretty: options.pretty,
     });
-    verification = JSON.parse(encoded.toString("utf8"));
+    blocking = Boolean(JSON.parse(encoded.toString("utf8")).summary.blocking);
   } else {
-    encoded = archbird.reportConstraints(configJson, mapJson, {
-      resolutionJson,
-      requestJson,
-      format: options.format,
-      maxFindings: options.full ? 0xffffffff : maxFindings,
-      pretty: options.pretty || options.format === "sarif",
-    });
+    const report = native.constraintsReportWithBlocking(
+      Buffer.from(configJson),
+      Buffer.from(mapJson),
+      Buffer.from(resolutionJson),
+      Buffer.from(requestJson),
+      options.format,
+      options.full ? 0xffffffff : maxFindings,
+      options.pretty || options.format === "sarif",
+    );
+    encoded = report.report;
+    blocking = report.blocking;
   }
   write(encoded, options.output);
 
@@ -1324,13 +1329,7 @@ function verifyMain(argv) {
   }
   progress.finish();
   if (!options.check) return 0;
-  if (verification === null) {
-    verification = JSON.parse(archbird.evaluateConstraints(configJson, mapJson, {
-      resolutionJson,
-      requestJson,
-    }).toString("utf8"));
-  }
-  return verification.summary.blocking ? 1 : 0;
+  return blocking ? 1 : 0;
 }
 
 function planMain(argv) {

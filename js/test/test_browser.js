@@ -143,6 +143,15 @@ function markedNames(relative, name) {
     Buffer.alloc(0),
     Buffer.alloc(0),
   );
+  const checkedReport = archbird.core.constraintsReportWithBlocking(
+    config,
+    first,
+    Buffer.alloc(0),
+    Buffer.alloc(0),
+    "markdown",
+  );
+  assert.equal(checkedReport.blocking, true);
+  assert.match(checkedReport.report.toString("utf8"), /blocking=yes/);
   const overlayBrief = project.queryMarkdown({
     paths: ["js/index.js"],
     depth: 0,

@@ -1657,7 +1657,9 @@ static int node_constraint_format(const char *format, size_t length,
   return 1;
 }
 
-static napi_value constraints_report(napi_env env, napi_callback_info info) {
+static napi_value constraints_report_common(napi_env env,
+                                            napi_callback_info info,
+                                            int include_blocking) {
   size_t argc = 7;
   napi_value argv[7];
   const uint8_t *config;
@@ -1672,11 +1674,14 @@ static napi_value constraints_report(napi_env env, napi_callback_info info) {
   size_t format_length = 0;
   uint32_t max_findings = 200;
   int pretty;
+  int blocking = 0;
   ArchbirdVerificationFormat native_format;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
   NodeOutput output = {0};
   napi_value result;
+  napi_value combined;
+  napi_value blocking_result;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
   if (argc < 5 || !get_buffer(env, argv[0], &config, &config_length) ||
       !get_buffer(env, argv[1], &map, &map_length) ||
@@ -1702,20 +1707,42 @@ static napi_value constraints_report(napi_env env, napi_callback_info info) {
       larger_input(larger_input(config_length, map_length),
                    larger_input(resolution_length, request_length)),
       &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_constraints_report(
-        engine, config, config_length, map, map_length,
-        resolution_length ? resolution : NULL, resolution_length,
-        request_length ? request : NULL, request_length, native_format,
-        max_findings,
-        (pretty ? ARCHBIRD_JSON_PRETTY : 0) |
-            (native_format == ARCHBIRD_VERIFICATION_SARIF
-                 ? ARCHBIRD_JSON_TRAILING_NEWLINE
-                 : 0),
-        output_write, &output);
+  if (status == ARCHBIRD_OK) {
+    uint32_t flags = (pretty ? ARCHBIRD_JSON_PRETTY : 0) |
+                     (native_format == ARCHBIRD_VERIFICATION_SARIF
+                          ? ARCHBIRD_JSON_TRAILING_NEWLINE
+                          : 0);
+    if (include_blocking)
+      status = archbird_constraints_report_with_blocking(
+          engine, config, config_length, map, map_length,
+          resolution_length ? resolution : NULL, resolution_length,
+          request_length ? request : NULL, request_length, native_format,
+          max_findings, flags, &blocking, output_write, &output);
+    else
+      status = archbird_constraints_report(
+          engine, config, config_length, map, map_length,
+          resolution_length ? resolution : NULL, resolution_length,
+          request_length ? request : NULL, request_length, native_format,
+          max_findings, flags, output_write, &output);
+  }
   result = render_result(env, engine, status, &output);
   archbird_engine_destroy(engine);
-  return result;
+  if (!include_blocking || !result)
+    return result;
+  NAPI_TRY(napi_create_object(env, &combined));
+  NAPI_TRY(napi_set_named_property(env, combined, "report", result));
+  NAPI_TRY(napi_get_boolean(env, blocking, &blocking_result));
+  NAPI_TRY(napi_set_named_property(env, combined, "blocking", blocking_result));
+  return combined;
+}
+
+static napi_value constraints_report(napi_env env, napi_callback_info info) {
+  return constraints_report_common(env, info, 0);
+}
+
+static napi_value constraints_report_with_blocking(napi_env env,
+                                                   napi_callback_info info) {
+  return constraints_report_common(env, info, 1);
 }
 
 static napi_value constraints_freeze(napi_env env, napi_callback_info info) {
@@ -1963,6 +1990,8 @@ static napi_value init(napi_env env, napi_value exports) {
        napi_default, NULL},
       {"constraintsReport", NULL, constraints_report, NULL, NULL, NULL,
        napi_default, NULL},
+      {"constraintsReportWithBlocking", NULL, constraints_report_with_blocking,
+       NULL, NULL, NULL, napi_default, NULL},
       {"constraintsEvaluate", NULL, constraints_evaluate, NULL, NULL, NULL,
        napi_default, NULL},
       {"queryPlanCompile", NULL, query_plan_compile, NULL, NULL, NULL,

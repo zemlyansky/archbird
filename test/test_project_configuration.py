@@ -2040,6 +2040,16 @@ def main() -> None:
         constraint_ids=("REQUIRED",),
         format="markdown",
     )
+    native_markdown, native_blocking = (
+        _native.constraints_report_with_blocking(
+            config_json,
+            modern_map,
+            "markdown",
+            request_json=b'{"ids":["REQUIRED"]}',
+        )
+    )
+    assert native_markdown == markdown
+    assert native_blocking is False
     assert markdown.startswith(b"# Architecture constraints: archbird\n")
     assert b"constraint policy" in markdown
     assert b"## Constraints\n" in markdown
@@ -2105,6 +2115,15 @@ def main() -> None:
     failing_markdown = evaluate_constraints_json(
         failing_json, modern_map, format="markdown"
     )
+    native_failing_markdown, native_failing_blocking = (
+        _native.constraints_report_with_blocking(
+            failing_json,
+            modern_map,
+            "markdown",
+        )
+    )
+    assert native_failing_markdown == failing_markdown
+    assert native_failing_blocking is True
     failing_tail = [line for line in failing_markdown.splitlines() if line][-2:]
     assert (
         failing_tail[0]

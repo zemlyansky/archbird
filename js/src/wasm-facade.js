@@ -638,6 +638,34 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
           )),
       );
     },
+    constraintsReportWithBlocking(
+      config,
+      map,
+      resolution,
+      request,
+      format,
+      maxFindings = 200,
+      pretty = false,
+    ) {
+      if (format === "json") {
+        throw new RangeError(
+          "constraint report format must be markdown, sarif, or junit",
+        );
+      }
+      const report = facade.constraintsReport(
+        config,
+        map,
+        resolution,
+        request,
+        format,
+        maxFindings,
+        pretty,
+      );
+      return {
+        blocking: Boolean(module._ab_wasm_verification_blocking()),
+        report,
+      };
+    },
     constraintsFreeze(
       config,
       map,

@@ -37,6 +37,7 @@ from .native import (
     change_verify,
     compile_test_observations,
     diff_maps_json,
+    _evaluate_constraints_report_with_blocking,
     evaluate_constraints_json,
     export_graph,
     export_okf_bundle,
@@ -2004,20 +2005,35 @@ def _verify_main(argv: Sequence[str]) -> int:
             map_json = project.map_json()
             resolution_json = project.resolution_json or b""
             _warn_map_cache_stats(project.map_cache_stats)
-        encoded = evaluate_constraints_json(
-            config_json,
-            map_json,
-            resolution_json=resolution_json,
-            constraint_ids=args.constraint_ids,
-            baseline=baseline,
-            maps=maps,
-            observations=observations,
-            policy_date=policy_date,
-            format=args.format,
-            max_findings=-1 if args.full else max_findings,
-            pretty=args.pretty or args.format == "sarif",
-        )
-        verification = json.loads(encoded) if args.format == "json" else None
+        blocking = False
+        if args.format == "json":
+            encoded = evaluate_constraints_json(
+                config_json,
+                map_json,
+                resolution_json=resolution_json,
+                constraint_ids=args.constraint_ids,
+                baseline=baseline,
+                maps=maps,
+                observations=observations,
+                policy_date=policy_date,
+                pretty=args.pretty,
+            )
+            verification = json.loads(encoded)
+            blocking = bool(verification["summary"]["blocking"])
+        else:
+            encoded, blocking = _evaluate_constraints_report_with_blocking(
+                config_json,
+                map_json,
+                resolution_json=resolution_json,
+                constraint_ids=args.constraint_ids,
+                baseline=baseline,
+                maps=maps,
+                observations=observations,
+                policy_date=policy_date,
+                format=args.format,
+                max_findings=-1 if args.full else max_findings,
+                pretty=args.pretty or args.format == "sarif",
+            )
         _write(encoded, args.output)
         if args.freeze is not None:
             _write(
@@ -2038,20 +2054,7 @@ def _verify_main(argv: Sequence[str]) -> int:
         progress.finish()
         if not args.check:
             return 0
-        if verification is None:
-            verification = json.loads(
-                evaluate_constraints_json(
-                    config_json,
-                    map_json,
-                    resolution_json=resolution_json,
-                    constraint_ids=args.constraint_ids,
-                    baseline=baseline,
-                    maps=maps,
-                    observations=observations,
-                    policy_date=policy_date,
-                )
-            )
-        return int(bool(verification["summary"]["blocking"]))
+        return int(blocking)
     except (ConfigError, OSError, RuntimeError, ValueError, _native.Error) as error:
         progress.clear()
         print(f"archbird: error: {error}", file=sys.stderr)

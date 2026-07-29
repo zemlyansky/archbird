@@ -25,8 +25,8 @@ ArchbirdStatus ab_constraints_report(
     const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
     size_t resolution_length, const uint8_t *request_json,
     size_t request_length, ArchbirdVerificationFormat format,
-    size_t max_findings, uint32_t json_flags, ArchbirdWriteFn write_fn,
-    void *user_data);
+    size_t max_findings, uint32_t json_flags, int *out_blocking,
+    ArchbirdWriteFn write_fn, void *user_data);
 
 ArchbirdStatus ab_constraints_freeze(
     ArchbirdEngine *engine, const AbConstraintPolicyInput *policy,

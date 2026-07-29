@@ -42,13 +42,14 @@ ArchbirdStatus archbird_constraints_evaluate(
   return status;
 }
 
-ArchbirdStatus archbird_constraints_report(
-    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
-    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
-    size_t resolution_length, const uint8_t *request_json,
-    size_t request_length, ArchbirdVerificationFormat format,
-    size_t max_findings, uint32_t json_flags, ArchbirdWriteFn write_fn,
-    void *user_data) {
+static ArchbirdStatus
+constraints_report(ArchbirdEngine *engine, const uint8_t *config_json,
+                   size_t config_length, const uint8_t *map_json,
+                   size_t map_length, const uint8_t *resolution_json,
+                   size_t resolution_length, const uint8_t *request_json,
+                   size_t request_length, ArchbirdVerificationFormat format,
+                   size_t max_findings, uint32_t json_flags, int *out_blocking,
+                   ArchbirdWriteFn write_fn, void *user_data) {
   AbProjectConfiguration configuration = {0};
   AbConstraintPolicyInput policy;
   ArchbirdStatus status;
@@ -66,9 +67,38 @@ ArchbirdStatus archbird_constraints_report(
     status = ab_constraints_report(
         engine, &policy, map_json, map_length, resolution_json,
         resolution_length, request_json, request_length, format, max_findings,
-        json_flags, write_fn, user_data);
+        json_flags, out_blocking, write_fn, user_data);
   ab_project_configuration_free(engine, &configuration);
   return status;
+}
+
+ArchbirdStatus archbird_constraints_report(
+    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
+    size_t resolution_length, const uint8_t *request_json,
+    size_t request_length, ArchbirdVerificationFormat format,
+    size_t max_findings, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data) {
+  return constraints_report(engine, config_json, config_length, map_json,
+                            map_length, resolution_json, resolution_length,
+                            request_json, request_length, format, max_findings,
+                            json_flags, NULL, write_fn, user_data);
+}
+
+ArchbirdStatus archbird_constraints_report_with_blocking(
+    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
+    size_t resolution_length, const uint8_t *request_json,
+    size_t request_length, ArchbirdVerificationFormat format,
+    size_t max_findings, uint32_t json_flags, int *out_blocking,
+    ArchbirdWriteFn write_fn, void *user_data) {
+  if (!out_blocking)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  *out_blocking = 0;
+  return constraints_report(engine, config_json, config_length, map_json,
+                            map_length, resolution_json, resolution_length,
+                            request_json, request_length, format, max_findings,
+                            json_flags, out_blocking, write_fn, user_data);
 }
 
 ArchbirdStatus archbird_constraints_freeze(

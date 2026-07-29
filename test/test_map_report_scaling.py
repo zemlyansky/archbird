@@ -8,7 +8,11 @@ from pathlib import Path
 from time import perf_counter
 
 from archbird import _native
-from archbird.native import evaluate_projection_json, render_map_markdown
+from archbird.native import (
+    Project,
+    evaluate_projection_json,
+    render_map_markdown,
+)
 
 
 def _graph_map(document: dict[str, object], count: int) -> bytes:
@@ -103,6 +107,24 @@ def _check_graph_aggregation(document: dict[str, object]) -> None:
     )
 
 
+def _check_empty_summary() -> None:
+    empty_root = Path(__file__).resolve().parents[1] / "build/test-empty-map-report"
+    empty_root.mkdir(parents=True, exist_ok=True)
+    project = Project.from_repository(
+        empty_root,
+        config=b"{}",
+        cache_dir=empty_root / "cache",
+    )
+    report = render_map_markdown(project.map_json())
+    tail = [line for line in report.splitlines() if line][-2:]
+    expected = (
+        b"Result: files=0; indexed-symbols=0; entities=0; relations=0; "
+        b"diagnostics=0 (errors=0 warnings=0)."
+    )
+    if len(tail) != 2 or tail[0] != expected:
+        raise AssertionError(f"empty Map report has an unstable tail: {tail!r}")
+
+
 def main() -> int:
     fixture = Path(__file__).parent / "fixtures/report_map.json"
     document = json.loads(fixture.read_bytes())
@@ -133,6 +155,8 @@ def main() -> int:
         raise AssertionError("Map Markdown did not aggregate resolution names")
     print("high-cardinality Map report aggregation passed")
     _check_graph_aggregation(document)
+    _check_empty_summary()
+    print("empty Map report summary passed")
     return 0
 
 

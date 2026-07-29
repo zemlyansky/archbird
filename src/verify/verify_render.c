@@ -82,7 +82,7 @@ static int finding_blocks(const AbVerifyFinding *finding,
           string_equals(&finding->evidence_state, "stale"));
 }
 
-static int verification_blocks(const AbVerificationContext *context) {
+int ab_verification_blocks(const AbVerificationContext *context) {
   size_t diagnostic_index;
   size_t check_index;
   for (diagnostic_index = 0; diagnostic_index < context->diagnostic_count;
@@ -151,7 +151,7 @@ ArchbirdStatus ab_constraints_render_summary(AbVerificationContext *context,
         context->baseline.coverage_regressions[regression_index].values.count;
   VERIFY_RENDER_TRY(ab_buffer_literal(buffer, "{\"blocking\":"));
   VERIFY_RENDER_TRY(ab_buffer_literal(
-      buffer, verification_blocks(context) ? "true" : "false"));
+      buffer, ab_verification_blocks(context) ? "true" : "false"));
   VERIFY_RENDER_TRY(ab_buffer_literal(buffer, ",\"constraints\":{\"fail\":"));
   VERIFY_RENDER_TRY(ab_buffer_u64(buffer, check_status_count(context, "fail")));
   VERIFY_RENDER_TRY(ab_buffer_literal(buffer, ",\"not_applicable\":"));

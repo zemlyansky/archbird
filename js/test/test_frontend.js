@@ -217,6 +217,27 @@ const markdownConstraints = reportConstraints(constraintConfig, metricMap, {
   format: "markdown",
 });
 assert.match(markdownConstraints.toString("utf8"), /src\/large\.js/);
+const checkedMarkdown = nativeBinding.constraintsReportWithBlocking(
+  constraintConfig,
+  metricMap,
+  metricProject.resolutionJson,
+  Buffer.alloc(0),
+  "markdown",
+  200,
+  false,
+);
+assert.deepEqual(checkedMarkdown.report, markdownConstraints);
+assert.equal(checkedMarkdown.blocking, true);
+const passingMarkdown = nativeBinding.constraintsReportWithBlocking(
+  constraintConfig,
+  metricMap,
+  metricProject.resolutionJson,
+  Buffer.from('{"ids":["STABLE-LITERAL"]}'),
+  "markdown",
+  200,
+  false,
+);
+assert.equal(passingMarkdown.blocking, false);
 const frozenConstraints = JSON.parse(freezeConstraints(constraintConfig, metricMap, {
   resolutionJson: metricProject.resolutionJson,
   owner: "architecture",

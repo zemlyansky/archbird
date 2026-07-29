@@ -1554,8 +1554,8 @@ static int constraint_format(const char *format,
   return 1;
 }
 
-static PyObject *py_constraints_report(PyObject *self, PyObject *args,
-                                       PyObject *kwargs) {
+static PyObject *constraints_report_common(PyObject *args, PyObject *kwargs,
+                                           int include_blocking) {
   static char *keywords[] = {
       "config",       "map_json",     "format", "resolution_json",
       "request_json", "max_findings", "pretty", NULL};
@@ -1570,13 +1570,15 @@ static PyObject *py_constraints_report(PyObject *self, PyObject *args,
   Py_ssize_t request_length = 0;
   Py_ssize_t max_findings = 200;
   int pretty = 0;
+  int blocking = 0;
   ArchbirdVerificationFormat native_format;
   ArchbirdEngine *engine = NULL;
   PyOutput output = {0};
   ArchbirdStatus status;
   PyObject *result;
+  PyObject *blocking_result;
+  PyObject *combined;
   size_t budget;
-  (void)self;
   if (!PyArg_ParseTupleAndKeywords(
           args, kwargs, "y#y#s|y#y#np:constraints_report", keywords, &config,
           &config_length, &map, &map_length, &format, &resolution,
@@ -1593,23 +1595,57 @@ static PyObject *py_constraints_report(PyObject *self, PyObject *args,
       larger_input((size_t)config_length, (size_t)map_length),
       larger_input((size_t)resolution_length, (size_t)request_length));
   status = saved_artifact_engine(budget, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_constraints_report(
-        engine, (const uint8_t *)config, (size_t)config_length,
-        (const uint8_t *)map, (size_t)map_length,
-        resolution_length ? (const uint8_t *)resolution : NULL,
-        (size_t)resolution_length,
-        request_length ? (const uint8_t *)request : NULL,
-        (size_t)request_length, native_format,
-        max_findings < 0 ? SIZE_MAX : (size_t)max_findings,
-        (pretty ? ARCHBIRD_JSON_PRETTY : 0) |
-            (native_format == ARCHBIRD_VERIFICATION_SARIF
-                 ? ARCHBIRD_JSON_TRAILING_NEWLINE
-                 : 0),
-        output_write, &output);
+  if (status == ARCHBIRD_OK) {
+    uint32_t flags = (pretty ? ARCHBIRD_JSON_PRETTY : 0) |
+                     (native_format == ARCHBIRD_VERIFICATION_SARIF
+                          ? ARCHBIRD_JSON_TRAILING_NEWLINE
+                          : 0);
+    size_t finding_limit = max_findings < 0 ? SIZE_MAX : (size_t)max_findings;
+    if (include_blocking)
+      status = archbird_constraints_report_with_blocking(
+          engine, (const uint8_t *)config, (size_t)config_length,
+          (const uint8_t *)map, (size_t)map_length,
+          resolution_length ? (const uint8_t *)resolution : NULL,
+          (size_t)resolution_length,
+          request_length ? (const uint8_t *)request : NULL,
+          (size_t)request_length, native_format, finding_limit, flags,
+          &blocking, output_write, &output);
+    else
+      status = archbird_constraints_report(
+          engine, (const uint8_t *)config, (size_t)config_length,
+          (const uint8_t *)map, (size_t)map_length,
+          resolution_length ? (const uint8_t *)resolution : NULL,
+          (size_t)resolution_length,
+          request_length ? (const uint8_t *)request : NULL,
+          (size_t)request_length, native_format, finding_limit, flags,
+          output_write, &output);
+  }
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);
-  return result;
+  if (!include_blocking || !result)
+    return result;
+  blocking_result = PyBool_FromLong(blocking);
+  if (!blocking_result) {
+    Py_DECREF(result);
+    return NULL;
+  }
+  combined = PyTuple_Pack(2, result, blocking_result);
+  Py_DECREF(blocking_result);
+  Py_DECREF(result);
+  return combined;
+}
+
+static PyObject *py_constraints_report(PyObject *self, PyObject *args,
+                                       PyObject *kwargs) {
+  (void)self;
+  return constraints_report_common(args, kwargs, 0);
+}
+
+static PyObject *py_constraints_report_with_blocking(PyObject *self,
+                                                     PyObject *args,
+                                                     PyObject *kwargs) {
+  (void)self;
+  return constraints_report_common(args, kwargs, 1);
 }
 
 static PyObject *py_constraints_freeze(PyObject *self, PyObject *args,
@@ -1826,14 +1862,17 @@ static PyMethodDef archbird_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "Compile one derived change proposal from a verification finding."},
     {"constraints_freeze", (PyCFunction)py_constraints_freeze,
-     METH_VARARGS | METH_KEYWORDS,
-     "Freeze a reviewed schema-2 constraint baseline."},
+     METH_VARARGS | METH_KEYWORDS, "Freeze a reviewed constraint baseline."},
     {"constraints_report", (PyCFunction)py_constraints_report,
-     METH_VARARGS | METH_KEYWORDS, "Render schema-2 constraint results."},
+     METH_VARARGS | METH_KEYWORDS, "Render project constraint results."},
+    {"constraints_report_with_blocking",
+     (PyCFunction)py_constraints_report_with_blocking,
+     METH_VARARGS | METH_KEYWORDS,
+     "Render project constraints and return their blocking state."},
     {"constraints_evaluate", (PyCFunction)py_constraints_evaluate,
-     METH_VARARGS | METH_KEYWORDS, "Evaluate schema-2 project constraints."},
+     METH_VARARGS | METH_KEYWORDS, "Evaluate project constraints."},
     {"query_plan_compile", (PyCFunction)py_query_plan_compile,
-     METH_VARARGS | METH_KEYWORDS, "Compile one named schema-2 query."},
+     METH_VARARGS | METH_KEYWORDS, "Compile one named query."},
     {"projection_evaluate", (PyCFunction)py_projection_evaluate,
      METH_VARARGS | METH_KEYWORDS, "Evaluate one exhaustive projection."},
     {"projection_render_markdown", (PyCFunction)py_projection_render_markdown,
@@ -1841,7 +1880,7 @@ static PyMethodDef archbird_methods[] = {
     {"project_configuration_compile",
      (PyCFunction)py_project_configuration_compile,
      METH_VARARGS | METH_KEYWORDS,
-     "Validate and normalize schema-2 project configuration."},
+     "Validate and normalize project configuration."},
     {"workspace_analyze", (PyCFunction)py_workspace_analyze,
      METH_VARARGS | METH_KEYWORDS,
      "Join canonical project maps into a workspace artifact."},

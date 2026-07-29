@@ -714,21 +714,13 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
   REPORT_TRY(render_ledgers(out, &result->data));
   REPORT_TRY(ab_report_literal_line(out, "## Graph completeness"));
   REPORT_TRY(ab_report_blank(out));
-  if (summary.files)
-    REPORT_TRY(ab_report_linef(out,
-                               "Result: files=%zu; indexed-symbols=%" PRIu64
-                               "; entities=%zu; relations=%zu; diagnostics=%zu "
-                               "(errors=%zu warnings=%zu).",
-                               summary.files, summary.symbols, summary.entities,
-                               summary.relations, summary.diagnostics,
-                               summary.errors, summary.warnings));
-  else
-    REPORT_TRY(
-        ab_report_linef(out,
-                        "Result: entities=%zu; relations=%zu; diagnostics=%zu "
-                        "(errors=%zu warnings=%zu).",
-                        summary.entities, summary.relations,
-                        summary.diagnostics, summary.errors, summary.warnings));
+  REPORT_TRY(ab_report_linef(out,
+                             "Result: files=%zu; indexed-symbols=%" PRIu64
+                             "; entities=%zu; relations=%zu; diagnostics=%zu "
+                             "(errors=%zu warnings=%zu).",
+                             summary.files, summary.symbols, summary.entities,
+                             summary.relations, summary.diagnostics,
+                             summary.errors, summary.warnings));
   REPORT_TRY(ab_report_linef(
       out,
       "Evidence: graph=%s; exhaustive=%s; unknown=%" PRIu64

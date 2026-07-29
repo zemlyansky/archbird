@@ -2114,8 +2114,8 @@ ArchbirdStatus ab_constraints_report(
     const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
     size_t resolution_length, const uint8_t *request_json,
     size_t request_length, ArchbirdVerificationFormat format,
-    size_t max_findings, uint32_t json_flags, ArchbirdWriteFn write_fn,
-    void *user_data) {
+    size_t max_findings, uint32_t json_flags, int *out_blocking,
+    ArchbirdWriteFn write_fn, void *user_data) {
   ConstraintExecution execution = {0};
   AbBuffer result;
   ArchbirdStatus status;
@@ -2143,6 +2143,8 @@ ArchbirdStatus ab_constraints_report(
     status = result_identities(&execution);
   if (status == ARCHBIRD_OK)
     ab_verify_diagnostics_finish(&execution.context);
+  if (status == ARCHBIRD_OK && out_blocking)
+    *out_blocking = ab_verification_blocks(&execution.context);
   if (status == ARCHBIRD_OK && format == ARCHBIRD_VERIFICATION_MARKDOWN)
     status = ab_constraints_render_markdown(&execution.context, &result,
                                             max_findings);

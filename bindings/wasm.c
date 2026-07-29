@@ -46,6 +46,7 @@ static char *wasm_error;
 static size_t wasm_error_length;
 static size_t wasm_error_offset = ARCHBIRD_NO_OFFSET;
 static ArchbirdStatus wasm_status = ARCHBIRD_OK;
+static int wasm_verification_blocking;
 
 static void result_reset(void) {
   free(wasm_output.data);
@@ -57,6 +58,7 @@ static void result_reset(void) {
   wasm_error_length = 0;
   wasm_error_offset = ARCHBIRD_NO_OFFSET;
   wasm_status = ARCHBIRD_OK;
+  wasm_verification_blocking = 0;
 }
 
 static int output_write(void *user_data, const uint8_t *bytes, size_t length) {
@@ -216,6 +218,10 @@ AB_WASM_EXPORT size_t ab_wasm_error_length(void) { return wasm_error_length; }
 AB_WASM_EXPORT size_t ab_wasm_error_offset(void) { return wasm_error_offset; }
 
 AB_WASM_EXPORT int ab_wasm_last_status(void) { return (int)wasm_status; }
+
+AB_WASM_EXPORT int ab_wasm_verification_blocking(void) {
+  return wasm_verification_blocking;
+}
 
 AB_WASM_EXPORT uint32_t ab_wasm_native_abi_version(void) {
   return ARCHBIRD_NATIVE_ABI_VERSION;
@@ -997,12 +1003,12 @@ AB_WASM_EXPORT int ab_wasm_constraints_report(
       format > (uint32_t)ARCHBIRD_VERIFICATION_JUNIT)
     status = ARCHBIRD_INVALID_ARGUMENT;
   if (status == ARCHBIRD_OK)
-    status = archbird_constraints_report(
+    status = archbird_constraints_report_with_blocking(
         engine, config, config_length, map, map_length,
         resolution_length ? resolution : NULL, resolution_length,
         request_length ? request : NULL, request_length,
-        (ArchbirdVerificationFormat)format, max_findings, flags, output_write,
-        &wasm_output);
+        (ArchbirdVerificationFormat)format, max_findings, flags,
+        &wasm_verification_blocking, output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 

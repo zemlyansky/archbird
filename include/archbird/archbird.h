@@ -209,7 +209,7 @@ ARCHBIRD_API ArchbirdStatus archbird_discovery_render(
     ArchbirdWriteFn write_fn, void *user_data);
 ARCHBIRD_API void archbird_discovery_destroy(ArchbirdDiscovery *discovery);
 
-/* Resolve deterministic discovery defaults, an optional schema-2 project
+/* Resolve deterministic discovery defaults, an optional project
  * configuration, and explicit CLI overlays against a host-provided repository
  * inventory. The result contains the effective configuration, selected file
  * plan, origin ledger, coverage, ignore-input hashes, and a content digest. */
@@ -229,7 +229,7 @@ ARCHBIRD_API ArchbirdStatus archbird_json_validate(ArchbirdEngine *engine,
                                                    size_t input_length);
 
 /*
- * Validate and normalize one schema-2 archbird.json project configuration.
+ * Validate and normalize one archbird.json project configuration.
  * The result exposes isolated Map configuration plus named projection, Query,
  * and Constraint definitions. Repository location is host execution context
  * and is never accepted from the project configuration.
@@ -252,7 +252,7 @@ ARCHBIRD_API ArchbirdStatus archbird_projection_evaluate(
 
 /* Compile a Map-independent QueryPlan. The plan contains normalized operations
  * and executable projection definitions, but never Map-bound projection
- * results. A non-empty id selects a named Query from schema-2 project
+ * results. A non-empty id selects a named Query from project
  * configuration and applies overrides. An empty id compiles overrides_json as
  * an ad-hoc Query and accepts an empty configuration. */
 ARCHBIRD_API ArchbirdStatus archbird_query_plan_compile(
@@ -262,7 +262,7 @@ ARCHBIRD_API ArchbirdStatus archbird_query_plan_compile(
     void *user_data);
 
 /*
- * Evaluate schema-2 project constraints directly over one canonical Map and
+ * Evaluate project constraints directly over one canonical Map and
  * its optional matching configuration-resolution artifact. request_json is
  * empty for the complete policy or {"ids":[...]} for an explicit subset.
  */
@@ -282,6 +282,16 @@ ARCHBIRD_API ArchbirdStatus archbird_constraints_report(
     size_t request_length, ArchbirdVerificationFormat format,
     size_t max_findings, uint32_t json_flags, ArchbirdWriteFn write_fn,
     void *user_data);
+
+/* Render a constraint report and return its blocking state from the same
+ * evaluation. out_blocking is set to one exactly when --check should fail. */
+ARCHBIRD_API ArchbirdStatus archbird_constraints_report_with_blocking(
+    ArchbirdEngine *engine, const uint8_t *config_json, size_t config_length,
+    const uint8_t *map_json, size_t map_length, const uint8_t *resolution_json,
+    size_t resolution_length, const uint8_t *request_json,
+    size_t request_length, ArchbirdVerificationFormat format,
+    size_t max_findings, uint32_t json_flags, int *out_blocking,
+    ArchbirdWriteFn write_fn, void *user_data);
 
 /* Freeze the complete evaluated project constraint policy as a reviewed
  * violation and coverage baseline. Selected constraint subsets are rejected. */

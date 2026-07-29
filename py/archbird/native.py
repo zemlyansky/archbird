@@ -2017,6 +2017,30 @@ def compile_query_plan_json(
     )
 
 
+def _constraint_request_json(
+    *,
+    constraint_ids: Sequence[str] = (),
+    baseline: Optional[Mapping[str, object]] = None,
+    maps: Optional[Mapping[str, Mapping[str, object]]] = None,
+    observations: Optional[Mapping[str, Mapping[str, object]]] = None,
+    policy_date: Optional[str] = None,
+) -> bytes:
+    request: dict[str, object] = {}
+    if constraint_ids:
+        request["ids"] = list(constraint_ids)
+    if baseline is not None:
+        request["baseline"] = dict(baseline)
+    if maps is not None:
+        request["maps"] = {name: dict(document) for name, document in maps.items()}
+    if observations is not None:
+        request["observations"] = {
+            name: dict(document) for name, document in observations.items()
+        }
+    if policy_date is not None:
+        request["policy_date"] = policy_date
+    return _canonical(request) if request else b""
+
+
 def evaluate_constraints_json(
     config_json: bytes,
     map_json: bytes,
@@ -2033,20 +2057,13 @@ def evaluate_constraints_json(
 ) -> bytes:
     """Evaluate all or selected project constraints."""
 
-    request: dict[str, object] = {}
-    if constraint_ids:
-        request["ids"] = list(constraint_ids)
-    if baseline is not None:
-        request["baseline"] = dict(baseline)
-    if maps is not None:
-        request["maps"] = {name: dict(document) for name, document in maps.items()}
-    if observations is not None:
-        request["observations"] = {
-            name: dict(document) for name, document in observations.items()
-        }
-    if policy_date is not None:
-        request["policy_date"] = policy_date
-    request_json = _canonical(request) if request else b""
+    request_json = _constraint_request_json(
+        constraint_ids=constraint_ids,
+        baseline=baseline,
+        maps=maps,
+        observations=observations,
+        policy_date=policy_date,
+    )
     if format == "json":
         return _native.constraints_evaluate(
             config_json,
@@ -2056,6 +2073,40 @@ def evaluate_constraints_json(
             pretty=pretty,
         )
     return _native.constraints_report(
+        config_json,
+        map_json,
+        format,
+        resolution_json=resolution_json,
+        request_json=request_json,
+        max_findings=max_findings,
+        pretty=pretty,
+    )
+
+
+def _evaluate_constraints_report_with_blocking(
+    config_json: bytes,
+    map_json: bytes,
+    *,
+    constraint_ids: Sequence[str] = (),
+    baseline: Optional[Mapping[str, object]] = None,
+    maps: Optional[Mapping[str, Mapping[str, object]]] = None,
+    observations: Optional[Mapping[str, Mapping[str, object]]] = None,
+    policy_date: Optional[str] = None,
+    resolution_json: bytes = b"",
+    format: str = "markdown",
+    max_findings: int = 200,
+    pretty: bool = False,
+) -> tuple[bytes, bool]:
+    """Render constraints and return their blocking state from one evaluation."""
+
+    request_json = _constraint_request_json(
+        constraint_ids=constraint_ids,
+        baseline=baseline,
+        maps=maps,
+        observations=observations,
+        policy_date=policy_date,
+    )
+    return _native.constraints_report_with_blocking(
         config_json,
         map_json,
         format,
