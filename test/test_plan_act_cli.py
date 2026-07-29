@@ -122,6 +122,41 @@ class PlanActCliTest(unittest.TestCase):
         )
         self.assertFalse(legacy.exists())
 
+    def test_plan_saved_in_repository_does_not_invalidate_itself(self) -> None:
+        self.configure(
+            {
+                "NO-LEGACY": {
+                    "kind": "forbidden_paths",
+                    "paths": ["legacy.py"],
+                    "owner": "architecture",
+                    "rationale": "Obsolete implementation stays absent.",
+                }
+            }
+        )
+        legacy = self.root / "legacy.py"
+        legacy.write_text("obsolete = True\n")
+        plan_path = self.root / "plan.json"
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        first = json.loads(plan_path.read_bytes())
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        second = json.loads(plan_path.read_bytes())
+        self.assertEqual(second["source"], first["source"])
+
+        result = json.loads(
+            run(
+                "act",
+                str(plan_path),
+                "--root",
+                str(self.root),
+                "--apply",
+                "--format",
+                "json",
+            ).stdout
+        )
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(result["acceptance"]["status"], "satisfied")
+        self.assertFalse(legacy.exists())
+
     def test_unrelated_source_drift_blocks_before_any_write(self) -> None:
         self.configure(
             {

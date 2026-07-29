@@ -307,6 +307,7 @@ class Project {
       cacheDir = null,
       cacheMaxBytes = null,
       mapCache = true,
+      _transientExclude = [],
     } = {},
   ) {
     const repository = path.resolve(root);
@@ -325,6 +326,7 @@ class Project {
       defaultExcludes,
       maxFileBytes,
       maxIndexBytes,
+      _transientExclude,
     });
     const resolution = JSON.parse(resolutionJson.toString("utf8"));
     const effectiveConfig = Buffer.from(
@@ -850,13 +852,18 @@ class Workspace {
 function inventoryState(
   configJson,
   root,
-  { includeStandardIgnores = false, ignoreFiles = [] } = {},
+  {
+    includeStandardIgnores = false,
+    ignoreFiles = [],
+    transientExclude = [],
+  } = {},
 ) {
   const files = [];
   const pruned = [];
   let pending = [["", root]];
   const standardIgnores = [];
   const customSet = new Set(ignoreFiles);
+  const transientSet = new Set(transientExclude);
   const customIgnores = ignoreFiles.map((relative) => ({
     data: fs.readFileSync(path.join(root, ...relative.split("/"))),
     path: relative,
@@ -870,7 +877,9 @@ function inventoryState(
         const candidate = path.join(directory, entry.name);
         const relative = path.relative(root, candidate).split(path.sep).join("/");
         if (entry.isDirectory()) directories.push([relative, candidate]);
-        else if (entry.isFile()) files.push(relative);
+        else if (entry.isFile() && !transientSet.has(relative)) {
+          files.push(relative);
+        }
       }
       if (includeStandardIgnores) {
         for (const name of [".gitignore", ".ignore", ".archbirdignore"]) {
@@ -989,7 +998,7 @@ function safeRelative(root, value) {
   const candidate = path.resolve(root, value);
   const relative = path.relative(root, candidate).split(path.sep).join("/");
   if (!relative || relative === "." || relative === ".." || relative.startsWith("../")) {
-    throw new Error(`ignore file is outside repository root: ${value}`);
+    throw new Error(`path is outside repository root: ${value}`);
   }
   return relative;
 }
@@ -1085,6 +1094,7 @@ function resolveDiscovery(
     maxFileBytes = null,
     maxIndexBytes = null,
     pretty = false,
+    _transientExclude = [],
   } = {},
 ) {
   const repository = path.resolve(root);
@@ -1094,6 +1104,9 @@ function resolveDiscovery(
   const configJson = configBytes(config);
   const normalizedIgnoreFiles = [...new Set(
     ignoreFiles.map((value) => safeRelative(repository, value)),
+  )];
+  const normalizedTransientExclude = [...new Set(
+    _transientExclude.map((value) => safeRelative(repository, value)),
   )];
   const request = mapRequest({
     project,
@@ -1106,10 +1119,16 @@ function resolveDiscovery(
     maxFileBytes,
     maxIndexBytes,
   });
-  const bootstrapInventory = repositoryInventory(repository, rootRows(repository), {
-    includeStandardIgnores: ignore,
-    ignoreFiles: normalizedIgnoreFiles,
-  });
+  const bootstrapInventory = repositoryInventory(
+    repository,
+    rootRows(repository).filter(
+      (row) => !normalizedTransientExclude.includes(row.path),
+    ),
+    {
+      includeStandardIgnores: ignore,
+      ignoreFiles: normalizedIgnoreFiles,
+    },
+  );
   const bootstrap = JSON.parse(
     native.discoveryResolve(configJson, request, bootstrapInventory, false).toString("utf8"),
   );
@@ -1119,6 +1138,7 @@ function resolveDiscovery(
   const inventoryState = inventoryRows(effectiveConfig, repository, {
     includeStandardIgnores: ignore,
     ignoreFiles: normalizedIgnoreFiles,
+    transientExclude: normalizedTransientExclude,
   });
   const inventory = repositoryInventory(repository, inventoryState.rows, {
     includeStandardIgnores: ignore,

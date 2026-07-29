@@ -226,7 +226,7 @@ fs.writeFileSync(
 );
 const legacyPath = path.join(actRoot, "legacy.js");
 fs.writeFileSync(legacyPath, "export const obsolete = true;\n");
-const planPath = path.join(work, `${engine}.plan.json`);
+const planPath = path.join(actRoot, "plan.json");
 fs.writeFileSync(planPath, run([
   "plan", "--root", actRoot,
 ]));

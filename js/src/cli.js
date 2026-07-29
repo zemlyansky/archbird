@@ -205,6 +205,19 @@ function write(value, output = "-") {
   else fs.writeFileSync(path.resolve(output), encoded);
 }
 
+function repositoryArtifactPath(repository, locator) {
+  if (locator === "-") return null;
+  const relative = path.relative(
+    repository,
+    path.resolve(locator),
+  ).split(path.sep).join("/");
+  if (!relative || relative === "." || relative === ".." ||
+      relative.startsWith("../")) {
+    return null;
+  }
+  return relative;
+}
+
 function hasErrors(document) {
   return (document.diagnostics || []).some((row) => row.severity === "error");
 }
@@ -422,6 +435,7 @@ function project(options, progress = null, resolvedInputs = null) {
     defaultExcludes: !options.noDefaultExcludes,
     maxFileBytes: options.maxFileBytes ?? null,
     maxIndexBytes: options.maxIndexBytes ?? null,
+    _transientExclude: options._transientExclude || [],
     scan: false,
     typescript: !options.noTypescript,
   });
@@ -1419,6 +1433,11 @@ function planMain(argv) {
     ...options,
     _: positionalRoot ? [positionalRoot] : [],
   };
+  const repositoryHint = path.resolve(positionalRoot || options.root || ".");
+  const transientOutput = repositoryArtifactPath(repositoryHint, options.output);
+  repositoryOptions._transientExclude = transientOutput
+    ? [transientOutput]
+    : [];
   const progress = new Progress(options.progress);
   const {
     repository,
@@ -1476,6 +1495,7 @@ function actProject(options, repository, configJson, progress) {
   progress.emit({ phase: "discovery", state: "start" });
   const current = archbird.Project.fromRepository(repository, {
     config: configJson,
+    _transientExclude: options._transientExclude || [],
     scan: false,
     typescript: !options.noTypescript,
   });
@@ -1734,6 +1754,12 @@ function actMain(argv) {
     readBounded(options._[0], MAX_PLAN_BYTES, "Plan JSON").toString("utf8"),
   );
   const repository = path.resolve(options.root || ".");
+  options._transientExclude = [
+    repositoryArtifactPath(repository, options._[0]),
+    repositoryArtifactPath(repository, options.output),
+  ].filter((value, index, values) =>
+    value !== null && values.indexOf(value) === index
+  );
   const preview = archbird.previewPlan(plan, repository);
   if (!options.apply || preview.status === "blocked") {
     write(actResultBytes(preview, options.format, options.pretty), options.output);

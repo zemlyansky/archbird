@@ -1033,6 +1033,21 @@ def _write(encoded: bytes, output: str) -> None:
         Path(output).write_bytes(value)
 
 
+def _repository_artifact_path(
+    repository: Path, locator: str
+) -> Optional[str]:
+    """Return an in-repository CLI artifact path for transient discovery."""
+
+    if locator == "-":
+        return None
+    candidate = Path(locator).resolve()
+    try:
+        relative = candidate.relative_to(repository).as_posix()
+    except ValueError:
+        return None
+    return relative if relative and relative != "." else None
+
+
 def _write_project_map(project: Project, output: str, *, pretty: bool) -> None:
     if output == "-":
         project.write_map_json(sys.stdout.buffer.write, pretty=pretty)
@@ -1384,6 +1399,7 @@ def _project_from_args(
         default_excludes=not args.no_default_excludes,
         max_file_bytes=args.max_file_bytes,
         max_index_bytes=args.max_index_bytes,
+        _transient_exclude=getattr(args, "_transient_exclude", ()),
         scan=False,
         jobs=args.jobs,
     )
@@ -2197,6 +2213,13 @@ def _plan_main(argv: Sequence[str]) -> int:
                     "positional ROOT and --root select different directories"
                 )
             args.root_override = str(positional_root)
+        repository_hint = Path(args.root_override or ".").resolve()
+        transient_output = _repository_artifact_path(
+            repository_hint, args.output
+        )
+        args._transient_exclude = (
+            (transient_output,) if transient_output is not None else ()
+        )
         (
             repository,
             config_json,
@@ -2261,6 +2284,7 @@ def _act_project(
     project = Project.from_repository(
         repository,
         config=config_json,
+        _transient_exclude=getattr(args, "_transient_exclude", ()),
         scan=False,
         jobs=args.jobs,
     )
@@ -2579,6 +2603,15 @@ def _act_main(argv: Sequence[str]) -> int:
         if not isinstance(document, dict):
             raise ValueError("Plan must be a JSON object")
         repository = Path(args.root_override or ".").resolve()
+        transient_artifacts = [
+            path
+            for path in (
+                _repository_artifact_path(repository, str(plan_path)),
+                _repository_artifact_path(repository, args.output),
+            )
+            if path is not None
+        ]
+        args._transient_exclude = tuple(dict.fromkeys(transient_artifacts))
         preview = preview_plan(document, repository)
         if not args.apply or preview["status"] == "blocked":
             _write(

@@ -392,6 +392,7 @@ class Project:
         cache_dir: Optional[Union[str, Path]] = None,
         cache_max_bytes: Optional[int] = None,
         map_cache: bool = True,
+        _transient_exclude: Sequence[Union[str, Path]] = (),
     ) -> "Project":
         """Resolve and map one repository with optional reviewed configuration."""
 
@@ -411,6 +412,7 @@ class Project:
             default_excludes=default_excludes,
             max_file_bytes=max_file_bytes,
             max_index_bytes=max_index_bytes,
+            _transient_exclude=_transient_exclude,
         )
         resolution = json.loads(resolution_json)
         effective_config = _canonical(resolution["effective_config"])
@@ -2334,6 +2336,7 @@ def _inventory_state(
     include_standard_ignores: bool = False,
     ignore_files: Sequence[str] = (),
     collect_sizes: bool = False,
+    transient_exclude: Sequence[str] = (),
 ) -> tuple[Tuple[str, ...], Tuple[str, ...], Tuple[Tuple[str, int], ...]]:
     files: list[str] = []
     file_sizes: list[tuple[str, int]] = []
@@ -2342,6 +2345,7 @@ def _inventory_state(
     standard_ignores: list[tuple[str, bytes]] = []
     custom_paths = tuple(ignore_files)
     custom_set = set(custom_paths)
+    transient_set = set(transient_exclude)
     custom_ignores = [
         (relative, root.joinpath(*PurePosixPath(relative).parts).read_bytes())
         for relative in custom_paths
@@ -2361,6 +2365,8 @@ def _inventory_state(
                         if entry.is_dir(follow_symlinks=False):
                             directories.append((relative, Path(entry.path)))
                         elif entry.is_file(follow_symlinks=False):
+                            if relative in transient_set:
+                                continue
                             files.append(relative)
                             if collect_sizes:
                                 try:
@@ -2496,6 +2502,7 @@ def _inventory_rows(
     *,
     include_standard_ignores: bool = False,
     ignore_files: Sequence[str] = (),
+    transient_exclude: Sequence[str] = (),
 ) -> tuple[list[dict[str, object]], Tuple[str, ...]]:
     _paths, pruned, file_sizes = _inventory_state(
         config_json,
@@ -2503,6 +2510,7 @@ def _inventory_rows(
         include_standard_ignores=include_standard_ignores,
         ignore_files=ignore_files,
         collect_sizes=True,
+        transient_exclude=transient_exclude,
     )
     return [
         {"bytes": size, "path": path}
@@ -2516,9 +2524,9 @@ def _safe_relative(root: Path, value: Union[str, Path]) -> str:
     try:
         relative = candidate.relative_to(root).as_posix()
     except ValueError as error:
-        raise ConfigError(f"ignore file is outside repository root: {value}") from error
+        raise ConfigError(f"path is outside repository root: {value}") from error
     if not relative or relative == ".":
-        raise ConfigError(f"ignore file is not a repository file: {value}")
+        raise ConfigError(f"path is not a repository file: {value}")
     return relative
 
 
@@ -2590,7 +2598,9 @@ def _repository_inventory(
     )
 
 
-def _root_rows(root: Path) -> list[dict[str, object]]:
+def _root_rows(
+    root: Path, transient_exclude: Sequence[str] = ()
+) -> list[dict[str, object]]:
     paths = (
         ".archbirdignore",
         ".gitignore",
@@ -2602,7 +2612,12 @@ def _root_rows(root: Path) -> list[dict[str, object]]:
         "package.json",
         "pyproject.toml",
     )
-    return [row for path in paths if (row := _file_row(root, path)) is not None]
+    excluded = set(transient_exclude)
+    return [
+        row
+        for path in paths
+        if path not in excluded and (row := _file_row(root, path)) is not None
+    ]
 
 
 def resolve_discovery(
@@ -2619,6 +2634,7 @@ def resolve_discovery(
     max_file_bytes: Optional[int] = None,
     max_index_bytes: Optional[int] = None,
     pretty: bool = False,
+    _transient_exclude: Sequence[Union[str, Path]] = (),
 ) -> bytes:
     """Return the canonical C-owned config-resolution artifact for a repository."""
 
@@ -2628,6 +2644,11 @@ def resolve_discovery(
     config_json = _config_bytes(config)
     normalized_ignore_files = tuple(
         dict.fromkeys(_safe_relative(repository, value) for value in ignore_files)
+    )
+    normalized_transient_exclude = tuple(
+        dict.fromkeys(
+            _safe_relative(repository, value) for value in _transient_exclude
+        )
     )
     request = _map_request(
         project=project,
@@ -2640,7 +2661,7 @@ def resolve_discovery(
         max_file_bytes=max_file_bytes,
         max_index_bytes=max_index_bytes,
     )
-    bootstrap_rows = _root_rows(repository)
+    bootstrap_rows = _root_rows(repository, normalized_transient_exclude)
     bootstrap_inventory = _repository_inventory(
         repository,
         bootstrap_rows,
@@ -2656,6 +2677,7 @@ def resolve_discovery(
         repository,
         include_standard_ignores=ignore,
         ignore_files=normalized_ignore_files,
+        transient_exclude=normalized_transient_exclude,
     )
     inventory = _repository_inventory(
         repository,

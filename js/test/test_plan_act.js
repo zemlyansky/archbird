@@ -1046,12 +1046,16 @@ run("Node CLI plans, previews, applies, and freshly verifies an exact delete", (
       }),
     );
     write(root, "legacy.js", Buffer.from("export const obsolete = true;\n"));
-    fs.mkdirSync(path.join(root, ".archbird"));
-    const planPath = path.join(root, ".archbird/plan.json");
+    const planPath = path.join(root, "plan.json");
     cli(["plan", "--root", root, "--output", planPath]);
     const generated = JSON.parse(fs.readFileSync(planPath));
     assert.equal(generated.items.length, 1);
     assert.equal(generated.items[0].operation.action, "delete_file");
+    cli(["plan", "--root", root, "--output", planPath]);
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(planPath)).source,
+      generated.source,
+    );
 
     const preview = cli([
       "act", planPath, "--root", root, "--format", "patch",
