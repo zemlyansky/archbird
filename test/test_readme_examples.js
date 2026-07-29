@@ -130,9 +130,14 @@ try {
   assert.equal(Object.hasOwn(generatedConfig, "root"), false);
 
   const explicitMap = run(["map", ".", "--format", "json", "--check"]);
+  const bareMap = run([]);
   assert.match(
-    run([]),
-    /^# demo architecture evidence\n[\s\S]*Projection `map-overview`[\s\S]*## Graph completeness\n[\s\S]*Projection result: `[0-9a-f]{64}`/,
+    bareMap,
+    /^# demo architecture evidence\n[\s\S]*Projection `map-overview`[\s\S]*## Graph completeness\n/,
+  );
+  assert.match(
+    bareMap,
+    /Result: files=\d+; indexed-symbols=\d+; entities=\d+; relations=\d+; diagnostics=\d+ \(errors=\d+ warnings=\d+\)\.\nEvidence: graph=(?:complete|incomplete|unknown); exhaustive=(?:yes|no); unknown=\d+; unsupported=\d+; presentation-omitted=\d+; projection=`[0-9a-f]{64}`\.\n$/,
   );
   assert.equal(run(["--format", "json", "--check"]), explicitMap);
   assert.equal(run([".", "--format", "json", "--check"]), explicitMap);
@@ -173,6 +178,13 @@ try {
   expectError([
     "verify", "--format", "markdown", "--max-findings", "-1",
   ], /nonnegative/);
+  const verificationReport = run([
+    "verify", "--map", ".archbird/map.json", "--check",
+  ]);
+  assert.match(
+    verificationReport,
+    /Result: blocking=no; constraints pass=2 fail=0 unknown=0 waived=0 not-applicable=0; findings=0\.\nEvidence: coverage-keys=4; coverage-regressions=0; diagnostics errors=0 warnings=0\.\n$/,
+  );
   run([
     "verify", "--map", ".archbird/map.json",
     "--resolution", ".archbird/resolution.json", "--format", "json",

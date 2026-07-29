@@ -60,6 +60,49 @@ static int text_is(const AbString *value, const char *literal) {
          (!length || !memcmp(value->data, literal, length));
 }
 
+typedef struct {
+  size_t entities;
+  size_t files;
+  size_t relations;
+  size_t diagnostics;
+  size_t errors;
+  size_t warnings;
+  uint64_t symbols;
+} GraphReportSummary;
+
+static ArchbirdStatus graph_report_summary(AbBuffer *out,
+                                           const AbProjectionData *data,
+                                           GraphReportSummary *summary) {
+  size_t index;
+  memset(summary, 0, sizeof(*summary));
+  for (index = 0; index < data->item_count; index++) {
+    const AbProjectionItem *item = &data->items[index];
+    if (item_is(item, "node")) {
+      const AbString *kind = item_text(item, "entity_kind");
+      uint64_t symbol_count = item_u64(item, "symbol_count");
+      summary->entities++;
+      if (!text_is(kind, "file"))
+        continue;
+      summary->files++;
+      if (UINT64_MAX - summary->symbols < symbol_count)
+        return archbird_error_set(out->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "too many indexed symbols in graph report");
+      summary->symbols += symbol_count;
+    } else if (item_is(item, "relation")) {
+      summary->relations++;
+    } else if (item_is(item, "diagnostic")) {
+      const AbString *severity = item_text(item, "severity");
+      summary->diagnostics++;
+      if (text_is(severity, "error"))
+        summary->errors++;
+      else if (text_is(severity, "warning"))
+        summary->warnings++;
+    }
+  }
+  return ARCHBIRD_OK;
+}
+
 static size_t plan_array_count(const AbProjectionPlan *plan,
                                const char *field) {
   const AbValue *value = ab_value_member(&plan->definition, field);
@@ -607,8 +650,10 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
                    plan_has(plan, "relations", "tests");
   int evidence_only = !plan_array_count(plan, "relations") &&
                       plan_has(plan, "overlays", "evidence-quality");
+  GraphReportSummary summary;
   size_t omitted = 0;
   size_t landmark_limit = limit < 12 ? limit : 12;
+  REPORT_TRY(graph_report_summary(out, &result->data, &summary));
   REPORT_TRY(ab_report_linef(out, "# %.*s architecture evidence",
                              (int)result->data.project.length,
                              result->data.project.data));
@@ -669,24 +714,31 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
   REPORT_TRY(render_ledgers(out, &result->data));
   REPORT_TRY(ab_report_literal_line(out, "## Graph completeness"));
   REPORT_TRY(ab_report_blank(out));
+  if (summary.files)
+    REPORT_TRY(ab_report_linef(out,
+                               "Result: files=%zu; indexed-symbols=%" PRIu64
+                               "; entities=%zu; relations=%zu; diagnostics=%zu "
+                               "(errors=%zu warnings=%zu).",
+                               summary.files, summary.symbols, summary.entities,
+                               summary.relations, summary.diagnostics,
+                               summary.errors, summary.warnings));
+  else
+    REPORT_TRY(
+        ab_report_linef(out,
+                        "Result: entities=%zu; relations=%zu; diagnostics=%zu "
+                        "(errors=%zu warnings=%zu).",
+                        summary.entities, summary.relations,
+                        summary.diagnostics, summary.errors, summary.warnings));
   REPORT_TRY(ab_report_linef(
       out,
-      "- Classification: **%s**; exhaustive=%s; "
-      "unknown-structural-records=%" PRIu64
-      "; unsupported-structural-records=%" PRIu64,
+      "Evidence: graph=%s; exhaustive=%s; unknown=%" PRIu64
+      "; unsupported=%" PRIu64 "; presentation-omitted=%zu; projection=`%s`.",
       classification, !strcmp(classification, "complete") ? "yes" : "no",
       result->data.selection.has_unknown ? result->data.selection.unknown : 0,
       result->data.selection.has_unsupported
           ? result->data.selection.unsupported
-          : 0));
-  if (omitted)
-    REPORT_TRY(ab_report_linef(
-        out,
-        "- Presentation omitted %zu display records; the exhaustive "
-        "ProjectionResult is unchanged.",
-        omitted));
-  REPORT_TRY(
-      ab_report_linef(out, "- Projection result: `%s`", result->result_sha256));
+          : 0,
+      omitted, result->result_sha256));
   return ARCHBIRD_OK;
 }
 

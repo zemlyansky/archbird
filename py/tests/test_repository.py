@@ -1381,7 +1381,7 @@ writer.commit()
         "unsupported-known=1" not in zero_report
         or "## Repository coverage" not in zero_report
         or "Coverage frontier: **unknown**" not in zero_report
-        or "Classification: **complete**" not in zero_report
+        or "Evidence: graph=complete; exhaustive=yes" not in zero_report
     ):
         raise AssertionError(
             "Map Markdown conflated graph completeness with repository coverage"
@@ -2924,6 +2924,8 @@ writer.commit()
                 "--root",
                 str(fixture),
                 "--check",
+                "--format",
+                "json",
                 "--output",
                 str(output),
             ]
@@ -2952,6 +2954,8 @@ writer.commit()
                 "--freeze-rationale",
                 "Review current fixture constraint debt.",
                 "--no-cache",
+                "--format",
+                "json",
                 "--output",
                 str(freeze_report),
             ]

@@ -66,7 +66,7 @@ function usage(command = "map") {
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
-    verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--check]",
+    verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
     plan: "archbird plan --verification RESULT.json --finding FINGERPRINT",
     contract: "archbird contract --proposal PROPOSAL.json --objective TEXT --owner NAME --rationale TEXT",
     "verify-plan": "archbird verify-plan --proposal P.json --contract C.json --before-verification B.json --after-verification A.json [--check]",
@@ -1185,7 +1185,7 @@ function verifyMain(argv) {
     freeze: { type: "string" },
     freezeOwner: { flag: "freeze-owner", type: "string" },
     freezeRationale: { flag: "freeze-rationale", type: "string" },
-    format: { default: "json", type: "string" },
+    format: { default: "markdown", type: "string" },
     full: { type: "boolean" },
     maxFindings: { flag: "max-findings", type: "number" },
   }, { positionals: Number.POSITIVE_INFINITY });

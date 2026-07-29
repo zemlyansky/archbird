@@ -896,6 +896,10 @@ def main() -> None:
         report = render_map_markdown(report_map, view=view, detail="compact")
         assert report.startswith(b"# sample architecture evidence\n")
         assert b"## Graph completeness\n" in report
+        tail = [line for line in report.splitlines() if line][-2:]
+        assert tail[0].startswith(b"Result: ")
+        assert tail[1].startswith(b"Evidence: graph=")
+        assert b"projection=`" in tail[1]
         assert report == _native.map_markdown_view(
             report_map, view_index, 0, max_chars=0
         )
@@ -903,7 +907,7 @@ def main() -> None:
         report_map, view="overview", detail="standard", max_chars=1_800
     )
     assert len(budgeted_report.decode("utf-8")) <= 1_800
-    assert b"Presentation omitted" in budgeted_report
+    assert b"presentation-omitted=" in budgeted_report
     try:
         render_map_markdown(
             report_map, view="overview", detail="full", max_chars=1_800
@@ -1188,6 +1192,9 @@ def main() -> None:
     assert "Focus: ``" not in named_report
     if "Continue with:" in named_report:
         assert "Continue with: `archbird query api-impact " in named_report
+    named_tail = [line for line in named_report.splitlines() if line][-3:]
+    assert any(line.startswith("Emitted: files=") for line in named_tail)
+    assert any(line.startswith("Not emitted: ") for line in named_tail)
 
     sentinel_named_plan = compile_named_query(config_json, "ad-hoc")
     assert sentinel_named_plan["id"] == "ad-hoc"
@@ -1997,6 +2004,20 @@ def main() -> None:
     )
     assert stale_cross_map["constraints"][0]["status"] == "unknown"
     assert stale_cross_map["summary"]["blocking"] is True
+    stale_markdown = evaluate_constraints_json(
+        json.dumps(stale_cross_map_config, separators=(",", ":")).encode(),
+        modern_map,
+        maps=map_inputs,
+        constraint_ids=("CROSS-MAP-API",),
+        format="markdown",
+    )
+    stale_tail = [line for line in stale_markdown.splitlines() if line][-2:]
+    assert (
+        stale_tail[0]
+        == b"Result: blocking=yes; constraints pass=0 fail=0 unknown=1 "
+        b"waived=0 not-applicable=0; findings=1."
+    )
+    assert stale_tail[1].startswith(b"Evidence: coverage-keys=")
     assert any(
         "source lock mismatch: include/archbird/archbird.h" in row["message"]
         for row in stale_cross_map["operands"]
@@ -2022,6 +2043,12 @@ def main() -> None:
     assert markdown.startswith(b"# Architecture constraints: archbird\n")
     assert b"constraint policy" in markdown
     assert b"## Constraints\n" in markdown
+    assert markdown.endswith(
+        b"Result: blocking=no; constraints pass=1 fail=0 unknown=0 waived=0 "
+        b"not-applicable=0; findings=0.\n"
+        b"Evidence: coverage-keys=1; coverage-regressions=0; diagnostics "
+        b"errors=0 warnings=0.\n"
+    )
     assert b"suite" not in markdown
     assert b"## Checks\n" not in markdown
     sarif = json.loads(
@@ -2075,6 +2102,16 @@ def main() -> None:
         row for row in failing_result["constraints"] if row["id"] == "MISSING-LITERAL"
     )
     assert missing["status"] == "fail"
+    failing_markdown = evaluate_constraints_json(
+        failing_json, modern_map, format="markdown"
+    )
+    failing_tail = [line for line in failing_markdown.splitlines() if line][-2:]
+    assert (
+        failing_tail[0]
+        == b"Result: blocking=yes; constraints pass=6 fail=1 unknown=0 "
+        b"waived=0 not-applicable=0; findings=1."
+    )
+    assert failing_tail[1].startswith(b"Evidence: coverage-keys=")
     fingerprint = missing["findings"][0]["fingerprint"]
     waived = json.loads(json.dumps(failing))
     waived["constraints"]["MISSING-LITERAL"]["waivers"] = [

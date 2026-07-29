@@ -89,7 +89,7 @@ def _check_graph_aggregation(document: dict[str, object]) -> None:
         len(report) >= 32_000
         or b"## Architecture groups\n" not in report
         or b"## Presentation accounting\n" not in report
-        or b"Presentation omitted " not in report
+        or b"presentation-omitted=" not in report
         or b"## Entities\n" in report
         or b"## Relations\n" in report
     ):

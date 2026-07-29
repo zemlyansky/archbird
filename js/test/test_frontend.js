@@ -1319,7 +1319,7 @@ const zeroEvidenceReport = zeroProject
   .toString("utf8");
 assert.match(zeroEvidenceReport, /unsupported-known=1/);
 assert.match(zeroEvidenceReport, /Coverage frontier: \*\*unknown\*\*/);
-assert.match(zeroEvidenceReport, /Classification: \*\*complete\*\*/);
+assert.match(zeroEvidenceReport, /Evidence: graph=complete; exhaustive=yes/);
 assert.deepEqual(
   zeroMap.files.filter((row) => row.roles).map((row) => [row.path, row.roles]),
   [

@@ -813,11 +813,11 @@ def verification_parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--freeze-rationale", help="review rationale recorded by --freeze"
     )
-    result.add_argument("-o", "--output", default="-", help="JSON output or -")
+    result.add_argument("-o", "--output", default="-", help="output path or -")
     result.add_argument(
         "--format",
         choices=("json", "markdown", "sarif", "junit"),
-        default="json",
+        default="markdown",
         help="output format",
     )
     result.add_argument(

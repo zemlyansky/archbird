@@ -758,6 +758,34 @@ static size_t markdown_field_count(const AbVerificationContext *context,
   return count;
 }
 
+static size_t markdown_status_count(const AbVerificationContext *context,
+                                    const char *status) {
+  size_t index;
+  size_t count = 0;
+  for (index = 0; index < context->check_count; index++)
+    if (string_literal(&context->checks[index].status, status))
+      count++;
+  return count;
+}
+
+static size_t markdown_finding_count(const AbVerificationContext *context) {
+  size_t index;
+  size_t count = 0;
+  for (index = 0; index < context->check_count; index++)
+    count += context->checks[index].finding_count;
+  return count;
+}
+
+static size_t markdown_diagnostic_count(const AbVerificationContext *context,
+                                        const char *severity) {
+  size_t index;
+  size_t count = 0;
+  for (index = 0; index < context->diagnostic_count; index++)
+    if (string_literal(&context->diagnostics[index].severity, severity))
+      count++;
+  return count;
+}
+
 static ArchbirdStatus
 markdown_counter_line(AbVerificationContext *context, AbBuffer *buffer,
                       const char *prefix, const char *field,
@@ -897,11 +925,7 @@ ArchbirdStatus ab_constraints_render_markdown(AbVerificationContext *context,
       "pass.\n\n## Verdict summary\n\n```text\nconstraints "));
   for (check_index = 0; check_index < sizeof(statuses) / sizeof(statuses[0]);
        check_index++) {
-    size_t row;
-    size_t count = 0;
-    for (row = 0; row < context->check_count; row++)
-      if (string_literal(&context->checks[row].status, statuses[check_index]))
-        count++;
+    size_t count = markdown_status_count(context, statuses[check_index]);
     if (check_index)
       MD_TRY(ab_buffer_literal(buffer, " "));
     MD_TRY(ab_buffer_literal(buffer, statuses[check_index]));
@@ -1215,6 +1239,31 @@ ArchbirdStatus ab_constraints_render_markdown(AbVerificationContext *context,
       }
     MD_TRY(ab_buffer_literal(buffer, "\n"));
   }
+  MD_TRY(ab_buffer_literal(buffer, "## Result\n\nResult: blocking="));
+  MD_TRY(ab_buffer_literal(buffer,
+                           report_verification_blocks(context) ? "yes" : "no"));
+  MD_TRY(ab_buffer_literal(buffer, "; constraints pass="));
+  MD_TRY(ab_buffer_u64(buffer, markdown_status_count(context, "pass")));
+  MD_TRY(ab_buffer_literal(buffer, " fail="));
+  MD_TRY(ab_buffer_u64(buffer, markdown_status_count(context, "fail")));
+  MD_TRY(ab_buffer_literal(buffer, " unknown="));
+  MD_TRY(ab_buffer_u64(buffer, markdown_status_count(context, "unknown")));
+  MD_TRY(ab_buffer_literal(buffer, " waived="));
+  MD_TRY(ab_buffer_u64(buffer, markdown_status_count(context, "waived")));
+  MD_TRY(ab_buffer_literal(buffer, " not-applicable="));
+  MD_TRY(
+      ab_buffer_u64(buffer, markdown_status_count(context, "not_applicable")));
+  MD_TRY(ab_buffer_literal(buffer, "; findings="));
+  MD_TRY(ab_buffer_u64(buffer, markdown_finding_count(context)));
+  MD_TRY(ab_buffer_literal(buffer, ".\nEvidence: coverage-keys="));
+  MD_TRY(ab_buffer_u64(buffer, coverage));
+  MD_TRY(ab_buffer_literal(buffer, "; coverage-regressions="));
+  MD_TRY(ab_buffer_u64(buffer, regressions));
+  MD_TRY(ab_buffer_literal(buffer, "; diagnostics errors="));
+  MD_TRY(ab_buffer_u64(buffer, markdown_diagnostic_count(context, "error")));
+  MD_TRY(ab_buffer_literal(buffer, " warnings="));
+  MD_TRY(ab_buffer_u64(buffer, markdown_diagnostic_count(context, "warning")));
+  MD_TRY(ab_buffer_literal(buffer, ".\n"));
   while (buffer->length && buffer->data[buffer->length - 1] == '\n')
     buffer->length--;
   MD_TRY(ab_buffer_literal(buffer, "\n"));

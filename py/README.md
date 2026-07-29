@@ -372,7 +372,9 @@ archbird verify --freeze .archbird/architecture.baseline.json \
 `verify` without IDs evaluates every configured constraint. Positional IDs
 select an explicit subset and the Verification artifact records configured,
 requested, evaluated, and omitted counts; a successful subset is never reported
-as whole-policy compliance. Unknown IDs are errors. Repository selection is
+as whole-policy compliance. Unknown IDs are errors. The CLI defaults to a
+human-readable Markdown verdict; use `--format json` when saving the canonical
+Verification artifact. Repository selection is
 execution context: run in the project root or use `--root PATH`; an external
 configuration uses `--config CONFIG --root PROJECT`. Query and Impact also
 accept an unambiguous path-shaped positional root, such as

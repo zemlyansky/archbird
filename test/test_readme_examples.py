@@ -336,6 +336,22 @@ def main() -> None:
             or "\nProjection `map-overview`" not in bare.stdout
         ):
             raise AssertionError("bare archbird shortcut did not render a Map")
+        bare_tail = [line for line in bare.stdout.splitlines() if line][-2:]
+        if (
+            len(bare_tail) != 2
+            or not re.fullmatch(
+                r"Result: files=\d+; indexed-symbols=\d+; entities=\d+; "
+                r"relations=\d+; diagnostics=\d+ \(errors=\d+ warnings=\d+\)\.",
+                bare_tail[0],
+            )
+            or not re.fullmatch(
+                r"Evidence: graph=(?:complete|incomplete|unknown); "
+                r"exhaustive=(?:yes|no); unknown=\d+; unsupported=\d+; "
+                r"presentation-omitted=\d+; projection=`[0-9a-f]{64}`\.",
+                bare_tail[1],
+            )
+        ):
+            raise AssertionError(f"unexpected default Map tail: {bare_tail!r}")
         bare_stdout = run(
             "--format",
             "json",
@@ -471,6 +487,28 @@ def main() -> None:
             cwd=root,
             match="--max-findings must be nonnegative",
         )
+        verification_report = run(
+            "verify",
+            "--map",
+            ".archbird/map.json",
+            "--check",
+            cwd=root,
+        ).stdout
+        verification_tail = [
+            line for line in verification_report.splitlines() if line
+        ][-2:]
+        if (
+            verification_tail
+            != [
+                "Result: blocking=no; constraints pass=2 fail=0 unknown=0 "
+                "waived=0 not-applicable=0; findings=0.",
+                "Evidence: coverage-keys=4; coverage-regressions=0; "
+                "diagnostics errors=0 warnings=0.",
+            ]
+        ):
+            raise AssertionError(
+                f"unexpected default Verify tail: {verification_tail!r}"
+            )
         run(
             "verify",
             "--map",
