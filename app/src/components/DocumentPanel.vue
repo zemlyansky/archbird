@@ -34,9 +34,19 @@ const diffSections = computed(() => {
   });
 });
 
-const proposalCandidates = computed(() => rows(props.artifact.document.candidates));
-const proposalUnknowns = computed(() => rows(props.artifact.document.unknowns));
-const resultOutcomes = computed(() => rows(props.artifact.document.outcomes));
+const planItems = computed(() => rows(props.artifact.document.items));
+const planUnknowns = computed(() => rows(props.artifact.document.unknowns));
+const preservedConstraints = computed(() =>
+  Array.isArray(props.artifact.document.preserved_constraints)
+    ? props.artifact.document.preserved_constraints.length
+    : 0);
+const actChanges = computed(() => rows(props.artifact.document.changes));
+const actAcceptance = computed(() => {
+  const value = props.artifact.document.acceptance;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+});
 
 function label(value: unknown): string {
   if (typeof value === "string") return value;
@@ -51,9 +61,8 @@ function label(value: unknown): string {
     <header>
       <p class="eyebrow">{{ artifact.artifact }}</p>
       <h1 v-if="artifact.artifact === 'diff'">Structural comparison</h1>
-      <h1 v-else-if="artifact.artifact === 'change-proposal'">Change proposal</h1>
-      <h1 v-else-if="artifact.artifact === 'change-contract'">Reviewed change contract</h1>
-      <h1 v-else-if="artifact.artifact === 'change-result'">Change result</h1>
+      <h1 v-else-if="artifact.artifact === 'plan'">Structural change plan</h1>
+      <h1 v-else-if="artifact.artifact === 'act-result'">Act result</h1>
       <h1 v-else>Structured evidence</h1>
     </header>
 
@@ -88,44 +97,48 @@ function label(value: unknown): string {
       </article>
     </template>
 
-    <template v-else-if="artifact.artifact === 'change-proposal'">
+    <template v-else-if="artifact.artifact === 'plan'">
       <div class="metric-strip">
-        <div><strong>{{ proposalCandidates.length }}</strong><span>candidate sites</span></div>
-        <div><strong>{{ rows(artifact.document.postconditions).length }}</strong><span>postconditions</span></div>
-        <div><strong>{{ rows(artifact.document.preserved_invariants).length }}</strong><span>preserved</span></div>
-        <div><strong>{{ proposalUnknowns.length }}</strong><span>unknowns</span></div>
+        <div><strong>{{ planItems.length }}</strong><span>plan items</span></div>
+        <div><strong>{{ planItems.filter((item) => item.executable).length }}</strong><span>executable</span></div>
+        <div><strong>{{ preservedConstraints }}</strong><span>preserved</span></div>
+        <div><strong>{{ planUnknowns.length }}</strong><span>unknowns</span></div>
       </div>
-      <article v-for="candidate in proposalCandidates" :key="String(candidate.id)" class="document-row">
-        <p class="eyebrow">{{ candidate.kind }}</p>
-        <h2>{{ candidate.path || candidate.id }}</h2>
-        <p>{{ candidate.reason }}</p>
+      <p class="document-lead">{{ artifact.document.objective }}</p>
+      <article v-for="item in planItems" :key="String(item.id)" class="document-row">
+        <p class="eyebrow">{{ (item.operation as Record<string, unknown>)?.action || 'manual' }}</p>
+        <h2>{{ item.statement || item.id }}</h2>
+        <p>{{ item.executable ? 'Ready for deterministic preview.' : 'Requires reviewed transformation input.' }}</p>
+        <ul v-if="(item.non_executable_reasons as unknown[])?.length">
+          <li v-for="reason in item.non_executable_reasons as unknown[]" :key="String(reason)">
+            {{ reason }}
+          </li>
+        </ul>
       </article>
-      <article v-for="unknown in proposalUnknowns" :key="String(unknown.id)" class="document-row warning-row">
+      <article v-for="unknown in planUnknowns" :key="String(unknown.id)" class="document-row warning-row">
         <p class="eyebrow">Unknown frontier</p>
-        <h2>{{ unknown.code || unknown.id }}</h2>
-        <p>{{ unknown.message }}</p>
+        <h2>{{ unknown.id }}</h2>
+        <p>{{ unknown.statement }}</p>
       </article>
     </template>
 
-    <template v-else-if="artifact.artifact === 'change-contract'">
-      <dl class="definition-list">
-        <dt>Objective</dt><dd>{{ artifact.document.objective }}</dd>
-        <dt>Owner</dt><dd>{{ artifact.document.owner }}</dd>
-        <dt>Rationale</dt><dd>{{ artifact.document.rationale }}</dd>
-        <dt>Selected candidates</dt><dd>{{ (artifact.document.selected_candidates as unknown[])?.length || 0 }}</dd>
-        <dt>Postconditions</dt><dd>{{ (artifact.document.postconditions as unknown[])?.length || 0 }}</dd>
-        <dt>Preserved constraints</dt><dd>{{ (artifact.document.preserved_constraints as unknown[])?.length || 0 }}</dd>
-      </dl>
-    </template>
-
-    <template v-else-if="artifact.artifact === 'change-result'">
+    <template v-else-if="artifact.artifact === 'act-result'">
       <div class="result-status" :data-status="artifact.document.status">
-        <span>Overall result</span><strong>{{ artifact.document.status }}</strong>
+        <span>Act</span><strong>{{ artifact.document.status }}</strong>
       </div>
-      <article v-for="outcome in resultOutcomes" :key="String(outcome.id)" class="document-row">
-        <p class="eyebrow">{{ outcome.kind }}</p>
-        <h2>{{ outcome.id }}</h2>
-        <p><strong>{{ outcome.status }}</strong> · {{ outcome.message }}</p>
+      <dl class="definition-list">
+        <dt>Acceptance</dt><dd>{{ actAcceptance.status || 'not evaluated' }}</dd>
+        <dt>Plan</dt><dd>{{ artifact.document.plan_sha256 }}</dd>
+        <dt>Files changed</dt><dd>{{ actChanges.length }}</dd>
+      </dl>
+      <article v-for="change in actChanges" :key="String(change.path)" class="document-row">
+        <p class="eyebrow">{{ change.kind }}</p>
+        <h2>{{ change.path }}</h2>
+        <p>{{ (change.item_ids as unknown[])?.length || 0 }} Plan item(s)</p>
+        <details>
+          <summary>Patch</summary>
+          <pre>{{ change.unified_diff }}</pre>
+        </details>
       </article>
     </template>
 

@@ -1,0 +1,396 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/plan.schema.json",
+  "title": "Archbird change plan",
+  "description": "An editable plan derived from a source Map and Verification. The canonical digest is computed by Act when the plan is consumed and is intentionally not stored in this artifact.",
+  "$comment": "Host validation additionally limits the canonical UTF-8 document to 67108864 bytes, every metadata string to 65536 UTF-8 bytes, every operation text field to 16777216 UTF-8 bytes, touched files to 4096, each existing or final source to 67108864 bytes, each of aggregate existing and final touched source to 268435456 bytes, and the aggregate rendered patch to 268435456 UTF-8 bytes. JSON Schema maxLength counts Unicode code points, so hosts enforce the corresponding byte limits.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "tool",
+    "source",
+    "objective",
+    "items",
+    "preserved_constraints",
+    "unknowns"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "plan"},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "tool": {"$ref": "#/$defs/tool"},
+    "source": {"$ref": "#/$defs/source"},
+    "objective": {"type": "string", "minLength": 1, "maxLength": 65536},
+    "items": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "description": "Plan item IDs must additionally be unique under native or host validation.",
+      "items": {"$ref": "#/$defs/item"}
+    },
+    "preserved_constraints": {"$ref": "#/$defs/ids"},
+    "unknowns": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "description": "Unknown IDs must additionally be unique under native or host validation.",
+      "items": {"$ref": "#/$defs/unknown"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "nullableId": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/id"}
+      ]
+    },
+    "ids": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/id"}
+    },
+    "nonEmptyStrings": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 65536
+      }
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+$"
+    },
+    "optionalRepositoryPath": {
+      "oneOf": [
+        {"const": ""},
+        {"$ref": "#/$defs/repositoryPath"}
+      ]
+    },
+    "provenance": {
+      "enum": ["derived", "asserted"]
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 256},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "map", "verification"],
+      "properties": {
+        "project": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "map": {"$ref": "#/$defs/mapIdentity"},
+        "verification": {"$ref": "#/$defs/verificationIdentity"}
+      }
+    },
+    "mapIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "input_sha256",
+        "configuration_sha256",
+        "producer_implementation_sha256"
+      ],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "input_sha256": {"$ref": "#/$defs/sha256"},
+        "configuration_sha256": {"$ref": "#/$defs/sha256"},
+        "producer_implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "verificationIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "policy_sha256",
+        "producer_implementation_sha256"
+      ],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "policy_sha256": {"$ref": "#/$defs/sha256"},
+        "producer_implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "constraint_id",
+        "constraint_result_sha256",
+        "issue_fingerprint"
+      ],
+      "properties": {
+        "constraint_id": {"$ref": "#/$defs/id"},
+        "constraint_result_sha256": {"$ref": "#/$defs/sha256"},
+        "issue_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "project",
+        "path",
+        "line",
+        "sha256",
+        "detail"
+      ],
+      "properties": {
+        "provenance": {"enum": ["derived", "asserted", "observed"]},
+        "project": {"type": "string", "maxLength": 65536},
+        "path": {"$ref": "#/$defs/optionalRepositoryPath"},
+        "line": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "oneOf": [
+            {"const": ""},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        },
+        "detail": {"type": "string", "maxLength": 65536}
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["constraints"],
+      "properties": {
+        "constraints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        }
+      }
+    },
+    "unknown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement", "item_id", "constraint_id"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "item_id": {"$ref": "#/$defs/nullableId"},
+        "constraint_id": {"$ref": "#/$defs/nullableId"}
+      }
+    },
+    "replaceRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Native or host validation must additionally enforce start_byte <= end_byte and that before equals the source bytes in the locked range.",
+      "required": [
+        "action",
+        "path",
+        "source_sha256",
+        "start_byte",
+        "end_byte",
+        "before",
+        "replacement"
+      ],
+      "properties": {
+        "action": {"const": "replace_range"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "start_byte": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_byte": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "before": {"type": "string", "maxLength": 16777216},
+        "replacement": {"type": "string", "maxLength": 16777216}
+      }
+    },
+    "createFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "path", "content"],
+      "properties": {
+        "action": {"const": "create_file"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "content": {"type": "string", "maxLength": 16777216}
+      }
+    },
+    "deleteFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "path", "source_sha256"],
+      "properties": {
+        "action": {"const": "delete_file"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "moveFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Native or host validation must additionally enforce distinct source and destination paths.",
+      "required": [
+        "action",
+        "source_path",
+        "destination_path",
+        "source_sha256"
+      ],
+      "properties": {
+        "action": {"const": "move_file"},
+        "source_path": {"$ref": "#/$defs/repositoryPath"},
+        "destination_path": {"$ref": "#/$defs/repositoryPath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "manual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "instructions", "candidate_paths"],
+      "properties": {
+        "action": {"const": "manual"},
+        "instructions": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "candidate_paths": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/repositoryPath"}
+        }
+      }
+    },
+    "operation": {
+      "oneOf": [
+        {"$ref": "#/$defs/replaceRange"},
+        {"$ref": "#/$defs/createFile"},
+        {"$ref": "#/$defs/deleteFile"},
+        {"$ref": "#/$defs/moveFile"},
+        {"$ref": "#/$defs/manual"}
+      ]
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "statement",
+        "provenance",
+        "origins",
+        "evidence",
+        "depends_on",
+        "operation",
+        "acceptance",
+        "unknowns",
+        "executable",
+        "non_executable_reasons"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "provenance": {"$ref": "#/$defs/provenance"},
+        "origins": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/origin"}
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "depends_on": {"$ref": "#/$defs/ids"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "acceptance": {"$ref": "#/$defs/acceptance"},
+        "unknowns": {"$ref": "#/$defs/ids"},
+        "executable": {"type": "boolean"},
+        "non_executable_reasons": {"$ref": "#/$defs/nonEmptyStrings"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"executable": {"const": true}},
+            "required": ["executable"]
+          },
+          "then": {
+            "properties": {
+              "non_executable_reasons": {"maxItems": 0},
+              "operation": {
+                "not": {
+                  "properties": {"action": {"const": "manual"}},
+                  "required": ["action"]
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "non_executable_reasons": {"minItems": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "properties": {"action": {"const": "manual"}},
+                "required": ["action"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": {
+              "executable": {"const": false},
+              "non_executable_reasons": {"minItems": 1}
+            }
+          }
+        }
+      ]
+    }
+  }
+}

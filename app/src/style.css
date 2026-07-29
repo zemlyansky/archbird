@@ -634,6 +634,7 @@ pre {
 .result-status[data-status="satisfied"] strong { color: var(--success); }
 .result-status[data-status="missing"] strong,
 .result-status[data-status="failed"] strong { color: var(--danger); }
+.result-status[data-status="rejected"] strong { color: var(--danger); }
 .canonical-input { margin-top: 4px; }
 
 @media (max-width: 1100px) {

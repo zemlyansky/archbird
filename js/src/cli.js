@@ -8,10 +8,11 @@ const { spawnSync } = require("node:child_process");
 const { TextDecoder } = require("node:util");
 const archbird = require("./index");
 const native = require("./native");
+const { MAX_PLAN_BYTES } = require("./plan-limits");
 
 const COMMANDS = new Set([
+  "act",
   "config",
-  "contract",
   "diff",
   "export",
   "freshness",
@@ -23,7 +24,6 @@ const COMMANDS = new Set([
   "serve",
   "support",
   "verify",
-  "verify-plan",
   "workspace",
 ]);
 
@@ -68,9 +68,8 @@ function usage(command = "map") {
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
     verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
-    plan: "archbird plan --verification RESULT.json --finding FINGERPRINT",
-    contract: "archbird contract --proposal PROPOSAL.json --objective TEXT --owner NAME --rationale TEXT",
-    "verify-plan": "archbird verify-plan --proposal P.json --contract C.json --before-verification B.json --after-verification A.json [--check]",
+    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--objective TEXT] [--output PLAN.json]",
+    act: "archbird act PLAN.json [--root PROJECT] [--apply] [--format markdown|json|patch]",
     export: "archbird export graphml|json|mermaid --map MAP_OR_QUERY.json [--output FILE]",
     serve: "archbird serve [--root PROJECT] [--config PROJECT.json] [--host 127.0.0.1] [--port 4177]",
     support: "archbird support",
@@ -83,17 +82,17 @@ function usage(command = "map") {
       "Context profiles exact|change|architecture|audit control Markdown; " +
       "--max-chars is only the final guard.\n"
     : "";
-  return `${rows[command]}\n${selectorHelp}\nMap → Verify → Act with deterministic native/Wasm evidence.\n`;
+  return `${rows[command]}\n${selectorHelp}\nMap → Query → Verify → Plan → Act with deterministic native/Wasm evidence.\n`;
 }
 
 function topLevelUsage() {
   return (
     "usage: archbird COMMAND [OPTIONS]\n" +
     "       archbird [ROOT] [MAP OPTIONS]\n\n" +
-    "Map codebases, query evidence, verify architecture, and review structural changes.\n\n" +
+    "Map codebases, query evidence, verify architecture, and apply reviewed Plans.\n\n" +
     "commands:\n" +
     "  map, config, query, impact, diff, observe, freshness, workspace\n" +
-    "  verify, plan, contract, verify-plan, export, serve, support\n\n" +
+    "  verify, plan, act, export, serve, support\n\n" +
     "Run `archbird COMMAND --help` for command-specific options. With no command, " +
     "Archbird maps the current directory; an existing or path-shaped positional " +
     "argument is the Map root.\n"
@@ -168,6 +167,33 @@ function required(options, ...names) {
 
 function read(name) {
   return fs.readFileSync(path.resolve(name));
+}
+
+function readBounded(name, maximum, description) {
+  const resolved = path.resolve(name);
+  const before = fs.lstatSync(resolved);
+  if (!before.isFile()) throw new Error(`${description} is not a regular file`);
+  const descriptor = fs.openSync(
+    resolved,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
+  );
+  try {
+    const metadata = fs.fstatSync(descriptor);
+    if (!metadata.isFile()) throw new Error(`${description} is not a regular file`);
+    if (metadata.dev !== before.dev || metadata.ino !== before.ino) {
+      throw new Error(`${description} changed while it was opened`);
+    }
+    if (metadata.size > maximum) {
+      throw new Error(`${description} exceeds ${maximum} bytes`);
+    }
+    const value = fs.readFileSync(descriptor);
+    if (value.length > maximum) {
+      throw new Error(`${description} exceeds ${maximum} bytes`);
+    }
+    return value;
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 function write(value, output = "-") {
@@ -462,6 +488,97 @@ function namedDocuments(values, option) {
     result[id] = document;
   }
   return result;
+}
+
+function constraintRequest(
+  options,
+  configJson,
+  { baselinePath = options.baseline || null } = {},
+) {
+  const observations = namedDocuments(
+    options.observation || [],
+    "--observation",
+  );
+  const mapDocuments = namedDocuments(options.mapInput || [], "--map-input");
+  const resolutionDocuments = namedDocuments(
+    options.resolutionInput || [],
+    "--resolution-input",
+  );
+  const unmatched = Object.keys(resolutionDocuments)
+    .filter((id) => !Object.hasOwn(mapDocuments, id));
+  if (unmatched.length) {
+    throw new Error(
+      `--resolution-input has no matching --map-input: ${unmatched.sort().join(", ")}`,
+    );
+  }
+  const maps = {};
+  for (const [id, map] of Object.entries(mapDocuments)) {
+    maps[id] = { map };
+    if (Object.hasOwn(resolutionDocuments, id)) {
+      maps[id].resolution = resolutionDocuments[id];
+    }
+  }
+  const configDocument = JSON.parse(configJson.toString("utf8"));
+  const configuredConstraints = Array.isArray(configDocument.constraints)
+    ? configDocument.constraints
+    : Object.values(configDocument.constraints || {});
+  const hasExpiringWaiver = configuredConstraints.some((constraint) =>
+    constraint && Array.isArray(constraint.waivers) &&
+    constraint.waivers.some((waiver) => waiver && waiver.expires_on));
+  const policyDate = options.policyDate ||
+    (hasExpiringWaiver ? new Date().toISOString().slice(0, 10) : null);
+  const request = {};
+  if (baselinePath) {
+    request.baseline = JSON.parse(read(baselinePath).toString("utf8"));
+  }
+  if (Object.keys(maps).length) request.maps = maps;
+  if (Object.keys(observations).length) request.observations = observations;
+  if (policyDate !== null) request.policy_date = policyDate;
+  return request;
+}
+
+function constraintContext(
+  options,
+  progress,
+  { baselinePath = options.baseline || null } = {},
+) {
+  if (options.noConfig) {
+    throw new Error(
+      "Verify and Plan require constraints from archbird.json; " +
+      "--no-config is not supported",
+    );
+  }
+  const resolvedInputs = repositoryInputs(options);
+  const { repository, configJson } = resolvedInputs;
+  if (!configJson.length) {
+    throw new Error(
+      `no archbird.json found in ${repository}; ` +
+      "Verify and Plan require reviewed constraints",
+    );
+  }
+  if (options.resolution && !options.map) {
+    throw new Error("--resolution requires --map");
+  }
+  let mapJson;
+  let resolutionJson;
+  if (options.map) {
+    mapJson = read(options.map);
+    resolutionJson = options.resolution
+      ? read(options.resolution)
+      : Buffer.alloc(0);
+  } else {
+    const current = project(options, progress, resolvedInputs);
+    mapJson = current.mapJson();
+    resolutionJson = current.resolutionJson || Buffer.alloc(0);
+    warnMapCacheStats(current.mapCacheStats);
+  }
+  return {
+    repository,
+    configJson,
+    mapJson,
+    resolutionJson,
+    request: constraintRequest(options, configJson, { baselinePath }),
+  };
 }
 
 function mapMain(argv) {
@@ -1219,72 +1336,21 @@ function verifyMain(argv) {
   }
   const constraintIds = [...options._];
   const repositoryOptions = { ...options, _: [] };
-  const observations = namedDocuments(options.observation, "--observation");
-  const mapDocuments = namedDocuments(options.mapInput, "--map-input");
-  const resolutionDocuments = namedDocuments(
-    options.resolutionInput,
-    "--resolution-input",
-  );
-  const unmatched = Object.keys(resolutionDocuments)
-    .filter((id) => !Object.hasOwn(mapDocuments, id));
-  if (unmatched.length) {
-    throw new Error(
-      `--resolution-input has no matching --map-input: ${unmatched.sort().join(", ")}`,
-    );
-  }
-  const maps = {};
-  for (const [id, map] of Object.entries(mapDocuments)) {
-    maps[id] = { map };
-    if (Object.hasOwn(resolutionDocuments, id)) {
-      maps[id].resolution = resolutionDocuments[id];
-    }
-  }
-  let baseline = null;
   const baselinePath = options.baseline ||
     (options.freeze && fs.existsSync(path.resolve(options.freeze))
       ? options.freeze
       : null);
-  if (baselinePath) baseline = JSON.parse(read(baselinePath).toString("utf8"));
-
   const progress = new Progress(options.progress);
-  const resolvedInputs = repositoryInputs(repositoryOptions);
-  const { repository, configJson } = resolvedInputs;
-  if (!configJson.length) {
-    throw new Error(
-      `no archbird.json found in ${repository}; Verify requires reviewed constraints`,
-    );
-  }
-  const configDocument = JSON.parse(configJson.toString("utf8"));
-  const configuredConstraints = Array.isArray(configDocument.constraints)
-    ? configDocument.constraints
-    : Object.values(configDocument.constraints || {});
-  const hasExpiringWaiver = configuredConstraints.some((constraint) =>
-    constraint && Array.isArray(constraint.waivers) &&
-    constraint.waivers.some((waiver) => waiver && waiver.expires_on));
-  const policyDate = options.policyDate ||
-    (hasExpiringWaiver ? new Date().toISOString().slice(0, 10) : null);
-  if (options.resolution && !options.map) {
-    throw new Error("--resolution requires --map");
-  }
-  let mapJson;
-  let resolutionJson;
-  if (options.map) {
-    mapJson = read(options.map);
-    resolutionJson = options.resolution
-      ? read(options.resolution)
-      : Buffer.alloc(0);
-  } else {
-    const current = project(repositoryOptions, progress, resolvedInputs);
-    mapJson = current.mapJson();
-    resolutionJson = current.resolutionJson || Buffer.alloc(0);
-    warnMapCacheStats(current.mapCacheStats);
-  }
-
-  const baseRequest = {};
-  if (baseline !== null) baseRequest.baseline = baseline;
-  if (Object.keys(maps).length) baseRequest.maps = maps;
-  if (Object.keys(observations).length) baseRequest.observations = observations;
-  if (policyDate !== null) baseRequest.policy_date = policyDate;
+  const {
+    configJson,
+    mapJson,
+    resolutionJson,
+    request: baseRequest,
+  } = constraintContext(
+    repositoryOptions,
+    progress,
+    { baselinePath },
+  );
   const selectedRequest = { ...baseRequest };
   if (constraintIds.length) selectedRequest.ids = constraintIds;
   const requestJson = Object.keys(selectedRequest).length
@@ -1334,63 +1400,434 @@ function verifyMain(argv) {
 
 function planMain(argv) {
   const options = parse(argv, {
-    verification: { type: "string" }, finding: { type: "string" },
-    format: { default: "json", type: "string" }, full: { type: "boolean" },
-    maxCandidates: { flag: "max-candidates", default: 20, type: "number" },
-    pretty: COMMON.pretty, output: COMMON.output, help: COMMON.help,
-  });
+    ...DISCOVERY,
+    map: { type: "string" },
+    resolution: { type: "string" },
+    baseline: { type: "string" },
+    policyDate: { flag: "policy-date", type: "string" },
+    observation: { type: "multiple" },
+    mapInput: { flag: "map-input", type: "multiple" },
+    resolutionInput: { flag: "resolution-input", type: "multiple" },
+    objective: { type: "string" },
+  }, { positionals: Number.POSITIVE_INFINITY });
   if (options.help) { process.stdout.write(usage("plan")); return 0; }
-  required(options, "verification", "finding");
-  write(archbird.compileChangeProposal(read(options.verification), options.finding, {
-    format: options.format, full: options.full, maxCandidates: options.maxCandidates, pretty: options.pretty,
-  }), options.output);
-  return 0;
-}
-
-function contractMain(argv) {
-  const options = parse(argv, {
-    proposal: { type: "string" }, objective: { type: "string" }, owner: { type: "string" },
-    rationale: { type: "string" }, preserveConstraint: { flag: "preserve-constraint", type: "multiple" },
-    preserveAll: { flag: "preserve-all", type: "boolean" },
-    selectCandidate: { flag: "select-candidate", type: "multiple" },
-    format: { default: "json", type: "string" }, pretty: COMMON.pretty,
-    output: COMMON.output, help: COMMON.help,
+  const positionals = [...options._];
+  const positionalRoot = queryPositionalIsRoot(positionals[0])
+    ? positionals.shift()
+    : null;
+  const repositoryOptions = {
+    ...options,
+    _: positionalRoot ? [positionalRoot] : [],
+  };
+  const progress = new Progress(options.progress);
+  const {
+    repository,
+    configJson,
+    mapJson,
+    resolutionJson,
+    request,
+  } = constraintContext(repositoryOptions, progress);
+  const verificationJson = archbird.evaluateConstraints(configJson, mapJson, {
+    resolutionJson,
+    requestJson: Object.keys(request).length
+      ? Buffer.from(JSON.stringify(request))
+      : Buffer.alloc(0),
+    pretty: false,
   });
-  if (options.help) { process.stdout.write(usage("contract")); return 0; }
-  required(options, "proposal", "objective", "owner", "rationale");
-  const proposal = read(options.proposal);
-  let preserveConstraints = options.preserveConstraint;
-  if (options.preserveAll) {
-    preserveConstraints = JSON.parse(proposal).preserved_invariants.map((row) => row.id);
+  const mapDocument = JSON.parse(mapJson.toString("utf8"));
+  if (hasErrors(mapDocument)) {
+    throw new Error(
+      "Plan requires a Map without error diagnostics; " +
+      "fix Map evidence before deriving edits",
+    );
   }
-  write(archbird.createChangeContract(proposal, {
-    objective: options.objective, owner: options.owner, rationale: options.rationale,
-    preserveConstraints, selectedCandidates: options.selectCandidate,
-    format: options.format, pretty: options.pretty,
-  }), options.output);
+  const generated = archbird.generatePlan(
+    mapDocument,
+    JSON.parse(verificationJson.toString("utf8")),
+    positionals.length ? positionals : null,
+    repository,
+  );
+  if (options.objective) {
+    generated.objective = options.objective;
+    generated.provenance = "asserted";
+  }
+  write(
+    native.jsonCanonicalize(
+      Buffer.from(JSON.stringify(generated)),
+      options.pretty,
+      false,
+    ),
+    options.output,
+  );
+  progress.finish();
   return 0;
 }
 
-function verifyPlanMain(argv) {
-  const options = parse(argv, {
-    proposal: { type: "string" }, contract: { type: "string" },
-    beforeVerification: { flag: "before-verification", type: "string" },
-    afterVerification: { flag: "after-verification", type: "string" },
-    format: { default: "json", type: "string" }, pretty: COMMON.pretty,
-    output: COMMON.output, check: COMMON.check, help: COMMON.help,
-  });
-  if (options.help) { process.stdout.write(usage("verify-plan")); return 0; }
-  required(options, "proposal", "contract", "beforeVerification", "afterVerification");
-  const inputs = [options.proposal, options.contract, options.beforeVerification, options.afterVerification].map(read);
-  const encoded = archbird.verifyChangeContract(...inputs, {
-    format: options.format, pretty: options.pretty || options.format === "sarif",
-  });
-  write(encoded, options.output);
-  if (!options.check) return 0;
-  const result = options.format === "json" ? JSON.parse(encoded) : JSON.parse(
-    archbird.verifyChangeContract(...inputs, { format: "json", pretty: false }),
+function canonicalJsonDigest(value) {
+  const canonical = native.jsonCanonicalize(
+    Buffer.isBuffer(value)
+      ? value
+      : Buffer.from(JSON.stringify(value)),
   );
-  return ["satisfied", "superseded"].includes(result.status) ? 0 : 1;
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+function actProject(options, repository, configJson, progress) {
+  progress.emit({ phase: "discovery", state: "start" });
+  const current = archbird.Project.fromRepository(repository, {
+    config: configJson,
+    scan: false,
+    typescript: !options.noTypescript,
+  });
+  progress.emit({ phase: "selected", files: current.sources.length });
+  current.scan("primary", {
+    cacheDir: options.noCache
+      ? null
+      : (options.cacheDir || archbird.defaultProviderCacheDir()),
+    cacheMaxBytes: cacheMaxBytes(options),
+    typescript: !options.noTypescript,
+    progress: (event) => progress.emit(event),
+    mapCache: true,
+  });
+  warnCacheStats(current.cacheStats);
+  warnMapCacheStats(current.mapCacheStats);
+  return current;
+}
+
+function planSourceMismatches(plan, mapJson, verification) {
+  const source = plan.source;
+  const map = JSON.parse(mapJson.toString("utf8"));
+  const expectedMap = source?.map;
+  const expectedVerification = source?.verification;
+  const evidence = map.evidence;
+  const mapTool = map.tool;
+  const policy = verification.policy;
+  const verificationTool = verification.tool;
+  if (![source, expectedMap, expectedVerification, evidence, mapTool, policy,
+    verificationTool].every((value) =>
+    value && typeof value === "object" && !Array.isArray(value))) {
+    return ["Plan, Map, or Verification is missing source identity fields"];
+  }
+  const actual = {
+    project: map.project,
+    "map.sha256": canonicalJsonDigest(mapJson),
+    "map.input_sha256": evidence.input_sha256,
+    "map.configuration_sha256": evidence.config_sha256,
+    "map.producer_implementation_sha256": mapTool.implementation_sha256,
+    "verification.sha256": verification.verification_result_sha256,
+    "verification.policy_sha256": policy.constraint_policy_sha256,
+    "verification.producer_implementation_sha256":
+      verificationTool.implementation_sha256,
+  };
+  const expected = {
+    project: source.project,
+    "map.sha256": expectedMap.sha256,
+    "map.input_sha256": expectedMap.input_sha256,
+    "map.configuration_sha256": expectedMap.configuration_sha256,
+    "map.producer_implementation_sha256":
+      expectedMap.producer_implementation_sha256,
+    "verification.sha256": expectedVerification.sha256,
+    "verification.policy_sha256": expectedVerification.policy_sha256,
+    "verification.producer_implementation_sha256":
+      expectedVerification.producer_implementation_sha256,
+  };
+  return Object.keys(expected)
+    .filter((field) => expected[field] !== actual[field])
+    .map((field) => `${field} changed`);
+}
+
+function planAcceptanceIds(plan) {
+  const identifiers = [];
+  for (const item of plan.items || []) {
+    const values = item?.acceptance?.constraints;
+    if (!Array.isArray(values) || !values.length) {
+      throw new Error("Plan item acceptance must name constraints");
+    }
+    for (const value of values) {
+      if (typeof value !== "string" || !value) {
+        throw new Error("Plan acceptance constraint IDs must be strings");
+      }
+      if (!identifiers.includes(value)) identifiers.push(value);
+    }
+  }
+  if (!Array.isArray(plan.preserved_constraints)) {
+    throw new Error("Plan preserved_constraints must be an array");
+  }
+  for (const value of plan.preserved_constraints) {
+    if (typeof value !== "string" || !value) {
+      throw new Error("preserved constraint IDs must be strings");
+    }
+    if (!identifiers.includes(value)) identifiers.push(value);
+  }
+  return identifiers;
+}
+
+function acceptanceFromVerification(plan, verification) {
+  if (!Array.isArray(verification.constraints)) {
+    throw new Error("fresh Verification has no constraint results");
+  }
+  const byId = new Map(
+    verification.constraints
+      .filter((row) => row && typeof row.id === "string")
+      .map((row) => [row.id, row]),
+  );
+  const identifiers = planAcceptanceIds(plan);
+  const omitted = [...byId.keys()]
+    .filter((id) => !identifiers.includes(id))
+    .sort();
+  const extra = identifiers.filter((id) => !byId.has(id)).sort();
+  if (omitted.length || extra.length) {
+    const details = [];
+    if (omitted.length) details.push(`omits ${omitted.join(", ")}`);
+    if (extra.length) details.push(`includes unknown ${extra.join(", ")}`);
+    throw new Error(
+      "Plan acceptance must cover the complete Verification policy: " +
+      details.join("; "),
+    );
+  }
+  const missing = identifiers.filter((id) => !byId.has(id));
+  if (missing.length) {
+    throw new Error(
+      "Plan names constraints absent from fresh Verification: " +
+      missing.join(", "),
+    );
+  }
+  const constraints = identifiers.map((id) => ({
+    id,
+    status: byId.get(id).status,
+  }));
+  const allowed = new Set([
+    "pass", "fail", "unknown", "waived", "not_applicable",
+  ]);
+  if (constraints.some((row) => !allowed.has(row.status))) {
+    throw new Error("fresh Verification contains an invalid constraint status");
+  }
+  const statuses = new Set(constraints.map((row) => row.status));
+  const status = statuses.has("fail")
+    ? "not_satisfied"
+    : statuses.has("unknown")
+      ? "unknown"
+      : "satisfied";
+  if (typeof verification.verification_result_sha256 !== "string") {
+    throw new Error("fresh Verification is missing its result digest");
+  }
+  return {
+    status,
+    verification_sha256: verification.verification_result_sha256,
+    constraints,
+  };
+}
+
+function mapDiagnosticRegressions(before, after) {
+  function inventory(document) {
+    const counts = new Map();
+    for (const row of Array.isArray(document.diagnostics)
+      ? document.diagnostics
+      : []) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const identity = JSON.stringify([
+        String(row.severity || ""),
+        String(row.code || ""),
+        String(row.path || ""),
+      ]);
+      counts.set(identity, (counts.get(identity) || 0) + 1);
+    }
+    return counts;
+  }
+  const prior = inventory(before);
+  const current = inventory(after);
+  const regressions = [];
+  for (const [encoded, count] of [...current].sort()) {
+    const added = count - (prior.get(encoded) || 0);
+    if (added <= 0) continue;
+    const [severity, code, filePath] = JSON.parse(encoded);
+    regressions.push(
+      `${added} new ${severity || "unknown"} diagnostic ${code || "unknown"}` +
+      (filePath ? ` at ${filePath}` : ""),
+    );
+  }
+  return regressions;
+}
+
+function blockedActResult(preview, message) {
+  return {
+    ...preview,
+    status: "blocked",
+    changes: [],
+    acceptance: {
+      status: "not_evaluated",
+      verification_sha256: null,
+      constraints: [],
+    },
+    diagnostics: [{
+      code: "source_context_mismatch",
+      severity: "error",
+      message,
+      item_id: null,
+      path: null,
+    }],
+  };
+}
+
+function actResultBytes(result, format, pretty) {
+  if (format === "json") {
+    return native.jsonCanonicalize(
+      Buffer.from(JSON.stringify(result)),
+      pretty,
+      false,
+    );
+  }
+  const changes = Array.isArray(result.changes) ? result.changes : [];
+  if (format === "patch") {
+    return Buffer.from(
+      changes.map((change) => change.unified_diff || "").join(""),
+    );
+  }
+  const acceptance = result.acceptance?.status || "not_evaluated";
+  const lines = [
+    `# Act ${result.status || "unknown"}`,
+    "",
+    `- Plan: \`${result.plan_sha256 || ""}\``,
+    `- Changes: ${changes.length}`,
+    `- Acceptance: \`${acceptance}\``,
+  ];
+  if (Array.isArray(result.diagnostics) && result.diagnostics.length) {
+    lines.push("", "## Diagnostics", "");
+    for (const row of result.diagnostics) {
+      lines.push(`- \`${row.code || "error"}\`: ${row.message || ""}`);
+    }
+  }
+  for (const change of changes) {
+    lines.push(
+      "",
+      `## ${change.path || ""}`,
+      "",
+      "```diff",
+      String(change.unified_diff || "").replace(/\n$/, ""),
+      "```",
+    );
+  }
+  return Buffer.from(`${lines.join("\n")}\n`);
+}
+
+function actMain(argv) {
+  const options = parse(argv, {
+    ...COMMON,
+    apply: { type: "boolean" },
+    progress: { default: "auto", type: "string" },
+    baseline: { type: "string" },
+    policyDate: { flag: "policy-date", type: "string" },
+    observation: { type: "multiple" },
+    mapInput: { flag: "map-input", type: "multiple" },
+    resolutionInput: { flag: "resolution-input", type: "multiple" },
+    format: { default: "markdown", type: "string" },
+  }, { positionals: 1 });
+  if (options.help) { process.stdout.write(usage("act")); return 0; }
+  if (!options._[0]) throw new Error("Act requires a Plan JSON path");
+  if (!["markdown", "json", "patch"].includes(options.format)) {
+    throw new Error("--format must be markdown, json, or patch");
+  }
+  if (options.pretty && options.format !== "json") {
+    throw new Error("--pretty applies only to JSON");
+  }
+  const plan = JSON.parse(
+    readBounded(options._[0], MAX_PLAN_BYTES, "Plan JSON").toString("utf8"),
+  );
+  const repository = path.resolve(options.root || ".");
+  const preview = archbird.previewPlan(plan, repository);
+  if (!options.apply || preview.status === "blocked") {
+    write(actResultBytes(preview, options.format, options.pretty), options.output);
+    return preview.status === "blocked" ? 2 : 0;
+  }
+
+  const progress = new Progress(options.progress);
+  const resolvedInputs = repositoryInputs({ ...options, _: [], noConfig: false });
+  if (!resolvedInputs.configJson.length) {
+    throw new Error(
+      `no archbird.json found in ${resolvedInputs.repository}; ` +
+      "Act acceptance requires reviewed constraints",
+    );
+  }
+  const request = constraintRequest(options, resolvedInputs.configJson);
+  const requestJson = Object.keys(request).length
+    ? Buffer.from(JSON.stringify(request))
+    : Buffer.alloc(0);
+  const beforeProject = actProject(
+    options,
+    resolvedInputs.repository,
+    resolvedInputs.configJson,
+    progress,
+  );
+  const beforeMap = beforeProject.mapJson();
+  const beforeMapDocument = JSON.parse(beforeMap.toString("utf8"));
+  if (hasErrors(beforeMapDocument)) {
+    throw new Error("Act requires a current Map without error diagnostics");
+  }
+  const beforeVerification = JSON.parse(
+    archbird.evaluateConstraints(resolvedInputs.configJson, beforeMap, {
+      resolutionJson: beforeProject.resolutionJson || Buffer.alloc(0),
+      requestJson,
+      pretty: false,
+    }).toString("utf8"),
+  );
+  const mismatches = planSourceMismatches(plan, beforeMap, beforeVerification);
+  acceptanceFromVerification(plan, beforeVerification);
+  if (mismatches.length) {
+    const blocked = blockedActResult(
+      preview,
+      `Plan source context is stale: ${mismatches.join(", ")}`,
+    );
+    write(actResultBytes(blocked, options.format, options.pretty), options.output);
+    progress.finish();
+    return 2;
+  }
+
+  const result = archbird.applyPlan(
+    plan,
+    resolvedInputs.repository,
+    (acceptedPlan, acceptedRoot) => {
+      const afterProject = actProject(
+        options,
+        acceptedRoot,
+        resolvedInputs.configJson,
+        progress,
+      );
+      const afterMap = afterProject.mapJson();
+      const afterMapDocument = JSON.parse(afterMap.toString("utf8"));
+      if (hasErrors(afterMapDocument)) {
+        throw new Error(
+          "fresh Map has error diagnostics after applying the Plan",
+        );
+      }
+      const diagnosticRegressions = mapDiagnosticRegressions(
+        beforeMapDocument,
+        afterMapDocument,
+      );
+      if (diagnosticRegressions.length) {
+        throw new Error(
+          "fresh Map evidence quality regressed: " +
+          diagnosticRegressions.join("; "),
+        );
+      }
+      const verification = JSON.parse(
+        archbird.evaluateConstraints(
+          resolvedInputs.configJson,
+          afterMap,
+          {
+            resolutionJson: afterProject.resolutionJson || Buffer.alloc(0),
+            requestJson,
+            pretty: false,
+          },
+        ).toString("utf8"),
+      );
+      return acceptanceFromVerification(acceptedPlan, verification);
+    },
+  );
+  write(actResultBytes(result, options.format, options.pretty), options.output);
+  progress.finish();
+  if (result.status === "rejected") return 1;
+  if (result.status !== "applied") return 2;
+  return result.acceptance?.status === "satisfied" ? 0 : 1;
 }
 
 function exportMain(argv) {
@@ -1538,8 +1975,7 @@ function main(argv = process.argv.slice(2)) {
   if (command === "workspace") return workspaceMain(rest);
   if (command === "verify") return verifyMain(rest);
   if (command === "plan") return planMain(rest);
-  if (command === "contract") return contractMain(rest);
-  if (command === "verify-plan") return verifyPlanMain(rest);
+  if (command === "act") return actMain(rest);
   if (command === "export") return exportMain(rest);
   if (command === "serve") return serveMain(rest);
   if (command === "support") return supportMain(rest);

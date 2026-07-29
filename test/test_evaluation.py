@@ -164,14 +164,21 @@ elif command == 'verify':
     'status':'fail' if before else 'pass',
   }]}
 elif command == 'plan':
-  value = {'artifact':'change-proposal','schema_version':1,'candidates':[{
+  value = {'artifact':'plan','schema_version':1,'items':[{
     'id':'test-regression',
-    'path':'tests/test_regression.py',
+    'origins':[{'issue_fingerprint':'4'*64}],
+    'operation':{
+      'action':'manual',
+      'candidate_paths':['tests/test_regression.py'],
+    },
+    'acceptance':{'constraints':['HISTORICAL-INTRODUCED-TESTS']},
   }]}
-elif command == 'contract':
-  value = {'artifact':'change-contract','schema_version':1}
-elif command == 'verify-plan':
-  value = {'artifact':'change-result','schema_version':1,'status':'satisfied'}
+elif command == 'act':
+  value = {
+    'artifact':'act-result',
+    'schema_version':1,
+    'status':'blocked',
+  }
 else:
   raise SystemExit(f'unsupported fake command: {command}')
 out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
@@ -580,8 +587,10 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert second["cases"][0]["metrics"]["verification_after_presence_recall"] == 1.0
     assert second["cases"][0]["metrics"]["verification_false_findings"] == 0
     assert second["cases"][0]["metrics"]["verification_transition_accuracy"] == 1.0
-    assert second["cases"][0]["metrics"]["act_proposal_recall"] == 1.0
-    assert second["cases"][0]["metrics"]["act_transition_satisfied"] == 1.0
+    assert second["cases"][0]["metrics"]["plan_generation_success"] == 1.0
+    assert second["cases"][0]["metrics"]["plan_origin_recall"] == 1.0
+    assert second["cases"][0]["metrics"]["plan_after_acceptance_satisfied"] == 1.0
+    assert second["cases"][0]["metrics"]["act_preview_available"] == 1.0
 
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "context"
     run("run", "--archbird", str(fake), "--label", "context", environment=environment)

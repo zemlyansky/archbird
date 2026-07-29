@@ -210,6 +210,24 @@ static char *get_string(napi_env env, napi_value value, size_t *out_length) {
   return text;
 }
 
+static char *get_nullable_string(napi_env env, napi_value value,
+                                 size_t *out_length, int *out_is_null) {
+  napi_value null_value;
+  bool is_null = false;
+  if (napi_get_null(env, &null_value) != napi_ok ||
+      napi_strict_equals(env, value, null_value, &is_null) != napi_ok) {
+    napi_throw_error(env, "ARCHBIRD_NAPI", "could not inspect nullable string");
+    return NULL;
+  }
+  if (is_null) {
+    *out_length = 0;
+    *out_is_null = 1;
+    return NULL;
+  }
+  *out_is_null = 0;
+  return get_string(env, value, out_length);
+}
+
 static int get_optional_bool(napi_env env, size_t argc, napi_value *argv,
                              size_t index, int default_value, int *out_value) {
   bool value;
@@ -1201,6 +1219,80 @@ static napi_value map_diff(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value unified_diff(napi_env env, napi_callback_info info) {
+  size_t argc = 7;
+  napi_value argv[7];
+  const uint8_t *before;
+  const uint8_t *after;
+  const uint8_t *metadata = NULL;
+  size_t before_length;
+  size_t after_length;
+  size_t metadata_length = 0;
+  size_t before_path_length;
+  size_t after_path_length;
+  size_t context_lines;
+  size_t max_work_bytes;
+  char *before_path;
+  char *after_path;
+  int before_null;
+  int after_null;
+  ArchbirdUnifiedDiffOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 4 || !get_buffer(env, argv[0], &before, &before_length) ||
+      !get_buffer(env, argv[1], &after, &after_length))
+    return NULL;
+  before_path =
+      get_nullable_string(env, argv[2], &before_path_length, &before_null);
+  if (!before_path && !before_null)
+    return NULL;
+  after_path =
+      get_nullable_string(env, argv[3], &after_path_length, &after_null);
+  if (!after_path && !after_null) {
+    free(before_path);
+    return NULL;
+  }
+  if (argc > 4 && !get_buffer(env, argv[4], &metadata, &metadata_length)) {
+    free(after_path);
+    free(before_path);
+    return NULL;
+  }
+  if (!get_optional_size(env, argc, argv, 5, 3, "contextLines",
+                         &context_lines) ||
+      !get_optional_size(env, argc, argv, 6, 16 * 1024 * 1024, "maxWorkBytes",
+                         &max_work_bytes)) {
+    free(after_path);
+    free(before_path);
+    return NULL;
+  }
+  if (max_work_bytes == 0) {
+    napi_throw_range_error(env, "ARCHBIRD_NUMBER",
+                           "maxWorkBytes must be positive");
+    free(after_path);
+    free(before_path);
+    return NULL;
+  }
+  archbird_unified_diff_options_init(&options);
+  options.context_lines = context_lines;
+  options.max_work_bytes = max_work_bytes;
+  options.metadata = metadata;
+  options.metadata_length = metadata_length;
+  status = input_engine(larger_input(before_length, after_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_unified_diff(
+        engine, before, before_length, after, after_length, before_path,
+        before_path_length, after_path, after_path_length, &options,
+        output_write, &output);
+  free(after_path);
+  free(before_path);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value map_freshness(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -2013,6 +2105,7 @@ static napi_value init(napi_env env, napi_value exports) {
       {"workspacePlan", NULL, workspace_plan, NULL, NULL, NULL, napi_default,
        NULL},
       {"mapDiff", NULL, map_diff, NULL, NULL, NULL, napi_default, NULL},
+      {"unifiedDiff", NULL, unified_diff, NULL, NULL, NULL, napi_default, NULL},
       {"mapFreshness", NULL, map_freshness, NULL, NULL, NULL, napi_default,
        NULL},
       {"mapMarkdown", NULL, map_markdown, NULL, NULL, NULL, napi_default, NULL},

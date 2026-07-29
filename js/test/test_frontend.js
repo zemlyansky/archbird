@@ -18,7 +18,6 @@ process.env.ARCHBIRD_NATIVE_ADDON = path.resolve(process.argv[2]);
 const repositoryRoot = path.resolve(process.argv[3]);
 const nativeBinding = require(process.env.ARCHBIRD_NATIVE_ADDON);
 const {
-  ChangeProposal,
   auditMapFreshness,
   analyzeOkfSource,
   compileProjectConfiguration,
@@ -59,6 +58,26 @@ assert.equal(
 assert.deepEqual(
   jsonCanonicalize(Buffer.from('{"b":2,"a":1}')),
   Buffer.from('{"a":1,"b":2}'),
+);
+assert.deepEqual(
+  nativeBinding.unifiedDiff(
+    Buffer.from("same\nold\n"),
+    Buffer.from("same\nnew\n"),
+    "src/example.txt",
+    "src/example.txt",
+    Buffer.alloc(0),
+    3,
+    16 * 1024 * 1024,
+  ),
+  Buffer.from(
+    "diff --git a/src/example.txt b/src/example.txt\n" +
+    "--- a/src/example.txt\n" +
+    "+++ b/src/example.txt\n" +
+    "@@ -1,2 +1,2 @@\n" +
+    " same\n" +
+    "-old\n" +
+    "+new\n",
+  ),
 );
 
 const conformanceCorpus = JSON.parse(fs.readFileSync(path.resolve(
@@ -244,28 +263,6 @@ const frozenConstraints = JSON.parse(freezeConstraints(constraintConfig, metricM
   rationale: "Review the current constraint debt.",
 }));
 assert.equal(frozenConstraints.artifact, "constraint-baseline");
-const metricFinding = metricResult.constraints
-  .find((row) => row.id === "MAX-FILE-BYTES").findings[0];
-const metricProposal = ChangeProposal.compile(
-  metricVerification,
-  metricFinding.fingerprint,
-);
-assert.equal(metricProposal.data().origin.constraint, "MAX-FILE-BYTES");
-const metricContract = metricProposal.review({
-  objective: "Reduce the oversized selected source.",
-  owner: "test",
-  rationale: "Exercise the native Node constraint lifecycle.",
-  preserveConstraints: ["STABLE-LITERAL"],
-  selectedCandidates: metricProposal.data().candidates.map((row) => row.id),
-});
-assert.deepEqual(
-  metricContract.data().preserved_constraints.map((row) => row.id),
-  ["STABLE-LITERAL"],
-);
-assert.equal(
-  JSON.parse(metricContract.verify(metricVerification, metricVerification)).status,
-  "missing",
-);
 metricProject.dispose();
 
 const constraintCli = path.resolve(process.argv[3], "js/src/cli.js");

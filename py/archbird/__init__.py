@@ -1,4 +1,4 @@
-"""Deterministic architecture evidence, verification, and change contracts."""
+"""Deterministic architecture evidence, verification, planning, and action."""
 
 from __future__ import annotations
 
@@ -32,8 +32,6 @@ def implementation_digest() -> str:
 
 
 _NATIVE_EXPORTS = (
-    "ChangeContract",
-    "ChangeProposal",
     "Project",
     "PATTERN_CONTRACT",
     "PATTERN_CONTRACT_VERSION",
@@ -45,9 +43,6 @@ _NATIVE_EXPORTS = (
     "analyze_workspace_json",
     "analyze_okf_source",
     "audit_map_freshness",
-    "change_contract",
-    "change_proposal",
-    "change_verify",
     "compile_project_configuration",
     "compile_query_plan_json",
     "compile_test_observations",
@@ -67,10 +62,39 @@ _NATIVE_EXPORTS = (
     "write_okf_bundle",
 )
 
+_PLAN_ACT_EXPORTS = (
+    "apply_plan",
+    "generate_plan",
+    "inspect_ast_grep_executable",
+    "materialize_ast_grep_operations",
+    "preview_plan",
+)
+
 
 def __getattr__(name: str) -> Any:
     """Lazily expose the native host without hiding package metadata."""
 
+    if name in _PLAN_ACT_EXPORTS:
+        if name == "generate_plan":
+            from .planning import generate_plan
+
+            return generate_plan
+        if name in {
+            "inspect_ast_grep_executable",
+            "materialize_ast_grep_operations",
+        }:
+            from .adapters.ast_grep import (
+                inspect_ast_grep_executable,
+                materialize_ast_grep_operations,
+            )
+
+            return {
+                "inspect_ast_grep_executable": inspect_ast_grep_executable,
+                "materialize_ast_grep_operations": materialize_ast_grep_operations,
+            }[name]
+        from .acting import apply_plan, preview_plan
+
+        return {"apply_plan": apply_plan, "preview_plan": preview_plan}[name]
     if name not in _NATIVE_EXPORTS:
         raise AttributeError(name)
     from . import native
@@ -83,5 +107,6 @@ __all__ = [
     "implementation_digest",
     "read_schema",
     "schema_names",
+    *_PLAN_ACT_EXPORTS,
     *_NATIVE_EXPORTS,
 ]

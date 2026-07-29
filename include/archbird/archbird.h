@@ -175,6 +175,21 @@ typedef struct ArchbirdGraphOptions {
   size_t max_edge_names;
 } ArchbirdGraphOptions;
 
+/*
+ * Deterministic git-style unified-diff rendering options. metadata contains
+ * optional complete, newline-terminated header lines (for example file-mode
+ * or rename records) inserted after "diff --git" and before "---"/"+++".
+ * max_work_bytes bounds temporary matching state; when an exact Myers trace
+ * does not fit, the renderer emits one deterministic whole-change hunk.
+ */
+typedef struct ArchbirdUnifiedDiffOptions {
+  size_t struct_size;
+  size_t context_lines;
+  size_t max_work_bytes;
+  const uint8_t *metadata;
+  size_t metadata_length;
+} ArchbirdUnifiedDiffOptions;
+
 ARCHBIRD_API void archbird_engine_options_init(ArchbirdEngineOptions *options);
 
 ARCHBIRD_API ArchbirdStatus archbird_engine_options_init_for_input(
@@ -182,6 +197,9 @@ ARCHBIRD_API ArchbirdStatus archbird_engine_options_init_for_input(
     size_t input_length);
 
 ARCHBIRD_API void archbird_graph_options_init(ArchbirdGraphOptions *options);
+
+ARCHBIRD_API void
+archbird_unified_diff_options_init(ArchbirdUnifiedDiffOptions *options);
 
 /* Return the lowercase SHA-256 identity of the compiled native core.
  * The returned process-lifetime string is owned by Archbird. */
@@ -517,6 +535,19 @@ ARCHBIRD_API ArchbirdStatus archbird_map_diff(
     ArchbirdEngine *engine, const uint8_t *before_json, size_t before_length,
     const uint8_t *after_json, size_t after_length, uint32_t json_flags,
     ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Render a deterministic git-style unified diff. Paths are canonical
+ * repository-relative UTF-8 paths. A null before_path denotes file creation;
+ * a null after_path denotes deletion. At least one path must be present.
+ * Invalid UTF-8 or NUL-containing content is represented as a binary change.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_unified_diff(
+    ArchbirdEngine *engine, const uint8_t *before, size_t before_length,
+    const uint8_t *after, size_t after_length, const char *before_path,
+    size_t before_path_length, const char *after_path, size_t after_path_length,
+    const ArchbirdUnifiedDiffOptions *options, ArchbirdWriteFn write_fn,
+    void *user_data);
 
 /*
  * Compare a saved schema-4/5/6/7 Map or Query snapshot with a freshly derived

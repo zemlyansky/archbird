@@ -1,6 +1,6 @@
 # archbird
 
-**Map codebases. Verify architecture. Plan and check structural changes.**
+**Map codebases. Verify architecture. Plan and apply structural changes.**
 
 Archbird scans a repository and builds a deterministic map of its files,
 symbols, dependencies, public interfaces, tests, build routes, and components.
@@ -26,6 +26,8 @@ npm install --save-dev archbird
 archbird                # shorthand for: archbird map
 archbird .              # shorthand for: archbird map .
 archbird map            # explicit form; npm: npx archbird map
+archbird plan           # derive edits from current constraint issues
+archbird act PLAN.json  # preview; add --apply only after review
 archbird serve          # npm: npx archbird serve
 archbird mcp            # Python/root launcher: local agent protocol
 ```
@@ -54,8 +56,10 @@ Archbird reads a supplied index but does not invoke an indexer.
 | Stage | Question | Output |
 | --- | --- | --- |
 | **Map** | What exists, and how is it connected? | Searchable files, symbols, dependencies, tests, and build routes |
+| **Query** | Which exact evidence matters for this task? | Focused, ranked context with source witnesses |
 | **Verify** | Does the code follow the architecture constraints? | Constraint status, violations, code locations, and unknowns |
-| **Act** | Did a coordinated change produce the required structural result? | A reviewable change checklist and a before/after judgment |
+| **Plan** | What exact edits follow from current evidence, and what remains unknown? | An editable source-locked Plan with operations and acceptance constraints |
+| **Act** | What patch does the Plan produce, and did its constraints pass? | A virtual patch or applied result bound to fresh Verification |
 
 **Map handles fragmentation.** In a complex repository, architecture is spread
 across source languages, package manifests, public interfaces, native/frontend
@@ -70,18 +74,20 @@ the complete relevant Map rather than a shortened query view and reports which
 constraints pass, which fail, where the violation occurs, and where incomplete
 or stale information prevents a reliable answer.
 
-**Act handles coordinated change.** A structural fix may need synchronized
-updates to an implementation, public interface, language binding, package
-entrypoint, tests, and build artifacts. Starting from a failed constraint, Act
-collects the affected obligations and candidate locations into a proposal. A
-reviewer turns that proposal into an explicit change contract; after a person,
-agent, or codemod performs the work, Archbird compares the before and after
-verification results and reports which obligations were satisfied, missed,
-unexpected, or still unknown.
+**Plan and Act handle coordinated change.** A structural fix may need
+synchronized updates to an implementation, public interface, language binding,
+package entrypoint, tests, and build artifacts. Plan derives source-locked
+operations only where current Map and Verify evidence establish the exact edit.
+Underdetermined work remains a visible manual item rather than guessed code. A
+developer or agent may edit the Plan. Act validates the complete Plan and
+previews one deterministic patch; explicit `--apply` writes it, rebuilds the
+Map, and evaluates every acceptance and preserved constraint against fresh
+Verification.
 
-Across all three stages, results retain links to the source, configuration, or
+Across all stages, results retain links to the source, configuration, or
 test data that produced them. Archbird keeps ambiguous, incomplete, and stale
-information visible instead of guessing, and it never edits the repository.
+information visible instead of guessing. Repository mutation occurs only
+through `archbird act PLAN --apply`.
 
 ## Map
 
@@ -676,51 +682,60 @@ Formats without per-test contexts require one isolated report per case.
 Archbird checks source hashes and rejects aggregate coverage that cannot prove
 which test produced a hit; it never runs the tests or coverage tools.
 
-## Act: review and judge a change
+## Plan and Act
 
-Archbird does not make the edit. It turns one failed architecture rule into a
-proposed change checklist, records the checklist after review, and compares the
-before and after repository state to see whether the required changes happened.
-
-```text
-derived finding → derived proposal → asserted contract
-       external person, agent, IDE, or codemod edits the repository
-new derived/observed evidence → derived transition result
-```
+Plan evaluates the complete current Verify policy and derives one editable
+artifact. Omit the constraint name to include every current issue, or scope
+generation by existing constraint ID:
 
 ```bash
-archbird verify --format json \
-  --output .archbird/before.verification.json
+archbird plan --output .archbird/plan.json
+archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 
-archbird plan --verification .archbird/before.verification.json \
-  --finding FINGERPRINT --format markdown \
-  --output .archbird/change.task.md
+# Inspect the exact patch without writing.
+archbird act .archbird/plan.json
+archbird act .archbird/plan.json --format patch
 
-archbird plan --verification .archbird/before.verification.json \
-  --finding FINGERPRINT --output .archbird/change.proposal.json
-
-archbird contract --proposal .archbird/change.proposal.json \
-  --objective "Restore the reviewed public surface" \
-  --owner core --rationale "Reviewed evidence and implementation strategy" \
-  --preserve-all --output .archbird/change.contract.json
-
-# An external executor edits, builds, and tests; then regenerate Verify.
-archbird verify --format json \
-  --output .archbird/after.verification.json
-
-archbird verify-plan \
-  --proposal .archbird/change.proposal.json \
-  --contract .archbird/change.contract.json \
-  --before-verification .archbird/before.verification.json \
-  --after-verification .archbird/after.verification.json --check
+# Apply only after reviewing or editing the Plan.
+archbird act .archbird/plan.json --apply \
+  --format json --output .archbird/act-result.json
 ```
 
-Proposals separate required postconditions, evidence-backed candidates,
-preserved constraints, coverage, and unknowns. Contracts are immutable asserted
-review. Results distinguish satisfied, missing, unexpected, unknown, stale,
-and superseded. Candidate paths are advice, not write authorization. Markdown
-task packets show the first 20 evidence rows by default; add `--full` when the
-complete evidence list is needed.
+An executable Plan item contains one exact `replace_range`, `create_file`,
+`delete_file`, or `move_file` operation. Existing sources are locked by
+SHA-256; ranges use UTF-8 byte offsets and include the expected text. Multiple
+range edits to one file become one atomic file transition and one unified diff.
+Paths must be canonical repository-relative paths. Symlinks, non-regular files,
+overlapping edits, stale hashes, conflicting destinations, and dependency
+cycles block before the first write.
+
+Verify evidence often establishes a required state without establishing the
+code that should implement it. Plan records those cases as non-executable
+`manual` items with candidate paths and explicit unknowns. Act refuses to apply
+until every item has a reviewed executable operation; it never invents a
+function body, replacement dependency, package target, or test.
+
+`--apply` first rebuilds the current Map and Verify result. Their project,
+input, configuration, producer, policy, and result identities must match the
+Plan's source snapshot. After applying the staged patch, Act rebuilds Map again
+and evaluates the union of item acceptance constraints and preserved
+constraints. A `not_satisfied` or `unknown` result rejects the patch and restores
+the original files; the ActResult retains that evaluated acceptance as
+`rejected`. Filesystem or evaluation failures also roll back and report
+`failed`. Archbird does not run project compilers or tests; configure test
+observations and build evidence when those results must participate in Verify.
+
+Destructive generated items require a current, complete, exhaustive relation
+projection. Unresolved imports or other relation frontiers make the item
+non-executable rather than allowing an apparently unused file or symbol to be
+removed. Every constraint in the source Verification is checked after apply,
+including constraints that passed when the Plan was generated.
+
+Plan ingestion is bounded before expensive work: 64 MiB for canonical Plan JSON
+and each source, 4,096 items or touched files, 16 MiB per operation text field,
+256 MiB aggregate touched source and patch, 64 MiB per file patch, and 64 KiB
+per metadata string. Source coordinates stop at JavaScript's exact integer
+limit (`2^53 - 1`) so Python and Node consume the same Plan.
 
 ## Evidence providers
 
@@ -744,7 +759,10 @@ unresolved targets remain explicit.
 ### Python
 
 ```python
-from archbird import Project
+import json
+from pathlib import Path
+
+from archbird import Project, generate_plan, preview_plan
 
 project = Project.from_repository(".")
 map_json = project.map_json(pretty=True)
@@ -755,7 +773,9 @@ print(project.source_markdown(
     artifact_json=selection
 ).decode())
 if project.verification_configured:
-    print(project.verify_json(pretty=True).decode())
+    verification = json.loads(project.verify_json())
+    plan = generate_plan(project.map(), verification, None, Path("."))
+    print(preview_plan(plan, Path("."))["status"])
 print(project.query_markdown(
     symbols=["runtime_start"], depth=1, view="changes", detail="compact"
 ).decode())
@@ -764,7 +784,7 @@ print(project.query_markdown(
 ### JavaScript / Node
 
 ```js
-const { Project } = require("archbird");
+const { Project, generatePlan, previewPlan } = require("archbird");
 
 const project = Project.fromRepository(".");
 try {
@@ -776,7 +796,9 @@ try {
     artifactJson: selectionJson,
   }).toString("utf8"));
   if (project.verificationConfigured) {
-    console.log(project.verifyJson({ pretty: true }).toString("utf8"));
+    const verification = JSON.parse(project.verifyJson().toString("utf8"));
+    const plan = generatePlan(project.map(), verification, null, ".");
+    console.log(previewPlan(plan, ".").status);
   }
   console.log(project.queryMarkdown({
     symbols: ["runtime_start"], depth: 1, view: "changes", detail: "compact",
@@ -818,7 +840,7 @@ ArchbirdEngine *engine = NULL;
 ArchbirdStatus status = archbird_engine_create(NULL, &engine);
 if (status == ARCHBIRD_OK) {
   /* Supply repository-relative sources or normalized provider facts, then
-     call Map, Verify, Query, Diff, workspace, or change APIs. */
+     call Map, Verify, Query, Diff, or workspace APIs. */
   archbird_engine_destroy(engine);
 }
 ```
@@ -828,14 +850,10 @@ statuses, and canonical JSON boundaries. It is experimental ABI v0.
 
 ### Complete API inventory
 
-Python and Node share 32 top-level capabilities after conventional
-snake_case/camelCase naming. The inventories below are checked against
-`archbird.__all__` and `Object.keys(require("archbird"))`. Their totals
-intentionally differ: Python adds schema readers, filesystem OKF output, and
-standalone observation validation; Node adds engine/provider/cache diagnostics,
-raw discovery/canonicalization, and a separate constraint-report renderer.
-Python folds report rendering into
-`evaluate_constraints_json(format=...)`.
+Python and Node expose parallel Map, Query, Verify, Plan, and Act capabilities
+where their runtimes permit them. The inventories below are checked against
+`archbird.__all__` and `Object.keys(require("archbird"))`; host-specific schema,
+cache, OKF, observation, and runtime inspection helpers intentionally differ.
 
 <!-- archbird-python-api:start -->
 | Python area | Public names |
@@ -843,7 +861,7 @@ Python folds report rendering into
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
-| Change lifecycle | `ChangeContract`, `ChangeProposal`, `change_contract`, `change_proposal`, `change_verify` |
+| Plan and Act | `apply_plan`, `generate_plan`, `inspect_ast_grep_executable`, `materialize_ast_grep_operations`, `preview_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
 | Runtime and schemas | `__version__`, `implementation_digest`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `read_schema`, `schema_names` |
 <!-- archbird-python-api:end -->
@@ -854,7 +872,7 @@ Python folds report rendering into
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
-| Change lifecycle | `ChangeContract`, `ChangeProposal`, `compileChangeProposal`, `createChangeContract`, `verifyChangeContract` |
+| Plan and Act | `applyPlan`, `generatePlan`, `previewPlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
 | Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
 | Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |
@@ -888,12 +906,13 @@ The complete C ABI is declared in
 <!-- archbird-c-api:start -->
 | C area | Public functions |
 | --- | --- |
-| Engine and JSON | `archbird_engine_create`, `archbird_engine_destroy`, `archbird_engine_error`, `archbird_engine_error_offset`, `archbird_engine_options_init`, `archbird_engine_options_init_for_input`, `archbird_graph_options_init`, `archbird_implementation_sha256`, `archbird_json_canonicalize`, `archbird_json_validate` |
+| Engine and JSON | `archbird_engine_create`, `archbird_engine_destroy`, `archbird_engine_error`, `archbird_engine_error_offset`, `archbird_engine_options_init`, `archbird_engine_options_init_for_input`, `archbird_graph_options_init`, `archbird_implementation_sha256`, `archbird_json_canonicalize`, `archbird_json_validate`, `archbird_unified_diff_options_init` |
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
 | Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_constraints_report_with_blocking`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
-| Map, Query, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish` |
-| Workspace and change | `archbird_change_contract`, `archbird_change_contract_report`, `archbird_change_proposal`, `archbird_change_proposal_report`, `archbird_change_verify`, `archbird_change_verify_report`, `archbird_workspace_analyze`, `archbird_workspace_plan` |
+| Map, Query, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_unified_diff` |
+| Workspace | `archbird_workspace_analyze`, `archbird_workspace_plan` |
+| Legacy native change compatibility | `archbird_change_contract`, `archbird_change_contract_report`, `archbird_change_proposal`, `archbird_change_proposal_report`, `archbird_change_verify`, `archbird_change_verify_report` |
 <!-- archbird-c-api:end -->
 
 ## Interchange and command surface
@@ -921,13 +940,13 @@ The command names are:
 
 <!-- archbird-python-cli:start -->
 Python: `map`, `config`, `query`, `impact`, `diff`, `observe`, `freshness`,
-`workspace`, `verify`, `plan`, `contract`, `verify-plan`, `export`, `okf`,
+`workspace`, `verify`, `plan`, `act`, `export`, `okf`,
 `serve`, `mcp`, `support`.
 <!-- archbird-python-cli:end -->
 
 <!-- archbird-node-cli:start -->
 Node: `map`, `config`, `query`, `impact`, `diff`, `observe`, `freshness`,
-`workspace`, `verify`, `plan`, `contract`, `verify-plan`, `export`, `serve`,
+`workspace`, `verify`, `plan`, `act`, `export`, `serve`,
 `support`.
 <!-- archbird-node-cli:end -->
 
@@ -967,17 +986,21 @@ For agents:
    requirement IDs.
 3. Query bounded context and inspect the exact witnesses used for decisions.
 4. Treat candidate/conservative tests as navigation, not execution.
-5. Review every change contract before it becomes asserted intent.
-6. Regenerate Map, runner evidence, and Verify after changes.
-7. Check freshness before treating saved evidence as the live checkout.
+5. Review or edit the generated Plan before invoking Act.
+6. Preview with `archbird act PLAN.json`; use `--apply` only when its operations,
+   unknowns, and acceptance constraints are understood.
+7. Regenerate runner evidence after changes when behavioral acceptance depends
+   on project-owned observations.
+8. Check freshness before treating saved evidence as the live checkout.
 
 ## Guarantees, limits, and distribution
 
 - Identical selected source, config, provider implementations, and supplied
   evidence produce byte-identical canonical output under the same Archbird
   implementation.
-- Archbird performs no analyzed-project import/execution, repository mutation,
-  network call, model call, codemod, or agent invocation.
+- Archbird performs no analyzed-project import/execution, network call, model
+  call, or agent invocation. Repository mutation occurs only through explicit
+  `archbird act PLAN.json --apply`; preview is non-mutating.
 - Lexical/syntax evidence is not whole-program semantic resolution; static test
   routes are not runtime execution or behavioral coverage.
 - Dynamic dispatch/reflection, C preprocessing, complete Make evaluation, ABI

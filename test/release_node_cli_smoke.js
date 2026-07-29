@@ -208,46 +208,41 @@ const observedMatch = observedQuery.test_matches.find((row) =>
   row.selector === "sched.2d_e2e");
 assert.equal(observedMatch.classification, "observed");
 
-const providerRoot = path.join(repository, "test/fixtures/act/provider");
-const providerReference = path.join(providerRoot, "reference");
-const providerSubject = path.join(providerRoot, "subject");
-const providerReferenceMap = path.join(work, `${engine}.provider-reference.map.json`);
-fs.writeFileSync(providerReferenceMap, run([
-  "map", "--config", path.join(providerReference, "archbird.json"),
-  "--root", providerReference, "--format", "json", "--check",
+const actRoot = path.join(work, `${engine}.plan-act-project`);
+fs.mkdirSync(actRoot, { recursive: true });
+fs.writeFileSync(
+  path.join(actRoot, "archbird.json"),
+  JSON.stringify({
+    project: "release-plan-act",
+    constraints: {
+      "NO-LEGACY": {
+        kind: "forbidden_paths",
+        paths: ["legacy.js"],
+        owner: "architecture",
+        rationale: "Obsolete implementation stays absent.",
+      },
+    },
+  }),
+);
+const legacyPath = path.join(actRoot, "legacy.js");
+fs.writeFileSync(legacyPath, "export const obsolete = true;\n");
+const planPath = path.join(work, `${engine}.plan.json`);
+fs.writeFileSync(planPath, run([
+  "plan", "--root", actRoot,
 ]));
-const verificationBytes = run([
-  "verify", "--config", path.join(providerSubject, "archbird.json"),
-  "--root", providerSubject,
-  "--map-input", `reference=${providerReferenceMap}`,
-  "--format", "json",
+const plan = JSON.parse(fs.readFileSync(planPath));
+assert.equal(plan.artifact, "plan");
+assert.equal(plan.items[0].operation.action, "delete_file");
+const preview = run([
+  "act", planPath, "--root", actRoot, "--format", "patch",
 ]);
-const verification = JSON.parse(verificationBytes);
-const finding = verification.constraints
-  .find((row) => row.id === "PROVIDER-RENAME")
-  .findings.find((row) => row.key === "core_sum");
-assert.ok(finding.fingerprint);
-const verificationPath = path.join(work, `${engine}.verification.json`);
-const proposalPath = path.join(work, `${engine}.proposal.json`);
-const contractPath = path.join(work, `${engine}.contract.json`);
-fs.writeFileSync(verificationPath, verificationBytes);
-fs.writeFileSync(proposalPath, run([
-  "plan", "--verification", verificationPath, "--finding", finding.fingerprint,
-]));
-fs.writeFileSync(contractPath, run([
-  "contract", "--proposal", proposalPath,
-  "--objective", "Exercise packaged Act",
-  "--owner", "release",
-  "--rationale", "Prove the packaged CLI reaches the native Act engine.",
-  "--preserve-all",
-]));
+assert.match(preview, /--- a\/legacy\.js/);
+assert.equal(fs.existsSync(legacyPath), true);
 const result = JSON.parse(run([
-  "verify-plan",
-  "--proposal", proposalPath,
-  "--contract", contractPath,
-  "--before-verification", verificationPath,
-  "--after-verification", verificationPath,
+  "act", planPath, "--root", actRoot, "--apply", "--format", "json",
 ]));
-assert.equal(result.artifact, "change-result");
-assert.equal(result.status, "missing");
-console.log(`packaged Node CLI Map/Query/Verify/Act passed through ${engine}`);
+assert.equal(result.artifact, "act-result");
+assert.equal(result.status, "applied");
+assert.equal(result.acceptance.status, "satisfied");
+assert.equal(fs.existsSync(legacyPath), false);
+console.log(`packaged Node CLI Map/Query/Verify/Plan/Act passed through ${engine}`);

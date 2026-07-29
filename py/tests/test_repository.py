@@ -63,6 +63,25 @@ def main() -> int:
         for character in _native.IMPLEMENTATION_SHA256
     ):
         raise AssertionError("native core implementation identity is invalid")
+    unified = _native.unified_diff(
+        b"same\nold\n",
+        b"same\nnew\n",
+        "src/example.txt",
+        "src/example.txt",
+        metadata=b"",
+        context_lines=3,
+        max_work_bytes=16 * 1024 * 1024,
+    )
+    if unified != (
+        b"diff --git a/src/example.txt b/src/example.txt\n"
+        b"--- a/src/example.txt\n"
+        b"+++ b/src/example.txt\n"
+        b"@@ -1,2 +1,2 @@\n"
+        b" same\n"
+        b"-old\n"
+        b"+new\n"
+    ):
+        raise AssertionError("native Python unified-diff binding diverged")
 
     conflict_project = Project(
         "merge-conflict",

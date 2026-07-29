@@ -11,9 +11,9 @@ const {
   sharedChromium,
 } = require("./browser_harness");
 
-if (process.argv.length !== 9) {
+if (process.argv.length !== 8) {
   throw new Error(
-    "usage: run_app_browser.js APP_ROOT GRAPH_VIEW_JSON MAP_JSON VERIFICATION_JSON PROPOSAL_JSON SOURCE_DIRECTORY SCREENSHOT",
+    "usage: run_app_browser.js APP_ROOT GRAPH_VIEW_JSON MAP_JSON VERIFICATION_JSON SOURCE_DIRECTORY SCREENSHOT",
   );
 }
 
@@ -21,10 +21,70 @@ const appRoot = path.resolve(process.argv[2]);
 const graphView = path.resolve(process.argv[3]);
 const map = path.resolve(process.argv[4]);
 const verification = path.resolve(process.argv[5]);
-const proposal = path.resolve(process.argv[6]);
-const sourceDirectory = path.resolve(process.argv[7]);
+const sourceDirectory = path.resolve(process.argv[6]);
 const projectConfiguration = path.join(sourceDirectory, "archbird.json");
-const screenshot = path.resolve(process.argv[8]);
+const screenshot = path.resolve(process.argv[7]);
+
+function browserPlan() {
+  const sha = (character) => character.repeat(64);
+  const output = path.join(path.dirname(screenshot), "plan.json");
+  fs.writeFileSync(output, JSON.stringify({
+    schema_version: 1,
+    artifact: "plan",
+    provenance: "derived",
+    tool: {
+      name: "archbird",
+      version: "0.0.1",
+      implementation_sha256: sha("a"),
+    },
+    source: {
+      project: "map-base",
+      map: {
+        sha256: sha("b"),
+        input_sha256: sha("c"),
+        configuration_sha256: sha("d"),
+        producer_implementation_sha256: sha("e"),
+      },
+      verification: {
+        sha256: sha("f"),
+        policy_sha256: sha("1"),
+        producer_implementation_sha256: sha("2"),
+      },
+    },
+    objective: "Provide the reviewed implementation for the missing API.",
+    items: [{
+      id: "implement-api",
+      statement: "Implement the missing API in js/index.js.",
+      provenance: "derived",
+      origins: [{
+        constraint_id: "JAVASCRIPT-ENTRY",
+        constraint_result_sha256: sha("3"),
+        issue_fingerprint: sha("4"),
+      }],
+      evidence: [],
+      depends_on: [],
+      operation: {
+        action: "manual",
+        instructions: "Provide reviewed implementation code.",
+        candidate_paths: ["js/index.js"],
+      },
+      acceptance: { constraints: ["JAVASCRIPT-ENTRY"] },
+      unknowns: ["implementation-required"],
+      executable: false,
+      non_executable_reasons: [
+        "Verification does not establish implementation semantics.",
+      ],
+    }],
+    preserved_constraints: [],
+    unknowns: [{
+      id: "implementation-required",
+      statement: "Implementation code requires review.",
+      item_id: "implement-api",
+      constraint_id: "JAVASCRIPT-ENTRY",
+    }],
+  }));
+  return output;
+}
 
 function sourceArchive(output) {
   const { zipSync } = require(path.join(path.dirname(appRoot), "node_modules/fflate"));
@@ -367,8 +427,8 @@ async function main() {
       throw new Error("reviewed project configuration contains a version field");
     }
 
-    await loadArtifact(page, proposal, "change-proposal");
-    await page.getByRole("heading", { name: "Change proposal", exact: true }).waitFor();
+    await loadArtifact(page, browserPlan(), "plan");
+    await page.getByRole("heading", { name: "Structural change plan", exact: true }).waitFor();
 
     await page.setInputFiles('input[accept="application/json,.json"]', map);
     await page.setInputFiles('input[accept="application/json,.json"]', verification);

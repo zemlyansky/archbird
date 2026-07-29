@@ -101,7 +101,6 @@ app-browser-test: app-test build-js
 	$(NODE) test/run_app_browser.js app/dist \
 		$(APP_BROWSER_SMOKE)/graph.json $(APP_BROWSER_SMOKE)/map.json \
 		test/fuzz/corpus/act-verification/verification.json \
-		test/fuzz/corpus/act-proposal/proposal.json \
 		test/fixtures/map_base \
 		$(APP_BROWSER_SMOKE)/app.png
 	ARCHBIRD_ENGINE=native \
@@ -177,6 +176,11 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_identity.py \
 		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_project_configuration.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_generation.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_act_execution.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_resource_limits.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ast_grep_adapter.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_act_cli.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_freshness.py $(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_fuzz_seeds.py \
 		$(PYTHON_NATIVE) $(CURDIR)/test/fuzz/corpus
@@ -196,6 +200,12 @@ test-js: build-js build-py
 		$(NODE) test/test_coverage_observations.js js/src $(CURDIR) $(NODE_NATIVE)
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) --expose-gc js/test/test_frontend.js $(NODE_NATIVE) $(CURDIR)
+	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
+		$(NODE) js/test/test_plan_act.js $(NODE_NATIVE) $(CURDIR)
+	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
+		$(NODE) js/test/test_plan_resource_limits.js $(NODE_NATIVE) $(CURDIR)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_act_frontend_parity.py \
+		$(NODE) $(NODE_NATIVE)
 	$(NODE) test/test_cli_progress.js js/src/cli.js $(CURDIR) $(NODE_NATIVE)
 	$(NODE) test/test_readme_examples.js $(CURDIR) js/src/cli.js $(NODE_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_git_diff_cli.py \

@@ -96,7 +96,7 @@ def check_public_readmes(repository: Path) -> None:
         "codemap",
     )
     tagline = (
-        "**Map codebases. Verify architecture. Plan and check structural changes.**"
+        "**Map codebases. Verify architecture. Plan and apply structural changes.**"
     )
     unexpected_readmes = tuple(
         path

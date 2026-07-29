@@ -1,0 +1,426 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/act-result.schema.json",
+  "title": "Archbird plan execution result",
+  "description": "The exact preview or application result for the canonical Plan identified by plan_sha256.",
+  "$comment": "Act limits changes, diagnostics, constraint results, and contributing item IDs to 4096 records each. Each unified diff is limited to 67108864 Unicode code points by schema and 67108864 UTF-8 bytes by host validation; the aggregate patch is limited to 268435456 UTF-8 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact",
+    "provenance",
+    "tool",
+    "plan_sha256",
+    "status",
+    "changes",
+    "acceptance",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact": {"const": "act-result"},
+    "provenance": {"const": "derived"},
+    "tool": {"$ref": "#/$defs/tool"},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "status": {
+      "enum": ["preview", "applied", "rejected", "blocked", "failed"]
+    },
+    "changes": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "description": "Each record is one atomic file transition and names every contributing Plan item.",
+      "items": {"$ref": "#/$defs/change"}
+    },
+    "acceptance": {"$ref": "#/$defs/acceptance"},
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/diagnostic"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": ["preview", "blocked", "failed"]
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "acceptance": {"$ref": "#/$defs/notEvaluatedAcceptance"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "applied"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "acceptance": {"$ref": "#/$defs/evaluatedAcceptance"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "rejected"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "acceptance": {
+            "allOf": [
+              {"$ref": "#/$defs/evaluatedAcceptance"},
+              {
+                "properties": {
+                  "status": {"enum": ["not_satisfied", "unknown"]}
+                }
+              }
+            ]
+          },
+          "diagnostics": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "blocked"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "changes": {"maxItems": 0},
+          "diagnostics": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "failed"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "diagnostics": {"minItems": 1}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/sha256"}
+      ]
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "nullableId": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/id"}
+      ]
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+$"
+    },
+    "nullableRepositoryPath": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/repositoryPath"}
+      ]
+    },
+    "unifiedDiff": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 67108864,
+      "pattern": "(^|\\n)--- [^\\n]+\\n\\+\\+\\+ [^\\n]+"
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "implementation_sha256"],
+      "properties": {
+        "name": {"const": "archbird"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 256},
+        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "constraintResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "status": {
+          "enum": ["pass", "fail", "unknown", "waived", "not_applicable"]
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "verification_sha256", "constraints"],
+      "properties": {
+        "status": {
+          "enum": [
+            "not_evaluated",
+            "satisfied",
+            "not_satisfied",
+            "unknown"
+          ]
+        },
+        "verification_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "constraints": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "description": "Constraint result IDs must additionally be unique under native or host validation.",
+          "items": {"$ref": "#/$defs/constraintResult"}
+        }
+      }
+    },
+    "notEvaluatedAcceptance": {
+      "allOf": [
+        {"$ref": "#/$defs/acceptance"},
+        {
+          "properties": {
+            "status": {"const": "not_evaluated"},
+            "verification_sha256": {"type": "null"},
+            "constraints": {"maxItems": 0}
+          }
+        }
+      ]
+    },
+    "evaluatedAcceptance": {
+      "allOf": [
+        {"$ref": "#/$defs/acceptance"},
+        {
+          "properties": {
+            "status": {
+              "enum": ["satisfied", "not_satisfied", "unknown"]
+            },
+            "verification_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {"const": "satisfied"},
+                "constraints": {
+                  "items": {
+                    "allOf": [
+                      {"$ref": "#/$defs/constraintResult"},
+                      {
+                        "properties": {
+                          "status": {
+                            "enum": ["pass", "waived", "not_applicable"]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {"const": "not_satisfied"},
+                "constraints": {
+                  "contains": {
+                    "properties": {"status": {"const": "fail"}},
+                    "required": ["status"]
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {"const": "unknown"},
+                "constraints": {
+                  "items": {
+                    "allOf": [
+                      {"$ref": "#/$defs/constraintResult"},
+                      {
+                        "properties": {
+                          "status": {
+                            "enum": [
+                              "pass",
+                              "unknown",
+                              "waived",
+                              "not_applicable"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "contains": {
+                    "properties": {"status": {"const": "unknown"}},
+                    "required": ["status"]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "createChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_ids",
+        "kind",
+        "path",
+        "source_path",
+        "before_sha256",
+        "after_sha256",
+        "unified_diff"
+      ],
+      "properties": {
+        "item_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "kind": {"const": "create"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_path": {"type": "null"},
+        "before_sha256": {"type": "null"},
+        "after_sha256": {"$ref": "#/$defs/sha256"},
+        "unified_diff": {"$ref": "#/$defs/unifiedDiff"}
+      }
+    },
+    "modifyChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_ids",
+        "kind",
+        "path",
+        "source_path",
+        "before_sha256",
+        "after_sha256",
+        "unified_diff"
+      ],
+      "properties": {
+        "item_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "kind": {"const": "modify"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_path": {"type": "null"},
+        "before_sha256": {"$ref": "#/$defs/sha256"},
+        "after_sha256": {"$ref": "#/$defs/sha256"},
+        "unified_diff": {"$ref": "#/$defs/unifiedDiff"}
+      }
+    },
+    "deleteChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_ids",
+        "kind",
+        "path",
+        "source_path",
+        "before_sha256",
+        "after_sha256",
+        "unified_diff"
+      ],
+      "properties": {
+        "item_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "kind": {"const": "delete"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_path": {"type": "null"},
+        "before_sha256": {"$ref": "#/$defs/sha256"},
+        "after_sha256": {"type": "null"},
+        "unified_diff": {"$ref": "#/$defs/unifiedDiff"}
+      }
+    },
+    "moveChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Native or host validation must additionally enforce source_path != path.",
+      "required": [
+        "item_ids",
+        "kind",
+        "path",
+        "source_path",
+        "before_sha256",
+        "after_sha256",
+        "unified_diff"
+      ],
+      "properties": {
+        "item_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "kind": {"const": "move"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_path": {"$ref": "#/$defs/repositoryPath"},
+        "before_sha256": {"$ref": "#/$defs/sha256"},
+        "after_sha256": {"$ref": "#/$defs/sha256"},
+        "unified_diff": {"$ref": "#/$defs/unifiedDiff"}
+      }
+    },
+    "change": {
+      "oneOf": [
+        {"$ref": "#/$defs/createChange"},
+        {"$ref": "#/$defs/modifyChange"},
+        {"$ref": "#/$defs/deleteChange"},
+        {"$ref": "#/$defs/moveChange"}
+      ]
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message", "item_id", "path"],
+      "properties": {
+        "code": {"$ref": "#/$defs/id"},
+        "severity": {"enum": ["info", "warning", "error"]},
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "item_id": {"$ref": "#/$defs/nullableId"},
+        "path": {"$ref": "#/$defs/nullableRepositoryPath"}
+      }
+    }
+  }
+}

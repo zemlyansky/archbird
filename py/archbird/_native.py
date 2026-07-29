@@ -110,6 +110,16 @@ class _GraphOptions(ctypes.Structure):
     ]
 
 
+class _UnifiedDiffOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("context_lines", ctypes.c_size_t),
+        ("max_work_bytes", ctypes.c_size_t),
+        ("metadata", _BYTES_POINTER),
+        ("metadata_length", ctypes.c_size_t),
+    ]
+
+
 class _EngineOptions(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_size_t),
@@ -164,6 +174,11 @@ _project_destroy = _declare("archbird_project_destroy", [_POINTER], None)
 _discovery_destroy = _declare("archbird_discovery_destroy", [_POINTER], None)
 _graph_options_init = _declare(
     "archbird_graph_options_init", [ctypes.POINTER(_GraphOptions)], None
+)
+_unified_diff_options_init = _declare(
+    "archbird_unified_diff_options_init",
+    [ctypes.POINTER(_UnifiedDiffOptions)],
+    None,
 )
 
 
@@ -1177,6 +1192,92 @@ def map_diff(before: bytes, after: bytes, pretty=False) -> bytes:
         [_bytes(before), _bytes(after)],
         flags=_json_flags(pretty),
         saved_artifact=True,
+    )
+
+
+def unified_diff(
+    before: bytes,
+    after: bytes,
+    before_path: Optional[str],
+    after_path: Optional[str],
+    *,
+    metadata: bytes = b"",
+    context_lines: int = 3,
+    max_work_bytes: int = 16 * 1024 * 1024,
+) -> bytes:
+    """Render one deterministic git-style unified diff."""
+
+    before_bytes = _bytes(before, "before")
+    after_bytes = _bytes(after, "after")
+    metadata_bytes = _bytes(metadata, "metadata")
+    if before_path is None:
+        before_path_bytes = None
+    else:
+        before_path_bytes = _text(before_path, "before_path")
+    if after_path is None:
+        after_path_bytes = None
+    else:
+        after_path_bytes = _text(after_path, "after_path")
+    if (
+        not isinstance(context_lines, int)
+        or isinstance(context_lines, bool)
+        or context_lines < 0
+    ):
+        raise ValueError("context_lines must be a nonnegative integer")
+    if (
+        not isinstance(max_work_bytes, int)
+        or isinstance(max_work_bytes, bool)
+        or max_work_bytes <= 0
+    ):
+        raise ValueError("max_work_bytes must be a positive integer")
+    options = _UnifiedDiffOptions()
+    _unified_diff_options_init(ctypes.byref(options))
+    options.context_lines = context_lines
+    options.max_work_bytes = max_work_bytes
+    metadata_storage = (
+        (ctypes.c_uint8 * len(metadata_bytes)).from_buffer_copy(metadata_bytes)
+        if metadata_bytes
+        else None
+    )
+    options.metadata = (
+        ctypes.cast(metadata_storage, _BYTES_POINTER)
+        if metadata_storage is not None
+        else _BYTES_POINTER()
+    )
+    options.metadata_length = len(metadata_bytes)
+    function = _declare(
+        "archbird_unified_diff",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(_UnifiedDiffOptions),
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _one_shot(
+        lambda engine, write: function(
+            engine,
+            before_bytes,
+            len(before_bytes),
+            after_bytes,
+            len(after_bytes),
+            before_path_bytes,
+            len(before_path_bytes or b""),
+            after_path_bytes,
+            len(after_path_bytes or b""),
+            ctypes.byref(options),
+            write,
+            None,
+        ),
+        input_budget=max(len(before_bytes), len(after_bytes)),
     )
 
 

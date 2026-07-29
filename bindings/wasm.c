@@ -698,6 +698,36 @@ AB_WASM_EXPORT int ab_wasm_json_canonicalize(const uint8_t *input,
   return stateless_end(engine, status);
 }
 
+AB_WASM_EXPORT int ab_wasm_unified_diff(
+    const uint8_t *before, size_t before_length, const uint8_t *after,
+    size_t after_length, const char *before_path, size_t before_path_length,
+    int has_before_path, const char *after_path, size_t after_path_length,
+    int has_after_path, const uint8_t *metadata, size_t metadata_length,
+    size_t context_lines, size_t max_work_bytes) {
+  ArchbirdUnifiedDiffOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  if ((has_before_path != 0 && has_before_path != 1) ||
+      (has_after_path != 0 && has_after_path != 1))
+    return (int)invalid_argument("invalid unified diff path presence flag");
+  status =
+      stateless_begin_input(larger_input(before_length, after_length), &engine);
+  archbird_unified_diff_options_init(&options);
+  options.context_lines = context_lines;
+  options.max_work_bytes = max_work_bytes;
+  options.metadata = metadata;
+  options.metadata_length = metadata_length;
+  if (status == ARCHBIRD_OK)
+    status = archbird_unified_diff(engine, before, before_length, after,
+                                   after_length,
+                                   has_before_path ? before_path : NULL,
+                                   has_before_path ? before_path_length : 0,
+                                   has_after_path ? after_path : NULL,
+                                   has_after_path ? after_path_length : 0,
+                                   &options, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
 AB_WASM_EXPORT int ab_wasm_map_markdown(const uint8_t *map, size_t map_length,
                                         int full, size_t max_chars) {
   ArchbirdEngine *engine = NULL;

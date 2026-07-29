@@ -4,8 +4,10 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const native = require("./native");
+const { applyPlan, previewPlan } = require("./acting");
 const { okfNormalization } = require("./adapters/okf/normalization");
 const { compileTestObservations: compileCoverageObservations } = require("./adapters/coverage");
+const { generatePlan } = require("./planning");
 const {
   ProviderCache,
   defaultProviderCacheDir,
@@ -1652,8 +1654,6 @@ class ChangeContract {
 }
 
 module.exports = {
-  ChangeContract,
-  ChangeProposal,
   ENGINE: native.ENGINE,
   IMPLEMENTATION_SHA256: native.IMPLEMENTATION_SHA256,
   NATIVE_ABI_VERSION: native.NATIVE_ABI_VERSION,
@@ -1671,11 +1671,10 @@ module.exports = {
   analyzeOkfSource,
   publishOkfBundle,
   analyzeWorkspace,
+  applyPlan,
   compileProjectConfiguration,
   compileQueryPlan,
-  compileChangeProposal,
   compileTestObservations,
-  createChangeContract,
   defaultProviderCacheDir,
   defaultProviderCacheMaxBytes,
   discoveryPlan,
@@ -1690,6 +1689,7 @@ module.exports = {
   renderMapMarkdown,
   renderSourceMarkdown,
   freezeConstraints,
-  verifyChangeContract,
+  generatePlan,
+  previewPlan,
   jsonCanonicalize: native.jsonCanonicalize,
 };

@@ -36,6 +36,40 @@ function markedNames(relative, name) {
   });
   assert.equal(archbird.ENGINE.kind, "wasm");
   assert.equal(archbird.VERSION, "0.0.1");
+  assert.deepEqual(
+    archbird.core.unifiedDiff(
+      Buffer.from("same\nold\n"),
+      Buffer.from("same\nnew\n"),
+      "src/example.txt",
+      "src/example.txt",
+    ),
+    Buffer.from(
+      "diff --git a/src/example.txt b/src/example.txt\n" +
+      "--- a/src/example.txt\n" +
+      "+++ b/src/example.txt\n" +
+      "@@ -1,2 +1,2 @@\n" +
+      " same\n" +
+      "-old\n" +
+      "+new\n",
+    ),
+  );
+  assert.deepEqual(
+    archbird.core.unifiedDiff(
+      Buffer.alloc(0),
+      Buffer.from("created\n"),
+      null,
+      "src/created.txt",
+      Buffer.from("new file mode 100644\n"),
+    ),
+    Buffer.from(
+      "diff --git a/src/created.txt b/src/created.txt\n" +
+      "new file mode 100644\n" +
+      "--- /dev/null\n" +
+      "+++ b/src/created.txt\n" +
+      "@@ -0,0 +1 @@\n" +
+      "+created\n",
+    ),
+  );
   for (const relative of ["README.md", "js/README.md"]) {
     assert.deepEqual(
       markedNames(relative, "archbird-browser-api"),

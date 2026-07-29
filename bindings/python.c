@@ -1101,6 +1101,60 @@ static PyObject *py_map_diff(PyObject *self, PyObject *args, PyObject *kwargs) {
   return result;
 }
 
+static PyObject *py_unified_diff(PyObject *self, PyObject *args,
+                                 PyObject *kwargs) {
+  static char *keywords[] = {
+      "before",   "after",         "before_path",    "after_path",
+      "metadata", "context_lines", "max_work_bytes", NULL,
+  };
+  const char *before;
+  const char *after;
+  const char *before_path;
+  const char *after_path;
+  const char *metadata = NULL;
+  Py_ssize_t before_length;
+  Py_ssize_t after_length;
+  Py_ssize_t before_path_length;
+  Py_ssize_t after_path_length;
+  Py_ssize_t metadata_length = 0;
+  Py_ssize_t context_lines = 3;
+  Py_ssize_t max_work_bytes = 16 * 1024 * 1024;
+  ArchbirdUnifiedDiffOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#z#z#|y#nn:unified_diff", keywords, &before,
+          &before_length, &after, &after_length, &before_path,
+          &before_path_length, &after_path, &after_path_length, &metadata,
+          &metadata_length, &context_lines, &max_work_bytes))
+    return NULL;
+  if (context_lines < 0 || max_work_bytes <= 0) {
+    PyErr_SetString(PyExc_ValueError,
+                    "context_lines must be nonnegative and max_work_bytes "
+                    "must be positive");
+    return NULL;
+  }
+  archbird_unified_diff_options_init(&options);
+  options.context_lines = (size_t)context_lines;
+  options.max_work_bytes = (size_t)max_work_bytes;
+  options.metadata = (const uint8_t *)metadata;
+  options.metadata_length = (size_t)metadata_length;
+  status = input_engine(
+      larger_input((size_t)before_length, (size_t)after_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_unified_diff(
+        engine, (const uint8_t *)before, (size_t)before_length,
+        (const uint8_t *)after, (size_t)after_length, before_path,
+        (size_t)before_path_length, after_path, (size_t)after_path_length,
+        &options, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_map_freshness(PyObject *self, PyObject *args,
                                   PyObject *kwargs) {
   static char *keywords[] = {"snapshot", "current", "pretty", NULL};
@@ -1889,6 +1943,8 @@ static PyMethodDef archbird_methods[] = {
      "Validate and expose a workspace host-loading plan."},
     {"map_diff", (PyCFunction)py_map_diff, METH_VARARGS | METH_KEYWORDS,
      "Structurally diff two canonical saved maps."},
+    {"unified_diff", (PyCFunction)py_unified_diff, METH_VARARGS | METH_KEYWORDS,
+     "Render one deterministic git-style unified diff."},
     {"map_freshness", (PyCFunction)py_map_freshness,
      METH_VARARGS | METH_KEYWORDS,
      "Audit a saved Map or Query against a freshly derived current Map."},

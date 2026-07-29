@@ -1634,160 +1634,149 @@ def run_historical_verification(
         ),
     }
 
-    proposals: list[Mapping[str, Any]] = []
-    proposal_paths: list[str] = []
     act_root = case_output / "act"
     act_root.mkdir(parents=True, exist_ok=True)
-    for index, identity in enumerate(identities):
-        finding = finding_by_key(documents["before"], identity)
-        if finding is None or not isinstance(finding.get("fingerprint"), str):
-            continue
-        proposal_path = act_root / f"proposal-{index}.json"
-        observation = run_process(
+    expected_paths = [identity.split("::", 1)[0] for identity in identities]
+    expected_fingerprints = {
+        str(finding["fingerprint"])
+        for identity in identities
+        for finding in [finding_by_key(documents["before"], identity)]
+        if finding is not None and isinstance(finding.get("fingerprint"), str)
+    }
+    plan_path = act_root / "plan.json"
+    plan_observation = run_process(
+        [
+            str(archbird),
+            "plan",
+            "HISTORICAL-INTRODUCED-TESTS",
+            "--config",
+            str(verification_root / "before/archbird.json"),
+            "--map",
+            str(verification_root / "before/map.json"),
+            "--root",
+            str(act_root),
+            "--output",
+            str(plan_path),
+        ],
+        act_root,
+        act_root / "plan.stdout",
+        act_root / "plan.stderr",
+    )
+    plan: Mapping[str, Any] | None = None
+    plan_artifact: Mapping[str, Any] | None = None
+    if plan_observation["returncode"] == 0 and plan_path.is_file():
+        plan = read_json(plan_path, "historical Plan")
+        plan_artifact = {
+            "bytes": plan_path.stat().st_size,
+            "sha256": sha256_file(plan_path),
+        }
+    plan_items = (
+        [
+            item
+            for item in plan.get("items", [])
+            if isinstance(item, dict)
+        ]
+        if plan is not None
+        else []
+    )
+    plan_fingerprints = {
+        str(origin["issue_fingerprint"])
+        for item in plan_items
+        for origin in item.get("origins", [])
+        if isinstance(origin, dict)
+        and isinstance(origin.get("issue_fingerprint"), str)
+    }
+    plan_paths: list[str] = []
+    acceptance_ids: set[str] = set()
+    for item in plan_items:
+        operation = item.get("operation")
+        if isinstance(operation, dict):
+            for field in ("path", "source_path", "destination_path"):
+                if isinstance(operation.get(field), str):
+                    plan_paths.append(str(operation[field]))
+            plan_paths.extend(
+                str(value)
+                for value in operation.get("candidate_paths", [])
+                if isinstance(value, str)
+            )
+        acceptance = item.get("acceptance")
+        if isinstance(acceptance, dict):
+            acceptance_ids.update(
+                str(value)
+                for value in acceptance.get("constraints", [])
+                if isinstance(value, str)
+            )
+    metrics["plan_generation_success"] = float(plan is not None)
+    metrics["plan_origin_recall"] = (
+        len(expected_fingerprints.intersection(plan_fingerprints))
+        / len(expected_fingerprints)
+        if expected_fingerprints
+        else None
+    )
+    metrics["plan_acceptance_coverage"] = float(
+        "HISTORICAL-INTRODUCED-TESTS" in acceptance_ids
+    )
+    metrics["plan_after_acceptance_satisfied"] = float(
+        plan is not None
+        and "HISTORICAL-INTRODUCED-TESTS" in acceptance_ids
+        and after_constraint_states == {"pass"}
+    )
+    metrics.update(rank_metrics("plan_candidate_path", plan_paths, expected_paths))
+
+    preview_path = act_root / "preview.json"
+    preview_observation: Mapping[str, Any] | None = None
+    preview: Mapping[str, Any] | None = None
+    if plan is not None:
+        preview_observation = run_process(
             [
                 str(archbird),
-                "plan",
-                "--verification",
-                str(verification_root / "before/result.json"),
-                "--finding",
-                str(finding["fingerprint"]),
+                "act",
+                str(plan_path),
+                "--root",
+                str(act_root),
                 "--format",
                 "json",
                 "--output",
-                str(proposal_path),
+                str(preview_path),
             ],
             act_root,
-            act_root / f"proposal-{index}.stdout",
-            act_root / f"proposal-{index}.stderr",
+            act_root / "preview.stdout",
+            act_root / "preview.stderr",
         )
-        if observation["returncode"] != 0 or not proposal_path.is_file():
-            continue
-        proposal = read_json(proposal_path, "historical change proposal")
-        proposals.append(
-            {
-                "artifact": {
-                    "bytes": proposal_path.stat().st_size,
-                    "sha256": sha256_file(proposal_path),
-                },
-                "document": proposal,
-                "identity": identity,
-                "observation": observation,
-                "path": proposal_path,
-            }
-        )
-        proposal_paths.extend(
-            str(candidate["path"])
-            for candidate in proposal.get("candidates", [])
-            if isinstance(candidate, dict)
-            and isinstance(candidate.get("path"), str)
-        )
-    expected_paths = [identity.split("::", 1)[0] for identity in identities]
-    metrics["act_proposal_recall"] = len(proposals) / len(identities)
-    metrics.update(
-        rank_metrics("act_candidate_path", proposal_paths, expected_paths)
-    )
+        if preview_path.is_file():
+            preview = read_json(preview_path, "historical Act preview")
+    metrics["act_preview_available"] = float(preview is not None)
     act: dict[str, Any] = {
         "applicability": "applicable",
-        "origins_expected": len(identities),
-        "proposals_produced": len(proposals),
-        "transition": {
-            "applicability": "not_applicable",
-            "reason": (
-                "multiple findings require reviewed plan composition"
-                if len(identities) > 1
-                else "no current origin finding produced a proposal"
-            ),
-        },
-    }
-    if len(identities) == 1 and len(proposals) == 1:
-        proposal_row = proposals[0]
-        proposal = proposal_row["document"]
-        proposal_path = proposal_row["path"]
-        contract_path = act_root / "contract.json"
-        result_path = act_root / "result.json"
-        contract_command = [
-            str(archbird),
-            "contract",
-            "--proposal",
-            str(proposal_path),
-            "--objective",
-            f"Introduce reviewed regression test {identities[0]}",
-            "--owner",
-            "historical-evaluation",
-            "--rationale",
-            "The reviewed historical change introduced this exact test identity.",
-            "--preserve-all",
-            "--format",
-            "json",
-            "--output",
-            str(contract_path),
-        ]
-        expected_path = expected_paths[0]
-        for candidate in proposal.get("candidates", []):
-            if (
-                isinstance(candidate, dict)
-                and candidate.get("path") == expected_path
-                and isinstance(candidate.get("id"), str)
-            ):
-                contract_command.extend(
-                    ("--select-candidate", str(candidate["id"]))
-                )
-        contract_observation = run_process(
-            contract_command,
-            act_root,
-            act_root / "contract.stdout",
-            act_root / "contract.stderr",
-        )
-        if contract_observation["returncode"] == 0 and contract_path.is_file():
-            result_observation = run_process(
-                [
-                    str(archbird),
-                    "verify-plan",
-                    "--proposal",
-                    str(proposal_path),
-                    "--contract",
-                    str(contract_path),
-                    "--before-verification",
-                    str(verification_root / "before/result.json"),
-                    "--after-verification",
-                    str(verification_root / "after/result.json"),
-                    "--format",
-                    "json",
-                    "--output",
-                    str(result_path),
-                ],
-                act_root,
-                act_root / "result.stdout",
-                act_root / "result.stderr",
-            )
-            if result_observation["returncode"] == 0 and result_path.is_file():
-                result = read_json(result_path, "historical change result")
-                metrics["act_transition_satisfied"] = float(
-                    result.get("status") == "satisfied"
-                )
-                act["transition"] = {
-                    "applicability": "applicable",
-                    "artifact": {
-                        "bytes": result_path.stat().st_size,
-                        "sha256": sha256_file(result_path),
-                    },
-                    "observation": result_observation,
-                    "status": result.get("status"),
-                }
-            else:
-                act["transition"] = {
-                    "applicability": "unknown",
-                    "reason": "change-result judgment failed",
-                }
-        else:
-            act["transition"] = {
-                "applicability": "unknown",
-                "reason": "reviewed contract construction failed",
+        "preview": (
+            {
+                "applicability": "applicable",
+                "artifact": {
+                    "bytes": preview_path.stat().st_size,
+                    "sha256": sha256_file(preview_path),
+                },
+                "observation": preview_observation,
+                "status": preview.get("status"),
             }
+            if preview is not None
+            else {
+                "applicability": "unknown",
+                "reason": "Act preview was not produced",
+            }
+        ),
+    }
     track = {
         "act": act,
         "applicability": "applicable",
         "expected_test_identities": identities,
+        "plan": {
+            "applicability": (
+                "applicable" if plan is not None else "unknown"
+            ),
+            "artifact": plan_artifact,
+            "items": len(plan_items),
+            "observation": plan_observation,
+        },
         "verification": {
             "after_missing": sorted(
                 truth.intersection(after_findings), key=str.encode
@@ -1800,7 +1789,15 @@ def run_historical_verification(
         },
     }
     artifacts = {
-        "act_proposals": [row["artifact"] for row in proposals],
+        "act_preview": (
+            {
+                "bytes": preview_path.stat().st_size,
+                "sha256": sha256_file(preview_path),
+            }
+            if preview is not None
+            else None
+        ),
+        "plan": plan_artifact,
         "verification": artifact_rows,
     }
     return track, metrics, {"artifacts": artifacts, "observations": observations}
@@ -2189,7 +2186,6 @@ def aggregate_cases(
             metrics[name] = statistics.fmean(values)
     pooled = {}
     for prefix in (
-        "act_candidate_path",
         "diff_context_file",
         "diff_file",
         "issue_context_file",
@@ -2199,6 +2195,7 @@ def aggregate_cases(
         "issue_symbol",
         "issue_test",
         "matched_symbol",
+        "plan_candidate_path",
         "relevant_context_file",
         "relevant_file",
         "relevant_symbol",

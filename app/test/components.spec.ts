@@ -323,17 +323,43 @@ describe("artifact workspaces", () => {
     expect(diff.textContent).toContain("1 added");
     mounted?.unmount();
 
-    const proposal = mount(DocumentPanel, {
+    const plan = mount(DocumentPanel, {
       artifact: artifact({
-        artifact: "change-proposal",
-        schema_version: 2,
-        candidates: [{ id: "candidate-1", kind: "edit_site", path: "src/api.c", reason: "current evidence" }],
-        postconditions: [{}],
-        preserved_invariants: [],
+        artifact: "plan",
+        schema_version: 1,
+        objective: "Remove the forbidden declaration.",
+        items: [{
+          id: "remove-legacy",
+          statement: "Remove legacy from src/api.c.",
+          executable: true,
+          operation: { action: "replace_range", path: "src/api.c" },
+          non_executable_reasons: [],
+        }],
+        preserved_constraints: ["NO-CYCLES"],
         unknowns: [],
-      }, "proposal.json"),
+      }, "plan.json"),
     });
-    expect(proposal.textContent).toContain("Change proposal");
-    expect(proposal.textContent).toContain("src/api.c");
+    expect(plan.textContent).toContain("Structural change plan");
+    expect(plan.textContent).toContain("Remove legacy from src/api.c");
+    mounted?.unmount();
+
+    const result = mount(DocumentPanel, {
+      artifact: artifact({
+        artifact: "act-result",
+        schema_version: 1,
+        status: "applied",
+        plan_sha256: "a".repeat(64),
+        changes: [{
+          item_ids: ["remove-legacy"],
+          kind: "modify",
+          path: "src/api.c",
+          unified_diff: "--- a/src/api.c\n+++ b/src/api.c\n",
+        }],
+        acceptance: { status: "satisfied" },
+      }, "act-result.json"),
+    });
+    expect(result.textContent).toContain("Act result");
+    expect(result.textContent).toContain("satisfied");
+    expect(result.textContent).toContain("src/api.c");
   });
 });

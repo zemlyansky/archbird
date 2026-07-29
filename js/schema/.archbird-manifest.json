@@ -2,6 +2,12 @@
   "artifact": "archbird-node-schemas",
   "files": [
     {
+      "bytes": 11897,
+      "path": "act-result.schema.json",
+      "sha256": "b8fc17a9cba7460ded99067279317530a328946acd6c047ffcf6db859525e903",
+      "source": "schema/act-result.schema.json"
+    },
+    {
       "bytes": 43109,
       "path": "archbird.schema.json",
       "sha256": "4b6b825d6183125588dc55eb98a2368c2e555fa22b05769b5a2be33f083dbfad",
@@ -132,6 +138,12 @@
       "path": "okf-text-normalization.schema.json",
       "sha256": "13365bc6beaaa3555415da18b5418165556c2e0f89a898fcb0140174917779fd",
       "source": "schema/okf-text-normalization.schema.json"
+    },
+    {
+      "bytes": 11837,
+      "path": "plan.schema.json",
+      "sha256": "dbe69675fcf6f8c7660c1572477d3a4455fd2f5ffd65ca3b3a6d8d3a5947f138",
+      "source": "schema/plan.schema.json"
     },
     {
       "bytes": 7598,

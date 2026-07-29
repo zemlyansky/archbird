@@ -394,6 +394,48 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
     sha256: (value) => oneInput(value, "_ab_wasm_sha256").toString("ascii"),
     jsonCanonicalize: (value, pretty = false, trailing = false) =>
       oneInput(value, "_ab_wasm_json_canonicalize", boolFlags(pretty, trailing)),
+    unifiedDiff(
+      before,
+      after,
+      beforePath,
+      afterPath,
+      metadata = Buffer.alloc(0),
+      contextLines = 3,
+      maxWorkBytes = 16 * 1024 * 1024,
+    ) {
+      if (beforePath !== null && typeof beforePath !== "string") {
+        throw new TypeError("beforePath must be a string or null");
+      }
+      if (afterPath !== null && typeof afterPath !== "string") {
+        throw new TypeError("afterPath must be a string or null");
+      }
+      const beforePathBytes = beforePath === null
+        ? Buffer.alloc(0)
+        : Buffer.from(beforePath, "utf8");
+      const afterPathBytes = afterPath === null
+        ? Buffer.alloc(0)
+        : Buffer.from(afterPath, "utf8");
+      return withInputs(
+        [before, after, beforePathBytes, afterPathBytes, metadata],
+        ([beforeInput, afterInput, beforePathInput, afterPathInput, metadataInput]) =>
+          result(module._ab_wasm_unified_diff(
+            beforeInput.pointer,
+            beforeInput.length,
+            afterInput.pointer,
+            afterInput.length,
+            beforePathInput.pointer,
+            beforePathInput.length,
+            beforePath === null ? 0 : 1,
+            afterPathInput.pointer,
+            afterPathInput.length,
+            afterPath === null ? 0 : 1,
+            metadataInput.pointer,
+            metadataInput.length,
+            sizeValue(contextLines, "contextLines"),
+            sizeValue(maxWorkBytes, "maxWorkBytes"),
+          )),
+      );
+    },
     mapMarkdown: (map, full = false, maxChars = 0) =>
       oneInput(
         map,

@@ -32,9 +32,6 @@ from .native import (
     Source,
     Workspace,
     audit_map_freshness,
-    change_contract,
-    change_proposal,
-    change_verify,
     compile_test_observations,
     diff_maps_json,
     _evaluate_constraints_report_with_blocking,
@@ -50,6 +47,9 @@ from .native import (
     resolve_discovery,
 )
 from .adapters.okf.parser import okf_query_input, parse_okf_bundle
+from .acting import apply_plan, preview_plan
+from ._plan_limits import MAX_PLAN_BYTES
+from .planning import generate_plan
 from .project_configuration import (
     compile_named_query,
 )
@@ -72,7 +72,7 @@ _PORTABLE_PROVIDERS = (
 
 _COMMANDS = (
     "config",
-    "contract",
+    "act",
     "diff",
     "export",
     "freshness",
@@ -86,7 +86,6 @@ _COMMANDS = (
     "serve",
     "support",
     "verify",
-    "verify-plan",
     "workspace",
 )
 
@@ -95,11 +94,11 @@ def _top_level_help() -> str:
     return (
         "usage: archbird COMMAND [OPTIONS]\n"
         "       archbird [ROOT] [MAP OPTIONS]\n\n"
-        "Map codebases, query evidence, verify architecture, and review "
-        "structural changes.\n\n"
+        "Map codebases, query evidence, verify architecture, plan changes, "
+        "and act on reviewed plans.\n\n"
         "commands:\n"
         "  map, config, query, impact, diff, observe, freshness, workspace\n"
-        "  verify, plan, contract, verify-plan, export, okf, serve, mcp, support\n\n"
+        "  verify, plan, act, export, okf, serve, mcp, support\n\n"
         "Run `archbird COMMAND --help` for command-specific options. With no "
         "command, Archbird maps the current directory; an existing or "
         "path-shaped positional argument is the Map root.\n"
@@ -845,56 +844,129 @@ def verification_parser() -> argparse.ArgumentParser:
 def plan_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird plan",
-        description="Compile one derived proposal from one verification finding.",
+        description=(
+            "Derive an editable source-locked Plan from current constraint issues."
+        ),
     )
-    result.add_argument("--verification", required=True)
-    result.add_argument("--finding", required=True)
-    result.add_argument("--format", choices=("json", "markdown"), default="json")
-    result.add_argument("--full", action="store_true")
-    result.add_argument("--max-candidates", type=int, default=20)
-    result.add_argument("--pretty", action="store_true")
+    result.add_argument(
+        "constraint_ids",
+        nargs="*",
+        metavar="CONSTRAINT",
+        help="constraint IDs to plan; omit to plan every current issue",
+    )
+    source = result.add_mutually_exclusive_group()
+    source.add_argument("-c", "--config", help="project configuration JSON")
+    source.add_argument(
+        "--no-config",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    result.add_argument("--map", help="saved canonical Map JSON")
+    result.add_argument(
+        "--resolution",
+        help="configuration-resolution JSON paired with --map",
+    )
+    result.add_argument("--root", dest="root_override", help="repository root (default: .)")
+    _add_discovery_options(result)
+    _add_python_analysis_options(result)
+    _add_cache_options(result)
+    _add_progress_options(result)
+    result.add_argument(
+        "--baseline",
+        help="classify issues against an explicit frozen baseline",
+    )
+    result.add_argument(
+        "--policy-date",
+        metavar="YYYY-MM-DD",
+        help="date used to evaluate expiring waivers",
+    )
+    result.add_argument(
+        "--observation",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply a reviewed observation artifact",
+    )
+    result.add_argument(
+        "--map-input",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply an additional saved Map for a constraint operand",
+    )
+    result.add_argument(
+        "--resolution-input",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply configuration resolution for an additional saved Map",
+    )
+    result.add_argument(
+        "--objective",
+        help="replace the derived Plan objective with reviewed text",
+    )
+    result.add_argument("--pretty", action="store_true", help="pretty JSON")
     result.add_argument("-o", "--output", default="-")
     return result
 
 
-def contract_parser() -> argparse.ArgumentParser:
+def act_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
-        prog="archbird contract",
-        description="Seal explicit review metadata as an asserted change contract.",
+        prog="archbird act",
+        description=(
+            "Preview or explicitly apply a source-locked Plan. Applying rebuilds "
+            "the Map and verifies its acceptance constraints."
+        ),
     )
-    result.add_argument("--proposal", required=True)
-    result.add_argument("--objective", required=True)
-    result.add_argument("--owner", required=True)
-    result.add_argument("--rationale", required=True)
-    preserved = result.add_mutually_exclusive_group()
-    preserved.add_argument(
-        "--preserve-constraint", action="append", default=[]
+    result.add_argument("plan", help="editable Plan JSON")
+    result.add_argument("-c", "--config", help="project configuration JSON")
+    result.add_argument("--root", dest="root_override", help="repository root (default: .)")
+    result.add_argument(
+        "--apply",
+        action="store_true",
+        help="apply only after validating the Plan against a fresh current Map",
     )
-    preserved.add_argument("--preserve-all", action="store_true")
-    result.add_argument("--select-candidate", action="append", default=[])
-    result.add_argument("--format", choices=("json", "markdown"), default="json")
-    result.add_argument("--pretty", action="store_true")
-    result.add_argument("-o", "--output", default="-")
-    return result
-
-
-def verify_plan_parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(
-        prog="archbird verify-plan",
-        description="Judge a reviewed fact transition without executing projects.",
+    _add_python_analysis_options(result)
+    _add_cache_options(result)
+    _add_progress_options(result)
+    result.add_argument(
+        "--baseline",
+        help="classify acceptance against an explicit frozen baseline",
     )
-    result.add_argument("--proposal", required=True)
-    result.add_argument("--contract", required=True)
-    result.add_argument("--before-verification", required=True)
-    result.add_argument("--after-verification", required=True)
+    result.add_argument(
+        "--policy-date",
+        metavar="YYYY-MM-DD",
+        help="date used to evaluate expiring waivers",
+    )
+    result.add_argument(
+        "--observation",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply a reviewed observation artifact for acceptance",
+    )
+    result.add_argument(
+        "--map-input",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply an additional saved Map for acceptance",
+    )
+    result.add_argument(
+        "--resolution-input",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="supply configuration resolution for an additional saved Map",
+    )
     result.add_argument(
         "--format",
-        choices=("json", "markdown", "sarif", "junit"),
-        default="json",
+        choices=("markdown", "json", "patch"),
+        default="markdown",
     )
     result.add_argument("--pretty", action="store_true")
-    result.add_argument("--check", action="store_true")
     result.add_argument("-o", "--output", default="-")
+    result.set_defaults(no_config=False, root_path=None)
     return result
 
 
@@ -908,9 +980,6 @@ def export_parser() -> argparse.ArgumentParser:
         "--map", required=True, help="canonical saved Map or Query JSON"
     )
     result.add_argument("--verification", help="canonical verification JSON")
-    result.add_argument("--proposal", help="canonical change-proposal JSON")
-    result.add_argument("--contract", help="canonical change-contract JSON")
-    result.add_argument("--result", help="canonical change-result JSON")
     result.add_argument(
         "--replace",
         action="store_true",
@@ -1902,15 +1971,129 @@ def _workspace_main(argv: Sequence[str]) -> int:
         return 2
 
 
+def _constraint_auxiliary_inputs(
+    args: argparse.Namespace,
+    config_json: bytes,
+) -> tuple[
+    object,
+    Mapping[str, Mapping[str, object]],
+    Mapping[str, Mapping[str, object]],
+    Optional[str],
+]:
+    baseline = (
+        json.loads(Path(args.baseline).read_bytes()) if args.baseline else None
+    )
+    observations = _named_json_documents(
+        args.observation, option="--observation"
+    )
+    map_documents = _named_json_documents(args.map_input, option="--map-input")
+    resolution_documents = _named_json_documents(
+        args.resolution_input, option="--resolution-input"
+    )
+    unknown_resolutions = set(resolution_documents) - set(map_documents)
+    if unknown_resolutions:
+        raise ConfigError(
+            "--resolution-input has no matching --map-input: "
+            + ", ".join(sorted(unknown_resolutions))
+        )
+    maps = {
+        name: {
+            "map": document,
+            **(
+                {"resolution": resolution_documents[name]}
+                if name in resolution_documents
+                else {}
+            ),
+        }
+        for name, document in map_documents.items()
+    }
+    config_document = json.loads(config_json)
+    constraints = config_document.get("constraints", {})
+    constraint_rows = (
+        constraints.values()
+        if isinstance(constraints, dict)
+        else constraints
+        if isinstance(constraints, list)
+        else ()
+    )
+    has_expiring_waiver = any(
+        isinstance(constraint, dict)
+        and any(
+            isinstance(waiver, dict) and "expires_on" in waiver
+            for waiver in constraint.get("waivers", [])
+        )
+        for constraint in constraint_rows
+    )
+    policy_date = args.policy_date
+    if policy_date is None and has_expiring_waiver:
+        policy_date = datetime.now(timezone.utc).date().isoformat()
+    return baseline, maps, observations, policy_date
+
+
+def _constraint_evaluation_inputs(
+    args: argparse.Namespace,
+    progress: _Progress,
+) -> tuple[
+    Path,
+    bytes,
+    bytes,
+    bytes,
+    object,
+    Mapping[str, Mapping[str, object]],
+    Mapping[str, Mapping[str, object]],
+    Optional[str],
+]:
+    if args.no_config:
+        raise ConfigError(
+            "Verify and Plan require constraints from archbird.json; "
+            "--no-config is not supported"
+        )
+    repository, config_json, _ = _repository_inputs(args)
+    if not config_json:
+        raise ConfigError(
+            f"no archbird.json found in {repository}; "
+            "Verify and Plan require reviewed constraints"
+        )
+    baseline, maps, observations, policy_date = _constraint_auxiliary_inputs(
+        args, config_json
+    )
+    if args.resolution and not args.map:
+        raise ValueError("--resolution requires --map")
+    if args.map:
+        if args.jobs or args.python_provider_timeout is not None:
+            raise ValueError(
+                "--jobs and --python-provider-timeout apply only to a live repository"
+            )
+        map_json = Path(args.map).read_bytes()
+        resolution_json = (
+            Path(args.resolution).read_bytes() if args.resolution else b""
+        )
+    else:
+        project = _project_from_args(
+            args,
+            progress,
+            resolved_repository=repository,
+            resolved_config_json=config_json,
+        )
+        map_json = project.map_json()
+        resolution_json = project.resolution_json or b""
+        _warn_map_cache_stats(project.map_cache_stats)
+    return (
+        repository,
+        config_json,
+        map_json,
+        resolution_json,
+        baseline,
+        maps,
+        observations,
+        policy_date,
+    )
+
+
 def _verify_main(argv: Sequence[str]) -> int:
     args = verification_parser().parse_args(argv)
     progress = _Progress(args.progress)
     try:
-        if args.no_config:
-            raise ConfigError(
-                "Verify requires reviewed constraints from archbird.json; "
-                "--no-config is not supported"
-            )
         if args.max_findings is not None and args.max_findings < 0:
             raise ValueError("--max-findings must be nonnegative")
         if args.full and args.max_findings is not None:
@@ -1932,79 +2115,16 @@ def _verify_main(argv: Sequence[str]) -> int:
             args.freeze_owner is not None or args.freeze_rationale is not None
         ):
             raise ValueError("--freeze-owner/--freeze-rationale require --freeze")
-        baseline = (
-            json.loads(Path(args.baseline).read_bytes()) if args.baseline else None
-        )
-        observations = _named_json_documents(
-            args.observation, option="--observation"
-        )
-        map_documents = _named_json_documents(args.map_input, option="--map-input")
-        resolution_documents = _named_json_documents(
-            args.resolution_input, option="--resolution-input"
-        )
-        unknown_resolutions = set(resolution_documents) - set(map_documents)
-        if unknown_resolutions:
-            raise ConfigError(
-                "--resolution-input has no matching --map-input: "
-                + ", ".join(sorted(unknown_resolutions))
-            )
-        maps = {
-            name: {
-                "map": document,
-                **(
-                    {"resolution": resolution_documents[name]}
-                    if name in resolution_documents
-                    else {}
-                ),
-            }
-            for name, document in map_documents.items()
-        }
-        repository, config_json, _ = _repository_inputs(args)
-        if not config_json:
-            raise ConfigError(
-                f"no archbird.json found in {repository}; Verify requires reviewed constraints"
-            )
-        config_document = json.loads(config_json)
-        constraints = config_document.get("constraints", {})
-        constraint_rows = (
-            constraints.values()
-            if isinstance(constraints, dict)
-            else constraints
-            if isinstance(constraints, list)
-            else ()
-        )
-        has_expiring_waiver = any(
-            isinstance(constraint, dict)
-            and any(
-                isinstance(waiver, dict) and "expires_on" in waiver
-                for waiver in constraint.get("waivers", [])
-            )
-            for constraint in constraint_rows
-        )
-        policy_date = args.policy_date
-        if policy_date is None and has_expiring_waiver:
-            policy_date = datetime.now(timezone.utc).date().isoformat()
-        if args.resolution and not args.map:
-            raise ValueError("--resolution requires --map")
-        if args.map:
-            if args.jobs or args.python_provider_timeout is not None:
-                raise ValueError(
-                    "--jobs and --python-provider-timeout apply only to a live repository"
-                )
-            map_json = Path(args.map).read_bytes()
-            resolution_json = (
-                Path(args.resolution).read_bytes() if args.resolution else b""
-            )
-        else:
-            project = _project_from_args(
-                args,
-                progress,
-                resolved_repository=repository,
-                resolved_config_json=config_json,
-            )
-            map_json = project.map_json()
-            resolution_json = project.resolution_json or b""
-            _warn_map_cache_stats(project.map_cache_stats)
+        (
+            _repository,
+            config_json,
+            map_json,
+            resolution_json,
+            baseline,
+            maps,
+            observations,
+            policy_date,
+        ) = _constraint_evaluation_inputs(args, progress)
         blocking = False
         if args.format == "json":
             encoded = evaluate_constraints_json(
@@ -2063,84 +2183,516 @@ def _verify_main(argv: Sequence[str]) -> int:
 
 def _plan_main(argv: Sequence[str]) -> int:
     args = plan_parser().parse_args(argv)
+    progress = _Progress(args.progress)
     try:
-        if args.max_candidates < 0:
-            raise ValueError("--max-candidates must be nonnegative")
-        encoded = change_proposal(
-            Path(args.verification).read_bytes(),
-            args.finding,
-            format=args.format,
-            full=args.full,
-            max_candidates=args.max_candidates,
+        if args.constraint_ids and _query_positional_is_root(
+            args.constraint_ids[0]
+        ):
+            positional_root = Path(args.constraint_ids.pop(0)).resolve()
+            if (
+                args.root_override
+                and positional_root != Path(args.root_override).resolve()
+            ):
+                raise ConfigError(
+                    "positional ROOT and --root select different directories"
+                )
+            args.root_override = str(positional_root)
+        (
+            repository,
+            config_json,
+            map_json,
+            resolution_json,
+            baseline,
+            maps,
+            observations,
+            policy_date,
+        ) = _constraint_evaluation_inputs(args, progress)
+        verification_json = evaluate_constraints_json(
+            config_json,
+            map_json,
+            resolution_json=resolution_json,
+            baseline=baseline,
+            maps=maps,
+            observations=observations,
+            policy_date=policy_date,
+            pretty=False,
+        )
+        map_document = json.loads(map_json)
+        if _has_error_diagnostics(map_document):
+            raise ValueError(
+                "Plan requires a Map without error diagnostics; "
+                "fix Map evidence before deriving edits"
+            )
+        plan = generate_plan(
+            map_document,
+            json.loads(verification_json),
+            args.constraint_ids or None,
+            repository,
+        )
+        if args.objective:
+            plan["objective"] = args.objective
+            plan["provenance"] = "asserted"
+        encoded = _native.json_canonicalize(
+            json.dumps(
+                plan,
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
             pretty=args.pretty,
         )
         _write(encoded, args.output)
+        progress.finish()
         return 0
-    except (ConfigError, OSError, RuntimeError, ValueError) as error:
+    except (ConfigError, OSError, RuntimeError, ValueError, _native.Error) as error:
+        progress.clear()
         print(f"archbird: error: {error}", file=sys.stderr)
         return 2
 
 
-def _contract_main(argv: Sequence[str]) -> int:
-    args = contract_parser().parse_args(argv)
-    try:
-        proposal_json = Path(args.proposal).read_bytes()
-        preserve_constraints = args.preserve_constraint
-        if args.preserve_all:
-            proposal_document = json.loads(proposal_json)
-            preserve_constraints = [
-                str(row["id"])
-                for row in proposal_document["preserved_invariants"]
-            ]
-        encoded = change_contract(
-            proposal_json,
-            objective=args.objective,
-            owner=args.owner,
-            rationale=args.rationale,
-            preserve_constraints=preserve_constraints,
-            selected_candidates=args.select_candidate,
-            format=args.format,
-            pretty=args.pretty,
-        )
-        _write(encoded, args.output)
-        return 0
-    except (ConfigError, OSError, RuntimeError, ValueError, KeyError) as error:
-        print(f"archbird: error: {error}", file=sys.stderr)
-        return 2
+def _act_project(
+    args: argparse.Namespace,
+    repository: Path,
+    config_json: bytes,
+    progress: _Progress,
+) -> Project:
+    progress.emit({"phase": "discovery", "state": "start"})
+    project = Project.from_repository(
+        repository,
+        config=config_json,
+        scan=False,
+        jobs=args.jobs,
+    )
+    progress.emit({"phase": "selected", "files": len(project.sources)})
+    project.scan(
+        jobs=args.jobs,
+        python_provider_timeout=_python_provider_timeout(args),
+        cache_dir=_cache_dir(args),
+        cache_max_bytes=_cache_max_bytes(args),
+        progress=progress.emit,
+    )
+    _warn_cache_stats(project.cache_stats)
+    _warn_map_cache_stats(project.map_cache_stats)
+    return project
 
 
-def _verify_plan_main(argv: Sequence[str]) -> int:
-    args = verify_plan_parser().parse_args(argv)
-    try:
-        proposal_json = Path(args.proposal).read_bytes()
-        contract_json = Path(args.contract).read_bytes()
-        before_json = Path(args.before_verification).read_bytes()
-        after_json = Path(args.after_verification).read_bytes()
-        encoded = change_verify(
-            proposal_json,
-            contract_json,
-            before_json,
-            after_json,
-            format=args.format,
-            pretty=args.pretty or args.format == "sarif",
+def _plan_source_mismatches(
+    plan: Mapping[str, object],
+    map_json: bytes,
+    verification: Mapping[str, object],
+) -> list[str]:
+    source = plan.get("source")
+    if not isinstance(source, Mapping):
+        return ["Plan has no source identity"]
+    expected_map = source.get("map")
+    expected_verification = source.get("verification")
+    map_document = json.loads(map_json)
+    evidence = map_document.get("evidence")
+    map_tool = map_document.get("tool")
+    verification_policy = verification.get("policy")
+    verification_tool = verification.get("tool")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (
+            expected_map,
+            expected_verification,
+            evidence,
+            map_tool,
+            verification_policy,
+            verification_tool,
         )
-        _write(encoded, args.output)
-        if not args.check:
-            return 0
-        result = json.loads(
-            encoded
-            if args.format == "json"
-            else change_verify(
-                proposal_json,
-                contract_json,
-                before_json,
-                after_json,
-                format="json",
-                pretty=False,
+    ):
+        return ["Plan, Map, or Verification is missing source identity fields"]
+    assert isinstance(expected_map, Mapping)
+    assert isinstance(expected_verification, Mapping)
+    assert isinstance(evidence, Mapping)
+    assert isinstance(map_tool, Mapping)
+    assert isinstance(verification_policy, Mapping)
+    assert isinstance(verification_tool, Mapping)
+    actual = {
+        "project": map_document.get("project"),
+        "map.sha256": hashlib.sha256(
+            _native.json_canonicalize(map_json)
+        ).hexdigest(),
+        "map.input_sha256": evidence.get("input_sha256"),
+        "map.configuration_sha256": evidence.get("config_sha256"),
+        "map.producer_implementation_sha256": map_tool.get(
+            "implementation_sha256"
+        ),
+        "verification.sha256": verification.get("verification_result_sha256"),
+        "verification.policy_sha256": verification_policy.get(
+            "constraint_policy_sha256"
+        ),
+        "verification.producer_implementation_sha256": verification_tool.get(
+            "implementation_sha256"
+        ),
+    }
+    expected = {
+        "project": source.get("project"),
+        "map.sha256": expected_map.get("sha256"),
+        "map.input_sha256": expected_map.get("input_sha256"),
+        "map.configuration_sha256": expected_map.get("configuration_sha256"),
+        "map.producer_implementation_sha256": expected_map.get(
+            "producer_implementation_sha256"
+        ),
+        "verification.sha256": expected_verification.get("sha256"),
+        "verification.policy_sha256": expected_verification.get("policy_sha256"),
+        "verification.producer_implementation_sha256": expected_verification.get(
+            "producer_implementation_sha256"
+        ),
+    }
+    return [
+        f"{field} changed"
+        for field in expected
+        if expected[field] != actual[field]
+    ]
+
+
+def _plan_acceptance_ids(plan: Mapping[str, object]) -> list[str]:
+    identifiers: list[str] = []
+    for item in plan.get("items", []):
+        if not isinstance(item, Mapping):
+            raise ValueError("Plan items must be objects")
+        acceptance = item.get("acceptance")
+        if not isinstance(acceptance, Mapping):
+            raise ValueError("Plan item acceptance must be an object")
+        values = acceptance.get("constraints")
+        if not isinstance(values, list) or not values:
+            raise ValueError("Plan item acceptance must name constraints")
+        for value in values:
+            if not isinstance(value, str) or not value:
+                raise ValueError("Plan acceptance constraint IDs must be strings")
+            if value not in identifiers:
+                identifiers.append(value)
+    preserved = plan.get("preserved_constraints")
+    if not isinstance(preserved, list):
+        raise ValueError("Plan preserved_constraints must be an array")
+    for value in preserved:
+        if not isinstance(value, str) or not value:
+            raise ValueError("preserved constraint IDs must be strings")
+        if value not in identifiers:
+            identifiers.append(value)
+    return identifiers
+
+
+def _acceptance_from_verification(
+    plan: Mapping[str, object],
+    verification: Mapping[str, object],
+) -> dict[str, object]:
+    rows = verification.get("constraints")
+    if not isinstance(rows, list):
+        raise ValueError("fresh Verification has no constraint results")
+    by_id = {
+        row["id"]: row
+        for row in rows
+        if isinstance(row, Mapping) and isinstance(row.get("id"), str)
+    }
+    identifiers = _plan_acceptance_ids(plan)
+    omitted = sorted(set(by_id) - set(identifiers))
+    extra = sorted(set(identifiers) - set(by_id))
+    if omitted or extra:
+        details = []
+        if omitted:
+            details.append("omits " + ", ".join(omitted))
+        if extra:
+            details.append("includes unknown " + ", ".join(extra))
+        raise ValueError(
+            "Plan acceptance must cover the complete Verification policy: "
+            + "; ".join(details)
+        )
+    missing = [identifier for identifier in identifiers if identifier not in by_id]
+    if missing:
+        raise ValueError(
+            "Plan names constraints absent from fresh Verification: "
+            + ", ".join(missing)
+        )
+    constraints = [
+        {"id": identifier, "status": by_id[identifier].get("status")}
+        for identifier in identifiers
+    ]
+    allowed = {"pass", "fail", "unknown", "waived", "not_applicable"}
+    if any(row["status"] not in allowed for row in constraints):
+        raise ValueError("fresh Verification contains an invalid constraint status")
+    statuses = {str(row["status"]) for row in constraints}
+    status = (
+        "not_satisfied"
+        if "fail" in statuses
+        else "unknown"
+        if "unknown" in statuses
+        else "satisfied"
+    )
+    verification_sha256 = verification.get("verification_result_sha256")
+    if not isinstance(verification_sha256, str):
+        raise ValueError("fresh Verification is missing its result digest")
+    return {
+        "status": status,
+        "verification_sha256": verification_sha256,
+        "constraints": constraints,
+    }
+
+
+def _map_diagnostic_regressions(
+    before: Mapping[str, object],
+    after: Mapping[str, object],
+) -> list[str]:
+    def inventory(document: Mapping[str, object]) -> dict[tuple[str, str, str], int]:
+        counts: dict[tuple[str, str, str], int] = {}
+        rows = document.get("diagnostics")
+        if not isinstance(rows, list):
+            return counts
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            identity = (
+                str(row.get("severity", "")),
+                str(row.get("code", "")),
+                str(row.get("path", "")),
+            )
+            counts[identity] = counts.get(identity, 0) + 1
+        return counts
+
+    prior = inventory(before)
+    current = inventory(after)
+    regressions = []
+    for identity, count in sorted(current.items()):
+        added = count - prior.get(identity, 0)
+        if added > 0:
+            severity, code, path = identity
+            location = f" at {path}" if path else ""
+            regressions.append(
+                f"{added} new {severity or 'unknown'} diagnostic {code or 'unknown'}"
+                f"{location}"
+            )
+    return regressions
+
+
+def _blocked_act_result(
+    preview: Mapping[str, object],
+    message: str,
+) -> dict[str, object]:
+    result = dict(preview)
+    result["status"] = "blocked"
+    result["changes"] = []
+    result["acceptance"] = {
+        "status": "not_evaluated",
+        "verification_sha256": None,
+        "constraints": [],
+    }
+    result["diagnostics"] = [
+        {
+            "code": "source_context_mismatch",
+            "severity": "error",
+            "message": message,
+            "item_id": None,
+            "path": None,
+        }
+    ]
+    return result
+
+
+def _act_result_bytes(
+    result: Mapping[str, object],
+    *,
+    format: str,
+    pretty: bool,
+) -> bytes:
+    if format == "json":
+        return _native.json_canonicalize(
+            json.dumps(
+                result,
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+            pretty=pretty,
+        )
+    changes = result.get("changes")
+    change_rows = changes if isinstance(changes, list) else []
+    if format == "patch":
+        return "".join(
+            str(change.get("unified_diff", ""))
+            for change in change_rows
+            if isinstance(change, Mapping)
+        ).encode("utf-8")
+    acceptance = result.get("acceptance")
+    acceptance_status = (
+        acceptance.get("status")
+        if isinstance(acceptance, Mapping)
+        else "not_evaluated"
+    )
+    lines = [
+        f"# Act {result.get('status', 'unknown')}",
+        "",
+        f"- Plan: `{result.get('plan_sha256', '')}`",
+        f"- Changes: {len(change_rows)}",
+        f"- Acceptance: `{acceptance_status}`",
+    ]
+    diagnostics = result.get("diagnostics")
+    diagnostic_rows = diagnostics if isinstance(diagnostics, list) else []
+    if diagnostic_rows:
+        lines.extend(("", "## Diagnostics", ""))
+        for row in diagnostic_rows:
+            if isinstance(row, Mapping):
+                lines.append(
+                    f"- `{row.get('code', 'error')}`: {row.get('message', '')}"
+                )
+    for change in change_rows:
+        if not isinstance(change, Mapping):
+            continue
+        lines.extend(
+            (
+                "",
+                f"## {change.get('path', '')}",
+                "",
+                "```diff",
+                str(change.get("unified_diff", "")).rstrip("\n"),
+                "```",
             )
         )
-        return int(result["status"] not in {"satisfied", "superseded"})
-    except (ConfigError, OSError, RuntimeError, ValueError, KeyError) as error:
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _act_main(argv: Sequence[str]) -> int:
+    args = act_parser().parse_args(argv)
+    progress = _Progress(args.progress)
+    try:
+        if args.pretty and args.format != "json":
+            raise ValueError("--pretty applies only to JSON")
+        plan_path = Path(args.plan)
+        plan_metadata = plan_path.lstat()
+        if stat.S_ISLNK(plan_metadata.st_mode):
+            raise ValueError("Plan input must not be a symbolic link")
+        if not stat.S_ISREG(plan_metadata.st_mode):
+            raise ValueError("Plan input must be a regular file")
+        if plan_metadata.st_size > MAX_PLAN_BYTES:
+            raise ValueError(
+                f"Plan exceeds the {MAX_PLAN_BYTES}-byte input limit"
+            )
+        plan_bytes = plan_path.read_bytes()
+        if len(plan_bytes) > MAX_PLAN_BYTES:
+            raise ValueError(
+                f"Plan exceeds the {MAX_PLAN_BYTES}-byte input limit"
+            )
+        document = json.loads(plan_bytes)
+        if not isinstance(document, dict):
+            raise ValueError("Plan must be a JSON object")
+        repository = Path(args.root_override or ".").resolve()
+        preview = preview_plan(document, repository)
+        if not args.apply or preview["status"] == "blocked":
+            _write(
+                _act_result_bytes(
+                    preview, format=args.format, pretty=args.pretty
+                ),
+                args.output,
+            )
+            return 2 if preview["status"] == "blocked" else 0
+
+        repository, config_json, _ = _repository_inputs(args)
+        if not config_json:
+            raise ConfigError(
+                f"no archbird.json found in {repository}; "
+                "Act acceptance requires reviewed constraints"
+            )
+        baseline, maps, observations, policy_date = _constraint_auxiliary_inputs(
+            args, config_json
+        )
+        before_project = _act_project(args, repository, config_json, progress)
+        before_map = before_project.map_json()
+        before_map_document = json.loads(before_map)
+        if _has_error_diagnostics(before_map_document):
+            raise ValueError(
+                "Act requires a current Map without error diagnostics"
+            )
+        before_verification_json = evaluate_constraints_json(
+            config_json,
+            before_map,
+            resolution_json=before_project.resolution_json or b"",
+            baseline=baseline,
+            maps=maps,
+            observations=observations,
+            policy_date=policy_date,
+            pretty=False,
+        )
+        before_verification = json.loads(before_verification_json)
+        mismatches = _plan_source_mismatches(
+            document, before_map, before_verification
+        )
+        _acceptance_from_verification(document, before_verification)
+        if mismatches:
+            blocked = _blocked_act_result(
+                preview,
+                "Plan source context is stale: " + ", ".join(mismatches),
+            )
+            _write(
+                _act_result_bytes(
+                    blocked, format=args.format, pretty=args.pretty
+                ),
+                args.output,
+            )
+            progress.finish()
+            return 2
+
+        def verify_acceptance(
+            plan: Mapping[str, object], resolved_root: Path
+        ) -> Mapping[str, object]:
+            after_project = _act_project(
+                args, resolved_root, config_json, progress
+            )
+            after_map = after_project.map_json()
+            after_map_document = json.loads(after_map)
+            if _has_error_diagnostics(after_map_document):
+                raise ValueError(
+                    "fresh Map has error diagnostics after applying the Plan"
+                )
+            diagnostic_regressions = _map_diagnostic_regressions(
+                before_map_document, after_map_document
+            )
+            if diagnostic_regressions:
+                raise ValueError(
+                    "fresh Map evidence quality regressed: "
+                    + "; ".join(diagnostic_regressions)
+                )
+            after_verification = json.loads(
+                evaluate_constraints_json(
+                    config_json,
+                    after_map,
+                    resolution_json=after_project.resolution_json or b"",
+                    baseline=baseline,
+                    maps=maps,
+                    observations=observations,
+                    policy_date=policy_date,
+                    pretty=False,
+                )
+            )
+            return _acceptance_from_verification(plan, after_verification)
+
+        result = apply_plan(document, repository, verify_acceptance)
+        _write(
+            _act_result_bytes(
+                result, format=args.format, pretty=args.pretty
+            ),
+            args.output,
+        )
+        progress.finish()
+        if result["status"] == "rejected":
+            return 1
+        if result["status"] != "applied":
+            return 2
+        acceptance = result.get("acceptance")
+        if not isinstance(acceptance, Mapping):
+            return 2
+        return int(acceptance.get("status") != "satisfied")
+    except (
+        ConfigError,
+        json.JSONDecodeError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        _native.Error,
+    ) as error:
+        progress.clear()
         print(f"archbird: error: {error}", file=sys.stderr)
         return 2
 
@@ -2155,15 +2707,12 @@ def _export_main(argv: Sequence[str]) -> int:
                 args.map,
                 args.output,
                 verification_path=args.verification,
-                proposal_path=args.proposal,
-                contract_path=args.contract,
-                result_path=args.result,
                 replace=args.replace,
             )
             return 0
-        if any((args.verification, args.proposal, args.contract, args.result)) or args.replace:
+        if args.verification or args.replace:
             raise ValueError(
-                "verification/Act inputs and --replace apply only to export okf"
+                "--verification and --replace apply only to export okf"
             )
         encoded = export_graph(
             Path(args.map).read_bytes(),
@@ -2361,10 +2910,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _verify_main(arguments[1:])
     if arguments and arguments[0] == "plan":
         return _plan_main(arguments[1:])
-    if arguments and arguments[0] == "contract":
-        return _contract_main(arguments[1:])
-    if arguments and arguments[0] == "verify-plan":
-        return _verify_plan_main(arguments[1:])
+    if arguments and arguments[0] == "act":
+        return _act_main(arguments[1:])
     if arguments and arguments[0] == "export":
         return _export_main(arguments[1:])
     if arguments and arguments[0] == "okf":
