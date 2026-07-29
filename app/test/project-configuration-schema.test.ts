@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -9,6 +9,17 @@ interface ConformanceCase {
   valid: boolean;
   configuration: unknown;
 }
+
+const projectConfigurationExamples = [
+  "jsee.json",
+  "minimal.archbird.json",
+  "polygrad.json",
+  "quickstart.archbird.json",
+  "tinygrad.json",
+  "tranfi.json",
+  "wlearn-rf.json",
+  "wlearn-sym.json",
+] as const;
 
 const schema = JSON.parse(
   readFileSync(new URL("../../schema/archbird.schema.json", import.meta.url), "utf8"),
@@ -81,9 +92,7 @@ test("public project-configuration schema matches the conformance corpus", () =>
   const repository = fileURLToPath(new URL("../..", import.meta.url));
   const configuredExamples = [
     `${repository}/archbird.json`,
-    ...readdirSync(`${repository}/examples`)
-      .filter((name) => name.endsWith(".json"))
-      .map((name) => `${repository}/examples/${name}`),
+    ...projectConfigurationExamples.map((name) => `${repository}/examples/${name}`),
   ];
   for (const path of configuredExamples) {
     const configuration = JSON.parse(readFileSync(path, "utf8"));
