@@ -54,13 +54,13 @@ typedef struct ResolutionDiagnostic {
 
 typedef struct ResolutionState {
   ArchbirdEngine *engine;
-  int configured;
   ResolutionRequest request;
   InventoryFile *files;
   size_t file_count;
   AbIgnoreSet ignores;
   AbValue request_document;
   AbValue inventory_document;
+  AbValue configured_map_overlay;
   AbValue effective;
   AbValue plan;
   ResolutionDiagnostic *diagnostics;
@@ -81,6 +81,11 @@ typedef struct ResolutionState {
   /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION, 4 = configure.ac. */
   int package_identity;
 } ResolutionState;
+
+static int configured_map_field(const ResolutionState *state,
+                                const char *name) {
+  return ab_value_member(&state->configured_map_overlay, name) != NULL;
+}
 
 static int field_compare(const void *left_raw, const void *right_raw) {
   const AbObjectField *left = (const AbObjectField *)left_raw;
@@ -151,6 +156,51 @@ static ArchbirdStatus object_set(ArchbirdEngine *engine, AbValue *object,
   field = &object->as.object.fields[object->as.object.count];
   memset(field, 0, sizeof(*field));
   status = ab_string_copy(engine, &field->name, name, strlen(name));
+  if (status != ARCHBIRD_OK)
+    return status;
+  field->value = *value;
+  memset(value, 0, sizeof(*value));
+  object->as.object.count++;
+  if (object->as.object.count > 1)
+    qsort(object->as.object.fields, object->as.object.count,
+          sizeof(*object->as.object.fields), field_compare);
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus object_set_name(ArchbirdEngine *engine, AbValue *object,
+                                      const AbString *name, AbValue *value) {
+  AbObjectField *field = NULL;
+  AbObjectField *resized;
+  size_t index;
+  ArchbirdStatus status;
+  if (!object || object->kind != AB_VALUE_OBJECT || !name || !name->length ||
+      !value)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  for (index = 0; index < object->as.object.count; index++) {
+    if (ab_string_equal(&object->as.object.fields[index].name, name)) {
+      field = &object->as.object.fields[index];
+      break;
+    }
+  }
+  if (field) {
+    ab_value_free(engine, &field->value);
+    field->value = *value;
+    memset(value, 0, sizeof(*value));
+    return ARCHBIRD_OK;
+  }
+  if (object->as.object.count == SIZE_MAX / sizeof(*object->as.object.fields))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  resized = (AbObjectField *)ab_realloc(engine, object->as.object.fields,
+                                        (object->as.object.count + 1) *
+                                            sizeof(*object->as.object.fields));
+  if (!resized)
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory extending resolution object");
+  object->as.object.fields = resized;
+  field = &object->as.object.fields[object->as.object.count];
+  memset(field, 0, sizeof(*field));
+  status = ab_string_copy(engine, &field->name, name->data, name->length);
   if (status != ARCHBIRD_OK)
     return status;
   field->value = *value;
@@ -1360,6 +1410,95 @@ static ArchbirdStatus prefer_cpp_headers(ResolutionState *state) {
   return ARCHBIRD_INVALID_SCHEMA;
 }
 
+static int inferred_package_layer_matches(const AbValue *discovered_layer,
+                                          const AbValue *language) {
+  if (!discovered_layer || !language ||
+      discovered_layer->kind != AB_VALUE_STRING ||
+      language->kind != AB_VALUE_STRING)
+    return 0;
+  if (ab_value_string_is(discovered_layer, "auto-python"))
+    return ab_value_string_is(language, "python");
+  if (ab_value_string_is(discovered_layer, "auto-r"))
+    return ab_value_string_is(language, "r");
+  if (ab_value_string_is(discovered_layer, "auto-c"))
+    return ab_value_string_is(language, "c");
+  if (ab_value_string_is(discovered_layer, "auto-cpp"))
+    return ab_value_string_is(language, "cpp");
+  if (ab_value_string_is(discovered_layer, "auto-javascript"))
+    return ab_value_string_is(language, "javascript") ||
+           ab_value_string_is(language, "typescript") ||
+           ab_value_string_is(language, "vue");
+  return 0;
+}
+
+static int effective_layer_exists(const AbValue *layers,
+                                  const AbValue *wanted) {
+  size_t index;
+  if (!layers || layers->kind != AB_VALUE_ARRAY || !wanted ||
+      wanted->kind != AB_VALUE_STRING)
+    return 0;
+  for (index = 0; index < layers->as.array.count; index++) {
+    const AbValue *name =
+        ab_value_member(&layers->as.array.items[index], "name");
+    if (name && name->kind == AB_VALUE_STRING &&
+        ab_string_equal(&name->as.text, &wanted->as.text))
+      return 1;
+  }
+  return 0;
+}
+
+static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
+  AbObjectField *package_field;
+  const AbValue *layers;
+  size_t read_index;
+  size_t write_index = 0;
+  if (!configured_map_field(state, "layers") ||
+      configured_map_field(state, "packages"))
+    return ARCHBIRD_OK;
+  package_field = mutable_member(&state->effective, "packages");
+  layers = ab_value_member(&state->effective, "layers");
+  if (!package_field || package_field->value.kind != AB_VALUE_ARRAY ||
+      !layers || layers->kind != AB_VALUE_ARRAY)
+    return ARCHBIRD_OK;
+  for (read_index = 0; read_index < package_field->value.as.array.count;
+       read_index++) {
+    AbValue *package = &package_field->value.as.array.items[read_index];
+    const AbValue *discovered_layer = ab_value_member(package, "layer");
+    const AbValue *replacement = NULL;
+    size_t layer_index;
+    size_t matches = 0;
+    ArchbirdStatus status = ARCHBIRD_OK;
+    if (!effective_layer_exists(layers, discovered_layer)) {
+      for (layer_index = 0; layer_index < layers->as.array.count;
+           layer_index++) {
+        const AbValue *layer = &layers->as.array.items[layer_index];
+        const AbValue *language = ab_value_member(layer, "language");
+        if (!inferred_package_layer_matches(discovered_layer, language))
+          continue;
+        replacement = ab_value_member(layer, "name");
+        matches++;
+      }
+      if (matches == 1)
+        status = object_set_string(state->engine, package, "layer",
+                                   replacement->as.text.data,
+                                   replacement->as.text.length);
+      else {
+        ab_value_free(state->engine, package);
+        continue;
+      }
+    }
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (write_index != read_index) {
+      package_field->value.as.array.items[write_index] = *package;
+      memset(package, 0, sizeof(*package));
+    }
+    write_index++;
+  }
+  package_field->value.as.array.count = write_index;
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus
 prepare_effective(ResolutionState *state, const uint8_t *config_json,
                   size_t config_length, const AbString *package,
@@ -1371,21 +1510,23 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
   const uint8_t *default_json =
       ab_default_project_configuration(&default_length);
   AbProjectConfiguration configuration = {0};
+  size_t overlay_index;
   if (config_length) {
     status = ab_project_configuration_decode(state->engine, config_json,
                                              config_length, &configuration);
     if (status == ARCHBIRD_OK)
-      status = ab_value_copy(state->engine, &state->effective,
-                             &configuration.map_definition);
-    ab_project_configuration_free(state->engine, &configuration);
-  } else {
+      status = ab_value_copy(state->engine, &state->configured_map_overlay,
+                             &configuration.map_overlay);
+  } else
+    status = ARCHBIRD_OK;
+  if (status == ARCHBIRD_OK)
     status = ab_json_value_decode(state->engine, default_json, default_length,
                                   &state->effective);
-  }
-  if (status == ARCHBIRD_OK && !state->configured &&
-      state->has_cpp_translation_unit && !state->has_c_translation_unit)
+  if (status == ARCHBIRD_OK && state->has_cpp_translation_unit &&
+      !state->has_c_translation_unit)
     status = prefer_cpp_headers(state);
-  if (status == ARCHBIRD_OK && !state->configured && !state->request.project &&
+  if (status == ARCHBIRD_OK && !configured_map_field(state, "project") &&
+      !state->request.project &&
       (package->length || pyproject->name.length || r_package->length ||
        autoconf->package.length)) {
     const AbString *identity = package->length          ? package
@@ -1405,26 +1546,40 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
                                                            : 4;
     }
   }
-  if (status == ARCHBIRD_OK && !state->configured && state->has_package_json)
+  if (status == ARCHBIRD_OK && state->has_package_json)
     status = add_default_npm(state, package, version);
-  if (status == ARCHBIRD_OK && !state->configured && state->has_pyproject)
+  if (status == ARCHBIRD_OK && state->has_pyproject)
     status = add_default_python(state, pyproject);
-  if (status == ARCHBIRD_OK && !state->configured && state->has_description &&
-      r_package->length)
+  if (status == ARCHBIRD_OK && state->has_description && r_package->length)
     status = add_default_r(state, r_package, r_version);
-  if (status == ARCHBIRD_OK && !state->configured && state->has_autoconf)
+  if (status == ARCHBIRD_OK && state->has_autoconf)
     status = add_default_autoconf(state, autoconf);
-  if (status == ARCHBIRD_OK && !state->configured && has_make)
+  if (status == ARCHBIRD_OK && has_make)
     status = add_default_make(state);
-  if (status == ARCHBIRD_OK && !state->configured &&
-      state->has_compile_commands)
+  if (status == ARCHBIRD_OK && state->has_compile_commands)
     status = add_default_compile_commands(state);
-  if (status == ARCHBIRD_OK && !state->configured && state->has_scip_index)
+  if (status == ARCHBIRD_OK && state->has_scip_index)
     status = add_default_scip_index(state);
+  for (overlay_index = 0;
+       status == ARCHBIRD_OK &&
+       overlay_index < state->configured_map_overlay.as.object.count;
+       overlay_index++) {
+    const AbObjectField *field =
+        &state->configured_map_overlay.as.object.fields[overlay_index];
+    AbValue copied = {0};
+    status = ab_value_copy(state->engine, &copied, &field->value);
+    if (status == ARCHBIRD_OK)
+      status = object_set_name(state->engine, &state->effective, &field->name,
+                               &copied);
+    ab_value_free(state->engine, &copied);
+  }
   if (status == ARCHBIRD_OK)
     status = apply_overlays(state);
   if (status == ARCHBIRD_OK)
+    status = reconcile_inferred_packages(state);
+  if (status == ARCHBIRD_OK)
     status = scope_discovered_records(state);
+  ab_project_configuration_free(state->engine, &configuration);
   return status;
 }
 
@@ -1489,13 +1644,14 @@ static ArchbirdStatus scope_discovered_collection(ResolutionState *state,
 
 static ArchbirdStatus scope_discovered_records(ResolutionState *state) {
   ArchbirdStatus status;
-  if (state->configured || !state->request.only ||
-      !state->request.only->as.array.count)
+  if (!state->request.only || !state->request.only->as.array.count)
     return ARCHBIRD_OK;
-  status = scope_discovered_collection(state, "packages");
-  if (status == ARCHBIRD_OK)
+  status = configured_map_field(state, "packages")
+               ? ARCHBIRD_OK
+               : scope_discovered_collection(state, "packages");
+  if (status == ARCHBIRD_OK && !configured_map_field(state, "builds"))
     status = scope_discovered_collection(state, "builds");
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && !configured_map_field(state, "indexes"))
     status = scope_discovered_collection(state, "indexes");
   return status;
 }
@@ -1709,7 +1865,8 @@ static ArchbirdStatus filter_plan(ResolutionState *state, size_t max_file_bytes,
       keep = 0;
     }
     if (keep && inventory->bytes > byte_limit) {
-      if (state->configured)
+      if (configured_map_field(state, "layers") ||
+          configured_map_field(state, "limits"))
         return archbird_error_set(
             state->engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
             "configured %s exceeds limits.%s: %.*s: %zu > %zu",
@@ -1933,24 +2090,29 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
   ArchbirdStatus status = ab_buffer_literal(buffer, "[");
   if (status == ARCHBIRD_OK)
     status = render_origin(
-        buffer, &first, "/", state->configured ? "config" : "discovery",
-        state->configured ? "project-config" : "archbird-discovery-v1",
-        state->configured ? 14 : 21);
+        buffer, &first, "/",
+        state->configured_map_overlay.as.object.count ? "config-overlay"
+                                                      : "discovery",
+        state->configured_map_overlay.as.object.count ? "project-configuration"
+                                                      : "archbird-discovery-v1",
+        21);
   if (status == ARCHBIRD_OK)
-    status = render_origin(buffer, &first, "/discovery/default_excludes",
-                           request_default     ? "cli"
-                           : state->configured ? "config"
-                                               : "discovery",
-                           request_default ? "--no-default-excludes" : NULL,
-                           request_default ? 21 : 0);
+    status =
+        render_origin(buffer, &first, "/discovery/default_excludes",
+                      request_default                            ? "cli"
+                      : configured_map_field(state, "discovery") ? "config"
+                                                                 : "discovery",
+                      request_default ? "--no-default-excludes" : NULL,
+                      request_default ? 21 : 0);
   for (index = 0;
        status == ARCHBIRD_OK && excludes && index < excludes->as.array.count;
        index++) {
     const AbValue *item = &excludes->as.array.items[index];
     status = render_indexed_origin(
         buffer, &first, "exclude", index,
-        index < base_excludes ? state->configured ? "config" : "discovery"
-                              : "cli",
+        index < base_excludes
+            ? configured_map_field(state, "exclude") ? "config" : "discovery"
+            : "cli",
         &item->as.text);
   }
   for (index = 0; status == ARCHBIRD_OK && index < state->ignores.source_count;
@@ -1970,45 +2132,46 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
     const AbValue *name = ab_value_member(layer, "name");
     status = render_indexed_origin(
         buffer, &first, "layers", index,
-        index < cli_layers  ? "cli"
-        : state->configured ? "config"
-                            : "discovery",
+        index < cli_layers                      ? "cli"
+        : configured_map_field(state, "layers") ? "config"
+                                                : "discovery",
         name && name->kind == AB_VALUE_STRING ? &name->as.text : NULL);
   }
   if (status == ARCHBIRD_OK)
     status = render_origin(
         buffer, &first, "/limits/max_file_bytes",
-        state->request.has_max_file_bytes ? "cli"
-        : state->configured               ? "config"
-                                          : "discovery",
+        state->request.has_max_file_bytes       ? "cli"
+        : configured_map_field(state, "limits") ? "config"
+                                                : "discovery",
         state->request.has_max_file_bytes ? "--max-file-bytes" : NULL,
         state->request.has_max_file_bytes ? 16 : 0);
   if (status == ARCHBIRD_OK)
     status = render_origin(
         buffer, &first, "/limits/max_index_bytes",
-        state->request.has_max_index_bytes ? "cli"
-        : state->configured                ? "config"
-                                           : "discovery",
+        state->request.has_max_index_bytes      ? "cli"
+        : configured_map_field(state, "limits") ? "config"
+                                                : "discovery",
         state->request.has_max_index_bytes ? "--max-index-bytes" : NULL,
         state->request.has_max_index_bytes ? 17 : 0);
   if (status == ARCHBIRD_OK) {
-    const char *source = state->request.project    ? "cli"
-                         : state->configured       ? "config"
-                         : state->package_identity ? "manifest"
-                                                   : "discovery";
-    const char *evidence = state->request.project         ? "--project"
-                           : state->package_identity == 1 ? "package.json"
-                           : state->package_identity == 2 ? "pyproject.toml"
-                           : state->package_identity == 3 ? "DESCRIPTION"
-                           : state->package_identity == 4 ? "configure.ac"
-                           : !state->configured ? "stable-literal:repository"
-                                                : NULL;
+    const char *source = state->request.project                   ? "cli"
+                         : configured_map_field(state, "project") ? "config"
+                         : state->package_identity                ? "manifest"
+                                                                  : "discovery";
+    const char *evidence =
+        state->request.project                   ? "--project"
+        : configured_map_field(state, "project") ? "archbird.json"
+        : state->package_identity == 1           ? "package.json"
+        : state->package_identity == 2           ? "pyproject.toml"
+        : state->package_identity == 3           ? "DESCRIPTION"
+        : state->package_identity == 4           ? "configure.ac"
+                                                 : "stable-literal:repository";
     status = render_origin(buffer, &first, "/project", source, evidence,
                            evidence ? strlen(evidence) : 0);
   }
   if (status == ARCHBIRD_OK)
-    status = render_origin(buffer, &first, "/root",
-                           state->configured ? "config" : "discovery", NULL, 0);
+    status = render_origin(buffer, &first, "/root", "runtime",
+                           "repository-root", 15);
   if (status == ARCHBIRD_OK && request_ignore)
     status = render_origin(buffer, &first, "/selection/ignore", "cli",
                            "--no-ignore", 11);
@@ -2186,6 +2349,7 @@ static void resolution_free(ResolutionState *state) {
   ab_ignore_set_free(&state->ignores);
   ab_value_free(state->engine, &state->request_document);
   ab_value_free(state->engine, &state->inventory_document);
+  ab_value_free(state->engine, &state->configured_map_overlay);
   ab_value_free(state->engine, &state->effective);
   ab_value_free(state->engine, &state->plan);
   for (index = 0; index < state->diagnostic_count; index++)
@@ -2218,7 +2382,6 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
   state.engine = engine;
-  state.configured = config_length != 0;
   ab_ignore_set_init(&state.ignores, engine);
   ab_buffer_init(&effective_json, engine);
   status = decode_request(&state, request_json, request_length);

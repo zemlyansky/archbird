@@ -125,7 +125,8 @@ try {
   const generatedConfig = JSON.parse(
     fs.readFileSync(path.join(root, ".archbird/generated.archbird.json")),
   );
-  assert.equal(generatedConfig.schema_version, 2);
+  assert.equal(Object.hasOwn(generatedConfig, "schema_version"), false);
+  assert.equal(Object.hasOwn(generatedConfig, "version"), false);
   assert.equal(Object.hasOwn(generatedConfig, "root"), false);
 
   const explicitMap = run(["map", ".", "--format", "json", "--check"]);

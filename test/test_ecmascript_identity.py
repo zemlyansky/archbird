@@ -147,7 +147,6 @@ def build_project(extension, sources: dict[str, bytes]):
         "schema_version": 1,
     }
     config = {
-        "schema_version": 2,
         "project": "ecmascript-identity",
         "layers": [
             {
@@ -340,7 +339,6 @@ def check_diff(extension, before: dict) -> None:
 def check_verify(extension, mapped: dict) -> None:
     expected = sorted(REQUIRED["javascript"])
     config = {
-        "schema_version": 2,
         "project": "ecmascript-identity",
         "layers": [
             {

@@ -327,7 +327,6 @@ def main() -> int:
                     }
                 ],
                 "project": "provider-applicability",
-                "schema_version": 2,
             }
         ),
     )

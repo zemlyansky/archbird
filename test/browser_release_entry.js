@@ -4,7 +4,6 @@ const { createBrowserArchbird } = require("archbird/browser");
 const { scipFixture } = require("./scip_fixture");
 
 const config = {
-  schema_version: 2,
   project: "browser-release",
   description: "Real-browser Wasm release smoke.",
   layers: [
@@ -66,7 +65,6 @@ const config = {
     ).toString("utf8"),
   );
   const sameLineProject = new archbird.Project(JSON.stringify({
-    schema_version: 2,
     project: "same-line-c-query",
     layers: [{
       name: "c",

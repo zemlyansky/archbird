@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "provider-reference",
   "description": "Reference side of a cross-language provider rename.",
   "layers": [

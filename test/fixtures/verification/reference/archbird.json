@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "verify-reference",
   "description": "Reference fixture for typed architecture verification.",
   "layers": [

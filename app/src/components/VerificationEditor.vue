@@ -80,7 +80,7 @@ function saveProjectConfiguration() {
   try {
     const configuration = reviewedProjectConfiguration(toRaw(projectConfiguration.value));
     downloadJson(configuration, "archbird.json");
-    message.value = "Saved the schema-2 project configuration for review.";
+    message.value = "Saved the project configuration for review.";
   } catch (error) {
     message.value = (error as Error).message;
   }

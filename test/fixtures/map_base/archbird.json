@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "map-base",
   "description": "Native aggregate map fixture.",
   "layers": [

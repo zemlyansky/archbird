@@ -1978,7 +1978,7 @@ def analyze_workspace_json(
 def compile_project_configuration(
     config_json: bytes, *, pretty: bool = False
 ) -> bytes:
-    """Validate and normalize one schema-2 archbird.json document."""
+    """Validate and normalize one archbird.json document."""
 
     return _native.project_configuration_compile(config_json, pretty=pretty)
 
@@ -2031,7 +2031,7 @@ def evaluate_constraints_json(
     max_findings: int = 200,
     pretty: bool = False,
 ) -> bytes:
-    """Evaluate all or selected schema-2 project constraints."""
+    """Evaluate all or selected project constraints."""
 
     request: dict[str, object] = {}
     if constraint_ids:

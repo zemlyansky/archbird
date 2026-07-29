@@ -31,19 +31,22 @@ ArchbirdStatus archbird_project_configuration_compile(
     status = ab_buffer_json_string(&buffer,
                                    configuration.constraint_policy_sha256, 64);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ",\"map_definition\":");
+    status = ab_buffer_literal(&buffer, ",\"map_overlay\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(&buffer, &configuration.map_definition);
+    status = ab_value_render(&buffer, &configuration.map_overlay);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ",\"map_config_sha256\":");
+    status = ab_buffer_literal(&buffer, ",\"map_overlay_sha256\":");
   if (status == ARCHBIRD_OK)
     status =
-        ab_buffer_json_string(&buffer, configuration.map_config_sha256, 64);
+        ab_buffer_json_string(&buffer, configuration.map_overlay_sha256, 64);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, ",\"project\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_value_render(
-        &buffer, ab_value_member(&configuration.normalized, "project"));
+  if (status == ARCHBIRD_OK) {
+    const AbValue *project =
+        ab_value_member(&configuration.normalized, "project");
+    status = project ? ab_value_render(&buffer, project)
+                     : ab_buffer_literal(&buffer, "null");
+  }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, ",\"project_configuration_sha256\":");
   if (status == ARCHBIRD_OK)

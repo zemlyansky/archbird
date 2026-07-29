@@ -282,10 +282,9 @@ describe("artifact workspaces", () => {
     expect(root.textContent).toContain("Saved a waiver entry");
   });
 
-  it("mounts keyed schema-2 constraints and exports a reviewed configuration", async () => {
+  it("mounts keyed constraints and exports a reviewed configuration", async () => {
     const root = mount(VerificationEditor, {
       artifact: artifact({
-        schema_version: 2,
         project: "demo",
         layers: [{ name: "core", language: "c", globs: ["src/**"] }],
         constraints: {
@@ -303,7 +302,7 @@ describe("artifact workspaces", () => {
     expect(root.textContent).toContain("NO-CYCLES");
     (root.querySelector(".contract-editor > button") as HTMLButtonElement).click();
     await nextTick();
-    expect(root.textContent).toContain("Saved the schema-2 project configuration");
+    expect(root.textContent).toContain("Saved the project configuration");
   });
 
   it("renders Diff and Act artifacts as task-oriented summaries", () => {

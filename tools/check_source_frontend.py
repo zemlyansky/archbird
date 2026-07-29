@@ -23,7 +23,6 @@ CONFIG = {
         }
     ],
     "project": "source-coherence",
-    "schema_version": 2,
 }
 SOURCE = b"int archbird_source_identity(void) { return 1; }\n"
 
@@ -48,7 +47,6 @@ const archbird = require(process.env.ARCHBIRD_SOURCE_PACKAGE);
 const config = {
   layers: [{globs: ["identity.c"], language: "c", name: "core", role: "core"}],
   project: "source-coherence",
-  schema_version: 2,
 };
 const project = new archbird.Project("source-coherence", [
   new archbird.Source(

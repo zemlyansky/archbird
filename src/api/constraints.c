@@ -11,7 +11,6 @@ policy_input(const AbProjectConfiguration *configuration) {
       .projections = &configuration->projections,
       .constraints = &configuration->constraints,
       .constraint_policy_sha256 = configuration->constraint_policy_sha256,
-      .map_config_sha256 = configuration->map_config_sha256,
       .project_configuration_sha256 = configuration->sha256,
   };
   return input;

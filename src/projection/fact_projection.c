@@ -3536,11 +3536,33 @@ static ArchbirdStatus extract_component_edges(AbProjectionContext *context,
       continue;
     source_file = ab_projection_membership_file(&membership, &source->as.text);
     target_file = ab_projection_membership_file(&membership, &target->as.text);
-    if (!source_file || !target_file || !source_file->assignment_count ||
-        !target_file->assignment_count)
-      continue;
     status = edge_evidence(context, &project_name->as.text, map, edge,
                            &evidence, &evidence_state);
+    if (status == ARCHBIRD_OK && source_file && source_file->assignment_count &&
+        (!target_file || !target_file->assignment_count) &&
+        strcmp(evidence_state, "current") != 0) {
+      for (source_offset = 0; status == ARCHBIRD_OK &&
+                              source_offset < source_file->assignment_count;
+           source_offset++) {
+        const AbProjectionMembershipAssignment *source_assignment =
+            &membership
+                 .assignments[source_file->assignment_start + source_offset];
+        const AbString *source_name =
+            membership.components[source_assignment->component_index].name;
+        status = add_relation_item_state(
+            context->engine, fact, source_name, &kind->as.text,
+            &target->as.text, &evidence, evidence_state,
+            strcmp(evidence_state, "unknown") == 0
+                ? "relation target is unresolved"
+                : "relation target evidence is stale",
+            NULL);
+      }
+    }
+    if (!source_file || !target_file || !source_file->assignment_count ||
+        !target_file->assignment_count) {
+      ab_projection_evidence_free(context->engine, &evidence);
+      continue;
+    }
     for (source_offset = 0;
          status == ARCHBIRD_OK && source_offset < source_file->assignment_count;
          source_offset++) {

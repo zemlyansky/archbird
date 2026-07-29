@@ -161,7 +161,7 @@ async function main() {
     const initialGeneration = initial.descriptor.generation;
     const configurationPath = path.join(repositoryRoot, "archbird.json");
     const configuration = fs.readFileSync(configurationPath);
-    fs.writeFileSync(configurationPath, "{}\n");
+    fs.writeFileSync(configurationPath, '{"schema_version":2}\n');
     await waitFor(
       () => events.some((value) => value.includes("candidate-failed")),
       "failed candidate event",

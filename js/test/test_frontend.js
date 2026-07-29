@@ -123,7 +123,6 @@ fs.mkdirSync(path.join(metricFixture, "src"), { recursive: true });
 fs.writeFileSync(path.join(metricFixture, "src/small.js"), "x=1;\n");
 fs.writeFileSync(path.join(metricFixture, "src/large.js"), "x".repeat(20));
 const constraintConfiguration = {
-  schema_version: 2,
   project: "constraints-node",
   limits: { max_file_bytes: 100 },
   layers: [{
@@ -168,7 +167,8 @@ const constraintConfiguration = {
 const constraintConfig = Buffer.from(JSON.stringify(constraintConfiguration));
 fs.writeFileSync(path.join(metricFixture, "archbird.json"), constraintConfig);
 const compiledConfiguration = JSON.parse(compileProjectConfiguration(constraintConfig));
-assert.equal(compiledConfiguration.map_definition.schema_version, 2);
+assert.equal(compiledConfiguration.map_overlay.project, "constraints-node");
+assert.deepEqual(compiledConfiguration.map_overlay.layers, constraintConfiguration.layers);
 assert.equal(compiledConfiguration.constraint_policy_sha256.length, 64);
 const metricProject = Project.fromRepository(metricFixture, {
   config: constraintConfig,
@@ -258,6 +258,20 @@ assert.deepEqual(
   JSON.parse(cliFailure.stdout).constraints[0].findings.map((row) => row.key),
   ["src/large.js"],
 );
+const stdinConfigFailure = spawnSync(process.execPath, [
+  constraintCli,
+  "verify", "MAX-FILE-BYTES", "--root", metricFixture,
+  "--config", "-", "--format", "json", "--check", "--progress", "never",
+], {
+  encoding: "utf8",
+  env: process.env,
+  input: constraintConfig,
+});
+assert.equal(stdinConfigFailure.status, 1, stdinConfigFailure.stderr);
+assert.deepEqual(
+  JSON.parse(stdinConfigFailure.stdout).constraints[0].findings.map((row) => row.key),
+  ["src/large.js"],
+);
 fs.rmSync(metricFixture, { force: true, recursive: true });
 
 const source = Buffer.from(`
@@ -273,7 +287,6 @@ let project = new Project("node-test", [
   new Source("js/core.js", source, { language: "javascript", layer: "js" }),
 ]);
 project.setConfig(JSON.stringify({
-  schema_version: 2,
   project: "node-test",
   layers: [
     {
@@ -548,7 +561,6 @@ let semanticProject = new Project("typescript-test", [
 ]);
 semanticProject.setConfig(
   JSON.stringify({
-    schema_version: 2,
     project: "typescript-test",
     layers: [
       {
@@ -634,7 +646,6 @@ function createScipProject(positionEncoding) {
     ),
   ]);
   current.setConfig(JSON.stringify({
-    schema_version: 2,
     project: "scip-node",
     layers: [
       {
@@ -727,7 +738,6 @@ let invalidTypescript = new Project("invalid-typescript", [
 ]);
 invalidTypescript.setConfig(
   JSON.stringify({
-    schema_version: 2,
     project: "invalid-typescript",
     layers: [
       {
@@ -839,7 +849,6 @@ assert.ok(weakCoverageHit.reasons.some(
     && reason.field === "symbol.signature",
 ));
 const sameLineCConfig = Buffer.from(JSON.stringify({
-  schema_version: 2,
   project: "same-line-c-query",
   layers: [{
     name: "c",

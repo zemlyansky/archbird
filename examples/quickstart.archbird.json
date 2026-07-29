@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "demo",
   "description": "Native core with Python and TypeScript frontends.",
   "exclude": ["dist/**", "build/**"],

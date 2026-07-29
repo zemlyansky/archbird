@@ -10,7 +10,6 @@ typedef struct AbConstraintPolicyInput {
   const AbValue *projections;
   const AbValue *constraints;
   const char *constraint_policy_sha256;
-  const char *map_config_sha256;
   const char *project_configuration_sha256;
 } AbConstraintPolicyInput;
 

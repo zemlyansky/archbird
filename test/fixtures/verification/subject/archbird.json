@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "verify-subject",
   "description": "Subject fixture for typed architecture verification.",
   "layers": [

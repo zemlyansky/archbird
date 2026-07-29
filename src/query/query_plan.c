@@ -698,54 +698,48 @@ projection_plan_values(ArchbirdEngine *engine,
   return status;
 }
 
-static ArchbirdStatus query_plan_value(
-    ArchbirdEngine *engine, const AbString *id, const char *map_config_sha256,
-    const char *project_configuration_sha256, const AbValue *operations,
-    const AbValue *selection, const AbProjectionPlan *projections,
-    size_t projection_count, const char query_definition_sha256[65],
-    const char query_plan_sha256[65], AbValue *out) {
-  ArchbirdStatus status = object_init(engine, out, 9);
+static ArchbirdStatus
+query_plan_value(ArchbirdEngine *engine, const AbString *id,
+                 const char *project_configuration_sha256,
+                 const AbValue *operations, const AbValue *selection,
+                 const AbProjectionPlan *projections, size_t projection_count,
+                 const char query_definition_sha256[65],
+                 const char query_plan_sha256[65], AbValue *out) {
+  ArchbirdStatus status = object_init(engine, out, 8);
   if (status == ARCHBIRD_OK)
     status = field_text(engine, &out->as.object.fields[0], "id", id->data,
                         id->length);
-  if (status == ARCHBIRD_OK && map_config_sha256)
-    status = field_string(engine, &out->as.object.fields[1],
-                          "map_config_sha256", map_config_sha256);
-  else if (status == ARCHBIRD_OK) {
-    status = field_name(engine, &out->as.object.fields[1], "map_config_sha256");
-    out->as.object.fields[1].value.kind = AB_VALUE_NULL;
-  }
   if (status == ARCHBIRD_OK)
     status =
-        field_string(engine, &out->as.object.fields[2], "kind",
+        field_string(engine, &out->as.object.fields[1], "kind",
                      project_configuration_sha256 ? "configured" : "ad_hoc");
   if (status == ARCHBIRD_OK)
     status =
-        field_copy(engine, &out->as.object.fields[3], "operations", operations);
+        field_copy(engine, &out->as.object.fields[2], "operations", operations);
   if (status == ARCHBIRD_OK && project_configuration_sha256)
-    status = field_string(engine, &out->as.object.fields[4],
+    status = field_string(engine, &out->as.object.fields[3],
                           "project_configuration_sha256",
                           project_configuration_sha256);
   else if (status == ARCHBIRD_OK) {
-    status = field_name(engine, &out->as.object.fields[4],
+    status = field_name(engine, &out->as.object.fields[3],
                         "project_configuration_sha256");
-    out->as.object.fields[4].value.kind = AB_VALUE_NULL;
+    out->as.object.fields[3].value.kind = AB_VALUE_NULL;
   }
   if (status == ARCHBIRD_OK) {
-    status = field_name(engine, &out->as.object.fields[5], "projections");
+    status = field_name(engine, &out->as.object.fields[4], "projections");
     if (status == ARCHBIRD_OK)
       status = projection_plan_values(engine, projections, projection_count,
-                                      &out->as.object.fields[5].value);
+                                      &out->as.object.fields[4].value);
   }
   if (status == ARCHBIRD_OK)
-    status = field_string(engine, &out->as.object.fields[6],
+    status = field_string(engine, &out->as.object.fields[5],
                           "query_definition_sha256", query_definition_sha256);
   if (status == ARCHBIRD_OK)
-    status = field_string(engine, &out->as.object.fields[7],
+    status = field_string(engine, &out->as.object.fields[6],
                           "query_plan_sha256", query_plan_sha256);
   if (status == ARCHBIRD_OK)
     status =
-        field_copy(engine, &out->as.object.fields[8], "selection", selection);
+        field_copy(engine, &out->as.object.fields[7], "selection", selection);
   if (status == ARCHBIRD_OK)
     qsort(out->as.object.fields, out->as.object.count,
           sizeof(*out->as.object.fields), field_compare);
@@ -806,7 +800,7 @@ ArchbirdStatus ab_query_plan_compile_ad_hoc(ArchbirdEngine *engine,
   status = ad_hoc_definition(engine, request, &definition);
   if (status == ARCHBIRD_OK)
     status = ab_query_plan_compile_definition(engine, &id, &definition, &empty,
-                                              &empty, NULL, NULL, out_plan);
+                                              &empty, NULL, out_plan);
   ab_value_free(engine, &definition);
   return status;
 }
@@ -814,8 +808,7 @@ ArchbirdStatus ab_query_plan_compile_ad_hoc(ArchbirdEngine *engine,
 ArchbirdStatus ab_query_plan_compile_definition(
     ArchbirdEngine *engine, const AbString *id, const AbValue *definition,
     const AbValue *overrides, const AbValue *configured_projections,
-    const char *map_config_sha256, const char *project_configuration_sha256,
-    AbValue *out_plan) {
+    const char *project_configuration_sha256, AbValue *out_plan) {
   AbValue options = {0};
   AbValue plan_selection = {0};
   AbValue plan_operations = {0};
@@ -869,10 +862,10 @@ ArchbirdStatus ab_query_plan_compile_definition(
       status = digest_buffer(&plan_base, query_plan_sha256);
   }
   if (status == ARCHBIRD_OK)
-    status = query_plan_value(
-        engine, id, map_config_sha256, project_configuration_sha256,
-        &plan_operations, &plan_selection, projections, projection_count,
-        query_definition_sha256, query_plan_sha256, &plan);
+    status = query_plan_value(engine, id, project_configuration_sha256,
+                              &plan_operations, &plan_selection, projections,
+                              projection_count, query_definition_sha256,
+                              query_plan_sha256, &plan);
   if (status == ARCHBIRD_OK) {
     *out_plan = plan;
     memset(&plan, 0, sizeof(plan));

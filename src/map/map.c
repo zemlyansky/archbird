@@ -24,6 +24,12 @@ typedef AbMapEdgeMention EdgeMention;
 typedef AbMapCallResolution CallResolutionRow;
 typedef AbMapGraph MapGraph;
 
+typedef struct PythonImportedMember {
+  const AbManifestFile *file;
+  const AbFact *fact;
+  const AbString *module;
+} PythonImportedMember;
+
 enum AbMapCallBinding {
   AB_MAP_BINDING_BUILTIN = 1u << 0,
   AB_MAP_BINDING_PROJECT = 1u << 1,
@@ -507,6 +513,8 @@ collect_named_domain(ArchbirdEngine *engine, const ArchbirdProject *project,
     items[count].file = file;
     items[count].name = &fact->name;
     items[count].count = 1;
+    items[count].span_start = fact->span_start;
+    items[count].span_end = fact->span_end;
     items[count].builtin = fact_bool_attribute(fact, "stdlib");
     items[count].binding_mask = fact_call_binding(fact);
     items[count].import_delimiter_mask = fact_import_delimiter(fact);
@@ -527,6 +535,10 @@ collect_named_domain(ArchbirdEngine *engine, const ArchbirdProject *project,
       items[write_index - 1].binding_mask |= items[index].binding_mask;
       items[write_index - 1].import_delimiter_mask |=
           items[index].import_delimiter_mask;
+      if (items[index].span_start < items[write_index - 1].span_start) {
+        items[write_index - 1].span_start = items[index].span_start;
+        items[write_index - 1].span_end = items[index].span_end;
+      }
       continue;
     }
     if (write_index != index)
@@ -535,6 +547,107 @@ collect_named_domain(ArchbirdEngine *engine, const ArchbirdProject *project,
   }
   *out_items = items;
   *out_count = write_index;
+  return ARCHBIRD_OK;
+}
+
+static int python_imported_member_compare(const void *left_raw,
+                                          const void *right_raw) {
+  const PythonImportedMember *left = (const PythonImportedMember *)left_raw;
+  const PythonImportedMember *right = (const PythonImportedMember *)right_raw;
+  int compared = ab_string_compare(&left->file->path, &right->file->path);
+  if (compared != 0)
+    return compared;
+  compared = ab_string_compare(left->module, right->module);
+  if (compared != 0)
+    return compared;
+  compared = ab_string_compare(&left->fact->name, &right->fact->name);
+  if (compared != 0)
+    return compared;
+  return ab_string_compare(&left->fact->id, &right->fact->id);
+}
+
+static int
+python_imported_member_key_compare(const PythonImportedMember *member,
+                                   const AbString *path,
+                                   const AbString *module) {
+  int compared = ab_string_compare(&member->file->path, path);
+  return compared != 0 ? compared : ab_string_compare(member->module, module);
+}
+
+static void python_imported_member_range(const PythonImportedMember *members,
+                                         size_t member_count,
+                                         const AbString *path,
+                                         const AbString *module,
+                                         size_t *out_start, size_t *out_end) {
+  size_t low = 0;
+  size_t high = member_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (python_imported_member_key_compare(&members[middle], path, module) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  *out_start = low;
+  high = member_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (python_imported_member_key_compare(&members[middle], path, module) <= 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  *out_end = low;
+}
+
+static ArchbirdStatus collect_python_imported_members(
+    ArchbirdEngine *engine, const ArchbirdProject *project,
+    const AbSourceManifest *manifest, PythonImportedMember **out_items,
+    size_t *out_count) {
+  size_t total = ab_project_merged_fact_count(project);
+  PythonImportedMember *items = NULL;
+  size_t count = 0;
+  size_t index;
+  *out_items = NULL;
+  *out_count = 0;
+  for (index = 0; index < total; index++) {
+    const AbFact *fact = ab_project_merged_fact(project, index);
+    const AbString *module;
+    const AbManifestFile *file;
+    if (!fact->has_name || !string_literal(&fact->domain, "imported-names"))
+      continue;
+    module = fact_string_attribute(fact, "module");
+    file = module ? fact_file(manifest, fact) : NULL;
+    if (file && file->has_layer)
+      count++;
+  }
+  if (count) {
+    items = (PythonImportedMember *)ab_malloc(engine, count * sizeof(*items));
+    if (!items)
+      return archbird_error_set(
+          engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+          "out of memory indexing Python imported members");
+  }
+  count = 0;
+  for (index = 0; index < total; index++) {
+    const AbFact *fact = ab_project_merged_fact(project, index);
+    const AbString *module;
+    const AbManifestFile *file;
+    if (!fact->has_name || !string_literal(&fact->domain, "imported-names"))
+      continue;
+    module = fact_string_attribute(fact, "module");
+    file = module ? fact_file(manifest, fact) : NULL;
+    if (!file || !file->has_layer)
+      continue;
+    items[count].file = file;
+    items[count].fact = fact;
+    items[count].module = module;
+    count++;
+  }
+  if (count > 1)
+    qsort(items, count, sizeof(*items), python_imported_member_compare);
+  *out_items = items;
+  *out_count = count;
   return ARCHBIRD_OK;
 }
 
@@ -623,28 +736,6 @@ static ArchbirdStatus candidate_file(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus exact_candidate_file(ArchbirdEngine *engine,
-                                           const AbSourceManifest *manifest,
-                                           const char *path, size_t path_length,
-                                           const AbManifestFile **out) {
-  char *candidate;
-  size_t normalized_length;
-  *out = NULL;
-  if (path_length == SIZE_MAX)
-    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
-                              ARCHBIRD_NO_OFFSET,
-                              "import candidate path is too large");
-  candidate = (char *)ab_malloc(engine, path_length + 1);
-  if (!candidate)
-    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                              ARCHBIRD_NO_OFFSET,
-                              "out of memory resolving exact import path");
-  if (normalized_path(path, path_length, candidate, &normalized_length))
-    *out = ab_map_manifest_file(manifest, candidate, normalized_length);
-  ab_free(engine, candidate);
-  return ARCHBIRD_OK;
-}
-
 static size_t path_directory_length(const AbString *path) {
   size_t index = path->length;
   while (index && path->data[index - 1] != '/')
@@ -652,10 +743,11 @@ static size_t path_directory_length(const AbString *path) {
   return index ? index - 1 : 0;
 }
 
-static ArchbirdStatus
-resolve_joined_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
-                      const char *prefix, size_t prefix_length,
-                      const AbString *imported, const AbManifestFile **out) {
+static ArchbirdStatus resolve_joined_import_with_suffixes(
+    ArchbirdEngine *engine, const AbSourceManifest *manifest,
+    const char *prefix, size_t prefix_length, const AbString *imported,
+    const char *const *suffixes, size_t suffix_count,
+    const AbManifestFile **out) {
   char *joined;
   size_t joined_length;
   ArchbirdStatus status;
@@ -677,7 +769,8 @@ resolve_joined_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
   if (imported->length)
     memcpy(joined + prefix_length + (prefix_length ? 1 : 0), imported->data,
            imported->length);
-  status = exact_candidate_file(engine, manifest, joined, joined_length, out);
+  status = candidate_file(engine, manifest, joined, joined_length, suffixes,
+                          suffix_count, out);
   ab_free(engine, joined);
   return status;
 }
@@ -711,6 +804,7 @@ resolve_c_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
                  const AbMapConfig *config, const AbManifestFile *file,
                  const AbString *imported, unsigned delimiter_mask,
                  const AbManifestFile **out) {
+  static const char *const suffixes[] = {"", ".generic"};
   size_t base_length = path_directory_length(&file->path);
   const AbConfigLayer *layer;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -720,8 +814,9 @@ resolve_c_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
   if (!delimiter_mask)
     delimiter_mask = AB_MAP_IMPORT_UNKNOWN;
   if (delimiter_mask & (AB_MAP_IMPORT_LOCAL | AB_MAP_IMPORT_UNKNOWN)) {
-    status = resolve_joined_import(engine, manifest, file->path.data,
-                                   base_length, imported, out);
+    status = resolve_joined_import_with_suffixes(
+        engine, manifest, file->path.data, base_length, imported, suffixes,
+        sizeof(suffixes) / sizeof(suffixes[0]), out);
     if (status != ARCHBIRD_OK || *out)
       return status;
   }
@@ -731,8 +826,9 @@ resolve_c_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
     size_t root_index;
     for (root_index = 0; root_index < layer->import_roots.count; root_index++) {
       const AbString *root = &layer->import_roots.items[root_index];
-      status = resolve_joined_import(engine, manifest, root->data, root->length,
-                                     imported, out);
+      status = resolve_joined_import_with_suffixes(
+          engine, manifest, root->data, root->length, imported, suffixes,
+          sizeof(suffixes) / sizeof(suffixes[0]), out);
       if (status != ARCHBIRD_OK || *out)
         return status;
     }
@@ -1081,11 +1177,20 @@ static ArchbirdStatus package_target(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+typedef enum ImportTargetClass {
+  IMPORT_TARGET_UNKNOWN = 0,
+  IMPORT_TARGET_BUILTIN,
+  IMPORT_TARGET_LOCAL,
+  IMPORT_TARGET_EXTERNAL,
+  IMPORT_TARGET_AMBIGUOUS
+} ImportTargetClass;
+
 static ArchbirdStatus
-external_import_target(ArchbirdEngine *engine, const AbManifestFile *file,
-                       const AbString *imported, const AbMapPackage *packages,
-                       size_t package_count, char **out, size_t *out_length,
-                       int *out_builtin, int *out_local) {
+classify_import_target(ArchbirdEngine *engine, const AbMapConfig *config,
+                       const AbManifestFile *file, const AbString *imported,
+                       const AbMapPackage *packages, size_t package_count,
+                       char **out, size_t *out_length,
+                       ImportTargetClass *out_class) {
   size_t family_length;
   const char *family = language_family(file, &family_length);
   const char *start = imported->data;
@@ -1096,10 +1201,10 @@ external_import_target(ArchbirdEngine *engine, const AbManifestFile *file,
   const char *manager;
   size_t matches = 0;
   size_t package_index;
+  const AbExternalNamespace *external;
   *out = NULL;
   *out_length = 0;
-  *out_builtin = 0;
-  *out_local = 0;
+  *out_class = IMPORT_TARGET_UNKNOWN;
   if (bytes_literal(family, family_length, "python")) {
     while (length && *start == '.') {
       start++;
@@ -1111,12 +1216,12 @@ external_import_target(ArchbirdEngine *engine, const AbManifestFile *file,
     if (!name_length)
       return ARCHBIRD_OK;
     if (python_stdlib(start, name_length)) {
-      *out_builtin = 1;
+      *out_class = IMPORT_TARGET_BUILTIN;
       return ARCHBIRD_OK;
     }
   } else if (bytes_literal(family, family_length, "javascript")) {
     if (length > 5 && memcmp(start, "node:", 5) == 0) {
-      *out_builtin = 1;
+      *out_class = IMPORT_TARGET_BUILTIN;
       return ARCHBIRD_OK;
     }
     if (length && start[0] == '@') {
@@ -1137,7 +1242,7 @@ external_import_target(ArchbirdEngine *engine, const AbManifestFile *file,
     if (!name_length)
       return ARCHBIRD_OK;
     if (node_builtin(start, name_length)) {
-      *out_builtin = 1;
+      *out_class = IMPORT_TARGET_BUILTIN;
       return ARCHBIRD_OK;
     }
   } else {
@@ -1156,9 +1261,113 @@ external_import_target(ArchbirdEngine *engine, const AbManifestFile *file,
   }
   if (matches == 1) {
     package = matched->name;
-    *out_local = 1;
+    *out_class = IMPORT_TARGET_LOCAL;
+    return package_target(engine, &package, out, out_length);
+  }
+  if (matches > 1) {
+    *out_class = IMPORT_TARGET_AMBIGUOUS;
+    return package_target(engine, &package, out, out_length);
+  }
+  external = external_namespace(config, file, imported);
+  if (external) {
+    *out_class = IMPORT_TARGET_EXTERNAL;
+    return package_target(engine, &external->package, out, out_length);
+  }
+  for (package_index = 0; package_index < package_count; package_index++) {
+    const AbMapPackage *candidate = &packages[package_index];
+    if (strcmp(ab_map_package_manager(&candidate->kind), manager) != 0 ||
+        !ab_string_equal(&candidate->layer, &file->layer) ||
+        !ab_map_package_dependency_matches(candidate, manager, &package))
+      continue;
+    *out_class = IMPORT_TARGET_EXTERNAL;
+    return package_target(engine, &package, out, out_length);
+  }
+  if (bytes_literal(family, family_length, "javascript") ||
+      bytes_literal(family, family_length, "r")) {
+    *out_class = IMPORT_TARGET_EXTERNAL;
+    return package_target(engine, &package, out, out_length);
   }
   return package_target(engine, &package, out, out_length);
+}
+
+static ArchbirdStatus
+unresolved_import_diagnostic(AbMapState *state, const NamedReference *imported,
+                             const char *code, const char *reason) {
+  AbBuffer message;
+  ArchbirdStatus status;
+  ab_buffer_init(&message, state->engine);
+  status = ab_buffer_literal(&message, reason);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&message, ": ");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&message, imported->name->data,
+                              imported->name->length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&message, "", 1);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_add_diagnostic_span(
+        state, "warning", code, (const char *)message.data,
+        &imported->file->path, imported->span_start, imported->span_end);
+  ab_buffer_free(&message);
+  return status;
+}
+
+static ArchbirdStatus resolve_python_namespace_members(
+    AbMapState *state, const NamedReference *imported,
+    const PythonImportedMember *members, size_t member_count,
+    size_t *out_resolved, size_t *out_unresolved) {
+  size_t family_length;
+  const char *family = language_family(imported->file, &family_length);
+  size_t member_index;
+  size_t member_end;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  *out_resolved = 0;
+  *out_unresolved = 0;
+  if (!bytes_literal(family, family_length, "python") ||
+      !imported->name->length)
+    return ARCHBIRD_OK;
+  python_imported_member_range(members, member_count, &imported->file->path,
+                               imported->name, &member_index, &member_end);
+  for (; status == ARCHBIRD_OK && member_index < member_end; member_index++) {
+    const AbFact *fact = members[member_index].fact;
+    const AbString *module = members[member_index].module;
+    const AbManifestFile *target = NULL;
+    AbString qualified = {0};
+    {
+      size_t separator =
+          module->length && module->data[module->length - 1] == '.' ? 0 : 1;
+      if (module->length > SIZE_MAX - fact->name.length - separator - 1)
+        return archbird_error_set(
+            state->engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+            "Python namespace import candidate is too large");
+      qualified.length = module->length + separator + fact->name.length;
+      qualified.data = (char *)ab_malloc(state->engine, qualified.length + 1);
+      if (!qualified.data)
+        return archbird_error_set(
+            state->engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+            "out of memory resolving Python namespace import");
+      memcpy(qualified.data, module->data, module->length);
+      if (separator)
+        qualified.data[module->length] = '.';
+      memcpy(qualified.data + module->length + separator, fact->name.data,
+             fact->name.length);
+      qualified.data[qualified.length] = '\0';
+    }
+    status =
+        ab_map_resolve_import(state->engine, state->manifest, state->config,
+                              imported->file, &qualified, &target);
+    if (status == ARCHBIRD_OK && target) {
+      status = ab_map_graph_add_edge(state->engine, &state->graph, "import",
+                                     &imported->file->path, target->path.data,
+                                     target->path.length, &qualified);
+      if (status == ARCHBIRD_OK)
+        (*out_resolved)++;
+    } else if (status == ARCHBIRD_OK) {
+      (*out_unresolved)++;
+    }
+    ab_string_free(state->engine, &qualified);
+  }
+  return status;
 }
 
 static ArchbirdStatus definition_candidates(
@@ -1210,12 +1419,14 @@ static ArchbirdStatus definition_candidates(
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus build_graph(ArchbirdEngine *engine,
-                                  const ArchbirdProject *project,
-                                  const AbSourceManifest *manifest,
-                                  const AbMapConfig *config,
-                                  const AbMapPackage *packages,
-                                  size_t package_count, MapGraph *graph) {
+static ArchbirdStatus build_graph(AbMapState *state) {
+  ArchbirdEngine *engine = state->engine;
+  const ArchbirdProject *project = state->project;
+  const AbSourceManifest *manifest = state->manifest;
+  const AbMapConfig *config = state->config;
+  const AbMapPackage *packages = state->packages;
+  size_t package_count = state->package_count;
+  MapGraph *graph = &state->graph;
   SymbolReference *symbols = NULL;
   size_t symbol_count = 0;
   NamedReference *calls = NULL;
@@ -1224,6 +1435,8 @@ static ArchbirdStatus build_graph(ArchbirdEngine *engine,
   size_t method_count = 0;
   NamedReference *imports = NULL;
   size_t import_count = 0;
+  PythonImportedMember *imported_members = NULL;
+  size_t imported_member_count = 0;
   size_t index;
   ArchbirdStatus status =
       collect_symbols(engine, project, manifest, &symbols, &symbol_count);
@@ -1236,6 +1449,9 @@ static ArchbirdStatus build_graph(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = collect_named_domain(engine, project, manifest, "imports",
                                   &imports, &import_count);
+  if (status == ARCHBIRD_OK)
+    status = collect_python_imported_members(
+        engine, project, manifest, &imported_members, &imported_member_count);
   for (index = 0; status == ARCHBIRD_OK && index < call_count; index++) {
     const AbManifestFile **candidates = NULL;
     size_t candidate_count = 0;
@@ -1323,27 +1539,74 @@ static ArchbirdStatus build_graph(ArchbirdEngine *engine,
       status = ab_map_graph_add_edge(
           engine, graph, "import", &imports[index].file->path,
           target->path.data, target->path.length, imports[index].name);
-    } else if (!imports[index].name->length ||
-               imports[index].name->data[0] != '.') {
+    } else if (!target) {
       char *external_target = NULL;
       size_t external_length = 0;
-      int builtin = 0;
-      int package_local = 0;
+      ImportTargetClass target_class = IMPORT_TARGET_UNKNOWN;
+      size_t namespace_resolved = 0;
+      size_t namespace_unresolved = 0;
       if (imports[index].builtin) {
-        builtin = 1;
+        target_class = IMPORT_TARGET_BUILTIN;
+      } else if (imports[index].import_delimiter_mask == AB_MAP_IMPORT_SYSTEM) {
+        target_class = IMPORT_TARGET_EXTERNAL;
+        status = package_target(engine, imports[index].name, &external_target,
+                                &external_length);
       } else {
-        status = external_import_target(
-            engine, imports[index].file, imports[index].name, packages,
-            package_count, &external_target, &external_length, &builtin,
-            &package_local);
+        status = resolve_python_namespace_members(
+            state, &imports[index], imported_members, imported_member_count,
+            &namespace_resolved, &namespace_unresolved);
+        if (status == ARCHBIRD_OK && namespace_resolved &&
+            !namespace_unresolved) {
+          target_class = IMPORT_TARGET_LOCAL;
+        } else if (status == ARCHBIRD_OK && imports[index].name->length &&
+                   imports[index].name->data[0] == '.') {
+          const AbExternalNamespace *external = external_namespace(
+              config, imports[index].file, imports[index].name);
+          if (external) {
+            target_class = IMPORT_TARGET_EXTERNAL;
+            status = package_target(engine, &external->package,
+                                    &external_target, &external_length);
+          } else {
+            target_class = IMPORT_TARGET_UNKNOWN;
+          }
+        } else if (status == ARCHBIRD_OK) {
+          status = classify_import_target(engine, config, imports[index].file,
+                                          imports[index].name, packages,
+                                          package_count, &external_target,
+                                          &external_length, &target_class);
+        }
       }
-      if (status == ARCHBIRD_OK && external_target)
+      if (status == ARCHBIRD_OK && external_target &&
+          (target_class == IMPORT_TARGET_LOCAL ||
+           target_class == IMPORT_TARGET_EXTERNAL))
         status = ab_map_graph_add_edge(
-            engine, graph, package_local ? "package-local" : "external",
+            engine, graph,
+            target_class == IMPORT_TARGET_LOCAL ? "package-local" : "external",
             &imports[index].file->path, external_target, external_length,
             imports[index].name);
+      if (status == ARCHBIRD_OK && (target_class == IMPORT_TARGET_UNKNOWN ||
+                                    target_class == IMPORT_TARGET_AMBIGUOUS)) {
+        static const AbString provider = {
+            (char *)"archbird-map-import-resolution", 30};
+        static const AbString unknown = {(char *)"unknown", 7};
+        const char *unresolved_target = target_class == IMPORT_TARGET_AMBIGUOUS
+                                            ? "ambiguous-import"
+                                            : "unresolved-import";
+        status = ab_map_graph_add_edge_evidence(
+            engine, graph, "import", &imports[index].file->path,
+            unresolved_target, strlen(unresolved_target), imports[index].name,
+            "resolution", &provider, &unknown);
+        if (status == ARCHBIRD_OK)
+          status = unresolved_import_diagnostic(
+              state, &imports[index],
+              target_class == IMPORT_TARGET_AMBIGUOUS ? "ambiguous-import"
+                                                      : "unresolved-import",
+              target_class == IMPORT_TARGET_AMBIGUOUS
+                  ? "import matches more than one local package"
+                  : "import is not resolved internally, builtin, or declared "
+                    "external");
+      }
       ab_free(engine, external_target);
-      (void)builtin;
     }
   }
   for (index = 0; status == ARCHBIRD_OK && index < symbol_count; index++) {
@@ -1371,6 +1634,7 @@ static ArchbirdStatus build_graph(ArchbirdEngine *engine,
     qsort(graph->resolutions, graph->resolution_count,
           sizeof(*graph->resolutions), resolution_compare);
   ab_free(engine, imports);
+  ab_free(engine, imported_members);
   ab_free(engine, methods);
   ab_free(engine, calls);
   ab_free(engine, symbols);
@@ -2007,8 +2271,7 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
   memcpy(input_digest, archbird_project_map_input_sha256(project), 65);
   ab_buffer_init(&buffer, engine);
   MAP_TRY(ab_map_analyze_packages(&state));
-  MAP_TRY(build_graph(engine, project, manifest, config, state.packages,
-                      state.package_count, &state.graph));
+  MAP_TRY(build_graph(&state));
   MAP_TRY(ab_map_add_reference_edges(&state));
   MAP_TRY(ab_map_analyze_indexes(&state));
   MAP_TRY(ab_map_analyze_builds(&state));

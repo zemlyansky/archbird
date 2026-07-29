@@ -98,7 +98,6 @@ def main() -> int:
         "src/b.c": b"int b(void) { return 2; }\n",
     }
     config = {
-        "schema_version": 2,
         "project": "compile-commands",
         "layers": [
             {

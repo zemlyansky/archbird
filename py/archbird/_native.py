@@ -654,7 +654,7 @@ def json_canonicalize(
 def project_configuration_compile(
     config: bytes, *, pretty: bool = False
 ) -> bytes:
-    """Validate and normalize one schema-2 project configuration."""
+    """Validate and normalize one project configuration."""
 
     return _simple_render(
         "archbird_project_configuration_compile",
@@ -779,7 +779,7 @@ def constraints_evaluate(
     request_json: bytes = b"",
     pretty: bool = False,
 ) -> bytes:
-    """Evaluate schema-2 project constraints directly over one Map."""
+    """Evaluate project constraints directly over one Map."""
 
     return _simple_render(
         "archbird_constraints_evaluate",

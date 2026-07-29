@@ -82,7 +82,6 @@ def projection(row: dict) -> tuple:
 
 def verify_binding(extension) -> None:
     config = {
-        "schema_version": 2,
         "project": "python-binding",
         "layers": [
             {
@@ -108,7 +107,7 @@ def verify_binding(extension) -> None:
         "schema_version": 6,
         "project": "python-binding",
         "evidence": {
-            "config_sha256": compiled["map_config_sha256"],
+            "config_sha256": "1" * 64,
             "input_sha256": "2" * 64,
         },
         "tool": {
@@ -123,6 +122,11 @@ def verify_binding(extension) -> None:
             canonical(config), canonical(map_document)
         )
     )
+    if compiled["map_overlay"] != {
+        "layers": config["layers"],
+        "project": "python-binding",
+    }:
+        raise AssertionError("public CPython configuration overlay is incorrect")
     if (
         result["artifact"] != "verification"
         or result["schema_version"] != 2
@@ -367,7 +371,6 @@ def main() -> int:
             }
         ],
         "project": "python-error-test",
-        "schema_version": 2,
     }
     extension.project_set_config(invalid_project, canonical(invalid_config))
     extension.project_add_provider(
@@ -446,7 +449,6 @@ def main() -> int:
             }
         ],
         "project": "python-portable",
-        "schema_version": 2,
     }
     extension.project_set_config(portable_project, canonical(portable_config))
     extension.project_add_provider(portable_project, "primary", rejected_provider)

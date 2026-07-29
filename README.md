@@ -27,6 +27,7 @@ archbird                # shorthand for: archbird map
 archbird .              # shorthand for: archbird map .
 archbird map            # explicit form; npm: npx archbird map
 archbird serve          # npm: npx archbird serve
+archbird mcp            # Python/root launcher: local agent protocol
 ```
 
 ## Language support
@@ -342,7 +343,7 @@ The application provides:
 - canonical artifact and graph-view JSON downloads plus GraphML and Mermaid
   graph exports;
 - task-oriented Diff and change-artifact summaries, Verification finding
-  review with explicit waiver candidates, and schema-2 configuration review;
+  review with explicit waiver candidates, and project-configuration review;
 - system, light, and dark themes with responsive graph and inspector layouts.
 
 The same application can run statically on GitHub Pages. A browser can open a
@@ -363,6 +364,37 @@ in the browser Wasm host. A successfully
 mapped repository with no supported source files shows an explicit empty-scope
 state rather than a blank graph.
 
+## Agent protocol
+
+The Python CLI and source launcher expose the same live repository service over
+MCP stdio:
+
+```bash
+archbird mcp
+archbird mcp --root ../project
+archbird mcp --no-config
+```
+
+An MCP host launches that command and communicates through stdin/stdout. The
+server maps the repository once, watches it for changes, retains recent valid
+generations, and exposes read-only tools for status, Map presentation,
+exhaustive projections, focused Query, hash-checked source, Verify, and Diff.
+It does not advertise Act because the current live service does not yet provide
+Map-aware change planning.
+
+Map, Projection, Query, source, Verification, and Diff results include
+generation- and digest-bound resource links. Tool results are structured JSON
+plus text where useful, and are bounded to 2 MiB; Map and Query have smaller
+configurable presentation budgets. `archbird_source` validates the requested
+repository-relative path and current bytes against the selected Map generation.
+Project configuration can come from the repository or a file, but not stdin,
+because MCP owns stdin.
+
+The transport follows the
+[MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+and the tool/resource shapes follow the
+[MCP server specification](https://modelcontextprotocol.io/specification/2025-11-25/server).
+
 ## Project configuration
 
 Archbird works without config. Add `archbird.json` when names and boundaries
@@ -379,7 +411,6 @@ archbird config init . --output archbird.json
 <!-- archbird-minimal-project-config:start -->
 ```json
 {
-  "schema_version": 2,
   "project": "demo",
   "layers": [
     {
@@ -444,7 +475,7 @@ vocabulary is:
 <!-- archbird-config-fields:start -->
 | Section | Purpose |
 | --- | --- |
-| `schema_version`, `project`, `description` | configuration format, stable project identity, and human context |
+| `project`, `description` | optional stable project identity and human context |
 | `exclude`, `discovery` | project-level selection and explicit discovery policy |
 | `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
@@ -492,10 +523,12 @@ Draft 2020-12 project-configuration schema is
 configuration compiler is authoritative and additionally enforces relational
 invariants that standard JSON Schema cannot express, such as `min <= max`.
 A shared accepted/rejected corpus keeps the schema and native C, Python, Node,
-and Wasm compilers aligned for their common contract. Its `schema_version`
-applies only to `archbird.json`. Map, ProjectionResult, Query, Verification,
-and change artifacts each carry an independent schema version and migration
-schedule; Archbird has no global schema version.
+and Wasm compilers aligned for their common contract. Project configuration is
+unversioned: absent project-model fields inherit discovery, while explicitly
+present fields replace the corresponding discovered value. Generated Map,
+ProjectionResult, Query, Verification, and change artifacts each carry an
+independent schema version and migration schedule; Archbird has no global
+schema version.
 
 ## Verify architecture
 
@@ -505,6 +538,28 @@ their exhaustive Map projections; primitive assertions can use inline literals,
 observations, or named/inline projections. The complete
 [`quickstart.archbird.json`](examples/quickstart.archbird.json) combines these
 stages and needs no second suite file.
+
+For a first check in an unfamiliar repository, configuration may contain only
+the reviewed constraint; discovery supplies the project model and layers:
+
+```bash
+archbird verify --config - --check <<'JSON'
+{
+  "constraints": {
+    "NO-LARGE-SOURCE": {
+      "kind": "max_file_bytes",
+      "include": ["src/**"],
+      "max": 1048576,
+      "owner": "architecture",
+      "rationale": "Keep source files reviewable."
+    }
+  }
+}
+JSON
+```
+
+The same fragment can be saved unchanged as `archbird.json`. Explicit
+project-model sections replace discovery; omitted sections inherit it.
 
 ```bash
 # Run one saved Query plan or an ad-hoc query.
@@ -865,7 +920,7 @@ The command names are:
 <!-- archbird-python-cli:start -->
 Python: `map`, `config`, `query`, `impact`, `diff`, `observe`, `freshness`,
 `workspace`, `verify`, `plan`, `contract`, `verify-plan`, `export`, `okf`,
-`serve`, `support`.
+`serve`, `mcp`, `support`.
 <!-- archbird-python-cli:end -->
 
 <!-- archbird-node-cli:start -->

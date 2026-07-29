@@ -279,9 +279,6 @@ function validateProjectConfiguration(configJson) {
   if (!document || Array.isArray(document) || typeof document !== "object") {
     throw new Error("project configuration must be an object");
   }
-  if (document.schema_version !== 2) {
-    throw new Error("archbird.json schema_version must equal 2");
-  }
   if (Object.hasOwn(document, "root")) {
     throw new Error("archbird.json does not allow root; use --root");
   }
@@ -384,9 +381,9 @@ function warnMapCacheStats(stats) {
   }
 }
 
-function project(options, progress = null) {
+function project(options, progress = null, resolvedInputs = null) {
   if (progress !== null) progress.emit({ phase: "discovery", state: "start" });
-  const { repository, configJson } = repositoryInputs(options);
+  const { repository, configJson } = resolvedInputs || repositoryInputs(options);
   const current = archbird.Project.fromRepository(repository, {
     config: configJson.length ? configJson : null,
     project: options.project || null,
@@ -890,11 +887,12 @@ function queryMain(argv, command) {
     if (queryId || options.config) configJson = configForSavedMap(options, "named query");
   }
   else {
+    const resolvedInputs = repositoryInputs(repositoryOptions);
     if (options.gitDiff) {
-      changeSet = gitChangeSet(repositoryInputs(repositoryOptions).repository, options.gitDiff);
+      changeSet = gitChangeSet(resolvedInputs.repository, options.gitDiff);
     }
-    ({ configJson } = repositoryInputs(repositoryOptions));
-    current = project(repositoryOptions, progress);
+    ({ configJson } = resolvedInputs);
+    current = project(repositoryOptions, progress, resolvedInputs);
     progress.emit({ phase: "rendering", artifact: "canonical Map" });
     source = current.mapJson();
     resolutionJson = current.resolutionJson || Buffer.alloc(0);
@@ -1248,7 +1246,8 @@ function verifyMain(argv) {
   if (baselinePath) baseline = JSON.parse(read(baselinePath).toString("utf8"));
 
   const progress = new Progress(options.progress);
-  const { repository, configJson } = repositoryInputs(repositoryOptions);
+  const resolvedInputs = repositoryInputs(repositoryOptions);
+  const { repository, configJson } = resolvedInputs;
   if (!configJson.length) {
     throw new Error(
       `no archbird.json found in ${repository}; Verify requires reviewed constraints`,
@@ -1274,7 +1273,7 @@ function verifyMain(argv) {
       ? read(options.resolution)
       : Buffer.alloc(0);
   } else {
-    const current = project(repositoryOptions, progress);
+    const current = project(repositoryOptions, progress, resolvedInputs);
     mapJson = current.mapJson();
     resolutionJson = current.resolutionJson || Buffer.alloc(0);
     warnMapCacheStats(current.mapCacheStats);

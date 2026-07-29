@@ -418,6 +418,12 @@ class LiveRepository:
                 raise ValueError(f"snapshot is unavailable: {generation or 'current'}")
             return selected
 
+    def retained_snapshots(self) -> tuple[dict[str, Any], ...]:
+        """Return a stable view of retained immutable snapshot records."""
+
+        with self._lock:
+            return tuple(self.snapshots.values())
+
     def artifact(self, snapshot: Mapping[str, Any], data: bytes) -> dict[str, object]:
         digest = hashlib.sha256(data).hexdigest()
         with self._lock:

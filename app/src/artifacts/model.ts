@@ -90,11 +90,19 @@ export function parseArtifact(bytes: Uint8Array, name: string): ParsedArtifact {
     throw new Error(`${name} is not valid UTF-8 JSON: ${(error as Error).message}`);
   }
   const document = object(value, name);
+  const configurationName = /(^|[/\\])archbird\.json$/i.test(name);
+  const configurationKeys = new Set([
+    "artifacts", "bridges", "builds", "components", "constraints",
+    "description", "discovery", "exclude", "indexes", "layers", "limits",
+    "named_entries", "packages", "parity", "project", "projections",
+    "queries", "tests",
+  ]);
+  const configurationShape = document.artifact === undefined &&
+    Object.keys(document).every((key) => configurationKeys.has(key)) &&
+    (configurationName || Object.keys(document).length > 0);
   const artifact = typeof document.artifact === "string" && document.artifact.length
     ? document.artifact
-    : document.schema_version === 2
-      && typeof document.project === "string"
-      && Array.isArray(document.layers)
+    : configurationShape
       ? "project-configuration"
       : string(document.artifact, `${name}.artifact`);
   return { artifact, bytes, document, name };

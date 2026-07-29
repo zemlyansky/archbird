@@ -53,7 +53,6 @@ ArchbirdStatus archbird_query_plan_compile(
   const AbObjectField *query = NULL;
   const AbValue *definition = NULL;
   const AbValue *configured_projections = &empty;
-  const char *map_config_sha256 = NULL;
   const char *project_configuration_sha256 = NULL;
   AbBuffer rendered;
   ArchbirdStatus status;
@@ -81,7 +80,6 @@ ArchbirdStatus archbird_query_plan_compile(
     else {
       definition = &query->value;
       configured_projections = &configuration.projections;
-      map_config_sha256 = configuration.map_config_sha256;
       project_configuration_sha256 = configuration.sha256;
     }
   } else if (status == ARCHBIRD_OK) {
@@ -90,8 +88,7 @@ ArchbirdStatus archbird_query_plan_compile(
   if (status == ARCHBIRD_OK)
     status = ab_query_plan_compile_definition(
         engine, &id, definition, named ? &overrides : &empty,
-        configured_projections, map_config_sha256, project_configuration_sha256,
-        &plan);
+        configured_projections, project_configuration_sha256, &plan);
   if (status == ARCHBIRD_OK)
     status =
         ab_buffer_literal(&rendered, "{\"artifact\":\"query-plan\",\"plan\":");

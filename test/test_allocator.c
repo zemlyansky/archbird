@@ -285,7 +285,7 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
       "\"name\":\"allocator-test\",\"version\":\"1\"},\"project\":"
       "\"allocator-test\",\"schema_version\":1}";
   static const char config[] =
-      "{\"schema_version\":2,\"project\":\"allocator-test\","
+      "{\"project\":\"allocator-test\","
       "\"description\":\"Allocator ownership fixture\",\"layers\":[{"
       "\"name\":\"core\",\"role\":\"core\",\"language\":\"c\","
       "\"globs\":[\"src/**\"]}],\"components\":[{\"name\":\"core\","
@@ -358,7 +358,7 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
 static ArchbirdStatus exercise_scip(TestAllocator *allocator) {
   static const uint8_t source[] = "int add(void) { return 1; }\n";
   static const char config[] =
-      "{\"schema_version\":2,\"project\":\"allocator-scip\",\"layers\":[{"
+      "{\"project\":\"allocator-scip\",\"layers\":[{"
       "\"name\":\"core\",\"role\":\"core\",\"language\":\"c\","
       "\"globs\":[\"src/**\"]}],\"indexes\":[{\"name\":\"compiler\","
       "\"format\":\"scip\",\"path\":\"valid.scip\"}]}";
@@ -564,7 +564,7 @@ static ArchbirdStatus exercise_verify(TestAllocator *allocator) {
       "\"owner\":\"test\",\"rationale\":\"Exercise allocator ownership "
       "through constraints.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
       "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
-      "\"project\":\"allocator-test\",\"schema_version\":2}";
+      "\"project\":\"allocator-test\"}";
   static const char map[] =
       "{\"artifact\":\"map\",\"diagnostics\":[],\"evidence\":{"
       "\"config_sha256\":"
@@ -606,7 +606,7 @@ static ArchbirdStatus exercise_verify_authoring(TestAllocator *allocator) {
       "\"owner\":\"test\",\"rationale\":\"Exercise allocator ownership "
       "through authoring.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
       "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
-      "\"project\":\"allocator-test\",\"schema_version\":2}";
+      "\"project\":\"allocator-test\"}";
   ArchbirdStatus status;
   ArchbirdEngine *engine = create_engine(allocator, &status);
   FixedOutput output = {{0}, 0};
@@ -663,7 +663,7 @@ static ArchbirdStatus exercise_act(TestAllocator *allocator) {
       "\"owner\":\"test\",\"rationale\":\"Exercise allocator ownership "
       "through Act.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
       "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
-      "\"project\":\"allocator-test\",\"schema_version\":2}";
+      "\"project\":\"allocator-test\"}";
   static const char map[] =
       "{\"artifact\":\"map\",\"diagnostics\":[],\"evidence\":{"
       "\"config_sha256\":"
@@ -857,46 +857,18 @@ static int generate_report_verification(void) {
       "\"owner\":\"test\",\"rationale\":\"Exercise query overlay "
       "allocation ownership.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
       "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
-      "\"project\":\"sample\",\"schema_version\":2}";
+      "\"project\":\"sample\"}";
   ArchbirdEngineOptions options;
   ArchbirdEngine *engine = NULL;
-  HeapOutput plan = {0};
   HeapOutput output = {0};
-  const char *plan_digest;
-  char *map_digest;
   ArchbirdStatus status;
   archbird_engine_options_init(&options);
   status = archbird_engine_create(&options, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_project_configuration_compile(
-        engine, (const uint8_t *)config, sizeof(config) - 1, 0, heap_write,
-        &plan);
-  if (status == ARCHBIRD_OK) {
-    uint8_t *terminated = (uint8_t *)realloc(plan.bytes, plan.length + 1);
-    if (!terminated)
-      status = ARCHBIRD_OUT_OF_MEMORY;
-    else {
-      plan.bytes = terminated;
-      plan.capacity = plan.length + 1;
-      plan.bytes[plan.length] = '\0';
-      plan_digest =
-          strstr((const char *)plan.bytes, "\"map_config_sha256\":\"");
-      map_digest = strstr((char *)report_map, "\"config_sha256\":\"");
-      if (!plan_digest || !map_digest)
-        status = ARCHBIRD_INVALID_SCHEMA;
-      else {
-        plan_digest += sizeof("\"map_config_sha256\":\"") - 1;
-        map_digest += sizeof("\"config_sha256\":\"") - 1;
-        memcpy(map_digest, plan_digest, 64);
-      }
-    }
-  }
   if (status == ARCHBIRD_OK)
     status = archbird_constraints_evaluate(
         engine, (const uint8_t *)config, sizeof(config) - 1, report_map,
         report_map_length, NULL, 0, NULL, 0, 0, heap_write, &output);
   archbird_engine_destroy(engine);
-  free(plan.bytes);
   if (status != ARCHBIRD_OK) {
     free(output.bytes);
     return 0;

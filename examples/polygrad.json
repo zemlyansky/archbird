@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "polygrad",
   "description": "C11 tensor compiler/runtime with Python, JavaScript, browser/WASM, and R surfaces.",
   "exclude": [

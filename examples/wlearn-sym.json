@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "wlearn-sym",
   "description": "Symbolic-model C11 core with Python, JavaScript/WASM, Polygrad, and verifier paths.",
   "exclude": ["**/csrc/**", "js/wasm/**", "references/**", ".emscripten-cache/**"],

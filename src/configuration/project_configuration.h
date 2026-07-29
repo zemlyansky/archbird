@@ -6,14 +6,13 @@
 
 typedef struct AbProjectConfiguration {
   AbValue normalized;
-  /* Canonical schema-2 fields that affect Map construction.  Execution uses
-   * the typed AbMapConfig decoded from the project configuration. */
-  AbValue map_definition;
+  /* Explicitly authored fields that replace discovered Map configuration. */
+  AbValue map_overlay;
   AbValue projections;
   AbValue queries;
   AbValue constraints;
   char constraint_policy_sha256[65];
-  char map_config_sha256[65];
+  char map_overlay_sha256[65];
   char sha256[65];
 } AbProjectConfiguration;
 

@@ -1388,7 +1388,9 @@ static ArchbirdStatus compile_constraints(ConstraintExecution *execution,
                         ab_value_member(&execution->request, "policy_date"));
   if (status == ARCHBIRD_OK)
     status = object_add_copy(execution->engine, &execution->policy, "project",
-                             execution->policy_input->project);
+                             execution->policy_input->project
+                                 ? execution->policy_input->project
+                                 : ab_value_member(&execution->map, "project"));
   if (status == ARCHBIRD_OK)
     status = object_add_string(
         execution->engine, &execution->policy, "project_configuration_sha256",
@@ -1521,9 +1523,9 @@ execution_prepare(ConstraintExecution *execution,
                   const uint8_t *request_json, size_t request_length) {
   size_t selected = 0;
   ArchbirdStatus status;
-  if (!policy || !policy->project || !policy->projections ||
-      !policy->constraints || !policy->constraint_policy_sha256 ||
-      !policy->map_config_sha256 || !policy->project_configuration_sha256)
+  if (!policy || !policy->projections || !policy->constraints ||
+      !policy->constraint_policy_sha256 ||
+      !policy->project_configuration_sha256)
     return ARCHBIRD_INVALID_ARGUMENT;
   execution->policy_input = policy;
   status = ARCHBIRD_OK;
@@ -1560,25 +1562,21 @@ execution_prepare(ConstraintExecution *execution,
   if (status != ARCHBIRD_OK)
     return status;
   execution->context.engine = execution->engine;
-  status = compile_constraints(execution, selected);
-  if (status == ARCHBIRD_OK)
-    status = ab_json_value_decode(execution->engine, map_json, map_length,
-                                  &execution->map);
+  status = ab_json_value_decode(execution->engine, map_json, map_length,
+                                &execution->map);
   if (status == ARCHBIRD_OK && resolution_length)
     status = ab_json_value_decode(execution->engine, resolution_json,
                                   resolution_length, &execution->resolution);
   if (status == ARCHBIRD_OK)
     status = validate_map_artifact(execution, &execution->map, "current Map");
-  if (status == ARCHBIRD_OK) {
-    const AbValue *map_evidence = ab_value_member(&execution->map, "evidence");
-    const AbValue *map_config =
-        map_evidence ? ab_value_member(map_evidence, "config_sha256") : NULL;
-    if (!map_config || map_config->as.text.length != 64 ||
-        memcmp(map_config->as.text.data,
-               execution->policy_input->map_config_sha256, 64) != 0)
-      status = invalid(
-          execution->engine,
-          "project configuration Map definition does not match current Map");
+  if (status == ARCHBIRD_OK && policy->project) {
+    const AbValue *map_project = ab_value_member(&execution->map, "project");
+    if (!map_project || map_project->kind != AB_VALUE_STRING ||
+        policy->project->kind != AB_VALUE_STRING ||
+        !ab_string_equal(&map_project->as.text, &policy->project->as.text))
+      status =
+          invalid(execution->engine,
+                  "project configuration identity does not match current Map");
   }
   if (status == ARCHBIRD_OK && execution->resolution.kind == AB_VALUE_OBJECT)
     status = ab_projection_resolution_validate(
@@ -1586,6 +1584,8 @@ execution_prepare(ConstraintExecution *execution,
         "constraint resolution");
   if (status == ARCHBIRD_OK)
     status = validate_request_maps(execution);
+  if (status == ARCHBIRD_OK)
+    status = compile_constraints(execution, selected);
   execution->context.current_map = &execution->map;
   execution->context.current_resolution =
       execution->resolution.kind == AB_VALUE_OBJECT ? &execution->resolution
@@ -1595,7 +1595,10 @@ execution_prepare(ConstraintExecution *execution,
   if (status != ARCHBIRD_OK)
     return status;
   execution->context.constraints = execution->policy_input->constraints;
-  execution->context.project = execution->policy_input->project;
+  execution->context.project =
+      execution->policy_input->project
+          ? execution->policy_input->project
+          : ab_value_member(&execution->map, "project");
   execution->context.description = execution->policy_input->description;
   execution->context.operand_definitions = &execution->operand_definitions;
   execution->context.mappings = &execution->mappings;

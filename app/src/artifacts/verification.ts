@@ -63,9 +63,13 @@ export function verificationFindings(
 export function reviewedProjectConfiguration(
   document: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (document.schema_version !== 2 || typeof document.project !== "string" ||
-      !Array.isArray(document.layers)) {
-    throw new Error("expected a schema-2 Archbird project configuration");
+  if (
+    document.artifact !== undefined ||
+    document.schema_version !== undefined ||
+    document.version !== undefined ||
+    document.root !== undefined
+  ) {
+    throw new Error("expected an unversioned Archbird project configuration");
   }
   const result = structuredClone(document);
   const rawConstraints = result.constraints ?? {};

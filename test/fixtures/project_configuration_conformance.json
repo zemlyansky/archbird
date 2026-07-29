@@ -2,10 +2,34 @@
   "schema_version": 1,
   "cases": [
     {
+      "id": "empty-discovery-overlay",
+      "valid": true,
+      "configuration": {}
+    },
+    {
+      "id": "constraints-only-discovery-overlay",
+      "valid": true,
+      "configuration": {
+        "constraints": {
+          "NO-CYCLES": {
+            "kind": "component_cycles",
+            "owner": "architecture",
+            "rationale": "Discovered components remain acyclic."
+          }
+        }
+      }
+    },
+    {
+      "id": "obsolete-configuration-version",
+      "valid": false,
+      "configuration": {
+        "schema_version": 2
+      }
+    },
+    {
       "id": "minimal",
       "valid": true,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -16,7 +40,6 @@
       "id": "all-projection-operators",
       "valid": true,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -66,7 +89,6 @@
       "id": "literal-operands",
       "valid": true,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -93,7 +115,6 @@
       "id": "all-constraint-forms",
       "valid": true,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -143,7 +164,6 @@
       "id": "scalar-literal",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -163,7 +183,6 @@
       "id": "selectorless-query",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -175,7 +194,6 @@
       "id": "redundant-keyed-id",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -187,7 +205,6 @@
       "id": "unknown-query-context-field",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -201,7 +218,6 @@
       "id": "invalid-query-context-value",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -215,7 +231,6 @@
       "id": "projection-field-from-other-operator",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -229,7 +244,6 @@
       "id": "constraint-field-from-other-kind",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -248,7 +262,6 @@
       "id": "assertion-field-from-other-contract",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -268,7 +281,6 @@
       "id": "graph-component-level-with-group",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -287,7 +299,6 @@
       "id": "graph-symbol-level-file-relation",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -305,7 +316,6 @@
       "id": "graph-duplicate-relation",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -323,7 +333,6 @@
       "id": "graph-unknown-overlay",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -341,7 +350,6 @@
       "id": "required-symbols-without-symbols",
       "valid": false,
       "configuration": {
-        "schema_version": 2,
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}

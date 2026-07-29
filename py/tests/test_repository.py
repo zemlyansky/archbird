@@ -764,7 +764,6 @@ writer.commit()
     source_project.set_config(
         json.dumps(
             {
-                "schema_version": 2,
                 "project": "source-views",
                 "components": [
                     {

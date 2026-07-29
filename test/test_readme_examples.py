@@ -182,8 +182,8 @@ def main() -> None:
     project_template = repository / "examples" / "minimal.archbird.json"
     workflow_template = repository / "examples" / "quickstart.archbird.json"
     project_config = json.loads(project_template.read_text(encoding="utf-8"))
-    if project_config.get("schema_version") != 2:
-        raise AssertionError("minimal project config is not schema 2")
+    if "schema_version" in project_config or "version" in project_config:
+        raise AssertionError("project configuration must not contain a version field")
     for readme in (
         repository / "README.md",
         repository / "py" / "README.md",
@@ -315,8 +315,12 @@ def main() -> None:
                 encoding="utf-8"
             )
         )
-        if generated_config.get("schema_version") != 2 or "root" in generated_config:
-            raise AssertionError("config init did not emit a portable schema-2 config")
+        if (
+            "schema_version" in generated_config
+            or "version" in generated_config
+            or "root" in generated_config
+        ):
+            raise AssertionError("config init did not emit portable project configuration")
 
         explicit_stdout = run(
             "map",

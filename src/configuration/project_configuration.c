@@ -30,7 +30,7 @@ static const char default_project_configuration[] =
     "{\"globs\":[\"**/*.R\",\"**/"
     "*.r\",\"NAMESPACE\"],\"language\":\"r\",\"name\":\"auto-r\","
     "\"required\":false}"
-    "],\"project\":\"repository\",\"schema_version\":2}";
+    "],\"project\":\"repository\"}";
 
 static int field_compare(const void *left_raw, const void *right_raw) {
   const AbObjectField *left = (const AbObjectField *)left_raw;
@@ -155,13 +155,6 @@ static ArchbirdStatus field_literal(ArchbirdEngine *engine, AbObjectField *out,
                                     const char *name, const AbValue *value) {
   AbString key = {(char *)name, strlen(name)};
   return field_copy(engine, out, &key, value);
-}
-
-static ArchbirdStatus integer_value(ArchbirdEngine *engine, AbValue *out,
-                                    const char *text) {
-  memset(out, 0, sizeof(*out));
-  out->kind = AB_VALUE_INTEGER;
-  return ab_string_copy(engine, &out->as.text, text, strlen(text));
 }
 
 static ArchbirdStatus copy_object_without_id(ArchbirdEngine *engine,
@@ -1010,54 +1003,34 @@ normalized_configuration(ArchbirdEngine *engine, const AbValue *source,
   return status;
 }
 
-static ArchbirdStatus normalize_map_definition(ArchbirdEngine *engine,
-                                               const AbValue *source,
-                                               AbValue *out) {
+static ArchbirdStatus normalize_map_overlay(ArchbirdEngine *engine,
+                                            const AbValue *source,
+                                            AbValue *out) {
   static const char *const map_fields[] = {
       "artifacts",     "bridges",  "builds",  "components", "description",
       "discovery",     "exclude",  "indexes", "layers",     "limits",
       "named_entries", "packages", "parity",  "project",    "tests"};
-  AbValue defaults = {0};
-  AbValue version = {0};
-  const AbValue *layers = ab_value_member(source, "layers");
   size_t index;
-  size_t count = 1;
+  size_t count = 0;
   size_t output = 0;
   ArchbirdStatus status;
-  if (!layers) {
-    size_t length;
-    const uint8_t *json = ab_default_project_configuration(&length);
-    status = ab_json_value_decode(engine, json, length, &defaults);
-    if (status != ARCHBIRD_OK)
-      return status;
-    layers = ab_value_member(&defaults, "layers");
-  }
   for (index = 0; index < sizeof(map_fields) / sizeof(map_fields[0]); index++)
-    if (ab_value_member(source, map_fields[index]) ||
-        !strcmp(map_fields[index], "layers"))
+    if (ab_value_member(source, map_fields[index]))
       count++;
   status = object_allocate(engine, out, count);
   for (index = 0; status == ARCHBIRD_OK &&
                   index < sizeof(map_fields) / sizeof(map_fields[0]);
        index++) {
     const char *name = map_fields[index];
-    const AbValue *value =
-        !strcmp(name, "layers") ? layers : ab_value_member(source, name);
+    const AbValue *value = ab_value_member(source, name);
     if (!value)
       continue;
     status =
         field_literal(engine, &out->as.object.fields[output++], name, value);
   }
-  if (status == ARCHBIRD_OK)
-    status = integer_value(engine, &version, "2");
-  if (status == ARCHBIRD_OK)
-    status = field_literal(engine, &out->as.object.fields[output++],
-                           "schema_version", &version);
   if (status == ARCHBIRD_OK && out->as.object.count > 1)
     qsort(out->as.object.fields, out->as.object.count,
           sizeof(*out->as.object.fields), field_compare);
-  ab_value_free(engine, &version);
-  ab_value_free(engine, &defaults);
   if (status != ARCHBIRD_OK)
     ab_value_free(engine, out);
   return status;
@@ -1094,14 +1067,11 @@ ArchbirdStatus ab_project_configuration_decode(ArchbirdEngine *engine,
                                                size_t json_length,
                                                AbProjectConfiguration *out) {
   static const char *const fields[] = {
-      "artifacts",   "bridges",        "builds",    "components",
-      "constraints", "description",    "discovery", "exclude",
-      "indexes",     "layers",         "limits",    "named_entries",
-      "packages",    "parity",         "project",   "projections",
-      "queries",     "schema_version", "tests"};
+      "artifacts",   "bridges",       "builds",   "components", "constraints",
+      "description", "discovery",     "exclude",  "indexes",    "layers",
+      "limits",      "named_entries", "packages", "parity",     "project",
+      "projections", "queries",       "tests"};
   AbValue document = {0};
-  const AbValue *schema;
-  uint64_t version = 0;
   size_t index;
   ArchbirdStatus status;
   if (!engine || !json || !json_length || !out)
@@ -1110,10 +1080,8 @@ ArchbirdStatus ab_project_configuration_decode(ArchbirdEngine *engine,
   status = ab_json_value_decode(engine, json, json_length, &document);
   if (status != ARCHBIRD_OK)
     return status;
-  schema = ab_value_member(&document, "schema_version");
-  if (document.kind != AB_VALUE_OBJECT || !ab_value_u64(schema, &version) ||
-      version != 2) {
-    status = invalid(engine, "schema_version must equal 2");
+  if (document.kind != AB_VALUE_OBJECT) {
+    status = invalid(engine, "project configuration must be an object");
     goto done;
   }
   for (index = 0; index < document.as.object.count; index++)
@@ -1126,13 +1094,14 @@ ArchbirdStatus ab_project_configuration_decode(ArchbirdEngine *engine,
           document.as.object.fields[index].name.data);
       goto done;
     }
-  if (!nonblank(ab_value_member(&document, "project"))) {
+  if (ab_value_member(&document, "project") &&
+      !nonblank(ab_value_member(&document, "project"))) {
     status = invalid(engine, "project must be a non-empty string");
     goto done;
   }
   {
     const AbValue *layers = ab_value_member(&document, "layers");
-    if (!layers || layers->kind != AB_VALUE_ARRAY || !layers->as.array.count) {
+    if (layers && (layers->kind != AB_VALUE_ARRAY || !layers->as.array.count)) {
       status = invalid(engine, "layers must be a non-empty array");
       goto done;
     }
@@ -1155,12 +1124,12 @@ ArchbirdStatus ab_project_configuration_decode(ArchbirdEngine *engine,
                                       &out->queries, &out->constraints,
                                       &out->normalized);
   if (status == ARCHBIRD_OK)
-    status = normalize_map_definition(engine, &document, &out->map_definition);
+    status = normalize_map_overlay(engine, &document, &out->map_overlay);
   if (status == ARCHBIRD_OK)
     status =
         digest_value(engine, &out->constraints, out->constraint_policy_sha256);
   if (status == ARCHBIRD_OK)
-    status = digest_value(engine, &out->map_definition, out->map_config_sha256);
+    status = digest_value(engine, &out->map_overlay, out->map_overlay_sha256);
   if (status == ARCHBIRD_OK)
     status = digest_value(engine, &out->normalized, out->sha256);
 done:
@@ -1175,7 +1144,7 @@ void ab_project_configuration_free(ArchbirdEngine *engine,
   if (!configuration)
     return;
   ab_value_free(engine, &configuration->normalized);
-  ab_value_free(engine, &configuration->map_definition);
+  ab_value_free(engine, &configuration->map_overlay);
   ab_value_free(engine, &configuration->projections);
   ab_value_free(engine, &configuration->queries);
   ab_value_free(engine, &configuration->constraints);

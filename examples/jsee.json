@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "jsee",
   "description": "Schema-driven JavaScript/browser runtime with a parallel Python server/runtime and Vue templates.",
   "exclude": ["dist/**", "apps/**", "load/**"],

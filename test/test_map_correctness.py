@@ -147,7 +147,6 @@ int main(void) {
         "schema_version": 1,
     }
     config = {
-        "schema_version": 2,
         "project": "c-test-function-candidates",
         "layers": [
             {
@@ -222,7 +221,6 @@ def check_stable_duplicate_reference_witness(extension) -> None:
             {"globs": [path], "language": "c", "name": "c"},
         ],
         "project": "duplicate-reference-witness",
-        "schema_version": 2,
     }
     project = extension.project_create(canonical(manifest))
     extension.project_add_source(project, path, source)
@@ -346,7 +344,6 @@ def check_external_call_namespace(extension) -> None:
         "schema_version": 1,
     }
     config = {
-        "schema_version": 2,
         "project": "external-call-namespace",
         "layers": [
             {

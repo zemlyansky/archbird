@@ -188,7 +188,6 @@ npx archbird config init . --output archbird.json
 <!-- archbird-minimal-project-config:start -->
 ```json
 {
-  "schema_version": 2,
   "project": "demo",
   "layers": [
     {
@@ -252,7 +251,7 @@ inventory is:
 <!-- archbird-config-fields:start -->
 | Section | Purpose |
 | --- | --- |
-| `schema_version`, `project`, `description` | configuration format, stable project identity, and human context |
+| `project`, `description` | optional stable project identity and human context |
 | `exclude`, `discovery` | project-level selection and explicit discovery policy |
 | `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
@@ -307,6 +306,28 @@ same `archbird.json` that defines project structure. Typed constraints infer
 their exhaustive Map projections; primitive assertions can use inline literals,
 observations, or named/inline projections. The staged configuration above
 therefore needs no second suite file.
+
+For a first check in an unfamiliar repository, configuration may contain only
+the reviewed constraint; discovery supplies the project model and layers:
+
+```bash
+npx archbird verify --config - --check <<'JSON'
+{
+  "constraints": {
+    "NO-LARGE-SOURCE": {
+      "kind": "max_file_bytes",
+      "include": ["src/**"],
+      "max": 1048576,
+      "owner": "architecture",
+      "rationale": "Keep source files reviewable."
+    }
+  }
+}
+JSON
+```
+
+The same fragment can be saved unchanged as `archbird.json`. Explicit
+project-model sections replace discovery; omitted sections inherit it.
 
 ```bash
 # Run one saved Query plan or an ad-hoc query.

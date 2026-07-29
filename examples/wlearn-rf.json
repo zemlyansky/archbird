@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "wlearn-rf",
   "description": "Random-forest C11 core with Python and JavaScript/WASM estimator surfaces.",
   "exclude": ["**/csrc/**", "js/wasm/**", "references/**"],

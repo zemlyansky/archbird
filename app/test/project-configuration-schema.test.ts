@@ -87,7 +87,6 @@ test("public project-configuration schema matches the conformance corpus", () =>
   ];
   for (const path of configuredExamples) {
     const configuration = JSON.parse(readFileSync(path, "utf8"));
-    if (configuration.schema_version !== 2) continue;
     assert.equal(
       validator(configuration),
       true,

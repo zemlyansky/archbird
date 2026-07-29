@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "tranfi",
   "description": "Streaming ETL C11 core with Python, Node, WASM, and Vue worker application surfaces.",
   "exclude": ["**/csrc/**", "js/wasm/**", "js/app/assets/**", "references/**", "third_party/**", "temp/**", "corpus/**"],

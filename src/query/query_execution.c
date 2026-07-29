@@ -212,7 +212,6 @@ static ArchbirdStatus validate_saved_plan(QueryContext *context,
   static const char *const allowed[] = {
       "id",
       "kind",
-      "map_config_sha256",
       "operations",
       "project_configuration_sha256",
       "projections",
@@ -228,7 +227,6 @@ static ArchbirdStatus validate_saved_plan(QueryContext *context,
   const AbValue *rows;
   const AbValue *id;
   const AbValue *kind;
-  const AbValue *map_configuration;
   const AbValue *project_configuration;
   size_t index;
   if (!plan)
@@ -241,41 +239,26 @@ static ArchbirdStatus validate_saved_plan(QueryContext *context,
       return query_error(context, "query.plan contains an unknown field");
   id = ab_value_member(plan, "id");
   kind = ab_value_member(plan, "kind");
-  map_configuration = ab_value_member(plan, "map_config_sha256");
   project_configuration = ab_value_member(plan, "project_configuration_sha256");
   if (!stable_id_value(id) ||
       (!ab_value_string_is(kind, "ad_hoc") &&
        !ab_value_string_is(kind, "configured")) ||
-      !map_configuration || !project_configuration ||
-      !ab_value_member(plan, "operations") ||
+      !project_configuration || !ab_value_member(plan, "operations") ||
       ab_value_member(plan, "operations")->kind != AB_VALUE_OBJECT ||
       !ab_value_member(plan, "selection") ||
       ab_value_member(plan, "selection")->kind != AB_VALUE_OBJECT ||
-      (map_configuration->kind != AB_VALUE_NULL &&
-       !valid_sha256_value(map_configuration)) ||
       (project_configuration->kind != AB_VALUE_NULL &&
        !valid_sha256_value(project_configuration)) ||
       !valid_sha256_value(ab_value_member(plan, "query_definition_sha256")) ||
       !valid_sha256_value(ab_value_member(plan, "query_plan_sha256")))
     return query_error(context, "query.plan identities are invalid");
   if ((ab_value_string_is(kind, "ad_hoc") &&
-       (map_configuration->kind != AB_VALUE_NULL ||
-        project_configuration->kind != AB_VALUE_NULL)) ||
+       project_configuration->kind != AB_VALUE_NULL) ||
       (ab_value_string_is(kind, "configured") &&
-       (map_configuration->kind == AB_VALUE_NULL ||
-        project_configuration->kind == AB_VALUE_NULL)))
+       project_configuration->kind == AB_VALUE_NULL))
     return query_error(
         context,
         "query.plan project configuration identity does not match its kind");
-  if (map_configuration->kind == AB_VALUE_STRING) {
-    const AbValue *evidence = ab_value_member(context->map, "evidence");
-    const AbValue *actual =
-        evidence ? ab_value_member(evidence, "config_sha256") : NULL;
-    if (!actual || actual->kind != AB_VALUE_STRING ||
-        !ab_string_equal(&map_configuration->as.text, &actual->as.text))
-      return query_error(
-          context, "query.plan Map configuration does not match query input");
-  }
   rows = ab_value_member(plan, "projections");
   if (!rows || rows->kind != AB_VALUE_ARRAY)
     return query_error(context, "query.plan.projections must be an array");

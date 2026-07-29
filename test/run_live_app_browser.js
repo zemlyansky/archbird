@@ -445,7 +445,10 @@ async function main() {
       { timeout: 30_000 },
     );
 
-    fs.writeFileSync(path.join(repositoryRoot, "archbird.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(repositoryRoot, "archbird.json"),
+      '{"schema_version":2}\n',
+    );
     await page.getByText("Candidate failed; showing last good view.", { exact: true })
       .waitFor({ timeout: 30_000 });
     await page.waitForSelector(".graph-canvas canvas");

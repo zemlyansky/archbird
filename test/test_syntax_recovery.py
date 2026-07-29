@@ -57,7 +57,6 @@ def main() -> int:
                     }
                 ],
                 "project": "syntax-recovery",
-                "schema_version": 2,
             }
         ),
     )

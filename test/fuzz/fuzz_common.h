@@ -46,7 +46,7 @@ static const uint8_t fuzz_workspace_maps_json[] =
     "[" ARCHBIRD_FUZZ_MAP_JSON "]";
 
 static const uint8_t fuzz_project_configuration_json[] =
-    "{\"schema_version\":2,\"project\":\"fuzz\",\"layers\":[{"
+    "{\"project\":\"fuzz\",\"layers\":[{"
     "\"name\":\"core\",\"role\":\"core\",\"language\":\"c\","
     "\"globs\":[\"src/**/*.c\"]}],\"constraints\":{"
     "\"FUZZ-SET\":{\"assert\":\"set_equal\","

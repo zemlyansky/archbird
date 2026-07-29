@@ -72,7 +72,7 @@ int main(void) {
       "\"project\":\"demo\",\"projections\":{\"public-api\":{"
       "\"paths\":[\"include/**\"],\"select\":\"symbols\"}},"
       "\"queries\":{\"api-impact\":{\"direction\":\"upstream\","
-      "\"projection\":\"public-api\"}},\"schema_version\":2}";
+      "\"projection\":\"public-api\"}}}";
   static const char arrays[] =
       "{\"constraints\":[{\"id\":\"NO-CYCLES\",\"kind\":"
       "\"component_cycles\",\"owner\":\"architecture\",\"rationale\":"
@@ -81,8 +81,7 @@ int main(void) {
       "\"projections\":[{"
       "\"id\":\"public-api\",\"paths\":[\"include/**\"],\"select\":"
       "\"symbols\"}],\"queries\":[{\"direction\":\"upstream\",\"id\":"
-      "\"api-impact\",\"projection\":\"public-api\"}],"
-      "\"schema_version\":2}";
+      "\"api-impact\",\"projection\":\"public-api\"}]}";
   static const char same_line_map[] =
       "{\"artifact\":\"map\",\"artifacts\":[],\"builds\":[],"
       "\"call_resolutions\":[],\"components\":[],\"description\":\"\","
@@ -131,17 +130,20 @@ int main(void) {
   if (!rejects(engine,
                "{\"project\":\"demo\",\"root\":\".\","
                "\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
-               "\"name\":\"c\"}],"
-               "\"schema_version\":2}",
+               "\"name\":\"c\"}]}",
                "unknown field 'root'")) {
     fprintf(stderr, "root field was not rejected\n");
+    goto failed;
+  }
+  if (!rejects(engine, "{\"schema_version\":2}",
+               "unknown field 'schema_version'")) {
+    fprintf(stderr, "obsolete configuration schema_version was not rejected\n");
     goto failed;
   }
   if (!rejects(engine,
                "{\"checks\":[],\"extractors\":{},"
                "\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
-               "\"name\":\"c\"}],\"project\":\"demo\",\"projects\":{},"
-               "\"schema_version\":2}",
+               "\"name\":\"c\"}],\"project\":\"demo\",\"projects\":{}}",
                "unknown field")) {
     fprintf(stderr, "legacy Verify suite fields were not rejected\n");
     goto failed;
@@ -149,7 +151,7 @@ int main(void) {
   if (!rejects(engine,
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\",\"queries\":{"
-               "\"empty\":{}},\"schema_version\":2}",
+               "\"empty\":{}}}",
                "requires a projection or focus selector")) {
     fprintf(stderr, "empty named query was not rejected\n");
     goto failed;
@@ -157,8 +159,7 @@ int main(void) {
   if (!rejects(engine,
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\",\"queries\":{"
-               "\"bad\":{\"search\":[\"engine\"],\"search_limit\":0}},"
-               "\"schema_version\":2}",
+               "\"bad\":{\"search\":[\"engine\"],\"search_limit\":0}}}",
                "search_limit must be from 1 to 100")) {
     fprintf(stderr, "invalid named-query search limit was not rejected\n");
     goto failed;
@@ -167,7 +168,7 @@ int main(void) {
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\",\"queries\":{"
                "\"bad\":{\"paths\":[\"src/**\"],\"context\":{"
-               "\"typo_policy\":\"expand\"}}},\"schema_version\":2}",
+               "\"typo_policy\":\"expand\"}}}}",
                "query.context contains an unknown field")) {
     fprintf(stderr, "unknown saved-query context field was not rejected\n");
     goto failed;
@@ -176,7 +177,7 @@ int main(void) {
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\","
                "\"queries\":[{\"id\":\"same\"},"
-               "{\"id\":\"same\"}],\"schema_version\":2}",
+               "{\"id\":\"same\"}]}",
                "duplicate ids")) {
     fprintf(stderr, "duplicate collection ids were not rejected\n");
     goto failed;
@@ -185,7 +186,7 @@ int main(void) {
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\","
                "\"queries\":{\"left\":{"
-               "\"id\":\"right\"}},\"schema_version\":2}",
+               "\"id\":\"right\"}}}",
                "derive identity from the key")) {
     fprintf(stderr, "redundant keyed id was not rejected\n");
     goto failed;
@@ -193,7 +194,7 @@ int main(void) {
   if (!rejects(engine,
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\",\"projections\":{"
-               "\"bad\":{\"select\":\"ranked_symbols\"}},\"schema_version\":2}",
+               "\"bad\":{\"select\":\"ranked_symbols\"}}}",
                "unsupported select operator")) {
     fprintf(stderr, "unknown projection operator was not rejected\n");
     goto failed;
@@ -201,8 +202,7 @@ int main(void) {
   if (!rejects(engine,
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\",\"projections\":{"
-               "\"bad\":{\"metric\":\"bytes\",\"select\":\"symbols\"}},"
-               "\"schema_version\":2}",
+               "\"bad\":{\"metric\":\"bytes\",\"select\":\"symbols\"}}}",
                "field unsupported by its select operator")) {
     fprintf(stderr, "operator-irrelevant projection field was not rejected\n");
     goto failed;
@@ -210,7 +210,7 @@ int main(void) {
   if (!rejects(engine,
                "{\"layers\":[{\"globs\":[\"**/*.c\"],\"language\":\"c\","
                "\"name\":\"c\"}],\"project\":\"demo\",\"queries\":{"
-               "\"bad\":{\"projection\":\"missing\"}},\"schema_version\":2}",
+               "\"bad\":{\"projection\":\"missing\"}}}",
                "unknown projection")) {
     fprintf(stderr, "unknown named projection was not rejected\n");
     goto failed;
@@ -220,7 +220,7 @@ int main(void) {
                "\"assert\":\"required_subset\",\"owner\":\"architecture\","
                "\"rationale\":\"A reviewed invariant.\"}},\"layers\":[{"
                "\"globs\":[\"**/*.c\"],\"language\":\"c\",\"name\":\"c\"}],"
-               "\"project\":\"demo\",\"schema_version\":2}",
+               "\"project\":\"demo\"}",
                "assertion requires expected")) {
     fprintf(stderr, "incomplete primitive constraint was not rejected\n");
     goto failed;
@@ -230,8 +230,7 @@ int main(void) {
                "\"assert\":\"values_equal\",\"expected\":{\"literal\":1},"
                "\"owner\":\"architecture\",\"rationale\":\"A reviewed "
                "invariant.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
-               "\"language\":\"c\",\"name\":\"c\"}],\"project\":\"demo\","
-               "\"schema_version\":2}",
+               "\"language\":\"c\",\"name\":\"c\"}],\"project\":\"demo\"}",
                "invalid operand value")) {
     fprintf(stderr, "scalar constraint literal was not rejected\n");
     goto failed;
@@ -240,8 +239,7 @@ int main(void) {
                "{\"constraints\":{\"bad\":{\"kind\":\"required_symbols\","
                "\"owner\":\"architecture\",\"rationale\":\"A reviewed "
                "invariant.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
-               "\"language\":\"c\",\"name\":\"c\"}],\"project\":\"demo\","
-               "\"schema_version\":2}",
+               "\"language\":\"c\",\"name\":\"c\"}],\"project\":\"demo\"}",
                "requires non-empty symbols")) {
     fprintf(stderr, "required_symbols without symbols was not rejected\n");
     goto failed;
@@ -251,7 +249,7 @@ int main(void) {
                "\"kind\":\"component_cycles\",\"owner\":\"architecture\","
                "\"rationale\":\"A reviewed invariant.\"}},\"layers\":[{"
                "\"globs\":[\"**/*.c\"],\"language\":\"c\",\"name\":\"c\"}],"
-               "\"project\":\"demo\",\"schema_version\":2}",
+               "\"project\":\"demo\"}",
                "field not owned by its kind")) {
     fprintf(stderr, "typed constraint accepted an unrelated field\n");
     goto failed;
@@ -261,7 +259,7 @@ int main(void) {
                "\"assert\":\"acyclic\",\"max\":1,\"owner\":\"architecture\","
                "\"rationale\":\"A reviewed invariant.\"}},\"layers\":[{"
                "\"globs\":[\"**/*.c\"],\"language\":\"c\",\"name\":\"c\"}],"
-               "\"project\":\"demo\",\"schema_version\":2}",
+               "\"project\":\"demo\"}",
                "field not owned by its kind")) {
     fprintf(stderr, "primitive constraint accepted an unrelated field\n");
     goto failed;
@@ -271,8 +269,7 @@ int main(void) {
           "{\"constraints\":{\"bad\":{\"kind\":\"component_membership\","
           "\"max\":1,\"min\":2,\"owner\":\"architecture\",\"rationale\":"
           "\"A reviewed invariant.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
-          "\"language\":\"c\",\"name\":\"c\"}],\"project\":\"demo\","
-          "\"schema_version\":2}",
+          "\"language\":\"c\",\"name\":\"c\"}],\"project\":\"demo\"}",
           "requires min <= max")) {
     fprintf(stderr, "inverted constraint bounds were not rejected\n");
     goto failed;

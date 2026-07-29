@@ -1764,13 +1764,11 @@ ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
     return ARCHBIRD_INVALID_ARGUMENT;
   {
     static const char *const fields[] = {
-        "artifacts",   "bridges",        "builds",    "components",
-        "constraints", "description",    "discovery", "exclude",
-        "indexes",     "layers",         "limits",    "named_entries",
-        "packages",    "parity",         "project",   "projections",
-        "queries",     "schema_version", "tests"};
-    static const char *const required[] = {"layers", "project",
-                                           "schema_version"};
+        "artifacts",   "bridges",       "builds",   "components", "constraints",
+        "description", "discovery",     "exclude",  "indexes",    "layers",
+        "limits",      "named_entries", "packages", "parity",     "project",
+        "projections", "queries",       "tests"};
+    static const char *const required[] = {"layers", "project"};
     yyjson_doc *document = NULL;
     yyjson_val *root;
     yyjson_val *layers;
@@ -1778,7 +1776,6 @@ ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
     yyjson_arr_iter iterator;
     yyjson_val *item;
     size_t index;
-    uint64_t schema_version = 0;
     ArchbirdStatus status;
     if (!engine || !out)
       return ARCHBIRD_INVALID_ARGUMENT;
@@ -1791,12 +1788,8 @@ ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
     if (status != ARCHBIRD_OK)
       goto done;
     root = yyjson_doc_get_root(document);
-    status = object_shape(engine, root, "project configuration", fields, 19,
-                          required, 3);
-    if (status == ARCHBIRD_OK &&
-        (!unsigned_value(member(root, "schema_version"), &schema_version) ||
-         schema_version != 2))
-      status = config_error(engine, "schema_version must equal 2");
+    status = object_shape(engine, root, "project configuration", fields, 18,
+                          required, 2);
     if (status == ARCHBIRD_OK)
       status = validate_optional_sections(engine, root);
     if (status == ARCHBIRD_OK)
@@ -1894,9 +1887,9 @@ ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
       size_t digest_index;
       for (digest_index = 0; digest_index < 32; digest_index++) {
         const char high =
-            project_configuration.map_config_sha256[digest_index * 2];
+            project_configuration.map_overlay_sha256[digest_index * 2];
         const char low =
-            project_configuration.map_config_sha256[digest_index * 2 + 1];
+            project_configuration.map_overlay_sha256[digest_index * 2 + 1];
         const uint8_t high_value =
             (uint8_t)(high <= '9' ? high - '0' : high - 'a' + 10);
         const uint8_t low_value =
@@ -1904,7 +1897,7 @@ ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
         out->sha256[digest_index] = (uint8_t)((high_value << 4) | low_value);
       }
       if (status == ARCHBIRD_OK)
-        memcpy(out->sha256_hex, project_configuration.map_config_sha256, 65);
+        memcpy(out->sha256_hex, project_configuration.map_overlay_sha256, 65);
     }
   done:
     yyjson_doc_free(document);

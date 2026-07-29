@@ -359,8 +359,12 @@ async function main() {
     await page.waitForSelector(".contract-editor", { timeout: 10_000 });
     const reviewed = path.join(path.dirname(screenshot), "reviewed-archbird.json");
     await saveDownload(page, "Save project configuration", reviewed);
-    if (JSON.parse(fs.readFileSync(reviewed, "utf8")).schema_version !== 2) {
-      throw new Error("reviewed project configuration is not schema 2");
+    const reviewedConfiguration = JSON.parse(fs.readFileSync(reviewed, "utf8"));
+    if (
+      Object.hasOwn(reviewedConfiguration, "schema_version") ||
+      Object.hasOwn(reviewedConfiguration, "version")
+    ) {
+      throw new Error("reviewed project configuration contains a version field");
     }
 
     await loadArtifact(page, proposal, "change-proposal");

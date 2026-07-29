@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import subprocess
 
 from archbird import _native
 from archbird.errors import ConfigError
@@ -108,7 +109,6 @@ def _assert_project_configuration_conformance() -> None:
             else {"metric": "bytes"}
         )
         mutated = {
-            "schema_version": 2,
             "project": "conformance",
             "layers": [
                 {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -135,7 +135,6 @@ def _assert_project_configuration_conformance() -> None:
             else {"bridge": "unused"}
         )
         mutated = {
-            "schema_version": 2,
             "project": "conformance",
             "layers": [
                 {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
@@ -171,6 +170,363 @@ def _fixture_map(root: Path) -> bytes:
     return project.map_json()
 
 
+def _assert_import_resolution_soundness() -> None:
+    root = ROOT / "build/import-resolution-soundness"
+    shutil.rmtree(root, ignore_errors=True)
+
+    def evaluate(
+        name: str,
+        source: str,
+        *,
+        import_roots: list[str] | None = None,
+        local_module: bool = False,
+        declared_external: bool = False,
+    ) -> tuple[dict, dict, dict, dict]:
+        repository = root / name
+        (repository / "app").mkdir(parents=True)
+        (repository / "app/main.py").write_text(source, encoding="utf-8")
+        if local_module:
+            (repository / "ui").mkdir()
+            (repository / "ui/widget.py").write_text(
+                "def render():\n    return 'ok'\n", encoding="utf-8"
+            )
+        layer = {
+            "globs": ["**/*.py"],
+            "language": "python",
+            "name": "python",
+        }
+        if import_roots is not None:
+            layer["import_roots"] = import_roots
+        configuration: dict[str, object] = {
+            "project": name,
+            "layers": [layer],
+            "components": [
+                {"name": "app", "paths": ["app/**"]},
+                {"name": "ui", "paths": ["ui/**"]},
+            ],
+            "constraints": {
+                "NO-IMPORT-EDGES": {
+                    "edges": [],
+                    "kind": "allowed_component_edges",
+                    "kinds": ["import"],
+                    "owner": "architecture",
+                    "rationale": "Exercise honest import-resolution completeness.",
+                }
+            },
+        }
+        if declared_external:
+            (repository / "pyproject.toml").write_text(
+                "[project]\n"
+                f'name = "{name}"\n'
+                'version = "1.0.0"\n'
+                'dependencies = ["requests>=2"]\n',
+                encoding="utf-8",
+            )
+            configuration["packages"] = [
+                {
+                    "kind": "python",
+                    "layer": "python",
+                    "name": "python-package",
+                    "path": "pyproject.toml",
+                }
+            ]
+        encoded = json.dumps(
+            configuration, sort_keys=True, separators=(",", ":")
+        ).encode()
+        project = Project.from_repository(repository, config=encoded, jobs=1)
+        map_document = json.loads(project.map_json())
+        file_edges = json.loads(
+            evaluate_projection_json(
+                json.dumps(map_document, separators=(",", ":")).encode(),
+                {
+                    "id": "file-imports",
+                    "kinds": ["import"],
+                    "select": "file_edges",
+                },
+            )
+        )
+        component_edges = json.loads(
+            evaluate_projection_json(
+                json.dumps(map_document, separators=(",", ":")).encode(),
+                {
+                    "id": "component-imports",
+                    "kinds": ["import"],
+                    "select": "component_edges",
+                },
+            )
+        )
+        verification = json.loads(
+            evaluate_constraints_json(
+                encoded,
+                json.dumps(map_document, separators=(",", ":")).encode(),
+            )
+        )
+        return map_document, file_edges, component_edges, verification
+
+    unresolved_map, unresolved_files, unresolved_components, unresolved_verify = (
+        evaluate(
+            "unresolved",
+            "from ui.widget import render\n\nrender()\n",
+            local_module=True,
+        )
+    )
+    assert unresolved_files["completeness"]["classification"] == "incomplete"
+    assert unresolved_files["completeness"]["counts"]["unknown"] == 1
+    assert (
+        unresolved_components["completeness"]["classification"] == "incomplete"
+    )
+    assert unresolved_components["completeness"]["counts"]["unknown"] == 1
+    assert unresolved_verify["constraints"][0]["status"] == "unknown"
+    unresolved_diagnostics = [
+        row
+        for row in unresolved_map["diagnostics"]
+        if row["code"] == "unresolved-import"
+    ]
+    assert len(unresolved_diagnostics) == 1
+    assert unresolved_diagnostics[0]["path"] == "app/main.py"
+    assert unresolved_diagnostics[0]["span"]["start"] >= 0
+    assert "ui.widget" in unresolved_diagnostics[0]["message"]
+
+    resolved_map, resolved_files, resolved_components, resolved_verify = evaluate(
+        "resolved",
+        "from ui.widget import render\n\nrender()\n",
+        import_roots=["."],
+        local_module=True,
+    )
+    assert resolved_files["completeness"]["classification"] == "complete"
+    assert resolved_files["completeness"]["counts"]["unknown"] == 0
+    assert resolved_components["completeness"]["classification"] == "complete"
+    assert resolved_components["completeness"]["counts"]["unknown"] == 0
+    assert resolved_verify["constraints"][0]["status"] == "fail"
+    assert not any(
+        row["code"] == "unresolved-import"
+        for row in resolved_map["diagnostics"]
+    )
+
+    _, empty_files, empty_components, empty_verify = evaluate(
+        "empty", "def main():\n    return 0\n"
+    )
+    assert empty_files["completeness"]["classification"] == "complete"
+    assert empty_files["fact"]["items"] == []
+    assert empty_components["completeness"]["classification"] == "complete"
+    assert empty_components["fact"]["items"] == []
+    assert empty_verify["constraints"][0]["status"] == "pass"
+
+    external_map, external_files, external_components, external_verify = evaluate(
+        "declared-external",
+        "import requests\n",
+        declared_external=True,
+    )
+    assert any(edge["kind"] == "external" for edge in external_map["edges"])
+    assert external_files["completeness"]["classification"] == "complete"
+    assert external_files["fact"]["items"] == []
+    assert external_components["completeness"]["classification"] == "complete"
+    assert external_components["fact"]["items"] == []
+    assert external_verify["constraints"][0]["status"] == "pass"
+
+    namespace = root / "namespace-package"
+    (namespace / "app").mkdir(parents=True)
+    (namespace / "tools").mkdir()
+    (namespace / "app/main.py").write_text(
+        "from tools import helper\n\nhelper.run()\n", encoding="utf-8"
+    )
+    (namespace / "tools/helper.py").write_text(
+        "def run():\n    return 1\n", encoding="utf-8"
+    )
+    namespace_config = {
+        "project": "namespace-package",
+        "layers": [
+            {
+                "globs": ["**/*.py"],
+                "import_roots": ["."],
+                "language": "python",
+                "name": "python",
+            }
+        ],
+        "components": [
+            {"name": "app", "paths": ["app/**"]},
+            {"name": "tools", "paths": ["tools/**"]},
+        ],
+    }
+    namespace_map = json.loads(
+        Project.from_repository(
+            namespace,
+            config=json.dumps(namespace_config, separators=(",", ":")).encode(),
+            jobs=1,
+        ).map_json()
+    )
+    assert any(
+        row["kind"] == "import"
+        and row["source"] == "app/main.py"
+        and row["target"] == "tools/helper.py"
+        for row in namespace_map["edges"]
+    )
+    assert not any(
+        row["code"] == "unresolved-import"
+        for row in namespace_map["diagnostics"]
+    )
+
+    c_system = root / "c-system"
+    (c_system / "src").mkdir(parents=True)
+    (c_system / "src/main.c").write_text(
+        "#include <stdio.h>\nint main(void) { return 0; }\n",
+        encoding="utf-8",
+    )
+    c_system_config = {
+        "project": "c-system",
+        "layers": [
+            {
+                "globs": ["**/*.c"],
+                "language": "c",
+                "name": "c",
+            }
+        ],
+        "components": [{"name": "app", "paths": ["src/**"]}],
+    }
+    c_system_map = json.loads(
+        Project.from_repository(
+            c_system,
+            config=json.dumps(c_system_config, separators=(",", ":")).encode(),
+            jobs=1,
+        ).map_json()
+    )
+    assert any(
+        row["kind"] == "external"
+        and row["source"] == "src/main.c"
+        and row["target"] == "package:stdio.h"
+        for row in c_system_map["edges"]
+    )
+    assert not any(
+        row["code"] == "unresolved-import"
+        for row in c_system_map["diagnostics"]
+    )
+
+    c_template = root / "c-template"
+    (c_template / "src").mkdir(parents=True)
+    (c_template / "include").mkdir()
+    (c_template / "src/main.c").write_text(
+        '#include "generated.h"\nint main(void) { return GENERATED; }\n',
+        encoding="utf-8",
+    )
+    (c_template / "include/generated.h.generic").write_text(
+        "#define GENERATED 0\n", encoding="utf-8"
+    )
+    c_template_config = {
+        "project": "c-template",
+        "layers": [
+            {
+                "globs": ["src/*.c", "include/*.generic"],
+                "import_roots": ["include"],
+                "language": "c",
+                "name": "c",
+            }
+        ],
+        "components": [
+            {"name": "app", "paths": ["src/**"]},
+            {"name": "template", "paths": ["include/**"]},
+        ],
+    }
+    c_template_map = json.loads(
+        Project.from_repository(
+            c_template,
+            config=json.dumps(c_template_config, separators=(",", ":")).encode(),
+            jobs=1,
+        ).map_json()
+    )
+    assert any(
+        row["kind"] == "import"
+        and row["source"] == "src/main.c"
+        and row["target"] == "include/generated.h.generic"
+        for row in c_template_map["edges"]
+    )
+    assert not any(
+        row["code"] == "unresolved-import"
+        for row in c_template_map["diagnostics"]
+    )
+
+
+def _assert_partial_configuration_overlay() -> None:
+    root = ROOT / "build/partial-configuration-overlay"
+    shutil.rmtree(root, ignore_errors=True)
+    (root / "src").mkdir(parents=True)
+    (root / "tests").mkdir()
+    (root / "src/core.py").write_text("def run():\n    return 1\n")
+    (root / "tests/test_core.py").write_text(
+        "from src.core import run\n\ndef test_run():\n    assert run() == 1\n"
+    )
+    (root / "pyproject.toml").write_text(
+        "[project]\nname = \"partial-overlay\"\nversion = \"1.0.0\"\n"
+    )
+    partial = {
+        "constraints": {
+            "HAS-CORE": {
+                "kind": "required_paths",
+                "paths": ["src/core.py"],
+                "owner": "architecture",
+                "rationale": "The discovered core remains mapped.",
+            }
+        }
+    }
+    unconfigured = Project.from_repository(root, jobs=1).map_json()
+    configured = Project.from_repository(
+        root,
+        config=json.dumps(partial, separators=(",", ":")).encode(),
+        jobs=1,
+    ).map_json()
+    assert configured == unconfigured
+    assert json.loads(
+        evaluate_constraints_json(
+            json.dumps(partial, separators=(",", ":")).encode(), configured
+        )
+    )["constraints"][0]["status"] == "pass"
+
+    explicit = {
+        **partial,
+        "layers": [
+            {
+                "name": "owned",
+                "language": "python",
+                "globs": ["src/**"],
+            }
+        ],
+    }
+    explicit_map = json.loads(
+        Project.from_repository(
+            root,
+            config=json.dumps(explicit, separators=(",", ":")).encode(),
+            jobs=1,
+        ).map_json()
+    )
+    assert [layer["name"] for layer in explicit_map["layers"]] == ["owned"]
+    assert [source["path"] for source in explicit_map["files"]] == ["src/core.py"]
+    assert [
+        (package["name"], package["layer"])
+        for package in explicit_map["packages"]
+    ] == [("python-root", "owned")]
+
+    completed = subprocess.run(
+        [
+            str(ROOT / "archbird"),
+            "verify",
+            "--root",
+            str(root),
+            "--config",
+            "-",
+            "--format",
+            "json",
+            "--check",
+            "--progress",
+            "never",
+        ],
+        input=json.dumps(partial, separators=(",", ":")).encode(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode()
+    assert json.loads(completed.stdout)["constraints"][0]["status"] == "pass"
+
+
 def _assert_invalid_projection(
     map_document: dict[str, object], definition: dict[str, object]
 ) -> None:
@@ -186,6 +542,8 @@ def _assert_invalid_projection(
 
 def main() -> None:
     _assert_project_configuration_conformance()
+    _assert_import_resolution_soundness()
+    _assert_partial_configuration_overlay()
     project_model = json.loads((ROOT / "archbird.json").read_text())
     project_model.pop("projections", None)
     project_model.pop("queries", None)
@@ -275,9 +633,10 @@ def main() -> None:
     )
     assert compiled["artifact"] == "project-configuration-plan"
     assert compiled["schema_version"] == 1
-    assert compiled["map_definition"]["schema_version"] == 2
-    assert "queries" not in compiled["map_definition"]
-    assert "constraints" not in compiled["map_definition"]
+    assert compiled["map_overlay"]["project"] == "archbird"
+    assert compiled["map_overlay"]["layers"] == modern["layers"]
+    assert "queries" not in compiled["map_overlay"]
+    assert "constraints" not in compiled["map_overlay"]
 
     modern_map = _map(modern)
 
@@ -791,6 +1150,7 @@ def main() -> None:
             row["attributes"]["target"],
         )
         for row in component_projection["fact"]["items"]
+        if row["state"] == "current"
     } == expected_component_edges
 
     config_json = json.dumps(
@@ -888,7 +1248,6 @@ def main() -> None:
     assert ad_hoc_query["files"] == direct_path_query["files"]
 
     same_line_config = {
-        "schema_version": 2,
         "project": "same-line-c-query",
         "layers": [
             {
@@ -937,7 +1296,6 @@ def main() -> None:
     ] == "complete"
 
     overload_config = {
-        "schema_version": 2,
         "project": "same-line-cpp-overloads",
         "layers": [
             {
@@ -986,7 +1344,6 @@ def main() -> None:
     ] == "complete"
 
     normalized_symbol_config = {
-        "schema_version": 2,
         "project": "normalized-symbol-query",
         "layers": [
             {
@@ -1034,7 +1391,6 @@ def main() -> None:
     ] == ["api_one"]
 
     partial_config = {
-        "schema_version": 2,
         "project": "partial-constant-query",
         "layers": [
             {
@@ -1280,7 +1636,7 @@ def main() -> None:
         for row in provider_subject_document["inputs"]
         if row["path"] == "Makefile"
     )
-    assert make_input["roles"] == ["provider"]
+    assert make_input["roles"] == ["build", "provider"]
     assert len(make_input["sha256"]) == 64
     assert not any(
         row["path"] == "Makefile" for row in provider_subject_document["files"]
@@ -1352,7 +1708,7 @@ def main() -> None:
     assert changed_compiled["project_configuration_sha256"] != compiled[
         "project_configuration_sha256"
     ]
-    assert changed_compiled["map_config_sha256"] == compiled["map_config_sha256"]
+    assert changed_compiled["map_overlay_sha256"] == compiled["map_overlay_sha256"]
     changed_map = _map(changed)
     assert changed_map == modern_map
 
@@ -1377,21 +1733,12 @@ def main() -> None:
     mismatched_plan = compile_named_query(
         mismatched_json, "api-impact"
     )
-    assert mismatched_plan["map_config_sha256"] != query_plan[
-        "map_config_sha256"
-    ]
-    try:
-        query_map_json(modern_map, plan=mismatched_plan)
-    except RuntimeError as error:
-        assert "Map configuration does not match query input" in str(error)
-    else:
-        raise AssertionError("Query execution accepted a mismatched Map definition")
-    try:
-        evaluate_constraints_json(mismatched_json, modern_map)
-    except RuntimeError as error:
-        assert "Map definition does not match current Map" in str(error)
-    else:
-        raise AssertionError("Verify accepted a mismatched Map definition")
+    assert "map_config_sha256" not in mismatched_plan
+    assert mismatched_plan["query_plan_sha256"] == query_plan["query_plan_sha256"]
+    assert json.loads(query_map_json(modern_map, plan=mismatched_plan))["artifact"] == "query"
+    assert json.loads(evaluate_constraints_json(mismatched_json, modern_map))[
+        "artifact"
+    ] == "verification"
     overridden_plan = compile_named_query(
         json.dumps(modern, sort_keys=True, separators=(",", ":")).encode(),
         "api-impact",
@@ -2065,7 +2412,6 @@ def main() -> None:
     before_root = transition_root / "before"
     after_root = transition_root / "after"
     transition_config = {
-        "schema_version": 2,
         "project": "act-transition",
         "layers": [
             {
@@ -2143,7 +2489,6 @@ def main() -> None:
     assert any(row["status"] == "missing" for row in unresolved["outcomes"])
 
     incomplete_transition_config = {
-        "schema_version": 2,
         "project": "incomplete-act-transition",
         "layers": [
             {

@@ -10,9 +10,8 @@ import {
 
 const encoder = new TextEncoder();
 
-test("project constraints load as one editable schema-2 configuration", () => {
+test("project constraints load as one editable unversioned configuration", () => {
   const configuration = {
-    schema_version: 2,
     project: "demo",
     layers: [{ name: "core", language: "c", globs: ["src/**"] }],
     constraints: [{

@@ -184,7 +184,6 @@ function markedNames(relative, name) {
   );
   project.dispose();
   const scipConfig = {
-    schema_version: 2,
     project: "scip-browser",
     layers: [
       {

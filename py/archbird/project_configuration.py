@@ -1,4 +1,4 @@
-"""Schema-2 project configuration planning for Query execution."""
+"""Project configuration planning for Query execution."""
 
 from __future__ import annotations
 

@@ -46,6 +46,8 @@ typedef struct AbMapNamedReference {
   const AbManifestFile *file;
   const AbString *name;
   size_t count;
+  size_t span_start;
+  size_t span_end;
   int builtin;
   unsigned binding_mask;
   unsigned import_delimiter_mask;
@@ -385,6 +387,9 @@ AbString ab_map_external_import_name(const AbString *language,
                                      const AbString *imported);
 int ab_map_package_alias_matches(const AbMapPackage *package,
                                  const char *manager, const AbString *external);
+int ab_map_package_dependency_matches(const AbMapPackage *package,
+                                      const char *manager,
+                                      const AbString *external);
 
 ArchbirdStatus ab_map_analyze_packages(AbMapState *state);
 ArchbirdStatus ab_map_render_packages(AbBuffer *buffer,

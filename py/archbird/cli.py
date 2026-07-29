@@ -77,6 +77,7 @@ _COMMANDS = (
     "freshness",
     "impact",
     "map",
+    "mcp",
     "observe",
     "okf",
     "plan",
@@ -97,7 +98,7 @@ def _top_level_help() -> str:
         "structural changes.\n\n"
         "commands:\n"
         "  map, config, query, impact, diff, observe, freshness, workspace\n"
-        "  verify, plan, contract, verify-plan, export, okf, serve, support\n\n"
+        "  verify, plan, contract, verify-plan, export, okf, serve, mcp, support\n\n"
         "Run `archbird COMMAND --help` for command-specific options. With no "
         "command, Archbird maps the current directory; an existing or "
         "path-shaped positional argument is the Map root.\n"
@@ -668,6 +669,28 @@ def serve_parser() -> argparse.ArgumentParser:
     return result
 
 
+def mcp_parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog="archbird mcp",
+        description=(
+            "Expose bounded Map, projection, Query, source, Verify, and Diff "
+            "tools over MCP stdio."
+        ),
+    )
+    source = result.add_mutually_exclusive_group()
+    source.add_argument(
+        "-c",
+        "--config",
+        help="project configuration file; stdin is reserved for MCP",
+    )
+    source.add_argument("--no-config", action="store_true")
+    result.add_argument("--root", dest="root_override")
+    _add_discovery_options(result)
+    _add_python_analysis_options(result)
+    _add_cache_options(result)
+    return result
+
+
 def diff_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird diff",
@@ -1085,8 +1108,6 @@ def _validate_project_configuration(config_json: bytes) -> None:
         raise ConfigError(f"invalid project configuration JSON: {error}") from error
     if not isinstance(document, dict):
         raise ConfigError("project configuration must be an object")
-    if document.get("schema_version") != 2:
-        raise ConfigError("archbird.json schema_version must equal 2")
     if "root" in document:
         raise ConfigError("archbird.json does not allow root; use --root")
 
@@ -1268,11 +1289,19 @@ def _git_change_set(repository: Path, revision: str) -> dict[str, object]:
 
 
 def _project_from_args(
-    args: argparse.Namespace, progress: Optional[_Progress] = None
+    args: argparse.Namespace,
+    progress: Optional[_Progress] = None,
+    *,
+    resolved_repository: Optional[Path] = None,
+    resolved_config_json: Optional[bytes] = None,
 ) -> Project:
     if progress is not None:
         progress.emit({"phase": "discovery", "state": "start"})
-    repository, config_json, _ = _repository_inputs(args)
+    if resolved_repository is None or resolved_config_json is None:
+        repository, config_json, _ = _repository_inputs(args)
+    else:
+        repository = resolved_repository
+        config_json = resolved_config_json
     current = Project.from_repository(
         repository,
         config=config_json or None,
@@ -1527,11 +1556,15 @@ def _query_main(
                 config_json = candidate.read_bytes()
                 _validate_project_configuration(config_json)
         else:
-            _, config_json, _ = _repository_inputs(args)
+            repository, config_json, _ = _repository_inputs(args)
             if args.git_diff:
-                repository, _, _ = _repository_inputs(args)
                 change_set = _git_change_set(repository, args.git_diff)
-            current = _project_from_args(args, progress)
+            current = _project_from_args(
+                args,
+                progress,
+                resolved_repository=repository,
+                resolved_config_json=config_json,
+            )
             source_project = current
             progress.emit({"phase": "rendering", "artifact": "canonical Map"})
             map_json = current.map_json()
@@ -1962,7 +1995,12 @@ def _verify_main(argv: Sequence[str]) -> int:
                 Path(args.resolution).read_bytes() if args.resolution else b""
             )
         else:
-            project = _project_from_args(args, progress)
+            project = _project_from_args(
+                args,
+                progress,
+                resolved_repository=repository,
+                resolved_config_json=config_json,
+            )
             map_json = project.map_json()
             resolution_json = project.resolution_json or b""
             _warn_map_cache_stats(project.map_cache_stats)
@@ -2233,6 +2271,54 @@ def _serve_main(argv: Sequence[str]) -> int:
         return 2
 
 
+def _mcp_main(argv: Sequence[str]) -> int:
+    args = mcp_parser().parse_args(argv)
+    repository_host = None
+    try:
+        if args.config == "-":
+            raise ValueError("archbird mcp reserves stdin for MCP; use a config file")
+        if args.jobs < 0:
+            raise ValueError("--jobs must be zero or positive")
+        _python_provider_timeout(args)
+        repository, config_json, config_path = _repository_inputs(args)
+        from .mcp import serve_stdio
+        from .serve import LiveRepository
+
+        repository_host = LiveRepository(
+            repository,
+            config=config_path,
+            config_json=(
+                None if config_path is not None or not config_json else config_json
+            ),
+            no_config=args.no_config,
+            project_options={
+                "default_excludes": not args.no_default_excludes,
+                "exclude": tuple(args.exclude),
+                "ignore": not args.no_ignore,
+                "ignore_files": tuple(args.ignore_file),
+                "jobs": args.jobs,
+                "python_provider_timeout": _python_provider_timeout(args),
+                "cache_dir": (
+                    str(_cache_dir(args)) if _cache_dir(args) is not None else None
+                ),
+                "cache_max_bytes": _cache_max_bytes(args),
+                "max_file_bytes": args.max_file_bytes,
+                "max_index_bytes": args.max_index_bytes,
+                "only": tuple(args.only),
+                "project": args.project,
+                "source": tuple(args.source),
+            },
+        )
+        repository_host.start()
+        return serve_stdio(repository_host)
+    except (ConfigError, OSError, RuntimeError, ValueError) as error:
+        print(f"archbird: error: {error}", file=sys.stderr)
+        return 2
+    finally:
+        if repository_host is not None:
+            repository_host.close()
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] in (["-h"], ["--help"], ["help"]):
@@ -2282,6 +2368,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _okf_main(arguments[1:])
     if arguments and arguments[0] == "serve":
         return _serve_main(arguments[1:])
+    if arguments and arguments[0] == "mcp":
+        return _mcp_main(arguments[1:])
     if arguments and arguments[0] == "config":
         return _config_main(arguments[1:])
     if arguments and arguments[0] == "support":

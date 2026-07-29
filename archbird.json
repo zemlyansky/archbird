@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "project": "archbird",
   "description": "Language-neutral C core with Python, Node, and Wasm hosts.",
   "exclude": ["build/**", "py/build/**", "py/dist/**", "py/csrc/**", "js/native/**", "js/node_modules/**"],
@@ -28,14 +27,23 @@
       "role": "frontend",
       "language": "python",
       "globs": ["py/archbird/**/*.py"],
-      "import_roots": ["py"]
+      "import_roots": ["py"],
+      "external_call_namespaces": [
+        {"prefix": "google", "package": "protobuf"},
+        {"prefix": "markdown_it", "package": "markdown-it-py"},
+        {"prefix": "yaml", "package": "PyYAML"}
+      ]
     },
     {
       "name": "javascript-host",
       "role": "frontend",
       "language": "javascript",
       "globs": ["js/src/**/*.js"],
-      "import_roots": ["js/src"]
+      "import_roots": ["js/src"],
+      "external_call_namespaces": [
+        {"prefix": "../wasm/", "package": "generated-wasm"},
+        {"prefix": "./generated/", "package": "generated-host-data"}
+      ]
     },
     {
       "name": "json-parser",
@@ -131,8 +139,8 @@
       "name": "core-tests",
       "role": "test",
       "language": "c",
-      "globs": ["test/*.c", "test/fuzz/*.c", "test/fuzz/*.h", "test/cmake_consumer/*.c"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
+      "globs": ["test/*.c", "test/scip_fixture.h", "test/fuzz/*.c", "test/fuzz/*.h", "test/cmake_consumer/*.c"],
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "test"]
     },
     {
       "name": "oracle-tests",
@@ -152,8 +160,15 @@
       "name": "javascript-tests",
       "role": "test",
       "language": "javascript",
-      "globs": ["js/test/*.js"],
+      "globs": ["js/test/*.js", "test/scip_fixture.js"],
       "import_roots": ["js/src"]
+    },
+    {
+      "name": "tooling",
+      "role": "build",
+      "language": "python",
+      "globs": ["tools/**/*.py"],
+      "import_roots": [".", "tools"]
     },
     {
       "name": "test-data",
@@ -265,7 +280,7 @@
     {"name": "lexical-r", "paths": ["src/evidence/lexical/r/**"], "description": "Conservative portable R lexical evidence provider"},
     {"name": "syntax", "paths": ["src/evidence/syntax/tree_sitter/**"], "description": "Portable Tree-sitter adapter and C/C++/Python/JavaScript/TypeScript/TSX/R syntax extraction packs"},
     {"name": "semantic-scip", "paths": ["src/evidence/semantic/scip/**"], "description": "Bounded host-neutral SCIP protobuf decoding, source anchoring, and semantic facts"},
-    {"name": "configuration", "paths": ["src/configuration/**"], "description": "Schema-2 project configuration normalization, validation, and independent identities"},
+    {"name": "configuration", "paths": ["src/configuration/**"], "description": "Unversioned project configuration normalization, validation, and independent identities"},
     {"name": "constraints", "paths": ["src/constraints/**"], "description": "Constraint planning, inferred exhaustive operands, and direct evaluation"},
     {"name": "map", "paths": ["src/map/**"], "description": "Architecture Map construction, diff, and workspace analysis"},
     {"name": "projection", "paths": ["src/projection/**"], "description": "Shared exhaustive typed derivations over canonical Map evidence"},
@@ -282,7 +297,7 @@
     {"name": "core-tests", "paths": ["test/**"], "description": "Core and Python-oracle conformance corpus"},
     {"name": "python-tests", "paths": ["py/tests/**"], "description": "Python host and precision-provider tests"},
     {"name": "javascript-tests", "paths": ["js/test/**"], "description": "Node host and TypeScript-provider tests"},
-    {"name": "build", "paths": ["CMakeLists.txt", "Makefile", "cmake/**", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/**", "js/package.json", "js/scripts/**"], "description": "Native and distribution build routes"}
+    {"name": "build", "paths": ["CMakeLists.txt", "Makefile", "cmake/**", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/**", "js/package.json", "js/scripts/**", "tools/**"], "description": "Native and distribution build routes"}
   ],
   "projections": {
     "public-core-api": {
@@ -526,6 +541,11 @@
             "target": "verify"
           },
           {
+            "source": "build",
+            "kind": "*",
+            "target": "python-host"
+          },
+          {
             "source": "configuration",
             "kind": "*",
             "target": "base"
@@ -584,6 +604,11 @@
             "source": "core-tests",
             "kind": "*",
             "target": "base"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "build"
           },
           {
             "source": "core-tests",
@@ -684,6 +709,11 @@
             "source": "interchange",
             "kind": "*",
             "target": "verify"
+          },
+          {
+            "source": "javascript-tests",
+            "kind": "*",
+            "target": "core-tests"
           },
           {
             "source": "javascript-tests",

@@ -47,6 +47,7 @@ archbird
 archbird query --symbol runtime_start
 archbird query --search 'provider registry'
 archbird serve
+archbird mcp
 ```
 
 ### Save and reuse evidence
@@ -177,6 +178,25 @@ Live Map, projection, Query, Verify, and source work runs in the native Python
 host; the page receives typed ProjectionResults and does not load browser Wasm.
 Normal exploration does not download the canonical Map; saving it is explicit.
 
+### Connect an agent over MCP
+
+```bash
+archbird mcp
+archbird mcp --root ../project
+archbird mcp --no-config
+```
+
+The MCP stdio server uses the same watched `LiveRepository` service as
+`serve`, without tunneling through HTTP. It exposes bounded read-only status,
+Map, projection, Query, hash-checked source, Verify, and Diff tools. Results
+carry structured content and digest-bound resource links for retained Map
+generations. Project configuration may come from `archbird.json` or a file;
+stdin is reserved for the protocol.
+
+See the official
+[MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+and [server tool/resource contract](https://modelcontextprotocol.io/specification/2025-11-25/server).
+
 ## Configuration
 
 Archbird works without config. Add `archbird.json` when names and boundaries
@@ -193,7 +213,6 @@ archbird config init . --output archbird.json
 <!-- archbird-minimal-project-config:start -->
 ```json
 {
-  "schema_version": 2,
   "project": "demo",
   "layers": [
     {
@@ -257,7 +276,7 @@ inventory is:
 <!-- archbird-config-fields:start -->
 | Section | Purpose |
 | --- | --- |
-| `schema_version`, `project`, `description` | configuration format, stable project identity, and human context |
+| `project`, `description` | optional stable project identity and human context |
 | `exclude`, `discovery` | project-level selection and explicit discovery policy |
 | `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
@@ -304,6 +323,28 @@ same `archbird.json` that defines project structure. Typed constraints infer
 their exhaustive Map projections; primitive assertions can use inline literals,
 observations, or named/inline projections. The staged configuration above
 therefore needs no second suite file.
+
+For a first check in an unfamiliar repository, configuration may contain only
+the reviewed constraint; discovery supplies the project model and layers:
+
+```bash
+archbird verify --config - --check <<'JSON'
+{
+  "constraints": {
+    "NO-LARGE-SOURCE": {
+      "kind": "max_file_bytes",
+      "include": ["src/**"],
+      "max": 1048576,
+      "owner": "architecture",
+      "rationale": "Keep source files reviewable."
+    }
+  }
+}
+JSON
+```
+
+The same fragment can be saved unchanged as `archbird.json`. Explicit
+project-model sections replace discovery; omitted sections inherit it.
 
 ```bash
 # Run one saved Query plan or an ad-hoc query.
@@ -577,7 +618,7 @@ remain shared with Node and C.
 <!-- archbird-python-cli:start -->
 The command names are `map`, `config`, `query`, `impact`, `diff`, `observe`,
 `freshness`, `workspace`, `verify`, `plan`, `contract`, `verify-plan`,
-`export`, `okf`, `serve`, and `support`.
+`export`, `okf`, `serve`, `mcp`, and `support`.
 <!-- archbird-python-cli:end -->
 
 `config` provides `show|init`; `export` provides

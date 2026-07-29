@@ -119,7 +119,6 @@ def test_real_python_providers() -> None:
     project.set_config(
         json.dumps(
             {
-                "schema_version": 2,
                 "project": "combined-python-extents",
                 "layers": [
                     {
