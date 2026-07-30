@@ -263,6 +263,10 @@ static int named_reference_compare(const void *left_raw,
     return -1;
   if (left->import_delimiter_mask > right->import_delimiter_mask)
     return 1;
+  if (left->span_start != right->span_start)
+    return left->span_start < right->span_start ? -1 : 1;
+  if (left->span_end != right->span_end)
+    return left->span_end < right->span_end ? -1 : 1;
   return 0;
 }
 
@@ -281,6 +285,19 @@ static int edge_mention_compare(const void *left_raw, const void *right_raw) {
   compared = ab_string_compare(&left->name, &right->name);
   if (compared != 0)
     return compared;
+  if (left->has_site != right->has_site)
+    return left->has_site ? 1 : -1;
+  if (left->has_site) {
+    if (left->site_line != right->site_line)
+      return left->site_line < right->site_line ? -1 : 1;
+    if (left->site_span_start != right->site_span_start)
+      return left->site_span_start < right->site_span_start ? -1 : 1;
+    if (left->site_span_end != right->site_span_end)
+      return left->site_span_end < right->site_span_end ? -1 : 1;
+    compared = ab_string_compare(&left->site_fact_id, &right->site_fact_id);
+    if (compared != 0)
+      return compared;
+  }
   if (left->has_evidence != right->has_evidence)
     return left->has_evidence ? 1 : -1;
   if (!left->has_evidence)
@@ -313,6 +330,7 @@ void ab_map_graph_free(ArchbirdEngine *engine, MapGraph *graph) {
     ab_string_free(engine, &graph->edges[index].kind);
     ab_string_free(engine, &graph->edges[index].target);
     ab_string_free(engine, &graph->edges[index].name);
+    ab_string_free(engine, &graph->edges[index].site_fact_id);
     ab_string_free(engine, &graph->edges[index].evidence_basis);
     ab_string_free(engine, &graph->edges[index].evidence_provider);
     ab_string_free(engine, &graph->edges[index].evidence_state);
@@ -333,8 +351,20 @@ ArchbirdStatus ab_map_graph_add_edge(ArchbirdEngine *engine, MapGraph *graph,
                                      const char *kind, const AbString *source,
                                      const char *target, size_t target_length,
                                      const AbString *name) {
-  return ab_map_graph_add_edge_evidence(engine, graph, kind, source, target,
-                                        target_length, name, NULL, NULL, NULL);
+  return ab_map_graph_add_edge_evidence_site(engine, graph, kind, source,
+                                             target, target_length, name, NULL,
+                                             0, 0, 0, NULL, NULL, NULL);
+}
+
+ArchbirdStatus
+ab_map_graph_add_edge_site(ArchbirdEngine *engine, MapGraph *graph,
+                           const char *kind, const AbString *source,
+                           const char *target, size_t target_length,
+                           const AbString *name, const AbString *fact_id,
+                           uint64_t line, size_t span_start, size_t span_end) {
+  return ab_map_graph_add_edge_evidence_site(
+      engine, graph, kind, source, target, target_length, name, fact_id, line,
+      span_start, span_end, NULL, NULL, NULL);
 }
 
 ArchbirdStatus ab_map_graph_add_edge_evidence(
@@ -342,9 +372,22 @@ ArchbirdStatus ab_map_graph_add_edge_evidence(
     const AbString *source, const char *target, size_t target_length,
     const AbString *name, const char *evidence_basis,
     const AbString *evidence_provider, const AbString *evidence_state) {
+  return ab_map_graph_add_edge_evidence_site(
+      engine, graph, kind, source, target, target_length, name, NULL, 0, 0, 0,
+      evidence_basis, evidence_provider, evidence_state);
+}
+
+ArchbirdStatus ab_map_graph_add_edge_evidence_site(
+    ArchbirdEngine *engine, MapGraph *graph, const char *kind,
+    const AbString *source, const char *target, size_t target_length,
+    const AbString *name, const AbString *fact_id, uint64_t line,
+    size_t span_start, size_t span_end, const char *evidence_basis,
+    const AbString *evidence_provider, const AbString *evidence_state) {
   EdgeMention *resized;
   EdgeMention *edge;
   ArchbirdStatus status;
+  if (fact_id && (!fact_id->length || span_start > span_end))
+    return ARCHBIRD_INVALID_ARGUMENT;
   if ((evidence_basis || evidence_provider || evidence_state) &&
       (!evidence_basis || !evidence_provider || !evidence_state))
     return ARCHBIRD_INVALID_ARGUMENT;
@@ -367,6 +410,16 @@ ArchbirdStatus ab_map_graph_add_edge_evidence(
     status = ab_string_copy(engine, &edge->target, target, target_length);
   if (status == ARCHBIRD_OK)
     status = ab_string_copy(engine, &edge->name, name->data, name->length);
+  if (status == ARCHBIRD_OK && fact_id) {
+    status = ab_string_copy(engine, &edge->site_fact_id, fact_id->data,
+                            fact_id->length);
+    if (status == ARCHBIRD_OK) {
+      edge->site_line = line;
+      edge->site_span_start = span_start;
+      edge->site_span_end = span_end;
+      edge->has_site = 1;
+    }
+  }
   if (status == ARCHBIRD_OK && evidence_basis) {
     status = ab_string_copy(engine, &edge->evidence_basis, evidence_basis,
                             strlen(evidence_basis));
@@ -384,6 +437,7 @@ ArchbirdStatus ab_map_graph_add_edge_evidence(
     ab_string_free(engine, &edge->kind);
     ab_string_free(engine, &edge->target);
     ab_string_free(engine, &edge->name);
+    ab_string_free(engine, &edge->site_fact_id);
     ab_string_free(engine, &edge->evidence_basis);
     ab_string_free(engine, &edge->evidence_provider);
     ab_string_free(engine, &edge->evidence_state);
@@ -483,10 +537,12 @@ static ArchbirdStatus collect_symbols(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus
-collect_named_domain(ArchbirdEngine *engine, const ArchbirdProject *project,
-                     const AbSourceManifest *manifest, const char *domain,
-                     NamedReference **out_items, size_t *out_count) {
+static ArchbirdStatus collect_named_domain(ArchbirdEngine *engine,
+                                           const ArchbirdProject *project,
+                                           const AbSourceManifest *manifest,
+                                           const char *domain, int aggregate,
+                                           NamedReference **out_items,
+                                           size_t *out_count) {
   size_t total = ab_project_merged_fact_count(project);
   NamedReference *items = NULL;
   size_t count = 0;
@@ -511,8 +567,12 @@ collect_named_domain(ArchbirdEngine *engine, const ArchbirdProject *project,
     if (!file || !file->has_layer)
       continue;
     items[count].file = file;
+    items[count].fact = fact;
+    items[count].fact_id = &fact->id;
     items[count].name = &fact->name;
     items[count].count = 1;
+    items[count].line = 0;
+    (void)ab_map_fact_u64_attribute(fact, "line", &items[count].line);
     items[count].span_start = fact->span_start;
     items[count].span_end = fact->span_end;
     items[count].builtin = fact_bool_attribute(fact, "stdlib");
@@ -521,13 +581,12 @@ collect_named_domain(ArchbirdEngine *engine, const ArchbirdProject *project,
     items[count].exact_target = NULL;
     items[count].exact_target_symbol = NULL;
     items[count].exact_count = 0;
-    items[count].exact_conflict = 0;
     count++;
   }
   if (count > 1)
     qsort(items, count, sizeof(*items), named_reference_compare);
   for (index = 0; index < count; index++) {
-    if (write_index > 0 &&
+    if (aggregate && write_index > 0 &&
         ab_string_equal(&items[write_index - 1].file->path,
                         &items[index].file->path) &&
         ab_string_equal(items[write_index - 1].name, items[index].name) &&
@@ -1361,9 +1420,10 @@ static ArchbirdStatus resolve_python_namespace_members(
         ab_map_resolve_import(state->engine, state->manifest, state->config,
                               imported->file, &qualified, &target);
     if (status == ARCHBIRD_OK && target) {
-      status = ab_map_graph_add_edge(state->engine, &state->graph, "import",
-                                     &imported->file->path, target->path.data,
-                                     target->path.length, &qualified);
+      status = ab_map_graph_add_edge_site(
+          state->engine, &state->graph, "import", &imported->file->path,
+          target->path.data, target->path.length, &qualified, imported->fact_id,
+          imported->line, imported->span_start, imported->span_end);
       if (status == ARCHBIRD_OK)
         (*out_resolved)++;
     } else if (status == ARCHBIRD_OK) {
@@ -1432,72 +1492,45 @@ static int named_reference_key_compare(const NamedReference *item,
   return ab_string_compare(item->name, name);
 }
 
-static NamedReference *named_reference_find(NamedReference *items, size_t count,
-                                            const AbManifestFile *file,
-                                            const AbString *name) {
-  size_t low = 0;
-  size_t high = count;
-  while (low < high) {
-    size_t middle = low + (high - low) / 2;
-    if (named_reference_key_compare(&items[middle], file, name) < 0)
-      low = middle + 1;
-    else
-      high = middle;
-  }
-  if (low < count && named_reference_key_compare(&items[low], file, name) == 0)
-    return &items[low];
-  return NULL;
-}
-
 static ArchbirdStatus resolve_exact_named_calls(AbMapState *state,
                                                 NamedReference *calls,
                                                 size_t call_count) {
   size_t index;
-  for (index = 0; index < ab_project_merged_fact_count(state->project);
-       index++) {
-    const AbFact *fact = ab_project_merged_fact(state->project, index);
-    const AbManifestFile *file;
-    NamedReference *group;
+  for (index = 0; index < call_count; index++) {
+    NamedReference *call = &calls[index];
     const AbFact *evidence = NULL;
     AbMapReferenceResolution resolution;
     ArchbirdStatus status;
-    if (!fact || !string_literal(&fact->domain, "calls") || !fact->has_name)
-      continue;
-    file = fact_file(state->manifest, fact);
-    if (!file || !file->has_layer)
-      continue;
-    group = named_reference_find(calls, call_count, file, &fact->name);
-    if (!group)
-      return archbird_error_set(
-          state->engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-          "Map call group is missing during exact resolution");
-    status = ab_map_resolve_call_reference(state, fact, &evidence, NULL,
+    status = ab_map_resolve_call_reference(state, call->fact, &evidence, NULL,
                                            &resolution);
     if (status != ARCHBIRD_OK)
       return status;
     if (!evidence || !resolution.exact || !resolution.target ||
         !resolution.target_symbol)
       continue;
-    if (group->exact_target && (!ab_string_equal(&group->exact_target->path,
-                                                 &resolution.target->path) ||
-                                !ab_string_equal(group->exact_target_symbol,
-                                                 resolution.target_symbol))) {
-      group->exact_conflict = 1;
-      continue;
-    }
-    group->exact_target = resolution.target;
-    group->exact_target_symbol = resolution.target_symbol;
-    group->exact_count++;
+    call->exact_target = resolution.target;
+    call->exact_target_symbol = resolution.target_symbol;
+    call->exact_count = 1;
   }
   return ARCHBIRD_OK;
 }
 
 static const AbManifestFile *
-exact_named_call_target(const NamedReference *call) {
-  return call->exact_target && !call->exact_conflict &&
-                 call->exact_count == call->count
-             ? call->exact_target
-             : NULL;
+exact_named_call_target(const NamedReference *calls, size_t start, size_t end) {
+  const AbManifestFile *target = NULL;
+  const AbString *target_symbol = NULL;
+  size_t index;
+  for (index = start; index < end; index++) {
+    const NamedReference *call = &calls[index];
+    if (!call->exact_target || call->exact_count != call->count)
+      return NULL;
+    if (target && (!ab_string_equal(&target->path, &call->exact_target->path) ||
+                   !ab_string_equal(target_symbol, call->exact_target_symbol)))
+      return NULL;
+    target = call->exact_target;
+    target_symbol = call->exact_target_symbol;
+  }
+  return target;
 }
 
 static ArchbirdStatus build_graph(AbMapState *state) {
@@ -1522,20 +1555,22 @@ static ArchbirdStatus build_graph(AbMapState *state) {
   ArchbirdStatus status =
       collect_symbols(engine, project, manifest, &symbols, &symbol_count);
   if (status == ARCHBIRD_OK)
-    status = collect_named_domain(engine, project, manifest, "calls", &calls,
+    status = collect_named_domain(engine, project, manifest, "calls", 0, &calls,
                                   &call_count);
   if (status == ARCHBIRD_OK)
     status = resolve_exact_named_calls(state, calls, call_count);
   if (status == ARCHBIRD_OK)
-    status = collect_named_domain(engine, project, manifest, "method-calls",
+    status = collect_named_domain(engine, project, manifest, "method-calls", 1,
                                   &methods, &method_count);
   if (status == ARCHBIRD_OK)
-    status = collect_named_domain(engine, project, manifest, "imports",
+    status = collect_named_domain(engine, project, manifest, "imports", 0,
                                   &imports, &import_count);
   if (status == ARCHBIRD_OK)
     status = collect_python_imported_members(
         engine, project, manifest, &imported_members, &imported_member_count);
-  for (index = 0; status == ARCHBIRD_OK && index < call_count; index++) {
+  for (index = 0; status == ARCHBIRD_OK && index < call_count;) {
+    size_t end = index + 1;
+    size_t occurrence;
     const AbManifestFile **candidates = NULL;
     size_t candidate_count = 0;
     const AbExternalNamespace *external = NULL;
@@ -1544,11 +1579,19 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     char *external_target = NULL;
     size_t external_target_length = 0;
     size_t family_length;
+    unsigned binding = 0;
+    size_t count;
     const char *family = language_family(calls[index].file, &family_length);
     int python = bytes_literal(family, family_length, "python");
     int builtin_name = python && python_builtin_call(calls[index].name);
-    unsigned binding = calls[index].binding_mask;
-    exact_target = exact_named_call_target(&calls[index]);
+    while (end < call_count &&
+           named_reference_key_compare(&calls[end], calls[index].file,
+                                       calls[index].name) == 0)
+      end++;
+    count = end - index;
+    for (occurrence = index; occurrence < end; occurrence++)
+      binding |= calls[occurrence].binding_mask;
+    exact_target = exact_named_call_target(calls, index, end);
     status = definition_candidates(engine, symbols, symbol_count,
                                    calls[index].file, calls[index].name, 1,
                                    &candidates, &candidate_count);
@@ -1593,12 +1636,12 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     }
     if (status == ARCHBIRD_OK && exact_target)
       status = add_resolution(engine, graph, &calls[index].file->path,
-                              calls[index].name, kind, calls[index].count,
-                              &exact_target, 1, NULL, 0);
+                              calls[index].name, kind, count, &exact_target, 1,
+                              NULL, 0);
     else if (status == ARCHBIRD_OK)
       status = add_resolution(engine, graph, &calls[index].file->path,
-                              calls[index].name, kind, calls[index].count,
-                              candidates, candidate_count, external_target,
+                              calls[index].name, kind, count, candidates,
+                              candidate_count, external_target,
                               external_target_length);
     if (status == ARCHBIRD_OK && !exact_target &&
         ((!strcmp(kind, "unique") && candidate_count == 1 &&
@@ -1608,12 +1651,18 @@ static ArchbirdStatus build_graph(AbMapState *state) {
           external_target ? external_target : candidates[0]->path.data;
       size_t target_length =
           external_target ? external_target_length : candidates[0]->path.length;
-      status = ab_map_graph_add_edge(
-          engine, graph, external_target ? "external-call" : "call",
-          &calls[index].file->path, target, target_length, calls[index].name);
+      for (occurrence = index; status == ARCHBIRD_OK && occurrence < end;
+           occurrence++)
+        status = ab_map_graph_add_edge_site(
+            engine, graph, external_target ? "external-call" : "call",
+            &calls[occurrence].file->path, target, target_length,
+            calls[occurrence].name, calls[occurrence].fact_id,
+            calls[occurrence].line, calls[occurrence].span_start,
+            calls[occurrence].span_end);
     }
     ab_free(engine, external_target);
     ab_free(engine, candidates);
+    index = end;
   }
   for (index = 0; status == ARCHBIRD_OK && index < method_count; index++)
     status = add_resolution(engine, graph, &methods[index].file->path,
@@ -1627,9 +1676,11 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     if (status != ARCHBIRD_OK)
       break;
     if (target && target != imports[index].file) {
-      status = ab_map_graph_add_edge(
+      status = ab_map_graph_add_edge_site(
           engine, graph, "import", &imports[index].file->path,
-          target->path.data, target->path.length, imports[index].name);
+          target->path.data, target->path.length, imports[index].name,
+          imports[index].fact_id, imports[index].line,
+          imports[index].span_start, imports[index].span_end);
     } else if (!target) {
       char *external_target = NULL;
       size_t external_length = 0;
@@ -1670,11 +1721,12 @@ static ArchbirdStatus build_graph(AbMapState *state) {
       if (status == ARCHBIRD_OK && external_target &&
           (target_class == IMPORT_TARGET_LOCAL ||
            target_class == IMPORT_TARGET_EXTERNAL))
-        status = ab_map_graph_add_edge(
+        status = ab_map_graph_add_edge_site(
             engine, graph,
             target_class == IMPORT_TARGET_LOCAL ? "package-local" : "external",
             &imports[index].file->path, external_target, external_length,
-            imports[index].name);
+            imports[index].name, imports[index].fact_id, imports[index].line,
+            imports[index].span_start, imports[index].span_end);
       if (status == ARCHBIRD_OK && (target_class == IMPORT_TARGET_UNKNOWN ||
                                     target_class == IMPORT_TARGET_AMBIGUOUS)) {
         static const AbString provider = {
@@ -1683,10 +1735,12 @@ static ArchbirdStatus build_graph(AbMapState *state) {
         const char *unresolved_target = target_class == IMPORT_TARGET_AMBIGUOUS
                                             ? "ambiguous-import"
                                             : "unresolved-import";
-        status = ab_map_graph_add_edge_evidence(
+        status = ab_map_graph_add_edge_evidence_site(
             engine, graph, "import", &imports[index].file->path,
             unresolved_target, strlen(unresolved_target), imports[index].name,
-            "resolution", &provider, &unknown);
+            imports[index].fact_id, imports[index].line,
+            imports[index].span_start, imports[index].span_end, "resolution",
+            &provider, &unknown);
         if (status == ARCHBIRD_OK)
           status = unresolved_import_diagnostic(
               state, &imports[index],
@@ -1712,10 +1766,15 @@ static ArchbirdStatus build_graph(AbMapState *state) {
                                    symbols[index].file, &leaf, 0, &candidates,
                                    &candidate_count);
     if (status == ARCHBIRD_OK && candidate_count == 1 &&
-        candidates[0] != symbols[index].file)
-      status = ab_map_graph_add_edge(
+        candidates[0] != symbols[index].file) {
+      uint64_t line = 0;
+      (void)ab_map_fact_u64_attribute(symbols[index].fact, "line", &line);
+      status = ab_map_graph_add_edge_site(
           engine, graph, "declaration", &symbols[index].file->path,
-          candidates[0]->path.data, candidates[0]->path.length, &leaf);
+          candidates[0]->path.data, candidates[0]->path.length, &leaf,
+          &symbols[index].fact->id, line, symbols[index].fact->span_start,
+          symbols[index].fact->span_end);
+    }
     ab_free(engine, candidates);
   }
   if (status == ARCHBIRD_OK && graph->edge_count > 1)
@@ -1759,6 +1818,15 @@ static int same_edge_evidence(const EdgeMention *left,
          ab_string_equal(&left->evidence_state, &right->evidence_state);
 }
 
+static int same_edge_site(const EdgeMention *left, const EdgeMention *right) {
+  return left->has_site && right->has_site &&
+         ab_string_equal(&left->site_fact_id, &right->site_fact_id) &&
+         left->site_line == right->site_line &&
+         left->site_span_start == right->site_span_start &&
+         left->site_span_end == right->site_span_end &&
+         ab_string_equal(&left->name, &right->name);
+}
+
 static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
   size_t index = 0;
   int first_edge = 1;
@@ -1767,11 +1835,14 @@ static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
     size_t end = index + 1;
     size_t name_index;
     size_t evidence_index;
+    size_t site_index;
     const AbString *previous_name = NULL;
     int has_evidence = graph->edges[index].has_evidence;
+    int has_sites = graph->edges[index].has_site;
     while (end < graph->edge_count &&
            same_edge_key(&graph->edges[index], &graph->edges[end])) {
       has_evidence = has_evidence || graph->edges[end].has_evidence;
+      has_sites = has_sites || graph->edges[end].has_site;
       end++;
     }
     if (!first_edge)
@@ -1835,7 +1906,55 @@ static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
       previous_name = name;
     }
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer, "],\"source\":");
+      status = ab_buffer_literal(buffer, "]");
+    if (status == ARCHBIRD_OK && has_sites)
+      status = ab_buffer_literal(buffer, ",\"sites\":[");
+    if (has_sites) {
+      const EdgeMention *previous_site = NULL;
+      int first_site = 1;
+      for (site_index = index; status == ARCHBIRD_OK && site_index < end;
+           site_index++) {
+        const EdgeMention *site = &graph->edges[site_index];
+        if (!site->has_site)
+          continue;
+        if (previous_site && same_edge_site(site, previous_site))
+          continue;
+        if (!first_site)
+          status = ab_buffer_literal(buffer, ",");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(buffer, "{\"fact_id\":");
+        if (status == ARCHBIRD_OK)
+          status = json_string(buffer, &site->site_fact_id);
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(buffer, ",\"line\":");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_u64(buffer, site->site_line);
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(buffer, ",\"name\":");
+        if (status == ARCHBIRD_OK)
+          status = json_string(buffer, &site->name);
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(buffer, ",\"path\":");
+        if (status == ARCHBIRD_OK)
+          status = json_string(buffer, site->source);
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(buffer, ",\"span\":{\"end\":");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_u64(buffer, site->site_span_end);
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(buffer, ",\"start\":");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_u64(buffer, site->site_span_start);
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(buffer, "}}");
+        previous_site = site;
+        first_site = 0;
+      }
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, "]");
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"source\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, graph->edges[index].source);
     if (status == ARCHBIRD_OK)

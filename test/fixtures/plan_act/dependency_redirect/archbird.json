@@ -1,0 +1,38 @@
+{
+  "project": "plan-act-dependency-redirect",
+  "description": "Dependency redirect used to test exact inducing-site evidence and architecture-aware acceptance.",
+  "layers": [
+    {
+      "name": "native",
+      "role": "core",
+      "language": "c",
+      "globs": ["src/**/*.c", "src/**/*.h", "test/*.c"],
+      "import_roots": ["src"]
+    }
+  ],
+  "components": [
+    {"name": "ui", "paths": ["src/ui/**"]},
+    {"name": "service", "paths": ["src/service/**"]},
+    {"name": "storage", "paths": ["src/storage/**"]},
+    {"name": "tests", "paths": ["test/**"]}
+  ],
+  "tests": [
+    {
+      "name": "native",
+      "language": "c",
+      "globs": ["test/*.c"],
+      "route_to": ["native"]
+    }
+  ],
+  "constraints": {
+    "UI-STORAGE-BOUNDARY": {
+      "kind": "forbidden_component_edges",
+      "edges": [
+        {"source": "ui", "kind": "import", "target": "storage"}
+      ],
+      "kinds": ["import"],
+      "owner": "architecture",
+      "rationale": "UI code reaches storage only through the service boundary."
+    }
+  }
+}

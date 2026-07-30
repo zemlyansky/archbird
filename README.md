@@ -743,6 +743,16 @@ code that should implement it. Plan records those cases as non-executable
 until every item has a reviewed executable operation; it never invents a
 function body, replacement dependency, package target, or test.
 
+For file and component dependency issues, the exhaustive edge projection also
+retains each exact inducing import, include, call, or semantic-reference site.
+A generated manual item exposes those sites with fact identity, line, UTF-8
+byte range, expected text, and source SHA-256 when the provider supplies a
+nonempty editable span. A zero-width semantic anchor remains explicit evidence
+and a non-executable reason, not a fabricated text edit. This bounds the
+locations a developer, agent, or structured executor must inspect without
+pretending that the observed forbidden edge determines its intended
+replacement route.
+
 `--apply` first rebuilds the current Map and Verify result. Their project,
 input, configuration, producer, policy, and result identities must match the
 Plan's source snapshot. After applying the staged patch, Act rebuilds Map again

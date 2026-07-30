@@ -140,9 +140,9 @@
       "source": "schema/okf-text-normalization.schema.json"
     },
     {
-      "bytes": 17649,
+      "bytes": 18944,
       "path": "plan.schema.json",
-      "sha256": "69661f9770245b14a1add0e5f77c0cdb1d21593629dfdb007bcc8519f8b024d0",
+      "sha256": "25550ff14db90dc3bc5172c81fe4bf4442fda3d13c7b68c4e82f9469d1d26f45",
       "source": "schema/plan.schema.json"
     },
     {

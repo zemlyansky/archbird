@@ -365,6 +365,9 @@ function validateOperationShape(operation) {
   if (action === "edit_json_pointer" && Object.hasOwn(operation, "expected")) {
     expectedFields.add("expected");
   }
+  if (action === "manual" && Object.hasOwn(operation, "candidate_sites")) {
+    expectedFields.add("candidate_sites");
+  }
   exactKeys(operation, expectedFields, `${action} operation`);
   if (
     [
@@ -621,6 +624,62 @@ function validateOperationShape(operation) {
       operation.candidate_paths.length
     ) throw new Error("manual candidate_paths must be unique");
     for (const filePath of operation.candidate_paths) safeRelativePath(filePath);
+    const sites = operation.candidate_sites ?? [];
+    if (!Array.isArray(sites) || sites.length > MAX_COLLECTION_ITEMS) {
+      throw new Error("manual candidate_sites must be a bounded array");
+    }
+    const identities = new Set();
+    for (const site of sites) {
+      if (!isObject(site)) {
+        throw new Error("manual candidate site must be an object");
+      }
+      exactKeys(
+        site,
+        new Set([
+          "fact_id",
+          "path",
+          "line",
+          "source_sha256",
+          "start_byte",
+          "end_byte",
+          "before",
+          "name",
+        ]),
+        "manual candidate site",
+      );
+      validateText(site.fact_id, "manual candidate site fact_id",
+        MAX_METADATA_BYTES, { nonempty: true });
+      safeRelativePath(site.path);
+      if (!validSha256(site.source_sha256)) {
+        throw new Error("manual candidate site source_sha256 is invalid");
+      }
+      for (const field of ["line", "start_byte", "end_byte"]) {
+        if (!Number.isSafeInteger(site[field]) || site[field] < 0) {
+          throw new Error(
+            `manual candidate site ${field} must be a nonnegative safe integer`,
+          );
+        }
+      }
+      if (site.start_byte >= site.end_byte) {
+        throw new Error("manual candidate site range is invalid");
+      }
+      validateText(site.before, "manual candidate site before",
+        MAX_METADATA_BYTES, { nonempty: true });
+      validateText(site.name, "manual candidate site name",
+        MAX_METADATA_BYTES, { nonempty: true });
+      if (
+        site.before !== site.name ||
+        Buffer.byteLength(site.before, "utf8") !==
+          site.end_byte - site.start_byte
+      ) {
+        throw new Error("manual candidate site source anchor is inconsistent");
+      }
+      const identity = canonicalBytes(site).toString("hex");
+      if (identities.has(identity)) {
+        throw new Error("manual candidate_sites must be unique");
+      }
+      identities.add(identity);
+    }
   }
   return action;
 }

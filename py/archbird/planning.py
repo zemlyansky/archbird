@@ -314,6 +314,130 @@ def _candidate_paths(
     return sorted(paths)
 
 
+def _edge_candidate_sites(
+    *,
+    verification_document: Mapping[str, object],
+    constraint: Mapping[str, object],
+    finding: Mapping[str, object] | None,
+    map_document: Mapping[str, object],
+    files: Mapping[str, Mapping[str, object]],
+    root: Path,
+) -> tuple[list[dict[str, object]], str | None]:
+    operands = constraint.get("operands")
+    actual_name = operands.get("actual") if isinstance(operands, Mapping) else None
+    evaluated = verification_document.get("operands")
+    if not isinstance(actual_name, str) or not isinstance(evaluated, list):
+        return [], "Verification does not identify the edge ProjectionResult."
+    matches = [
+        row
+        for row in evaluated
+        if isinstance(row, Mapping) and row.get("name") == actual_name
+    ]
+    if len(matches) != 1:
+        return [], "Verification does not contain one edge ProjectionResult."
+    actual = matches[0]
+    completeness = actual.get("completeness")
+    if (
+        actual.get("state") != "current"
+        or actual.get("shape") != "relation"
+        or not isinstance(completeness, Mapping)
+        or completeness.get("classification") != "complete"
+        or completeness.get("exhaustive") is not True
+    ):
+        return [], "The edge ProjectionResult is not complete and exhaustive."
+    finding_key = finding.get("key") if isinstance(finding, Mapping) else None
+    items = actual.get("items")
+    item_matches = [
+        row
+        for row in items
+        if isinstance(row, Mapping) and row.get("label") == finding_key
+    ] if isinstance(items, list) and isinstance(finding_key, str) else []
+    if len(item_matches) != 1:
+        return [], "The edge issue does not identify one projected relation."
+    attributes = item_matches[0].get("attributes")
+    raw_sites = attributes.get("sites") if isinstance(attributes, Mapping) else None
+    if not isinstance(raw_sites, list) or not raw_sites:
+        return [], "The edge projection has no exact inducing source sites."
+    result: list[dict[str, object]] = []
+    identities: set[bytes] = set()
+    zero_width = 0
+    for site in raw_sites:
+        if not isinstance(site, Mapping):
+            return [], "The edge projection contains an invalid source site."
+        fact_id = site.get("fact_id")
+        path = site.get("path")
+        line = site.get("line")
+        name = site.get("name")
+        span = site.get("span")
+        start = span.get("start") if isinstance(span, Mapping) else None
+        end = span.get("end") if isinstance(span, Mapping) else None
+        if (
+            not isinstance(fact_id, str)
+            or not fact_id
+            or not isinstance(path, str)
+            or not _is_repository_path(path)
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or line < 0
+            or line > MAX_SAFE_INTEGER
+            or not isinstance(name, str)
+            or not name
+            or not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(end, int)
+            or isinstance(end, bool)
+            or start < 0
+            or start > end
+            or end > MAX_SAFE_INTEGER
+        ):
+            return [], "The edge projection contains an invalid source site."
+        if start == end:
+            zero_width += 1
+            continue
+        source_sha256, lock_error = _path_lock(path, files, map_document)
+        if lock_error or source_sha256 is None:
+            return [], lock_error or f"Map has no source lock for {path}."
+        source, read_error = _read_locked_source(root, path, source_sha256)
+        if read_error or source is None:
+            return [], read_error or f"Could not read locked source {path}."
+        if end > len(source):
+            return [], f"Edge source site exceeds {path}."
+        try:
+            before = source[start:end].decode("utf-8")
+        except UnicodeDecodeError:
+            return [], f"Edge source site in {path} is not UTF-8 text."
+        if before != name:
+            return [], f"Edge source site in {path} does not match {name}."
+        normalized = {
+            "fact_id": fact_id,
+            "path": path,
+            "line": line,
+            "source_sha256": source_sha256,
+            "start_byte": start,
+            "end_byte": end,
+            "before": before,
+            "name": name,
+        }
+        identity = _canonical_bytes(normalized)
+        if identity not in identities:
+            identities.add(identity)
+            result.append(normalized)
+    result.sort(
+        key=lambda row: (
+            str(row["path"]).encode("utf-8"),
+            int(row["start_byte"]),
+            int(row["end_byte"]),
+            str(row["fact_id"]).encode("utf-8"),
+        )
+    )
+    if zero_width:
+        return (
+            result,
+            f"{zero_width} edge evidence anchor(s) have no editable source range.",
+        )
+    return result, None
+
+
 def _constraint_form(
     constraint: Mapping[str, object],
     definitions: Mapping[str, object],
@@ -1521,6 +1645,7 @@ def _manual_item(
     instructions: str,
     reasons: Sequence[str],
     candidate_paths: Sequence[str] = (),
+    candidate_sites: Sequence[Mapping[str, object]] = (),
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     operation = {
         "action": "manual",
@@ -1533,6 +1658,8 @@ def _manual_item(
             }
         ),
     }
+    if candidate_sites:
+        operation["candidate_sites"] = [dict(site) for site in candidate_sites]
     return _make_item(
         constraint_id=constraint_id,
         policy_result=policy_result,
@@ -1551,6 +1678,8 @@ def _non_executable_item(
     policy_result: Mapping[str, object] | None,
     finding: Mapping[str, object] | None,
     actual_definition: Mapping[str, object] | None,
+    candidate_sites: Sequence[Mapping[str, object]] = (),
+    site_error: str | None = None,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     key = finding.get("key") if finding else None
     subject = key if isinstance(key, str) and key else constraint_id
@@ -1631,8 +1760,11 @@ def _non_executable_item(
         finding=finding,
         statement=f"Resolve {constraint_id}: {subject}.",
         instructions=instructions,
-        reasons=(reason,),
+        reasons=tuple(
+            value for value in (reason, site_error) if isinstance(value, str)
+        ),
         candidate_paths=paths,
+        candidate_sites=candidate_sites,
     )
 
 
@@ -2001,12 +2133,25 @@ def generate_plan(
                     and finding.get("comparison") == "missing"
                     else form
                 )
+                candidate_sites: list[dict[str, object]] = []
+                site_error: str | None = None
+                if manual_form in ("file_edges", "component_edges"):
+                    candidate_sites, site_error = _edge_candidate_sites(
+                        verification_document=verification_document,
+                        constraint=constraint,
+                        finding=finding,
+                        map_document=map_document,
+                        files=files,
+                        root=root,
+                    )
                 item, rows = _non_executable_item(
                     form=manual_form,
                     constraint_id=constraint_id,
                     policy_result=policy_results.get(constraint_id),
                     finding=finding,
                     actual_definition=actual_definition,
+                    candidate_sites=candidate_sites,
+                    site_error=site_error,
                 )
                 if not _finding_is_current(finding):
                     reason = (

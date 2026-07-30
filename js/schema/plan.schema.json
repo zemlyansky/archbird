@@ -466,6 +466,60 @@
           "maxItems": 4096,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/repositoryPath"}
+        },
+        "candidate_sites": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/candidateSite"}
+        }
+      }
+    },
+    "candidateSite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "path",
+        "line",
+        "source_sha256",
+        "start_byte",
+        "end_byte",
+        "before",
+        "name"
+      ],
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "line": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "start_byte": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_byte": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "before": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
         }
       }
     },

@@ -1120,6 +1120,89 @@ run("generation uses exact declaration extents from a native Map", () => {
   });
 });
 
+run("edge constraints expose exact inducing sites without inventing a route", () => {
+  withTemporary("node-plan-edge-site", (root) => {
+    const source = Buffer.from(
+      '#include "storage/raw.h"\n\n' +
+      "int render_value(void) { return raw_value(); }\n",
+    );
+    const sourceSha = write(root, "src/ui/view.c", source);
+    write(
+      root,
+      "src/storage/raw.h",
+      Buffer.from("int raw_value(void);\n"),
+    );
+    const config = Buffer.from(JSON.stringify({
+      project: "node-plan-edge-site",
+      layers: [{
+        name: "native",
+        role: "core",
+        language: "c",
+        globs: ["src/**/*.c", "src/**/*.h"],
+        import_roots: ["src"],
+      }],
+      components: [
+        { name: "ui", paths: ["src/ui/**"] },
+        { name: "storage", paths: ["src/storage/**"] },
+      ],
+      constraints: {
+        "UI-STORAGE-BOUNDARY": {
+          kind: "forbidden_component_edges",
+          edges: [{ source: "ui", kind: "import", target: "storage" }],
+          kinds: ["import"],
+          owner: "architecture",
+          rationale: "UI code does not import storage directly.",
+        },
+      },
+    }));
+    const project = Project.fromRepository(root, {
+      config,
+      cacheDir: null,
+      mapCache: false,
+    });
+    const map = JSON.parse(project.mapJson());
+    const edge = map.edges.find(
+      (row) => row.source === "src/ui/view.c" &&
+        row.target === "src/storage/raw.h",
+    );
+    assert.equal(edge.sites.length, 1);
+    assert.deepEqual(
+      {
+        line: edge.sites[0].line,
+        name: edge.sites[0].name,
+        path: edge.sites[0].path,
+        span: edge.sites[0].span,
+      },
+      {
+        line: 1,
+        name: "storage/raw.h",
+        path: "src/ui/view.c",
+        span: { end: 23, start: 10 },
+      },
+    );
+    const verification = JSON.parse(project.verifyJson());
+    const generated = generatePlan(map, verification, null, root);
+    assert.equal(generated.items.length, 1);
+    const item = generated.items[0];
+    assert.equal(item.executable, false);
+    assert.deepEqual(item.operation.candidate_paths, ["src/ui/view.c"]);
+    assert.deepEqual(item.operation.candidate_sites, [{
+      fact_id: edge.sites[0].fact_id,
+      path: "src/ui/view.c",
+      line: 1,
+      source_sha256: sourceSha,
+      start_byte: 10,
+      end_byte: 23,
+      before: "storage/raw.h",
+      name: "storage/raw.h",
+    }]);
+    assert.match(
+      item.non_executable_reasons[0],
+      /does not identify the intended replacement route/,
+    );
+  });
+});
+
 run("primitive symbol constraints remove or propose exact rename", () => {
   withTemporary("node-plan-symbol-extras", (root) => {
     const source = Buffer.from(

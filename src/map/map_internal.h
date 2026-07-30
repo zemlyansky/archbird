@@ -45,8 +45,11 @@ ArchbirdStatus ab_map_render_facts(AbBuffer *buffer,
 
 typedef struct AbMapNamedReference {
   const AbManifestFile *file;
+  const AbFact *fact;
+  const AbString *fact_id;
   const AbString *name;
   size_t count;
+  uint64_t line;
   size_t span_start;
   size_t span_end;
   int builtin;
@@ -55,7 +58,6 @@ typedef struct AbMapNamedReference {
   const AbManifestFile *exact_target;
   const AbString *exact_target_symbol;
   size_t exact_count;
-  int exact_conflict;
 } AbMapNamedReference;
 
 typedef struct AbMapEdgeMention {
@@ -63,9 +65,14 @@ typedef struct AbMapEdgeMention {
   const AbString *source;
   AbString target;
   AbString name;
+  AbString site_fact_id;
+  uint64_t site_line;
+  size_t site_span_start;
+  size_t site_span_end;
   AbString evidence_basis;
   AbString evidence_provider;
   AbString evidence_state;
+  int has_site;
   int has_evidence;
 } AbMapEdgeMention;
 
@@ -378,10 +385,22 @@ ArchbirdStatus ab_map_graph_add_edge(ArchbirdEngine *engine, AbMapGraph *graph,
                                      const char *kind, const AbString *source,
                                      const char *target, size_t target_length,
                                      const AbString *name);
+ArchbirdStatus
+ab_map_graph_add_edge_site(ArchbirdEngine *engine, AbMapGraph *graph,
+                           const char *kind, const AbString *source,
+                           const char *target, size_t target_length,
+                           const AbString *name, const AbString *fact_id,
+                           uint64_t line, size_t span_start, size_t span_end);
 ArchbirdStatus ab_map_graph_add_edge_evidence(
     ArchbirdEngine *engine, AbMapGraph *graph, const char *kind,
     const AbString *source, const char *target, size_t target_length,
     const AbString *name, const char *evidence_basis,
+    const AbString *evidence_provider, const AbString *evidence_state);
+ArchbirdStatus ab_map_graph_add_edge_evidence_site(
+    ArchbirdEngine *engine, AbMapGraph *graph, const char *kind,
+    const AbString *source, const char *target, size_t target_length,
+    const AbString *name, const AbString *fact_id, uint64_t line,
+    size_t span_start, size_t span_end, const char *evidence_basis,
     const AbString *evidence_provider, const AbString *evidence_state);
 void ab_map_graph_sort(AbMapGraph *graph);
 void ab_map_package_clear(ArchbirdEngine *engine, AbMapPackage *package);

@@ -109,6 +109,113 @@ def _check_graph_aggregation(document: dict[str, object]) -> None:
     )
 
 
+def _edge_site_map(document: dict[str, object], count: int) -> bytes:
+    source_template = next(
+        row for row in document["files"] if row["path"] == "src/core.c"
+    )
+    target_template = next(
+        row for row in document["files"] if row["path"] == "src/core.h"
+    )
+    sources: list[str] = []
+    files = list(document["files"])
+    edges = list(document["edges"])
+    target = dict(target_template)
+    target["path"] = "site-target/provider.h"
+    target["symbols"] = []
+    files.append(target)
+    for index in range(count):
+        path = f"site-source/consumer-{index:04d}.c"
+        source = dict(source_template)
+        source["path"] = path
+        source["symbols"] = []
+        files.append(source)
+        sources.append(path)
+        edges.append(
+            {
+                "kind": "import",
+                "names": ["api"],
+                "sites": [
+                    {
+                        "fact_id": f"f:edge-site-{index:04d}",
+                        "line": 1,
+                        "name": "api",
+                        "path": path,
+                        "span": {"end": 3, "start": 0},
+                    }
+                ],
+                "source": path,
+                "target": target["path"],
+            }
+        )
+    scaled = dict(document)
+    scaled["files"] = files
+    scaled["edges"] = edges
+    scaled["components"] = list(document["components"]) + [
+        {
+            "description": "",
+            "files": sources,
+            "name": "site-source",
+            "outgoing": {},
+            "symbol_count": 0,
+        },
+        {
+            "description": "",
+            "files": [target["path"]],
+            "name": "site-target",
+            "outgoing": {},
+            "symbol_count": 0,
+        },
+    ]
+    return json.dumps(
+        scaled, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode()
+
+
+def _check_edge_site_scaling(document: dict[str, object]) -> None:
+    plan = {
+        "id": "edge-site-scaling",
+        "select": "component_edges",
+        "kinds": ["import"],
+    }
+    elapsed: dict[int, float] = {}
+    for count in (1_000, 2_000):
+        encoded = _edge_site_map(document, count)
+        outputs = []
+        durations = []
+        for _ in range(4):
+            started = perf_counter()
+            outputs.append(evaluate_projection_json(encoded, plan))
+            durations.append(perf_counter() - started)
+        if len(set(outputs)) != 1:
+            raise AssertionError("edge-site projection is not repeatable")
+        result = json.loads(outputs[-1])
+        item = next(
+            row
+            for row in result["fact"]["items"]
+            if row["label"] == "site-source -[import]-> site-target"
+        )
+        sites = item["attributes"]["sites"]
+        if (
+            result["completeness"]["classification"] != "complete"
+            or len(sites) != count
+            or len(item["evidence"]) != count
+            or sites[0]["path"] != "site-source/consumer-0000.c"
+            or sites[-1]["path"]
+            != f"site-source/consumer-{count - 1:04d}.c"
+        ):
+            raise AssertionError("edge-site projection lost exact occurrences")
+        elapsed[count] = statistics.median(durations[1:])
+    if elapsed[2_000] > elapsed[1_000] * 2.8 + 0.02 or elapsed[2_000] >= 3.0:
+        raise AssertionError(
+            "edge-site projection no longer scales near-linearly: "
+            f"1000={elapsed[1_000]:.3f}s 2000={elapsed[2_000]:.3f}s"
+        )
+    print(
+        "edge-site projection scaling passed "
+        f"(1000={elapsed[1_000]:.3f}s, 2000={elapsed[2_000]:.3f}s)"
+    )
+
+
 def _check_empty_summary() -> None:
     empty_root = Path(__file__).resolve().parents[1] / "build/test-empty-map-report"
     empty_root.mkdir(parents=True, exist_ok=True)
@@ -320,6 +427,7 @@ def main() -> int:
         raise AssertionError("Map Markdown did not aggregate resolution names")
     print("high-cardinality Map report aggregation passed")
     _check_graph_aggregation(document)
+    _check_edge_site_scaling(document)
     _check_empty_summary()
     print("empty Map report summary passed")
     _check_symbol_occurrence_scaling()

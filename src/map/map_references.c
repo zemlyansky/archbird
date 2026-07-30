@@ -869,24 +869,30 @@ ArchbirdStatus ab_map_add_reference_edges(AbMapState *state) {
       const AbString *index_name = string_attribute(edge_evidence, "index");
       const AbString *evidence_state =
           string_attribute(edge_evidence, "evidence_state");
+      uint64_t line = 0;
+      (void)ab_map_fact_u64_attribute(edge_evidence, "line", &line);
       if (!provider)
         provider = ab_project_merged_fact_provider(state->project, index);
       if (!provider)
         return archbird_error_set(
             state->engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
             "semantic Map edge is missing its evidence provider");
-      status = ab_map_graph_add_edge_evidence(
+      status = ab_map_graph_add_edge_evidence_site(
           state->engine, &state->graph, kind, &source->path,
           resolution.target->path.data, resolution.target->path.length,
-          resolution.target_symbol,
+          resolution.target_symbol, &edge_evidence->id, line,
+          edge_evidence->span_start, edge_evidence->span_end,
           index_name ? "semantic-index" : "semantic-provider",
           index_name ? index_name : &provider->producer.name,
           evidence_state ? evidence_state : &current);
     } else {
-      status = ab_map_graph_add_edge(
+      uint64_t line = 0;
+      (void)ab_map_fact_u64_attribute(edge_evidence, "line", &line);
+      status = ab_map_graph_add_edge_site(
           state->engine, &state->graph, kind, &source->path,
           resolution.target->path.data, resolution.target->path.length,
-          resolution.target_symbol);
+          resolution.target_symbol, &edge_evidence->id, line,
+          edge_evidence->span_start, edge_evidence->span_end);
     }
   }
   if (status == ARCHBIRD_OK)

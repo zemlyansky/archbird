@@ -355,6 +355,8 @@ def _validate_operation_shape(operation: object) -> str:
     expected_fields = set(fields[action])
     if action == "edit_json_pointer" and "expected" in operation:
         expected_fields.add("expected")
+    if action == "manual" and "candidate_sites" in operation:
+        expected_fields.add("candidate_sites")
     _exact_keys(operation, expected_fields, f"{action} operation")
     if action in {
         "replace_range",
@@ -584,6 +586,56 @@ def _validate_operation_shape(operation: object) -> str:
             raise ValueError("manual candidate_paths must be unique")
         for path in paths:
             _safe_relative_path(path)
+        sites = _bounded_collection(
+            operation.get("candidate_sites", []),
+            "manual candidate_sites",
+        )
+        identities: set[bytes] = set()
+        for site in sites:
+            if not isinstance(site, Mapping):
+                raise ValueError("manual candidate site must be an object")
+            _exact_keys(
+                site,
+                {
+                    "fact_id",
+                    "path",
+                    "line",
+                    "source_sha256",
+                    "start_byte",
+                    "end_byte",
+                    "before",
+                    "name",
+                },
+                "manual candidate site",
+            )
+            _bounded_text(site["fact_id"], "manual candidate site fact_id", nonempty=True)
+            _safe_relative_path(site["path"])
+            if not _valid_sha256(site["source_sha256"]):
+                raise ValueError("manual candidate site source_sha256 is invalid")
+            for field in ("line", "start_byte", "end_byte"):
+                value = site[field]
+                if (
+                    not isinstance(value, int)
+                    or isinstance(value, bool)
+                    or value < 0
+                    or value > MAX_SAFE_INTEGER
+                ):
+                    raise ValueError(
+                        f"manual candidate site {field} must be a nonnegative "
+                        "safe integer"
+                    )
+            if site["start_byte"] >= site["end_byte"]:
+                raise ValueError("manual candidate site range is invalid")
+            _bounded_text(site["before"], "manual candidate site before", nonempty=True)
+            _bounded_text(site["name"], "manual candidate site name", nonempty=True)
+            if site["before"] != site["name"] or len(
+                site["before"].encode("utf-8")
+            ) != site["end_byte"] - site["start_byte"]:
+                raise ValueError("manual candidate site source anchor is inconsistent")
+            identity = _canonical(site)
+            if identity in identities:
+                raise ValueError("manual candidate_sites must be unique")
+            identities.add(identity)
     return action
 
 

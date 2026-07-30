@@ -354,6 +354,146 @@ function candidatePaths(finding, actualDefinition) {
   return [...paths].sort(utf8Compare);
 }
 
+function edgeCandidateSites({
+  verificationDocument,
+  constraint,
+  finding,
+  mapDocument,
+  files,
+  root,
+}) {
+  const actualName = isObject(constraint.operands)
+    ? constraint.operands.actual
+    : null;
+  if (typeof actualName !== "string" ||
+      !Array.isArray(verificationDocument.operands)) {
+    return [[], "Verification does not identify the edge ProjectionResult."];
+  }
+  const matches = verificationDocument.operands.filter(
+    (row) => isObject(row) && row.name === actualName,
+  );
+  if (matches.length !== 1) {
+    return [[], "Verification does not contain one edge ProjectionResult."];
+  }
+  const actual = matches[0];
+  const completeness = actual.completeness;
+  if (
+    actual.state !== "current" ||
+    actual.shape !== "relation" ||
+    !isObject(completeness) ||
+    completeness.classification !== "complete" ||
+    completeness.exhaustive !== true
+  ) {
+    return [[], "The edge ProjectionResult is not complete and exhaustive."];
+  }
+  const findingKey = isObject(finding) ? finding.key : null;
+  const itemMatches = Array.isArray(actual.items) &&
+      typeof findingKey === "string"
+    ? actual.items.filter(
+      (row) => isObject(row) && row.label === findingKey,
+    )
+    : [];
+  if (itemMatches.length !== 1) {
+    return [[], "The edge issue does not identify one projected relation."];
+  }
+  const attributes = itemMatches[0].attributes;
+  const rawSites = isObject(attributes) ? attributes.sites : null;
+  if (!Array.isArray(rawSites) || rawSites.length === 0) {
+    return [[], "The edge projection has no exact inducing source sites."];
+  }
+  const result = [];
+  const identities = new Set();
+  let zeroWidth = 0;
+  for (const site of rawSites) {
+    if (!isObject(site) || !isObject(site.span)) {
+      return [[], "The edge projection contains an invalid source site."];
+    }
+    const {
+      fact_id: factId,
+      path: filePath,
+      line,
+      name,
+      span: { start, end },
+    } = site;
+    if (
+      typeof factId !== "string" ||
+      factId.length === 0 ||
+      !isRepositoryPath(filePath) ||
+      !Number.isSafeInteger(line) ||
+      line < 0 ||
+      typeof name !== "string" ||
+      name.length === 0 ||
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < 0 ||
+      start > end
+    ) {
+      return [[], "The edge projection contains an invalid source site."];
+    }
+    if (start === end) {
+      zeroWidth += 1;
+      continue;
+    }
+    const [sourceSha256, lockError] = pathLock(
+      filePath,
+      files,
+      mapDocument,
+    );
+    if (lockError || sourceSha256 === null) {
+      return [[], lockError || `Map has no source lock for ${filePath}.`];
+    }
+    const [source, readError] = readLockedSource(
+      root,
+      filePath,
+      sourceSha256,
+    );
+    if (readError || source === null) {
+      return [[], readError || `Could not read locked source ${filePath}.`];
+    }
+    if (end > source.length) {
+      return [[], `Edge source site exceeds ${filePath}.`];
+    }
+    const bytes = source.subarray(start, end);
+    const before = bytes.toString("utf8");
+    if (!Buffer.from(before, "utf8").equals(bytes)) {
+      return [[], `Edge source site in ${filePath} is not UTF-8 text.`];
+    }
+    if (before !== name) {
+      return [[], `Edge source site in ${filePath} does not match ${name}.`];
+    }
+    const normalized = {
+      fact_id: factId,
+      path: filePath,
+      line,
+      source_sha256: sourceSha256,
+      start_byte: start,
+      end_byte: end,
+      before,
+      name,
+    };
+    const identity = canonicalBytes(normalized).toString("hex");
+    if (!identities.has(identity)) {
+      identities.add(identity);
+      result.push(normalized);
+    }
+  }
+  result.sort((left, right) => {
+    let compared = utf8Compare(left.path, right.path);
+    if (compared !== 0) return compared;
+    compared = left.start_byte - right.start_byte;
+    if (compared !== 0) return compared;
+    compared = left.end_byte - right.end_byte;
+    if (compared !== 0) return compared;
+    return utf8Compare(left.fact_id, right.fact_id);
+  });
+  return zeroWidth > 0
+    ? [
+      result,
+      `${zeroWidth} edge evidence anchor(s) have no editable source range.`,
+    ]
+    : [result, null];
+}
+
 function constraintForm(constraint, definitions) {
   if (!isObject(constraint.operands)) return ["unsupported", null];
   const actualName = constraint.operands.actual;
@@ -1059,18 +1199,23 @@ function manualItem({
   instructions,
   reasons,
   candidatePaths: paths = [],
+  candidateSites = [],
 }) {
+  const operation = {
+    action: "manual",
+    instructions,
+    candidate_paths: [...new Set(paths.filter(isRepositoryPath))]
+      .sort(utf8Compare),
+  };
+  if (candidateSites.length > 0) {
+    operation.candidate_sites = structuredClone(candidateSites);
+  }
   return makeItem({
     constraintId,
     policyResult,
     finding,
     statement,
-    operation: {
-      action: "manual",
-      instructions,
-      candidate_paths: [...new Set(paths.filter(isRepositoryPath))]
-        .sort(utf8Compare),
-    },
+    operation,
     executable: false,
     reasons,
   });
@@ -1559,6 +1704,8 @@ function nonExecutableItem({
   policyResult,
   finding,
   actualDefinition,
+  candidateSites = [],
+  siteError = null,
 }) {
   const key = finding?.key;
   const subject = typeof key === "string" && key.length > 0
@@ -1636,8 +1783,11 @@ function nonExecutableItem({
     finding,
     statement: `Resolve ${constraintId}: ${subject}.`,
     instructions: details[0],
-    reasons: [details[1]],
+    reasons: [details[1], siteError].filter(
+      (value) => typeof value === "string",
+    ),
     candidatePaths: paths,
+    candidateSites,
   });
 }
 
@@ -1974,12 +2124,26 @@ function generatePlan(
           form === "removable_symbol_set" &&
           finding.comparison === "missing"
         ) ? "required_symbols" : form;
+        let candidateSites = [];
+        let siteError = null;
+        if (["file_edges", "component_edges"].includes(manualForm)) {
+          [candidateSites, siteError] = edgeCandidateSites({
+            verificationDocument,
+            constraint,
+            finding,
+            mapDocument,
+            files,
+            root: repository,
+          });
+        }
         [item, rows] = nonExecutableItem({
           form: manualForm,
           constraintId,
           policyResult: policies.get(constraintId),
           finding,
           actualDefinition,
+          candidateSites,
+          siteError,
         });
         if (!findingIsCurrent(finding)) {
           const reason =

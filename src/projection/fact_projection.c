@@ -318,6 +318,121 @@ item_merge_string_array_attribute(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+static int edge_site_compare(const void *left_raw, const void *right_raw) {
+  const AbValue *left = (const AbValue *)left_raw;
+  const AbValue *right = (const AbValue *)right_raw;
+  const AbValue *left_path = ab_value_member(left, "path");
+  const AbValue *right_path = ab_value_member(right, "path");
+  const AbValue *left_line = ab_value_member(left, "line");
+  const AbValue *right_line = ab_value_member(right, "line");
+  const AbValue *left_span = ab_value_member(left, "span");
+  const AbValue *right_span = ab_value_member(right, "span");
+  const AbValue *left_start = ab_value_member(left_span, "start");
+  const AbValue *right_start = ab_value_member(right_span, "start");
+  const AbValue *left_end = ab_value_member(left_span, "end");
+  const AbValue *right_end = ab_value_member(right_span, "end");
+  const AbValue *left_name = ab_value_member(left, "name");
+  const AbValue *right_name = ab_value_member(right, "name");
+  const AbValue *left_fact = ab_value_member(left, "fact_id");
+  const AbValue *right_fact = ab_value_member(right, "fact_id");
+  uint64_t left_number;
+  uint64_t right_number;
+  int compared = ab_string_compare(&left_path->as.text, &right_path->as.text);
+  if (compared != 0)
+    return compared;
+  (void)ab_value_u64(left_line, &left_number);
+  (void)ab_value_u64(right_line, &right_number);
+  if (left_number != right_number)
+    return left_number < right_number ? -1 : 1;
+  (void)ab_value_u64(left_start, &left_number);
+  (void)ab_value_u64(right_start, &right_number);
+  if (left_number != right_number)
+    return left_number < right_number ? -1 : 1;
+  (void)ab_value_u64(left_end, &left_number);
+  (void)ab_value_u64(right_end, &right_number);
+  if (left_number != right_number)
+    return left_number < right_number ? -1 : 1;
+  compared = ab_string_compare(&left_name->as.text, &right_name->as.text);
+  if (compared != 0)
+    return compared;
+  return ab_string_compare(&left_fact->as.text, &right_fact->as.text);
+}
+
+static int edge_site_equal(const AbValue *left, const AbValue *right) {
+  return edge_site_compare(left, right) == 0;
+}
+
+static ArchbirdStatus
+item_append_edge_sites_attribute(ArchbirdEngine *engine, AbProjectionItem *item,
+                                 const AbValue *incoming) {
+  AbObjectField *field = item_attribute(item, "sites");
+  size_t incoming_index;
+  if (!incoming)
+    return ARCHBIRD_OK;
+  if (!field)
+    return item_add_value_attribute(engine, item, "sites", incoming);
+  if (field->value.kind != AB_VALUE_ARRAY || incoming->kind != AB_VALUE_ARRAY)
+    return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                              ARCHBIRD_NO_OFFSET,
+                              "projection edge-site attribute is invalid");
+  for (incoming_index = 0; incoming_index < incoming->as.array.count;
+       incoming_index++) {
+    const AbValue *candidate = &incoming->as.array.items[incoming_index];
+    AbValue *items;
+    AbValue *added;
+    ArchbirdStatus status;
+    if (field->value.as.array.count == SIZE_MAX / sizeof(*items))
+      return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "too many projection relation sites");
+    items = (AbValue *)ab_realloc(engine, field->value.as.array.items,
+                                  (field->value.as.array.count + 1) *
+                                      sizeof(*items));
+    if (!items)
+      return archbird_error_set(
+          engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+          "out of memory storing projection relation sites");
+    field->value.as.array.items = items;
+    added = &items[field->value.as.array.count];
+    memset(added, 0, sizeof(*added));
+    status = ab_value_copy(engine, added, candidate);
+    if (status != ARCHBIRD_OK)
+      return status;
+    field->value.as.array.count++;
+  }
+  return ARCHBIRD_OK;
+}
+
+static void normalize_edge_site_attributes(ArchbirdEngine *engine,
+                                           AbProjectionData *fact) {
+  size_t item_index;
+  for (item_index = 0; item_index < fact->item_count; item_index++) {
+    AbObjectField *field = item_attribute(&fact->items[item_index], "sites");
+    size_t read_index;
+    size_t write_index = 0;
+    if (!field || field->value.as.array.count < 2)
+      continue;
+    qsort(field->value.as.array.items, field->value.as.array.count,
+          sizeof(*field->value.as.array.items), edge_site_compare);
+    for (read_index = 0; read_index < field->value.as.array.count;
+         read_index++) {
+      AbValue *current = &field->value.as.array.items[read_index];
+      if (write_index &&
+          edge_site_equal(&field->value.as.array.items[write_index - 1],
+                          current)) {
+        ab_value_free(engine, current);
+        continue;
+      }
+      if (write_index != read_index) {
+        field->value.as.array.items[write_index] = *current;
+        memset(current, 0, sizeof(*current));
+      }
+      write_index++;
+    }
+    field->value.as.array.count = write_index;
+  }
+}
+
 static ArchbirdStatus item_add_u64_attribute(ArchbirdEngine *engine,
                                              AbProjectionItem *item,
                                              const char *name, uint64_t value) {
@@ -737,16 +852,51 @@ static int valid_projected_file_row(const AbValue *row) {
   return 1;
 }
 
+static int serialized_edge_site_compare(const AbValue *left,
+                                        const AbValue *right) {
+  const AbValue *left_span = ab_value_member(left, "span");
+  const AbValue *right_span = ab_value_member(right, "span");
+  const AbValue *left_line = ab_value_member(left, "line");
+  const AbValue *right_line = ab_value_member(right, "line");
+  const AbValue *left_start = ab_value_member(left_span, "start");
+  const AbValue *right_start = ab_value_member(right_span, "start");
+  const AbValue *left_end = ab_value_member(left_span, "end");
+  const AbValue *right_end = ab_value_member(right_span, "end");
+  uint64_t left_number;
+  uint64_t right_number;
+  int compared = ab_string_compare(&ab_value_member(left, "name")->as.text,
+                                   &ab_value_member(right, "name")->as.text);
+  if (compared != 0)
+    return compared;
+  (void)ab_value_u64(left_line, &left_number);
+  (void)ab_value_u64(right_line, &right_number);
+  if (left_number != right_number)
+    return left_number < right_number ? -1 : 1;
+  (void)ab_value_u64(left_start, &left_number);
+  (void)ab_value_u64(right_start, &right_number);
+  if (left_number != right_number)
+    return left_number < right_number ? -1 : 1;
+  (void)ab_value_u64(left_end, &left_number);
+  (void)ab_value_u64(right_end, &right_number);
+  if (left_number != right_number)
+    return left_number < right_number ? -1 : 1;
+  return ab_string_compare(&ab_value_member(left, "fact_id")->as.text,
+                           &ab_value_member(right, "fact_id")->as.text);
+}
+
 static int valid_edge_row(const AbValue *edge) {
+  const AbValue *source = ab_value_member(edge, "source");
   const AbValue *names = ab_value_member(edge, "names");
   const AbValue *providers = ab_value_member(edge, "evidence");
+  const AbValue *sites = ab_value_member(edge, "sites");
   size_t index;
   if (!edge || edge->kind != AB_VALUE_OBJECT ||
-      !ab_projection_path_is_repository(ab_value_member(edge, "source")) ||
+      !ab_projection_path_is_repository(source) ||
       !ab_projection_path_is_repository(ab_value_member(edge, "target")) ||
       !ab_projection_nonblank(ab_value_member(edge, "kind")) ||
       !valid_string_array(names) ||
-      (providers && providers->kind != AB_VALUE_ARRAY))
+      (providers && providers->kind != AB_VALUE_ARRAY) ||
+      (sites && sites->kind != AB_VALUE_ARRAY))
     return 0;
   for (index = 0; providers && index < providers->as.array.count; index++) {
     const AbValue *row = &providers->as.array.items[index];
@@ -757,6 +907,29 @@ static int valid_edge_row(const AbValue *edge) {
         (!ab_projection_value_is(state, "current") &&
          !ab_projection_value_is(state, "unknown") &&
          !ab_projection_value_is(state, "stale")))
+      return 0;
+  }
+  for (index = 0; sites && index < sites->as.array.count; index++) {
+    const AbValue *site = &sites->as.array.items[index];
+    const AbValue *path = ab_value_member(site, "path");
+    const AbValue *line = ab_value_member(site, "line");
+    const AbValue *span = ab_value_member(site, "span");
+    const AbValue *start = ab_value_member(span, "start");
+    const AbValue *end = ab_value_member(span, "end");
+    uint64_t line_number;
+    uint64_t start_offset;
+    uint64_t end_offset;
+    if (!site || site->kind != AB_VALUE_OBJECT ||
+        !ab_projection_nonblank(ab_value_member(site, "fact_id")) ||
+        !ab_projection_nonblank(ab_value_member(site, "name")) ||
+        !ab_projection_path_is_repository(path) ||
+        !ab_string_equal(&path->as.text, &source->as.text) ||
+        !ab_value_u64(line, &line_number) || !span ||
+        span->kind != AB_VALUE_OBJECT || !ab_value_u64(start, &start_offset) ||
+        !ab_value_u64(end, &end_offset) || start_offset > end_offset)
+      return 0;
+    if (index && serialized_edge_site_compare(&sites->as.array.items[index - 1],
+                                              site) >= 0)
       return 0;
   }
   return 1;
@@ -3012,9 +3185,24 @@ static ArchbirdStatus extract_components(AbProjectionContext *context,
   return status;
 }
 
+static const char *edge_evidence_state(const AbValue *edge) {
+  const AbValue *providers = ab_value_member(edge, "evidence");
+  size_t index;
+  int has_current = 0;
+  int has_unknown = 0;
+  for (index = 0; providers && index < providers->as.array.count; index++) {
+    const AbValue *state =
+        ab_value_member(&providers->as.array.items[index], "state");
+    has_current = has_current || ab_value_string_is(state, "current");
+    has_unknown = has_unknown || ab_value_string_is(state, "unknown");
+  }
+  return !providers || has_current ? "current"
+                                   : (has_unknown ? "unknown" : "stale");
+}
+
 static ArchbirdStatus edge_evidence(AbProjectionContext *context,
                                     const AbString *project_name,
-                                    const AbValue *edge,
+                                    const AbValue *edge, const AbValue *site,
                                     AbProjectionEvidence *out,
                                     const char **out_state) {
   const AbValue *source = ab_value_member(edge, "source");
@@ -3024,10 +3212,9 @@ static ArchbirdStatus edge_evidence(AbProjectionContext *context,
   const AbValue *providers = ab_value_member(edge, "evidence");
   AbBuffer detail;
   size_t index;
-  int has_current = 0;
-  int has_unknown = 0;
+  uint64_t line = 0;
   ArchbirdStatus status;
-  *out_state = "current";
+  *out_state = edge_evidence_state(edge);
   ab_buffer_init(&detail, context->engine);
   status = ab_buffer_append(&detail, kind->as.text.data, kind->as.text.length);
   if (status == ARCHBIRD_OK)
@@ -3088,16 +3275,89 @@ static ArchbirdStatus edge_evidence(AbProjectionContext *context,
     if (status == ARCHBIRD_OK)
       status =
           ab_buffer_append(&detail, state->as.text.data, state->as.text.length);
-    has_current = has_current || ab_value_string_is(state, "current");
-    has_unknown = has_unknown || ab_value_string_is(state, "unknown");
   }
-  if (providers && !has_current)
-    *out_state = has_unknown ? "unknown" : "stale";
+  if (status == ARCHBIRD_OK && site) {
+    const AbValue *fact_id = ab_value_member(site, "fact_id");
+    const AbValue *name = ab_value_member(site, "name");
+    const AbValue *span = ab_value_member(site, "span");
+    const AbValue *start = ab_value_member(span, "start");
+    const AbValue *end = ab_value_member(span, "end");
+    const AbValue *file = map_file(context, &source->as.text);
+    const AbValue *bytes = file ? ab_value_member(file, "bytes") : NULL;
+    uint64_t byte_length = 0;
+    uint64_t start_offset = 0;
+    uint64_t end_offset = 0;
+    (void)ab_value_u64(ab_value_member(site, "line"), &line);
+    (void)ab_value_u64(start, &start_offset);
+    (void)ab_value_u64(end, &end_offset);
+    if (!file || !ab_value_u64(bytes, &byte_length) ||
+        end_offset > byte_length) {
+      ab_buffer_free(&detail);
+      return invalid_map_inventory(context,
+                                   "Map edge site exceeds its locked source");
+    }
+    status = ab_buffer_literal(&detail, "; site=");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_buffer_append(&detail, name->as.text.data, name->as.text.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&detail, "@");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(&detail, start_offset);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&detail, ":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(&detail, end_offset);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&detail, "; fact=");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(&detail, fact_id->as.text.data,
+                                fact_id->as.text.length);
+  }
   if (status == ARCHBIRD_OK)
     status =
-        derived_evidence(context->engine, project_name, &source->as.text, 0,
+        derived_evidence(context->engine, project_name, &source->as.text, line,
                          file_sha(context, &source->as.text), &detail, out);
   ab_buffer_free(&detail);
+  return status;
+}
+
+static ArchbirdStatus add_projected_edge_relation(
+    AbProjectionContext *context, AbProjectionData *fact,
+    const AbString *project_name, const AbValue *edge,
+    const AbString *relation_source, const AbString *relation_kind,
+    const AbString *relation_target, const char *current_message,
+    const char *unknown_message, const char *stale_message) {
+  const AbValue *sites = ab_value_member(edge, "sites");
+  const AbValue *names = ab_value_member(edge, "names");
+  size_t site_count = sites ? sites->as.array.count : 0;
+  size_t index;
+  AbProjectionItem *item = NULL;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0;
+       status == ARCHBIRD_OK && index < (site_count ? site_count : 1);
+       index++) {
+    const AbValue *site = site_count ? &sites->as.array.items[index] : NULL;
+    AbProjectionEvidence evidence = {0};
+    const char *state = "current";
+    const char *message;
+    status =
+        edge_evidence(context, project_name, edge, site, &evidence, &state);
+    message =
+        strcmp(state, "current") == 0
+            ? current_message
+            : (strcmp(state, "unknown") == 0 ? unknown_message : stale_message);
+    if (status == ARCHBIRD_OK)
+      status = add_relation_item_state(context->engine, fact, relation_source,
+                                       relation_kind, relation_target,
+                                       &evidence, state, message, &item);
+    ab_projection_evidence_free(context->engine, &evidence);
+  }
+  if (status == ARCHBIRD_OK && item)
+    status = item_merge_string_array_attribute(context->engine, item, "names",
+                                               names);
+  if (status == ARCHBIRD_OK && item)
+    status = item_append_edge_sites_attribute(context->engine, item, sites);
   return status;
 }
 
@@ -3505,11 +3765,7 @@ static ArchbirdStatus extract_file_edges(AbProjectionContext *context,
     const AbValue *edge = &edges->as.array.items[index];
     const AbValue *source;
     const AbValue *kind;
-    const AbValue *names;
     const AbValue *target;
-    AbProjectionItem *item = NULL;
-    AbProjectionEvidence evidence = {0};
-    const char *evidence_state;
     if (!valid_edge_row(edge)) {
       status = invalid_map_inventory(context,
                                      "Map contains an invalid file edge row");
@@ -3519,29 +3775,18 @@ static ArchbirdStatus extract_file_edges(AbProjectionContext *context,
       continue;
     source = ab_value_member(edge, "source");
     kind = ab_value_member(edge, "kind");
-    names = ab_value_member(edge, "names");
     target = ab_value_member(edge, "target");
-    status = edge_evidence(context, &project_name->as.text, edge, &evidence,
-                           &evidence_state);
-    if (status == ARCHBIRD_OK)
-      status = add_relation_item_state(
-          context->engine, fact, &source->as.text, &kind->as.text,
-          &target->as.text, &evidence, evidence_state,
-          strcmp(evidence_state, "current") == 0
-              ? ""
-              : (strcmp(evidence_state, "unknown") == 0
-                     ? "edge freshness is unknown"
-                     : "edge evidence is stale"),
-          &item);
-    if (status == ARCHBIRD_OK)
-      status = item_merge_string_array_attribute(context->engine, item, "names",
-                                                 names);
-    ab_projection_evidence_free(context->engine, &evidence);
+    status = add_projected_edge_relation(
+        context, fact, &project_name->as.text, edge, &source->as.text,
+        &kind->as.text, &target->as.text, "", "edge freshness is unknown",
+        "edge evidence is stale");
   }
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK) {
+    normalize_edge_site_attributes(context->engine, fact);
     status = ab_projection_data_completeness_exact(
         context->engine, fact, "relation", (uint64_t)fact->item_count,
         (uint64_t)fact->item_count, 0, 0, 0);
+  }
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(context->engine, fact);
   if (status != ARCHBIRD_OK)
@@ -3592,8 +3837,7 @@ static ArchbirdStatus extract_component_edges(AbProjectionContext *context,
     const AbValue *kind = ab_value_member(edge, "kind");
     const AbProjectionMembershipFile *source_file;
     const AbProjectionMembershipFile *target_file;
-    AbProjectionEvidence evidence = {0};
-    const char *evidence_state = "current";
+    const char *evidence_state;
     size_t source_offset;
     if (!valid_edge_row(edge)) {
       status = invalid_map_inventory(
@@ -3604,9 +3848,8 @@ static ArchbirdStatus extract_component_edges(AbProjectionContext *context,
       continue;
     source_file = ab_projection_membership_file(&membership, &source->as.text);
     target_file = ab_projection_membership_file(&membership, &target->as.text);
-    status = edge_evidence(context, &project_name->as.text, edge, &evidence,
-                           &evidence_state);
-    if (status == ARCHBIRD_OK && source_file && source_file->assignment_count &&
+    evidence_state = edge_evidence_state(edge);
+    if (source_file && source_file->assignment_count &&
         (!target_file || !target_file->assignment_count) &&
         strcmp(evidence_state, "current") != 0) {
       for (source_offset = 0; status == ARCHBIRD_OK &&
@@ -3617,20 +3860,16 @@ static ArchbirdStatus extract_component_edges(AbProjectionContext *context,
                  .assignments[source_file->assignment_start + source_offset];
         const AbString *source_name =
             membership.components[source_assignment->component_index].name;
-        status = add_relation_item_state(
-            context->engine, fact, source_name, &kind->as.text,
-            &target->as.text, &evidence, evidence_state,
-            strcmp(evidence_state, "unknown") == 0
-                ? "relation target is unresolved"
-                : "relation target evidence is stale",
-            NULL);
+        status = add_projected_edge_relation(
+            context, fact, &project_name->as.text, edge, source_name,
+            &kind->as.text, &target->as.text, "",
+            "relation target is unresolved",
+            "relation target evidence is stale");
       }
     }
     if (!source_file || !target_file || !source_file->assignment_count ||
-        !target_file->assignment_count) {
-      ab_projection_evidence_free(context->engine, &evidence);
+        !target_file->assignment_count)
       continue;
-    }
     for (source_offset = 0;
          status == ARCHBIRD_OK && source_offset < source_file->assignment_count;
          source_offset++) {
@@ -3650,23 +3889,19 @@ static ArchbirdStatus extract_component_edges(AbProjectionContext *context,
             membership.components[target_assignment->component_index].name;
         if (ab_string_equal(source_name, target_name))
           continue;
-        status = add_relation_item_state(
-            context->engine, fact, source_name, &kind->as.text, target_name,
-            &evidence, evidence_state,
-            strcmp(evidence_state, "current") == 0
-                ? ""
-                : (strcmp(evidence_state, "unknown") == 0
-                       ? "edge freshness is unknown"
-                       : "edge evidence is stale"),
-            NULL);
+        status = add_projected_edge_relation(
+            context, fact, &project_name->as.text, edge, source_name,
+            &kind->as.text, target_name, "", "edge freshness is unknown",
+            "edge evidence is stale");
       }
     }
-    ab_projection_evidence_free(context->engine, &evidence);
   }
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK) {
+    normalize_edge_site_attributes(context->engine, fact);
     status = ab_projection_data_completeness_exact(
         context->engine, fact, "relation", (uint64_t)fact->item_count,
         (uint64_t)fact->item_count, 0, 0, 0);
+  }
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(context->engine, fact);
   ab_projection_membership_index_free(context->engine, &membership);

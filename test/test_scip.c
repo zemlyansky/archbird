@@ -320,15 +320,24 @@ static void test_scip_pipeline(void) {
                   "current semantic-index evidence is absent");
   expect_contains(map.bytes,
                   "\"evidence\":[{\"basis\":\"semantic-index\","
-                  "\"provider\":\"no-text\",\"state\":\"unknown\"}],"
+                  "\"provider\":\"no-text\",\"state\":\"unknown\"}]",
+                  "unknown semantic-index evidence is absent");
+  expect_contains(map.bytes,
                   "\"kind\":\"semantic-reference\",\"names\":[\"scip c "
-                  "demo 1.0 demo/unknown_add().\"],\"source\":"
-                  "\"py/unknown.py\",\"target\":\"src/unknown_core.c\"",
+                  "demo 1.0 demo/unknown_add().\"]",
                   "unknown zero-width semantic target is absent");
+  expect_contains(map.bytes,
+                  "\"source\":\"py/unknown.py\","
+                  "\"target\":\"src/unknown_core.c\"",
+                  "unknown semantic target route is absent");
+  expect_contains(map.bytes, "\"span\":{\"end\":0,\"start\":0}",
+                  "zero-width semantic edge anchor is absent");
   expect_absent(map.bytes, "\"kind\":\"scip-reference\"",
                 "legacy SCIP relation leaked into canonical Map");
   expect_contains(map.bytes,
-                  "\"kind\":\"scip-implementation\",\"names\":[\"add\"],"
+                  "\"kind\":\"scip-implementation\",\"names\":[\"add\"]",
+                  "SCIP implementation relationship kind is absent");
+  expect_contains(map.bytes,
                   "\"source\":\"src/core.c\","
                   "\"target\":\"src/contract.c\"",
                   "SCIP implementation relationship is absent");

@@ -170,6 +170,18 @@ def main() -> int:
             ],
             "kind": "semantic-reference",
             "names": ["add"],
+            "sites": [
+                {
+                    "fact_id": (
+                        "f:3435eed34d3b4aee2e58f11d52bd0b36d895d2257c5104e5"
+                        "fb67cf086b284ece"
+                    ),
+                    "line": 0,
+                    "name": "add",
+                    "path": "src/use.js",
+                    "span": {"end": 12, "start": 9},
+                }
+            ],
             "source": "src/use.js",
             "target": "src/defs.js",
         }

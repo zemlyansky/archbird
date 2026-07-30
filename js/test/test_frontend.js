@@ -823,6 +823,15 @@ assert.deepEqual(
   {
     kind: "import",
     names: [".api"],
+    sites: [
+      {
+        fact_id: "f:4bbe1e3153f8075698c8a62202a6a0c67eecfe5806c717f00e73dde9f263b8e7",
+        line: 0,
+        name: ".api",
+        path: "py/pkg/__init__.py",
+        span: { end: 9, start: 5 },
+      },
+    ],
     source: "py/pkg/__init__.py",
     target: "py/pkg/api.py",
   },
