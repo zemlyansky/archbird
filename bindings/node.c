@@ -1442,6 +1442,82 @@ static napi_value make_variable_token_edit(napi_env env,
   return result;
 }
 
+static napi_value make_variable_token_insert(napi_env env,
+                                             napi_callback_info info) {
+  size_t argc = 6;
+  napi_value argv[6];
+  const uint8_t *source;
+  size_t source_length;
+  size_t lengths[5];
+  char *values[5] = {NULL, NULL, NULL, NULL, NULL};
+  ArchbirdMakeVariableTokenInsertOptions options;
+  ArchbirdMakeVariableTokenInsertResult insert_result;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value replacement_buffer;
+  napi_value result;
+  napi_value value;
+  size_t index;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc != 6 || !get_buffer(env, argv[0], &source, &source_length))
+    return NULL;
+  for (index = 0; index < 5; index++) {
+    values[index] = get_string(env, argv[index + 1], &lengths[index]);
+    if (!values[index]) {
+      while (index)
+        free(values[--index]);
+      return NULL;
+    }
+  }
+  archbird_make_variable_token_insert_options_init(&options);
+  options.source_sha256 = values[0];
+  options.source_sha256_length = lengths[0];
+  options.variable = (const uint8_t *)values[1];
+  options.variable_length = lengths[1];
+  options.token = (const uint8_t *)values[2];
+  options.token_length = lengths[2];
+  options.anchor_token = (const uint8_t *)values[3];
+  options.anchor_token_length = lengths[3];
+  if (lengths[4] == 6 && memcmp(values[4], "before", 6) == 0)
+    options.position = ARCHBIRD_MAKE_TOKEN_BEFORE;
+  else if (lengths[4] == 5 && memcmp(values[4], "after", 5) == 0)
+    options.position = ARCHBIRD_MAKE_TOKEN_AFTER;
+  else {
+    for (index = 0; index < 5; index++)
+      free(values[index]);
+    napi_throw_range_error(env, "ARCHBIRD_POSITION",
+                           "position must be before or after");
+    return NULL;
+  }
+  archbird_make_variable_token_insert_result_init(&insert_result);
+  status = input_engine(source_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_make_variable_token_insert(engine, source, source_length,
+                                                 &options, &insert_result,
+                                                 output_write, &output);
+  for (index = 0; index < 5; index++)
+    free(values[index]);
+  replacement_buffer = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  if (!replacement_buffer)
+    return NULL;
+  NAPI_TRY(napi_create_object(env, &result));
+  NAPI_TRY(napi_create_double(env, (double)insert_result.start_byte, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "startByte", value));
+  NAPI_TRY(napi_create_double(env, (double)insert_result.end_byte, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "endByte", value));
+  NAPI_TRY(
+      napi_create_double(env, (double)insert_result.matched_tokens, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "matchedTokens", value));
+  NAPI_TRY(
+      napi_create_double(env, (double)insert_result.matched_anchors, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "matchedAnchors", value));
+  NAPI_TRY(
+      napi_set_named_property(env, result, "replacement", replacement_buffer));
+  return result;
+}
+
 static napi_value map_freshness(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -2258,6 +2334,8 @@ static napi_value init(napi_env env, napi_value exports) {
       {"jsonPointerEdit", NULL, json_pointer_edit, NULL, NULL, NULL,
        napi_default, NULL},
       {"makeVariableTokenEdit", NULL, make_variable_token_edit, NULL, NULL,
+       NULL, napi_default, NULL},
+      {"makeVariableTokenInsert", NULL, make_variable_token_insert, NULL, NULL,
        NULL, napi_default, NULL},
       {"mapFreshness", NULL, map_freshness, NULL, NULL, NULL, napi_default,
        NULL},

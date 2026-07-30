@@ -465,14 +465,16 @@ npx archbird act .archbird/plan.json --apply \
 ```
 
 Exact `replace_range`, `create_file`, `delete_file`, `move_file`,
-`edit_json_pointer`, `edit_make_variable_token`, and evidence-bound
-`rename_symbol` operations are
+`edit_json_pointer`, `edit_make_variable_token`,
+`insert_make_variable_token`, and evidence-bound `rename_symbol` operations are
 executable. An asserted `edit_json_pointer` operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
 expected old JSON value without reformatting the complete file. An asserted
 `edit_make_variable_token` operation replaces or removes one exact direct
 token in a named Make variable while preserving its surrounding layout; stale,
-missing, or duplicate matches block execution. A derived
+missing, or duplicate matches block execution. An asserted
+`insert_make_variable_token` adds a proven-absent direct token before or after
+one unique anchor without guessing between assignments. A derived
 one-extra/one-missing rename candidate is review evidence, not intent; it
 remains non-executable until `--rename OLD=NEW` is supplied. The reviewed Plan
 locks the exhaustive declaration/import/export/reference projection, and Act

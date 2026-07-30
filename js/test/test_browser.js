@@ -119,6 +119,17 @@ function markedNames(relative, name) {
       ]),
       Buffer.from("WASM_EXPORTS = _core_sum \\\n\t_core_mul # keep\n"),
     );
+    const insertion = archbird.core.makeVariableTokenInsert(
+      source,
+      sourceSha256,
+      "WASM_EXPORTS",
+      "_core_new",
+      "_core_add",
+      "after",
+    );
+    assert.equal(insertion.matchedTokens, 0);
+    assert.equal(insertion.matchedAnchors, 1);
+    assert.deepEqual(insertion.replacement, Buffer.from(" _core_new"));
   }
   for (const relative of ["README.md", "js/README.md"]) {
     assert.deepEqual(

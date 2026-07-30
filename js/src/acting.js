@@ -25,6 +25,7 @@ const SUPPORTED_ACTIONS = new Set([
   "move_file",
   "edit_json_pointer",
   "edit_make_variable_token",
+  "insert_make_variable_token",
   "rename_symbol",
 ]);
 const PORTABLE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -348,6 +349,15 @@ function validateOperationShape(operation) {
       "expected_token",
       "replacement_token",
     ]),
+    insert_make_variable_token: new Set([
+      "action",
+      "path",
+      "source_sha256",
+      "variable",
+      "token",
+      "anchor_token",
+      "position",
+    ]),
     rename_symbol: new Set([
       "action",
       "symbol",
@@ -378,6 +388,7 @@ function validateOperationShape(operation) {
       "move_file",
       "edit_json_pointer",
       "edit_make_variable_token",
+      "insert_make_variable_token",
     ].includes(action) &&
     !validSha256(operation.source_sha256)
   ) throw new Error(`${action} operation has an invalid source_sha256`);
@@ -430,6 +441,38 @@ function validateOperationShape(operation) {
       throw new Error(
         "edit_make_variable_token requires a Make variable and " +
         "distinct direct tokens",
+      );
+    }
+  }
+  if (action === "insert_make_variable_token") {
+    safeRelativePath(operation.path);
+    validateText(
+      operation.variable,
+      "insert_make_variable_token variable",
+      256,
+    );
+    validateText(
+      operation.token,
+      "insert_make_variable_token token",
+      MAX_METADATA_BYTES,
+    );
+    validateText(
+      operation.anchor_token,
+      "insert_make_variable_token anchor_token",
+      MAX_METADATA_BYTES,
+    );
+    if (
+      !PORTABLE_IDENTIFIER.test(operation.variable) ||
+      operation.token.length === 0 ||
+      operation.anchor_token.length === 0 ||
+      /[\s#]/u.test(operation.token) ||
+      /[\s#]/u.test(operation.anchor_token) ||
+      operation.token === operation.anchor_token ||
+      !["before", "after"].includes(operation.position)
+    ) {
+      throw new Error(
+        "insert_make_variable_token requires a Make variable, " +
+        "distinct direct tokens, and explicit placement",
       );
     }
   }
@@ -932,6 +975,7 @@ function validatePlanShape(plan) {
         "rename_symbol",
         "edit_json_pointer",
         "edit_make_variable_token",
+        "insert_make_variable_token",
       ].includes(action) &&
       item.provenance !== "asserted"
     ) {
@@ -1519,6 +1563,53 @@ function prepare(plan, root, mapDocument = null) {
           start,
           end,
           before: state.data.subarray(start, end),
+          replacement,
+          sourceSha256: operation.source_sha256,
+        });
+      } else if (action === "insert_make_variable_token") {
+        const state = existingState(root, filePath, initial, sourceBudget);
+        if (state.sha256 !== operation.source_sha256) {
+          throw new Error(
+            `source SHA-256 is stale: expected ${operation.source_sha256}, ` +
+            `found ${state.sha256}`,
+          );
+        }
+        const edit = native.makeVariableTokenInsert(
+          state.data,
+          operation.source_sha256,
+          operation.variable,
+          operation.token,
+          operation.anchor_token,
+          operation.position,
+        );
+        const {
+          startByte: start,
+          endByte: end,
+          matchedTokens,
+          matchedAnchors,
+          replacement,
+        } = edit;
+        if (
+          !Number.isSafeInteger(start) ||
+          !Number.isSafeInteger(end) ||
+          start < 0 ||
+          end !== start ||
+          end > state.data.length ||
+          matchedTokens !== 0 ||
+          matchedAnchors !== 1 ||
+          !Buffer.isBuffer(replacement)
+        ) {
+          throw new Error(
+            "native Make variable token insertion returned an invalid range",
+          );
+        }
+        if (!replacements.has(filePath)) replacements.set(filePath, []);
+        replacements.get(filePath).push({
+          itemId,
+          path: filePath,
+          start,
+          end,
+          before: Buffer.alloc(0),
           replacement,
           sourceSha256: operation.source_sha256,
         });

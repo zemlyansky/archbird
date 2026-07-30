@@ -64,6 +64,32 @@ static ArchbirdStatus edit(ArchbirdEngine *engine, const char *source,
                                            buffer_write, buffer);
 }
 
+static ArchbirdStatus insert(ArchbirdEngine *engine, const char *source,
+                             const char *sha256, const char *variable,
+                             const char *token, const char *anchor,
+                             ArchbirdMakeVariableTokenPosition position,
+                             ArchbirdMakeVariableTokenInsertResult *result,
+                             Buffer *buffer) {
+  ArchbirdMakeVariableTokenInsertOptions options;
+  archbird_make_variable_token_insert_options_init(&options);
+  options.source_sha256 = sha256;
+  options.source_sha256_length = strlen(sha256);
+  options.variable = (const uint8_t *)variable;
+  options.variable_length = strlen(variable);
+  options.token = (const uint8_t *)token;
+  options.token_length = strlen(token);
+  options.anchor_token = (const uint8_t *)anchor;
+  options.anchor_token_length = strlen(anchor);
+  options.position = position;
+  archbird_make_variable_token_insert_result_init(result);
+  free(buffer->data);
+  buffer->data = NULL;
+  buffer->length = 0;
+  return archbird_make_variable_token_insert(engine, (const uint8_t *)source,
+                                             strlen(source), &options, result,
+                                             buffer_write, buffer);
+}
+
 static void expect_applied(const char *name, const char *source,
                            const ArchbirdMakeVariableTokenEditResult *result,
                            const Buffer *replacement, const char *expected) {
@@ -107,6 +133,7 @@ int main(void) {
   ArchbirdEngineOptions engine_options;
   ArchbirdEngine *engine = NULL;
   ArchbirdMakeVariableTokenEditResult result;
+  ArchbirdMakeVariableTokenInsertResult insert_result;
   Buffer buffer = {0};
   char sha256[65];
   ArchbirdStatus status;
@@ -137,9 +164,24 @@ int main(void) {
   } else {
     expect_applied("removal", multiline, &result, &buffer,
                    "OTHER = _core_add\n"
-                   "WASM_EXPORTS :=  \\\n"
+                   "WASM_EXPORTS := \\\n"
                    "\t_core_add \\\n"
                    "\t_core_last # preserve this comment\n");
+  }
+
+  {
+    static const char trailing[] = "WASM_EXPORTS = _core_add\n";
+    source_sha(trailing, sha256);
+    status = edit(engine, trailing, sha256, "WASM_EXPORTS", "_core_add", "",
+                  &result, &buffer);
+    if (status != ARCHBIRD_OK || result.matched_tokens != 1) {
+      fprintf(stderr, "FAIL trailing removal: %s\n",
+              archbird_engine_error(engine));
+      failures++;
+    } else {
+      expect_applied("trailing removal", trailing, &result, &buffer,
+                     "WASM_EXPORTS =\n");
+    }
   }
 
   source_sha(duplicate, sha256);
@@ -163,6 +205,46 @@ int main(void) {
                 &result, &buffer);
   if (status != ARCHBIRD_POLICY_REJECTED || result.matched_tokens != 0) {
     fprintf(stderr, "FAIL wrong variable cardinality\n");
+    failures++;
+  }
+
+  source_sha(multiline, sha256);
+  status =
+      insert(engine, multiline, sha256, "WASM_EXPORTS", "_core_sum",
+             "_core_add", ARCHBIRD_MAKE_TOKEN_AFTER, &insert_result, &buffer);
+  if (status != ARCHBIRD_OK || insert_result.matched_tokens != 0 ||
+      insert_result.matched_anchors != 1 ||
+      insert_result.start_byte != insert_result.end_byte) {
+    fprintf(stderr, "FAIL insertion: %s\n", archbird_engine_error(engine));
+    failures++;
+  } else {
+    ArchbirdMakeVariableTokenEditResult applied_range;
+    archbird_make_variable_token_edit_result_init(&applied_range);
+    applied_range.start_byte = insert_result.start_byte;
+    applied_range.end_byte = insert_result.end_byte;
+    expect_applied("insertion", multiline, &applied_range, &buffer,
+                   "OTHER = _core_add\n"
+                   "WASM_EXPORTS := _core_first \\\n"
+                   "\t_core_add _core_sum \\\n"
+                   "\t_core_last # preserve this comment\n");
+  }
+
+  status = insert(engine, multiline, sha256, "WASM_EXPORTS", "_core_sum",
+                  "_core_missing", ARCHBIRD_MAKE_TOKEN_BEFORE, &insert_result,
+                  &buffer);
+  if (status != ARCHBIRD_POLICY_REJECTED ||
+      insert_result.matched_anchors != 0) {
+    fprintf(stderr, "FAIL missing insertion anchor\n");
+    failures++;
+  }
+
+  source_sha(duplicate, sha256);
+  status =
+      insert(engine, duplicate, sha256, "WASM_EXPORTS", "_core_sum",
+             "_core_add", ARCHBIRD_MAKE_TOKEN_AFTER, &insert_result, &buffer);
+  if (status != ARCHBIRD_POLICY_REJECTED ||
+      insert_result.matched_anchors != 2) {
+    fprintf(stderr, "FAIL duplicate insertion anchor\n");
     failures++;
   }
 

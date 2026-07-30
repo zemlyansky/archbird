@@ -168,6 +168,31 @@ class _MakeVariableTokenEditResult(ctypes.Structure):
     ]
 
 
+class _MakeVariableTokenInsertOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("source_sha256", ctypes.c_char_p),
+        ("source_sha256_length", ctypes.c_size_t),
+        ("variable", _BYTES_POINTER),
+        ("variable_length", ctypes.c_size_t),
+        ("token", _BYTES_POINTER),
+        ("token_length", ctypes.c_size_t),
+        ("anchor_token", _BYTES_POINTER),
+        ("anchor_token_length", ctypes.c_size_t),
+        ("position", ctypes.c_int),
+    ]
+
+
+class _MakeVariableTokenInsertResult(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("start_byte", ctypes.c_size_t),
+        ("end_byte", ctypes.c_size_t),
+        ("matched_tokens", ctypes.c_size_t),
+        ("matched_anchors", ctypes.c_size_t),
+    ]
+
+
 class _EngineOptions(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_size_t),
@@ -246,6 +271,16 @@ _make_variable_token_edit_options_init = _declare(
 _make_variable_token_edit_result_init = _declare(
     "archbird_make_variable_token_edit_result_init",
     [ctypes.POINTER(_MakeVariableTokenEditResult)],
+    None,
+)
+_make_variable_token_insert_options_init = _declare(
+    "archbird_make_variable_token_insert_options_init",
+    [ctypes.POINTER(_MakeVariableTokenInsertOptions)],
+    None,
+)
+_make_variable_token_insert_result_init = _declare(
+    "archbird_make_variable_token_insert_result_init",
+    [ctypes.POINTER(_MakeVariableTokenInsertResult)],
     None,
 )
 
@@ -1512,6 +1547,78 @@ def make_variable_token_edit(
         "start_byte": result.start_byte,
         "end_byte": result.end_byte,
         "matched_tokens": result.matched_tokens,
+        "replacement": rendered,
+    }
+
+
+def make_variable_token_insert(
+    source: bytes,
+    source_sha256: str,
+    variable: str,
+    token: str,
+    anchor_token: str,
+    position: str,
+) -> dict[str, object]:
+    """Preview one exact anchored token insertion in a Make variable."""
+
+    if position not in {"before", "after"}:
+        raise ValueError("position must be before or after")
+    source_bytes = _bytes(source, "source")
+    source_sha256_bytes = _text(source_sha256, "source_sha256")
+    values = [
+        _text(variable, "variable"),
+        _text(token, "token"),
+        _text(anchor_token, "anchor_token"),
+    ]
+    options = _MakeVariableTokenInsertOptions()
+    result = _MakeVariableTokenInsertResult()
+    _make_variable_token_insert_options_init(ctypes.byref(options))
+    _make_variable_token_insert_result_init(ctypes.byref(result))
+    options.source_sha256 = source_sha256_bytes
+    options.source_sha256_length = len(source_sha256_bytes)
+    storages = [
+        (ctypes.c_uint8 * len(value)).from_buffer_copy(value)
+        for value in values
+    ]
+    pointers = [
+        ctypes.cast(storage, _BYTES_POINTER) for storage in storages
+    ]
+    options.variable = pointers[0]
+    options.variable_length = len(values[0])
+    options.token = pointers[1]
+    options.token_length = len(values[1])
+    options.anchor_token = pointers[2]
+    options.anchor_token_length = len(values[2])
+    options.position = 0 if position == "before" else 1
+    function = _declare(
+        "archbird_make_variable_token_insert",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(_MakeVariableTokenInsertOptions),
+            ctypes.POINTER(_MakeVariableTokenInsertResult),
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    rendered = _one_shot(
+        lambda engine, write: function(
+            engine,
+            source_bytes,
+            len(source_bytes),
+            ctypes.byref(options),
+            ctypes.byref(result),
+            write,
+            None,
+        ),
+        input_budget=len(source_bytes),
+    )
+    return {
+        "start_byte": result.start_byte,
+        "end_byte": result.end_byte,
+        "matched_tokens": result.matched_tokens,
+        "matched_anchors": result.matched_anchors,
         "replacement": rendered,
     }
 

@@ -1273,6 +1273,74 @@ static PyObject *py_make_variable_token_edit(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_make_variable_token_insert(PyObject *self, PyObject *args,
+                                               PyObject *kwargs) {
+  static char *keywords[] = {"source", "source_sha256", "variable",
+                             "token",  "anchor_token",  "position",
+                             NULL};
+  const char *source;
+  const char *source_sha256;
+  const char *variable;
+  const char *token;
+  const char *anchor_token;
+  const char *position;
+  Py_ssize_t source_length;
+  Py_ssize_t source_sha256_length;
+  Py_ssize_t variable_length;
+  Py_ssize_t token_length;
+  Py_ssize_t anchor_token_length;
+  Py_ssize_t position_length;
+  ArchbirdMakeVariableTokenInsertOptions options;
+  ArchbirdMakeVariableTokenInsertResult insert_result;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *replacement_bytes;
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#s#s#s#s#s#:make_variable_token_insert", keywords,
+          &source, &source_length, &source_sha256, &source_sha256_length,
+          &variable, &variable_length, &token, &token_length, &anchor_token,
+          &anchor_token_length, &position, &position_length))
+    return NULL;
+  archbird_make_variable_token_insert_options_init(&options);
+  options.source_sha256 = source_sha256;
+  options.source_sha256_length = (size_t)source_sha256_length;
+  options.variable = (const uint8_t *)variable;
+  options.variable_length = (size_t)variable_length;
+  options.token = (const uint8_t *)token;
+  options.token_length = (size_t)token_length;
+  options.anchor_token = (const uint8_t *)anchor_token;
+  options.anchor_token_length = (size_t)anchor_token_length;
+  if (position_length == 6 && memcmp(position, "before", 6) == 0)
+    options.position = ARCHBIRD_MAKE_TOKEN_BEFORE;
+  else if (position_length == 5 && memcmp(position, "after", 5) == 0)
+    options.position = ARCHBIRD_MAKE_TOKEN_AFTER;
+  else {
+    PyErr_SetString(PyExc_ValueError, "position must be before or after");
+    return NULL;
+  }
+  archbird_make_variable_token_insert_result_init(&insert_result);
+  status = input_engine((size_t)source_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_make_variable_token_insert(
+        engine, (const uint8_t *)source, (size_t)source_length, &options,
+        &insert_result, output_write, &output);
+  replacement_bytes = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  if (!replacement_bytes)
+    return NULL;
+  result =
+      Py_BuildValue("{s:n,s:n,s:n,s:n,s:N}", "start_byte",
+                    (Py_ssize_t)insert_result.start_byte, "end_byte",
+                    (Py_ssize_t)insert_result.end_byte, "matched_tokens",
+                    (Py_ssize_t)insert_result.matched_tokens, "matched_anchors",
+                    (Py_ssize_t)insert_result.matched_anchors, "replacement",
+                    replacement_bytes);
+  return result;
+}
+
 static PyObject *py_map_freshness(PyObject *self, PyObject *args,
                                   PyObject *kwargs) {
   static char *keywords[] = {"snapshot", "current", "pretty", NULL};
@@ -2069,6 +2137,9 @@ static PyMethodDef archbird_methods[] = {
     {"make_variable_token_edit", (PyCFunction)py_make_variable_token_edit,
      METH_VARARGS | METH_KEYWORDS,
      "Preview one source-locked Make variable token edit."},
+    {"make_variable_token_insert", (PyCFunction)py_make_variable_token_insert,
+     METH_VARARGS | METH_KEYWORDS,
+     "Preview one source-locked Make variable token insertion."},
     {"map_freshness", (PyCFunction)py_map_freshness,
      METH_VARARGS | METH_KEYWORDS,
      "Audit a saved Map or Query against a freshly derived current Map."},

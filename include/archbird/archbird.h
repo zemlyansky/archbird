@@ -235,6 +235,32 @@ typedef struct ArchbirdMakeVariableTokenEditResult {
   size_t matched_tokens;
 } ArchbirdMakeVariableTokenEditResult;
 
+typedef enum ArchbirdMakeVariableTokenPosition {
+  ARCHBIRD_MAKE_TOKEN_BEFORE = 0,
+  ARCHBIRD_MAKE_TOKEN_AFTER = 1
+} ArchbirdMakeVariableTokenPosition;
+
+typedef struct ArchbirdMakeVariableTokenInsertOptions {
+  size_t struct_size;
+  const char *source_sha256;
+  size_t source_sha256_length;
+  const uint8_t *variable;
+  size_t variable_length;
+  const uint8_t *token;
+  size_t token_length;
+  const uint8_t *anchor_token;
+  size_t anchor_token_length;
+  ArchbirdMakeVariableTokenPosition position;
+} ArchbirdMakeVariableTokenInsertOptions;
+
+typedef struct ArchbirdMakeVariableTokenInsertResult {
+  size_t struct_size;
+  size_t start_byte;
+  size_t end_byte;
+  size_t matched_tokens;
+  size_t matched_anchors;
+} ArchbirdMakeVariableTokenInsertResult;
+
 ARCHBIRD_API void archbird_engine_options_init(ArchbirdEngineOptions *options);
 
 ARCHBIRD_API ArchbirdStatus archbird_engine_options_init_for_input(
@@ -257,6 +283,12 @@ ARCHBIRD_API void archbird_make_variable_token_edit_options_init(
 
 ARCHBIRD_API void archbird_make_variable_token_edit_result_init(
     ArchbirdMakeVariableTokenEditResult *result);
+
+ARCHBIRD_API void archbird_make_variable_token_insert_options_init(
+    ArchbirdMakeVariableTokenInsertOptions *options);
+
+ARCHBIRD_API void archbird_make_variable_token_insert_result_init(
+    ArchbirdMakeVariableTokenInsertResult *result);
 
 /* Return the lowercase SHA-256 identity of the compiled native core.
  * The returned process-lifetime string is owned by Archbird. */
@@ -332,6 +364,18 @@ ARCHBIRD_API ArchbirdStatus archbird_make_variable_token_edit(
     ArchbirdEngine *engine, const uint8_t *input, size_t input_length,
     const ArchbirdMakeVariableTokenEditOptions *options,
     ArchbirdMakeVariableTokenEditResult *out_result, ArchbirdWriteFn write_fn,
+    void *user_data);
+
+/*
+ * Preview insertion of one absent direct token immediately before or after
+ * one exact anchor token in assignments to a named Make variable. The new
+ * token must be absent and the anchor must occur exactly once. This explicit
+ * placement contract avoids inferring Make evaluation order.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_make_variable_token_insert(
+    ArchbirdEngine *engine, const uint8_t *input, size_t input_length,
+    const ArchbirdMakeVariableTokenInsertOptions *options,
+    ArchbirdMakeVariableTokenInsertResult *out_result, ArchbirdWriteFn write_fn,
     void *user_data);
 
 /*

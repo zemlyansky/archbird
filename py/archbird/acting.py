@@ -41,6 +41,7 @@ _SUPPORTED_ACTIONS = {
     "move_file",
     "edit_json_pointer",
     "edit_make_variable_token",
+    "insert_make_variable_token",
     "rename_symbol",
 }
 _PORTABLE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -343,6 +344,15 @@ def _validate_operation_shape(operation: object) -> str:
             "expected_token",
             "replacement_token",
         },
+        "insert_make_variable_token": {
+            "action",
+            "path",
+            "source_sha256",
+            "variable",
+            "token",
+            "anchor_token",
+            "position",
+        },
         "rename_symbol": {
             "action",
             "symbol",
@@ -368,6 +378,7 @@ def _validate_operation_shape(operation: object) -> str:
         "move_file",
         "edit_json_pointer",
         "edit_make_variable_token",
+        "insert_make_variable_token",
     } and not _valid_sha256(operation["source_sha256"]):
         raise ValueError(f"{action} operation has an invalid source_sha256")
     if action == "edit_json_pointer":
@@ -421,6 +432,46 @@ def _validate_operation_shape(operation: object) -> str:
             raise ValueError(
                 "edit_make_variable_token requires a Make variable and "
                 "distinct direct tokens"
+            )
+    if action == "insert_make_variable_token":
+        variable = _bounded_text(
+            operation["variable"],
+            "insert_make_variable_token variable",
+            maximum=256,
+            nonempty=True,
+        )
+        token = _bounded_text(
+            operation["token"],
+            "insert_make_variable_token token",
+            nonempty=True,
+        )
+        anchor = _bounded_text(
+            operation["anchor_token"],
+            "insert_make_variable_token anchor_token",
+            nonempty=True,
+        )
+        position = _bounded_text(
+            operation["position"],
+            "insert_make_variable_token position",
+            maximum=6,
+            nonempty=True,
+        )
+        if (
+            _PORTABLE_IDENTIFIER.fullmatch(variable) is None
+            or any(
+                character.isspace() or character == "#"
+                for character in token
+            )
+            or any(
+                character.isspace() or character == "#"
+                for character in anchor
+            )
+            or token == anchor
+            or position not in {"before", "after"}
+        ):
+            raise ValueError(
+                "insert_make_variable_token requires a Make variable, "
+                "distinct direct tokens, and explicit placement"
             )
     if action == "create_file":
         _bounded_text(
@@ -867,6 +918,7 @@ def _validate_plan_shape(plan: Mapping[str, object]) -> None:
                     "rename_symbol",
                     "edit_json_pointer",
                     "edit_make_variable_token",
+                    "insert_make_variable_token",
                 }
                 and raw_item["provenance"] != "asserted"
             ):
@@ -1567,6 +1619,57 @@ def _prepare(
                         start,
                         end,
                         state.data[start:end],
+                        replacement_bytes,
+                        expected_sha,
+                    )
+                )
+            elif action == "insert_make_variable_token":
+                state = load_state(path)
+                expected_sha = _validate_sha256(
+                    operation.get("source_sha256")
+                )
+                if state.sha256 != expected_sha:
+                    raise ValueError(
+                        f"source SHA-256 is stale: expected {expected_sha}, "
+                        f"found {state.sha256}"
+                    )
+                try:
+                    edit = _native.make_variable_token_insert(
+                        state.data,
+                        expected_sha,
+                        str(operation.get("variable")),
+                        str(operation.get("token")),
+                        str(operation.get("anchor_token")),
+                        str(operation.get("position")),
+                    )
+                except RuntimeError as error:
+                    raise ValueError(str(error)) from error
+                start = edit.get("start_byte")
+                end = edit.get("end_byte")
+                replacement_bytes = edit.get("replacement")
+                if (
+                    not isinstance(start, int)
+                    or isinstance(start, bool)
+                    or not isinstance(end, int)
+                    or isinstance(end, bool)
+                    or start < 0
+                    or end != start
+                    or end > len(state.data)
+                    or edit.get("matched_tokens") != 0
+                    or edit.get("matched_anchors") != 1
+                    or not isinstance(replacement_bytes, bytes)
+                ):
+                    raise ValueError(
+                        "native Make variable token insertion returned "
+                        "an invalid range"
+                    )
+                replacements.setdefault(path, []).append(
+                    _Replacement(
+                        item_id,
+                        path,
+                        start,
+                        end,
+                        b"",
                         replacement_bytes,
                         expected_sha,
                     )

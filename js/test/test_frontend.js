@@ -126,6 +126,17 @@ assert.deepEqual(
     ]),
     Buffer.from("WASM_EXPORTS = _core_sum \\\n\t_core_mul # keep\n"),
   );
+  const insertion = nativeBinding.makeVariableTokenInsert(
+    source,
+    crypto.createHash("sha256").update(source).digest("hex"),
+    "WASM_EXPORTS",
+    "_core_new",
+    "_core_add",
+    "after",
+  );
+  assert.equal(insertion.matchedTokens, 0);
+  assert.equal(insertion.matchedAnchors, 1);
+  assert.deepEqual(insertion.replacement, Buffer.from(" _core_new"));
 }
 
 const conformanceCorpus = JSON.parse(fs.readFileSync(path.resolve(

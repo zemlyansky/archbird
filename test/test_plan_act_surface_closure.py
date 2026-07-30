@@ -85,27 +85,51 @@ def _verification_acceptance(
     }
 
 
-def _replacement_plan(
+def _surface_plan(
     plan: dict[str, object],
     source: bytes,
-    replacement_token: str,
+    *,
+    remove_stale: bool,
 ) -> dict[str, object]:
     result = copy.deepcopy(plan)
-    item = result["items"][0]
-    assert isinstance(item, dict)
-    item["statement"] = "Update the stale Wasm export registration."
-    item["provenance"] = "asserted"
-    item["operation"] = {
-        "action": "edit_make_variable_token",
+    template = result["items"][0]
+    assert isinstance(template, dict)
+    insertion = copy.deepcopy(template)
+    insertion["id"] = "insert-wasm-export"
+    insertion["statement"] = "Add the missing Wasm export registration."
+    insertion["provenance"] = "asserted"
+    insertion["operation"] = {
+        "action": "insert_make_variable_token",
         "path": "Makefile",
         "source_sha256": hashlib.sha256(source).hexdigest(),
         "variable": "WASM_EXPORTS",
-        "expected_token": "_core_add",
-        "replacement_token": replacement_token,
+        "token": "_core_sum",
+        "anchor_token": "_core_add",
+        "position": "after",
     }
-    item["executable"] = True
-    item["non_executable_reasons"] = []
-    item["unknowns"] = []
+    insertion["executable"] = True
+    insertion["non_executable_reasons"] = []
+    insertion["unknowns"] = []
+    items = [insertion]
+    if remove_stale:
+        removal = copy.deepcopy(template)
+        removal["id"] = "remove-stale-wasm-export"
+        removal["statement"] = "Remove the stale Wasm export registration."
+        removal["provenance"] = "asserted"
+        removal["depends_on"] = ["insert-wasm-export"]
+        removal["operation"] = {
+            "action": "edit_make_variable_token",
+            "path": "Makefile",
+            "source_sha256": hashlib.sha256(source).hexdigest(),
+            "variable": "WASM_EXPORTS",
+            "expected_token": "_core_add",
+            "replacement_token": "",
+        }
+        removal["executable"] = True
+        removal["non_executable_reasons"] = []
+        removal["unknowns"] = []
+        items.append(removal)
+    result["items"] = items
     result["unknowns"] = []
     return result
 
@@ -174,9 +198,7 @@ class PlanActSurfaceClosureTest(unittest.TestCase):
         self.assertEqual(preview_plan(plan, self.root)["status"], "blocked")
 
         makefile = (self.root / "Makefile").read_bytes()
-        incomplete = _replacement_plan(
-            plan, makefile, "_core_missing"
-        )
+        incomplete = _surface_plan(plan, makefile, remove_stale=False)
         rejected = apply_plan(
             incomplete,
             self.root,
@@ -187,7 +209,7 @@ class PlanActSurfaceClosureTest(unittest.TestCase):
         self.assertEqual(rejected["acceptance"]["status"], "not_satisfied")
         self.assertEqual((self.root / "Makefile").read_bytes(), makefile)
 
-        complete = _replacement_plan(plan, makefile, "_core_sum")
+        complete = _surface_plan(plan, makefile, remove_stale=True)
         preview = preview_plan(complete, self.root, before_map)
         self.assertEqual(preview["status"], "preview")
         self.assertEqual(len(preview["changes"]), 1)

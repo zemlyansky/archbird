@@ -347,6 +347,43 @@
         }
       }
     },
+    "makeVariableTokenInsert": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Act requires the inserted direct token to be absent and the named anchor token to occur exactly once across assignments and appends for the Make variable.",
+      "required": [
+        "action",
+        "path",
+        "source_sha256",
+        "variable",
+        "token",
+        "anchor_token",
+        "position"
+      ],
+      "properties": {
+        "action": {"const": "insert_make_variable_token"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "variable": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 256
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[^\\s#]+$"
+        },
+        "anchor_token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[^\\s#]+$"
+        },
+        "position": {"enum": ["before", "after"]}
+      }
+    },
     "renameSite": {
       "type": "object",
       "additionalProperties": false,
@@ -565,6 +602,7 @@
         {"$ref": "#/$defs/moveFile"},
         {"$ref": "#/$defs/jsonPointerEdit"},
         {"$ref": "#/$defs/makeVariableTokenEdit"},
+        {"$ref": "#/$defs/makeVariableTokenInsert"},
         {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/manual"}
       ]
@@ -694,6 +732,25 @@
               "operation": {
                 "properties": {
                   "action": {"const": "edit_make_variable_token"}
+                },
+                "required": ["action"]
+              }
+            },
+            "required": ["executable", "operation"]
+          },
+          "then": {
+            "properties": {
+              "provenance": {"const": "asserted"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executable": {"const": true},
+              "operation": {
+                "properties": {
+                  "action": {"const": "insert_make_variable_token"}
                 },
                 "required": ["action"]
               }

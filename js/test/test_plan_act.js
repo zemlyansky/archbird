@@ -392,6 +392,25 @@ run("Make variable token edits preserve layout and exact cardinality", () => {
     assert.ok(changed.includes("\t_core_sum \\\n"));
     assert.match(changed, /^\t_core_last # keep$/m);
 
+    const changedBuffer = Buffer.from(changed);
+    const insertion = plan(
+      operationItem("insert-wasm-export", {
+        action: "insert_make_variable_token",
+        path: "Makefile",
+        source_sha256: sha(changedBuffer),
+        variable: "WASM_EXPORTS",
+        token: "_core_new",
+        anchor_token: "_core_sum",
+        position: "after",
+      }, { provenance: "asserted" }),
+    );
+    const inserted = applyPlan(insertion, root, () => satisfied());
+    assert.equal(inserted.status, "applied");
+    assert.ok(
+      fs.readFileSync(path.join(root, "Makefile"), "utf8")
+        .includes("\t_core_sum _core_new \\\n"),
+    );
+
     const duplicate = Buffer.from(
       "WASM_EXPORTS = _core_add\n" +
       "WASM_EXPORTS += _core_add\n",

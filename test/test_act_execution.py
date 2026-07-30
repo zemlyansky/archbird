@@ -367,6 +367,27 @@ class ActExecutionTest(unittest.TestCase):
         self.assertIn(b"\t_core_sum \\\n", changed)
         self.assertIn(b"\t_core_last # keep\n", changed)
 
+        insertion = plan(
+            item(
+                "insert-wasm-export",
+                {
+                    "action": "insert_make_variable_token",
+                    "path": "Makefile",
+                    "source_sha256": sha(changed),
+                    "variable": "WASM_EXPORTS",
+                    "token": "_core_new",
+                    "anchor_token": "_core_sum",
+                    "position": "after",
+                },
+                provenance="asserted",
+            )
+        )
+        inserted = apply_plan(insertion, self.root, satisfied)
+        self.assertEqual(inserted["status"], "applied")
+        changed = (self.root / "Makefile").read_bytes()
+        self.assertIn(b"\t_core_sum _core_new \\\n", changed)
+        self.assertIn(b"\t_core_last # keep\n", changed)
+
         duplicate = (
             b"WASM_EXPORTS = _core_add\n"
             b"WASM_EXPORTS += _core_add\n"

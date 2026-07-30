@@ -551,6 +551,69 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
         },
       );
     },
+    makeVariableTokenInsert(
+      source,
+      sourceSha256,
+      variable,
+      token,
+      anchorToken,
+      position,
+    ) {
+      for (const [name, value] of Object.entries({
+        sourceSha256,
+        variable,
+        token,
+        anchorToken,
+      })) {
+        if (typeof value !== "string") {
+          throw new TypeError(`${name} must be a string`);
+        }
+      }
+      if (!["before", "after"].includes(position)) {
+        throw new RangeError("position must be before or after");
+      }
+      return withInputs(
+        [
+          source,
+          Buffer.from(sourceSha256, "ascii"),
+          Buffer.from(variable, "utf8"),
+          Buffer.from(token, "utf8"),
+          Buffer.from(anchorToken, "utf8"),
+        ],
+        ([
+          sourceInput,
+          sourceSha256Input,
+          variableInput,
+          tokenInput,
+          anchorInput,
+        ]) => {
+          const replacement = result(
+            module._ab_wasm_make_variable_token_insert(
+              sourceInput.pointer,
+              sourceInput.length,
+              sourceSha256Input.pointer,
+              sourceSha256Input.length,
+              variableInput.pointer,
+              variableInput.length,
+              tokenInput.pointer,
+              tokenInput.length,
+              anchorInput.pointer,
+              anchorInput.length,
+              position === "before" ? 0 : 1,
+            ),
+          );
+          return {
+            startByte: module._ab_wasm_make_variable_token_insert_start(),
+            endByte: module._ab_wasm_make_variable_token_insert_end(),
+            matchedTokens:
+              module._ab_wasm_make_variable_token_insert_matches(),
+            matchedAnchors:
+              module._ab_wasm_make_variable_token_insert_anchors(),
+            replacement,
+          };
+        },
+      );
+    },
     mapMarkdown: (map, full = false, maxChars = 0) =>
       oneInput(
         map,

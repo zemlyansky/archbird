@@ -49,6 +49,8 @@ static ArchbirdStatus wasm_status = ARCHBIRD_OK;
 static int wasm_verification_blocking;
 static ArchbirdJsonPointerEditResult wasm_json_pointer_edit_result;
 static ArchbirdMakeVariableTokenEditResult wasm_make_variable_token_edit_result;
+static ArchbirdMakeVariableTokenInsertResult
+    wasm_make_variable_token_insert_result;
 
 static void result_reset(void) {
   free(wasm_output.data);
@@ -64,6 +66,8 @@ static void result_reset(void) {
   archbird_json_pointer_edit_result_init(&wasm_json_pointer_edit_result);
   archbird_make_variable_token_edit_result_init(
       &wasm_make_variable_token_edit_result);
+  archbird_make_variable_token_insert_result_init(
+      &wasm_make_variable_token_insert_result);
 }
 
 static int output_write(void *user_data, const uint8_t *bytes, size_t length) {
@@ -254,6 +258,22 @@ AB_WASM_EXPORT size_t ab_wasm_make_variable_token_edit_end(void) {
 
 AB_WASM_EXPORT size_t ab_wasm_make_variable_token_edit_matches(void) {
   return wasm_make_variable_token_edit_result.matched_tokens;
+}
+
+AB_WASM_EXPORT size_t ab_wasm_make_variable_token_insert_start(void) {
+  return wasm_make_variable_token_insert_result.start_byte;
+}
+
+AB_WASM_EXPORT size_t ab_wasm_make_variable_token_insert_end(void) {
+  return wasm_make_variable_token_insert_result.end_byte;
+}
+
+AB_WASM_EXPORT size_t ab_wasm_make_variable_token_insert_matches(void) {
+  return wasm_make_variable_token_insert_result.matched_tokens;
+}
+
+AB_WASM_EXPORT size_t ab_wasm_make_variable_token_insert_anchors(void) {
+  return wasm_make_variable_token_insert_result.matched_anchors;
 }
 
 AB_WASM_EXPORT uint32_t ab_wasm_native_abi_version(void) {
@@ -811,6 +831,35 @@ AB_WASM_EXPORT int ab_wasm_make_variable_token_edit(
     status = archbird_make_variable_token_edit(
         engine, source, source_length, &options,
         &wasm_make_variable_token_edit_result, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_make_variable_token_insert(
+    const uint8_t *source, size_t source_length, const char *source_sha256,
+    size_t source_sha256_length, const uint8_t *variable,
+    size_t variable_length, const uint8_t *token, size_t token_length,
+    const uint8_t *anchor_token, size_t anchor_token_length, int position) {
+  ArchbirdMakeVariableTokenInsertOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  if (position != ARCHBIRD_MAKE_TOKEN_BEFORE &&
+      position != ARCHBIRD_MAKE_TOKEN_AFTER)
+    return (int)invalid_argument("invalid Make token insertion position");
+  status = stateless_begin_input(source_length, &engine);
+  archbird_make_variable_token_insert_options_init(&options);
+  options.source_sha256 = source_sha256;
+  options.source_sha256_length = source_sha256_length;
+  options.variable = variable;
+  options.variable_length = variable_length;
+  options.token = token;
+  options.token_length = token_length;
+  options.anchor_token = anchor_token;
+  options.anchor_token_length = anchor_token_length;
+  options.position = (ArchbirdMakeVariableTokenPosition)position;
+  if (status == ARCHBIRD_OK)
+    status = archbird_make_variable_token_insert(
+        engine, source, source_length, &options,
+        &wasm_make_variable_token_insert_result, output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 
