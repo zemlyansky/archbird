@@ -357,6 +357,61 @@ run("JSON Pointer edits preserve layout and require asserted intent", () => {
   });
 });
 
+run("Make variable token edits preserve layout and exact cardinality", () => {
+  withTemporary("node-act-make-variable", (root) => {
+    const source = Buffer.from(
+      "OTHER = _core_add\n" +
+      "WASM_EXPORTS := _core_first \\\n" +
+      "\t_core_add \\\n" +
+      "\t_core_last # keep\n",
+    );
+    const sourceSha = write(root, "Makefile", source);
+    const operation = {
+      action: "edit_make_variable_token",
+      path: "Makefile",
+      source_sha256: sourceSha,
+      variable: "WASM_EXPORTS",
+      expected_token: "_core_add",
+      replacement_token: "_core_sum",
+    };
+    const document = plan(
+      operationItem("replace-wasm-export", operation, {
+        provenance: "asserted",
+      }),
+    );
+    const preview = previewPlan(document, root);
+    assert.equal(preview.status, "preview");
+    assert.ok(
+      preview.changes[0].unified_diff.includes("+\t_core_sum \\\n"),
+    );
+    assert.match(preview.changes[0].unified_diff, /\t_core_last # keep/);
+    const applied = applyPlan(document, root, () => satisfied());
+    assert.equal(applied.status, "applied");
+    const changed = fs.readFileSync(path.join(root, "Makefile"), "utf8");
+    assert.match(changed, /^OTHER = _core_add$/m);
+    assert.ok(changed.includes("\t_core_sum \\\n"));
+    assert.match(changed, /^\t_core_last # keep$/m);
+
+    const duplicate = Buffer.from(
+      "WASM_EXPORTS = _core_add\n" +
+      "WASM_EXPORTS += _core_add\n",
+    );
+    const duplicateSha = write(root, "Makefile", duplicate);
+    const blocked = previewPlan(
+      plan(operationItem("ambiguous", {
+        ...operation,
+        source_sha256: duplicateSha,
+      }, { provenance: "asserted" })),
+      root,
+    );
+    assert.equal(blocked.status, "blocked");
+    assert.match(
+      blocked.diagnostics[0].message,
+      /expected one match but found 2/,
+    );
+  });
+});
+
 run("invalid and overlapping operations block every write", () => {
   withTemporary("node-act-blocked", (root) => {
     const source = Buffer.from("abcdef\n");

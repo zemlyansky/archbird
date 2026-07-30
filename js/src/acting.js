@@ -24,6 +24,7 @@ const SUPPORTED_ACTIONS = new Set([
   "delete_file",
   "move_file",
   "edit_json_pointer",
+  "edit_make_variable_token",
   "rename_symbol",
 ]);
 const PORTABLE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -339,6 +340,14 @@ function validateOperationShape(operation) {
       "expected_absent",
       "replacement",
     ]),
+    edit_make_variable_token: new Set([
+      "action",
+      "path",
+      "source_sha256",
+      "variable",
+      "expected_token",
+      "replacement_token",
+    ]),
     rename_symbol: new Set([
       "action",
       "symbol",
@@ -368,6 +377,7 @@ function validateOperationShape(operation) {
       "delete_file",
       "move_file",
       "edit_json_pointer",
+      "edit_make_variable_token",
     ].includes(action) &&
     !validSha256(operation.source_sha256)
   ) throw new Error(`${action} operation has an invalid source_sha256`);
@@ -392,6 +402,36 @@ function validateOperationShape(operation) {
       canonicalBytes(operation.expected, MAX_OPERATION_TEXT_BYTES);
     }
     canonicalBytes(operation.replacement, MAX_OPERATION_TEXT_BYTES);
+  }
+  if (action === "edit_make_variable_token") {
+    safeRelativePath(operation.path);
+    validateText(
+      operation.variable,
+      "edit_make_variable_token variable",
+      256,
+    );
+    validateText(
+      operation.expected_token,
+      "edit_make_variable_token expected_token",
+      MAX_METADATA_BYTES,
+    );
+    validateText(
+      operation.replacement_token,
+      "edit_make_variable_token replacement_token",
+      MAX_METADATA_BYTES,
+    );
+    if (
+      !PORTABLE_IDENTIFIER.test(operation.variable) ||
+      operation.expected_token.length === 0 ||
+      /[\s#]/u.test(operation.expected_token) ||
+      /[\s#]/u.test(operation.replacement_token) ||
+      operation.expected_token === operation.replacement_token
+    ) {
+      throw new Error(
+        "edit_make_variable_token requires a Make variable and " +
+        "distinct direct tokens",
+      );
+    }
   }
   if (action === "create_file") {
     safeRelativePath(operation.path);
@@ -888,14 +928,16 @@ function validatePlanShape(plan) {
     ) throw new Error(`Plan item ${item.id} has an invalid executable gate`);
     if (
       item.executable &&
-      ["rename_symbol", "edit_json_pointer"].includes(action) &&
+      [
+        "rename_symbol",
+        "edit_json_pointer",
+        "edit_make_variable_token",
+      ].includes(action) &&
       item.provenance !== "asserted"
     ) {
       throw new Error(
         `Plan item ${item.id} requires asserted ${
-          action === "rename_symbol"
-            ? "rename"
-            : "edit_json_pointer"
+          action === "rename_symbol" ? "rename" : action
         } intent`,
       );
     }
@@ -1424,6 +1466,50 @@ function prepare(plan, root, mapDocument = null) {
         ) {
           throw new Error(
             "native JSON Pointer edit returned an invalid range",
+          );
+        }
+        if (!replacements.has(filePath)) replacements.set(filePath, []);
+        replacements.get(filePath).push({
+          itemId,
+          path: filePath,
+          start,
+          end,
+          before: state.data.subarray(start, end),
+          replacement,
+          sourceSha256: operation.source_sha256,
+        });
+      } else if (action === "edit_make_variable_token") {
+        const state = existingState(root, filePath, initial, sourceBudget);
+        if (state.sha256 !== operation.source_sha256) {
+          throw new Error(
+            `source SHA-256 is stale: expected ${operation.source_sha256}, ` +
+            `found ${state.sha256}`,
+          );
+        }
+        const edit = native.makeVariableTokenEdit(
+          state.data,
+          operation.source_sha256,
+          operation.variable,
+          operation.expected_token,
+          operation.replacement_token,
+        );
+        const {
+          startByte: start,
+          endByte: end,
+          matchedTokens,
+          replacement,
+        } = edit;
+        if (
+          !Number.isSafeInteger(start) ||
+          !Number.isSafeInteger(end) ||
+          start < 0 ||
+          end <= start ||
+          end > state.data.length ||
+          matchedTokens !== 1 ||
+          !Buffer.isBuffer(replacement)
+        ) {
+          throw new Error(
+            "native Make variable token edit returned an invalid range",
           );
         }
         if (!replacements.has(filePath)) replacements.set(filePath, []);

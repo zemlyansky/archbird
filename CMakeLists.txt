@@ -749,6 +749,16 @@ if(BUILD_TESTING)
   target_compile_features(archbird_native_json_pointer_edit_test PRIVATE c_std_11)
   set_target_properties(archbird_native_json_pointer_edit_test
                         PROPERTIES C_EXTENSIONS OFF)
+  add_executable(archbird_native_make_variable_token_edit_test
+                 test/test_make_variable_token_edit.c)
+  target_link_libraries(archbird_native_make_variable_token_edit_test
+                        PRIVATE archbird_native)
+  target_include_directories(archbird_native_make_variable_token_edit_test
+                             PRIVATE ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
+  target_compile_features(archbird_native_make_variable_token_edit_test
+                          PRIVATE c_std_11)
+  set_target_properties(archbird_native_make_variable_token_edit_test
+                        PROPERTIES C_EXTENSIONS OFF)
 
   add_executable(archbird_native_json test/json_cli.c)
   target_link_libraries(archbird_native_json PRIVATE archbird_native)
@@ -957,6 +967,8 @@ if(BUILD_TESTING)
   add_test(NAME archbird_native_json COMMAND archbird_native_json_test)
   add_test(NAME archbird_native_json_pointer_edit
            COMMAND archbird_native_json_pointer_edit_test)
+  add_test(NAME archbird_native_make_variable_token_edit
+           COMMAND archbird_native_make_variable_token_edit_test)
   add_test(NAME archbird_native_sha256 COMMAND archbird_native_sha256_test)
   add_test(NAME archbird_native_project COMMAND archbird_native_project_test)
   add_test(NAME archbird_native_scip COMMAND archbird_native_scip_test)

@@ -705,8 +705,8 @@ archbird act .archbird/plan.json --apply \
 ```
 
 An executable Plan item contains one exact `replace_range`, `create_file`,
-`delete_file`, `move_file`, `edit_json_pointer`, or evidence-bound
-`rename_symbol` operation. A
+`delete_file`, `move_file`, `edit_json_pointer`,
+`edit_make_variable_token`, or evidence-bound `rename_symbol` operation. A
 one-extra/one-missing symbol constraint may suggest a rename, but that does not
 establish intent: the derived candidate stays non-executable until a developer
 or agent supplies `--rename OLD=NEW`. The reviewed command evaluates one
@@ -722,6 +722,12 @@ explicit absence), and the replacement value. The native core rejects stale
 hashes, duplicate keys, missing parents, ambiguous expectations, and invalid
 JSON, then returns one exact byte edit. Archbird does not derive this
 representation-level intent from a generic architecture finding.
+
+An asserted `edit_make_variable_token` operation replaces or removes one exact
+direct token across assignments and appends for a named Make variable. It
+preserves assignment operators, comments, continuations, whitespace, and
+unrelated variables. A stale source lock or zero/multiple token matches blocks
+the edit. Variable expansion and missing-token insertion are not inferred.
 
 The CPython provider can establish direct imported-name references. The
 TypeScript compiler provider covers JavaScript, TypeScript, and TSX references,
@@ -948,7 +954,7 @@ The complete C ABI is declared in
 <!-- archbird-c-api:start -->
 | C area | Public functions |
 | --- | --- |
-| Engine and JSON | `archbird_engine_create`, `archbird_engine_destroy`, `archbird_engine_error`, `archbird_engine_error_offset`, `archbird_engine_options_init`, `archbird_engine_options_init_for_input`, `archbird_graph_options_init`, `archbird_implementation_sha256`, `archbird_json_canonicalize`, `archbird_json_pointer_edit`, `archbird_json_pointer_edit_options_init`, `archbird_json_pointer_edit_result_init`, `archbird_json_validate`, `archbird_unified_diff_options_init` |
+| Engine and structured edits | `archbird_engine_create`, `archbird_engine_destroy`, `archbird_engine_error`, `archbird_engine_error_offset`, `archbird_engine_options_init`, `archbird_engine_options_init_for_input`, `archbird_graph_options_init`, `archbird_implementation_sha256`, `archbird_json_canonicalize`, `archbird_json_pointer_edit`, `archbird_json_pointer_edit_options_init`, `archbird_json_pointer_edit_result_init`, `archbird_json_validate`, `archbird_make_variable_token_edit`, `archbird_make_variable_token_edit_options_init`, `archbird_make_variable_token_edit_result_init`, `archbird_unified_diff_options_init` |
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
 | Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_constraints_report_with_blocking`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |

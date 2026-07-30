@@ -1371,6 +1371,77 @@ static napi_value json_pointer_edit(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value make_variable_token_edit(napi_env env,
+                                           napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5];
+  const uint8_t *source;
+  size_t source_length;
+  size_t source_sha256_length;
+  size_t variable_length;
+  size_t expected_token_length;
+  size_t replacement_token_length;
+  char *source_sha256;
+  char *variable;
+  char *expected_token;
+  char *replacement_token;
+  ArchbirdMakeVariableTokenEditOptions options;
+  ArchbirdMakeVariableTokenEditResult edit_result;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value replacement_buffer;
+  napi_value result;
+  napi_value value;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc != 5 || !get_buffer(env, argv[0], &source, &source_length))
+    return NULL;
+  source_sha256 = get_string(env, argv[1], &source_sha256_length);
+  variable = get_string(env, argv[2], &variable_length);
+  expected_token = get_string(env, argv[3], &expected_token_length);
+  replacement_token = get_string(env, argv[4], &replacement_token_length);
+  if (!source_sha256 || !variable || !expected_token || !replacement_token) {
+    free(replacement_token);
+    free(expected_token);
+    free(variable);
+    free(source_sha256);
+    return NULL;
+  }
+  archbird_make_variable_token_edit_options_init(&options);
+  options.source_sha256 = source_sha256;
+  options.source_sha256_length = source_sha256_length;
+  options.variable = (const uint8_t *)variable;
+  options.variable_length = variable_length;
+  options.expected_token = (const uint8_t *)expected_token;
+  options.expected_token_length = expected_token_length;
+  options.replacement_token = (const uint8_t *)replacement_token;
+  options.replacement_token_length = replacement_token_length;
+  archbird_make_variable_token_edit_result_init(&edit_result);
+  status = input_engine(source_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_make_variable_token_edit(engine, source, source_length,
+                                               &options, &edit_result,
+                                               output_write, &output);
+  free(replacement_token);
+  free(expected_token);
+  free(variable);
+  free(source_sha256);
+  replacement_buffer = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  if (!replacement_buffer)
+    return NULL;
+  NAPI_TRY(napi_create_object(env, &result));
+  NAPI_TRY(napi_create_double(env, (double)edit_result.start_byte, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "startByte", value));
+  NAPI_TRY(napi_create_double(env, (double)edit_result.end_byte, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "endByte", value));
+  NAPI_TRY(napi_create_double(env, (double)edit_result.matched_tokens, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "matchedTokens", value));
+  NAPI_TRY(
+      napi_set_named_property(env, result, "replacement", replacement_buffer));
+  return result;
+}
+
 static napi_value map_freshness(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -2186,6 +2257,8 @@ static napi_value init(napi_env env, napi_value exports) {
       {"unifiedDiff", NULL, unified_diff, NULL, NULL, NULL, napi_default, NULL},
       {"jsonPointerEdit", NULL, json_pointer_edit, NULL, NULL, NULL,
        napi_default, NULL},
+      {"makeVariableTokenEdit", NULL, make_variable_token_edit, NULL, NULL,
+       NULL, napi_default, NULL},
       {"mapFreshness", NULL, map_freshness, NULL, NULL, NULL, napi_default,
        NULL},
       {"mapMarkdown", NULL, map_markdown, NULL, NULL, NULL, napi_default, NULL},

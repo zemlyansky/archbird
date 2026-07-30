@@ -97,6 +97,29 @@ function markedNames(relative, name) {
       ),
     );
   }
+  {
+    const source = Buffer.from(
+      "WASM_EXPORTS = _core_add \\\n\t_core_mul # keep\n",
+    );
+    const sourceSha256 = archbird.core.sha256(source).toString("ascii");
+    const edit = archbird.core.makeVariableTokenEdit(
+      source,
+      sourceSha256,
+      "WASM_EXPORTS",
+      "_core_add",
+      "_core_sum",
+    );
+    assert.equal(edit.matchedTokens, 1);
+    assert.deepEqual(edit.replacement, Buffer.from("_core_sum"));
+    assert.deepEqual(
+      Buffer.concat([
+        source.subarray(0, edit.startByte),
+        edit.replacement,
+        source.subarray(edit.endByte),
+      ]),
+      Buffer.from("WASM_EXPORTS = _core_sum \\\n\t_core_mul # keep\n"),
+    );
+  }
   for (const relative of ["README.md", "js/README.md"]) {
     assert.deepEqual(
       markedNames(relative, "archbird-browser-api"),

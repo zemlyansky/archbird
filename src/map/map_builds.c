@@ -2,6 +2,7 @@
 
 #include "archbird_internal.h"
 #include "json_value.h"
+#include "makefile.h"
 #include "manifests/autoconf_manifest.h"
 #include "package_json.h"
 #include "sha256.h"
@@ -261,42 +262,6 @@ static ArchbirdStatus expand_make(ArchbirdEngine *engine, const char *value,
   return status;
 }
 
-static int assignment(const AbString *line, size_t *name_start,
-                      size_t *name_end, size_t *operator_start,
-                      size_t *operator_length, size_t *value_start) {
-  size_t index = 0;
-  while (index < line->length && isspace((unsigned char)line->data[index]))
-    index++;
-  *name_start = index;
-  if (index == line->length ||
-      !(isalpha((unsigned char)line->data[index]) || line->data[index] == '_'))
-    return 0;
-  index++;
-  while (index < line->length && (isalnum((unsigned char)line->data[index]) ||
-                                  line->data[index] == '_'))
-    index++;
-  *name_end = index;
-  while (index < line->length && isspace((unsigned char)line->data[index]))
-    index++;
-  *operator_start = index;
-  if (index + 1 < line->length &&
-      (line->data[index] == '?' || line->data[index] == ':' ||
-       line->data[index] == '+') &&
-      line->data[index + 1] == '=') {
-    *operator_length = 2;
-    index += 2;
-  } else if (index < line->length && line->data[index] == '=') {
-    *operator_length = 1;
-    index++;
-  } else {
-    return 0;
-  }
-  while (index < line->length && isspace((unsigned char)line->data[index]))
-    index++;
-  *value_start = index;
-  return 1;
-}
-
 static ArchbirdStatus strip_make_comment(ArchbirdEngine *engine,
                                          const char *value, size_t length,
                                          AbString *out) {
@@ -361,8 +326,8 @@ static ArchbirdStatus parse_variables(ArchbirdEngine *engine,
     AbString value = {0};
     if (line->length && line->data[0] == '\t')
       continue;
-    if (!assignment(line, &name_start, &name_end, &operator_start,
-                    &operator_length, &value_start))
+    if (!ab_make_assignment(line->data, line->length, &name_start, &name_end,
+                            &operator_start, &operator_length, &value_start))
       continue;
     status = strip_make_comment(engine, line->data + value_start,
                                 line->length - value_start, &value);
@@ -655,8 +620,9 @@ parse_make_works(ArchbirdEngine *engine, const AbStringArray *lines,
       current_count = 0;
       continue;
     }
-    if (assignment(&stripped, &name_start, &name_end, &operator_start,
-                   &operator_length, &value_start)) {
+    if (ab_make_assignment(stripped.data, stripped.length, &name_start,
+                           &name_end, &operator_start, &operator_length,
+                           &value_start)) {
       current_count = 0;
       continue;
     }

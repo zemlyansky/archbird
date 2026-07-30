@@ -40,6 +40,7 @@ _SUPPORTED_ACTIONS = {
     "delete_file",
     "move_file",
     "edit_json_pointer",
+    "edit_make_variable_token",
     "rename_symbol",
 }
 _PORTABLE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -334,6 +335,14 @@ def _validate_operation_shape(operation: object) -> str:
             "expected_absent",
             "replacement",
         },
+        "edit_make_variable_token": {
+            "action",
+            "path",
+            "source_sha256",
+            "variable",
+            "expected_token",
+            "replacement_token",
+        },
         "rename_symbol": {
             "action",
             "symbol",
@@ -358,6 +367,7 @@ def _validate_operation_shape(operation: object) -> str:
         "delete_file",
         "move_file",
         "edit_json_pointer",
+        "edit_make_variable_token",
     } and not _valid_sha256(operation["source_sha256"]):
         raise ValueError(f"{action} operation has an invalid source_sha256")
     if action == "edit_json_pointer":
@@ -380,6 +390,38 @@ def _validate_operation_shape(operation: object) -> str:
                     f"edit_json_pointer {field} exceeds "
                     f"{MAX_OPERATION_TEXT_BYTES} canonical bytes"
                 )
+    if action == "edit_make_variable_token":
+        variable = _bounded_text(
+            operation["variable"],
+            "edit_make_variable_token variable",
+            maximum=256,
+            nonempty=True,
+        )
+        expected_token = _bounded_text(
+            operation["expected_token"],
+            "edit_make_variable_token expected_token",
+            nonempty=True,
+        )
+        replacement_token = _bounded_text(
+            operation["replacement_token"],
+            "edit_make_variable_token replacement_token",
+        )
+        if (
+            _PORTABLE_IDENTIFIER.fullmatch(variable) is None
+            or any(
+                character.isspace() or character == "#"
+                for character in expected_token
+            )
+            or any(
+                character.isspace() or character == "#"
+                for character in replacement_token
+            )
+            or expected_token == replacement_token
+        ):
+            raise ValueError(
+                "edit_make_variable_token requires a Make variable and "
+                "distinct direct tokens"
+            )
     if action == "create_file":
         _bounded_text(
             operation["content"],
@@ -820,7 +862,12 @@ def _validate_plan_shape(plan: Mapping[str, object]) -> None:
             if reasons or action == "manual":
                 raise ValueError(f"Plan item {item_id} has an invalid executable gate")
             if (
-                action in {"rename_symbol", "edit_json_pointer"}
+                action
+                in {
+                    "rename_symbol",
+                    "edit_json_pointer",
+                    "edit_make_variable_token",
+                }
                 and raw_item["provenance"] != "asserted"
             ):
                 raise ValueError(
@@ -828,7 +875,7 @@ def _validate_plan_shape(plan: Mapping[str, object]) -> None:
                     + (
                         "rename intent"
                         if action == "rename_symbol"
-                        else "edit_json_pointer intent"
+                        else f"{action} intent"
                     )
                 )
         elif not reasons:
@@ -1464,6 +1511,54 @@ def _prepare(
                 ):
                     raise ValueError(
                         "native JSON Pointer edit returned an invalid range"
+                    )
+                replacements.setdefault(path, []).append(
+                    _Replacement(
+                        item_id,
+                        path,
+                        start,
+                        end,
+                        state.data[start:end],
+                        replacement_bytes,
+                        expected_sha,
+                    )
+                )
+            elif action == "edit_make_variable_token":
+                state = load_state(path)
+                expected_sha = _validate_sha256(
+                    operation.get("source_sha256")
+                )
+                if state.sha256 != expected_sha:
+                    raise ValueError(
+                        f"source SHA-256 is stale: expected {expected_sha}, "
+                        f"found {state.sha256}"
+                    )
+                try:
+                    edit = _native.make_variable_token_edit(
+                        state.data,
+                        expected_sha,
+                        str(operation.get("variable")),
+                        str(operation.get("expected_token")),
+                        str(operation.get("replacement_token")),
+                    )
+                except RuntimeError as error:
+                    raise ValueError(str(error)) from error
+                start = edit.get("start_byte")
+                end = edit.get("end_byte")
+                replacement_bytes = edit.get("replacement")
+                if (
+                    not isinstance(start, int)
+                    or isinstance(start, bool)
+                    or not isinstance(end, int)
+                    or isinstance(end, bool)
+                    or start < 0
+                    or end <= start
+                    or end > len(state.data)
+                    or edit.get("matched_tokens") != 1
+                    or not isinstance(replacement_bytes, bytes)
+                ):
+                    raise ValueError(
+                        "native Make variable token edit returned an invalid range"
                     )
                 replacements.setdefault(path, []).append(
                     _Replacement(

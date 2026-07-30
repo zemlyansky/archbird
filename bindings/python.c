@@ -1219,6 +1219,60 @@ static PyObject *py_json_pointer_edit(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_make_variable_token_edit(PyObject *self, PyObject *args,
+                                             PyObject *kwargs) {
+  static char *keywords[] = {"source",         "source_sha256",     "variable",
+                             "expected_token", "replacement_token", NULL};
+  const char *source;
+  const char *source_sha256;
+  const char *variable;
+  const char *expected_token;
+  const char *replacement_token;
+  Py_ssize_t source_length;
+  Py_ssize_t source_sha256_length;
+  Py_ssize_t variable_length;
+  Py_ssize_t expected_token_length;
+  Py_ssize_t replacement_token_length;
+  ArchbirdMakeVariableTokenEditOptions options;
+  ArchbirdMakeVariableTokenEditResult edit_result;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *replacement_bytes;
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#s#s#s#s#:make_variable_token_edit", keywords,
+          &source, &source_length, &source_sha256, &source_sha256_length,
+          &variable, &variable_length, &expected_token, &expected_token_length,
+          &replacement_token, &replacement_token_length))
+    return NULL;
+  archbird_make_variable_token_edit_options_init(&options);
+  options.source_sha256 = source_sha256;
+  options.source_sha256_length = (size_t)source_sha256_length;
+  options.variable = (const uint8_t *)variable;
+  options.variable_length = (size_t)variable_length;
+  options.expected_token = (const uint8_t *)expected_token;
+  options.expected_token_length = (size_t)expected_token_length;
+  options.replacement_token = (const uint8_t *)replacement_token;
+  options.replacement_token_length = (size_t)replacement_token_length;
+  archbird_make_variable_token_edit_result_init(&edit_result);
+  status = input_engine((size_t)source_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_make_variable_token_edit(
+        engine, (const uint8_t *)source, (size_t)source_length, &options,
+        &edit_result, output_write, &output);
+  replacement_bytes = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  if (!replacement_bytes)
+    return NULL;
+  result = Py_BuildValue(
+      "{s:n,s:n,s:n,s:N}", "start_byte", (Py_ssize_t)edit_result.start_byte,
+      "end_byte", (Py_ssize_t)edit_result.end_byte, "matched_tokens",
+      (Py_ssize_t)edit_result.matched_tokens, "replacement", replacement_bytes);
+  return result;
+}
+
 static PyObject *py_map_freshness(PyObject *self, PyObject *args,
                                   PyObject *kwargs) {
   static char *keywords[] = {"snapshot", "current", "pretty", NULL};
@@ -2012,6 +2066,9 @@ static PyMethodDef archbird_methods[] = {
     {"json_pointer_edit", (PyCFunction)py_json_pointer_edit,
      METH_VARARGS | METH_KEYWORDS,
      "Preview one source-locked JSON Pointer edit."},
+    {"make_variable_token_edit", (PyCFunction)py_make_variable_token_edit,
+     METH_VARARGS | METH_KEYWORDS,
+     "Preview one source-locked Make variable token edit."},
     {"map_freshness", (PyCFunction)py_map_freshness,
      METH_VARARGS | METH_KEYWORDS,
      "Audit a saved Map or Query against a freshly derived current Map."},

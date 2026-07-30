@@ -145,6 +145,29 @@ class _JsonPointerEditResult(ctypes.Structure):
     ]
 
 
+class _MakeVariableTokenEditOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("source_sha256", ctypes.c_char_p),
+        ("source_sha256_length", ctypes.c_size_t),
+        ("variable", _BYTES_POINTER),
+        ("variable_length", ctypes.c_size_t),
+        ("expected_token", _BYTES_POINTER),
+        ("expected_token_length", ctypes.c_size_t),
+        ("replacement_token", _BYTES_POINTER),
+        ("replacement_token_length", ctypes.c_size_t),
+    ]
+
+
+class _MakeVariableTokenEditResult(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("start_byte", ctypes.c_size_t),
+        ("end_byte", ctypes.c_size_t),
+        ("matched_tokens", ctypes.c_size_t),
+    ]
+
+
 class _EngineOptions(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_size_t),
@@ -213,6 +236,16 @@ _json_pointer_edit_options_init = _declare(
 _json_pointer_edit_result_init = _declare(
     "archbird_json_pointer_edit_result_init",
     [ctypes.POINTER(_JsonPointerEditResult)],
+    None,
+)
+_make_variable_token_edit_options_init = _declare(
+    "archbird_make_variable_token_edit_options_init",
+    [ctypes.POINTER(_MakeVariableTokenEditOptions)],
+    None,
+)
+_make_variable_token_edit_result_init = _declare(
+    "archbird_make_variable_token_edit_result_init",
+    [ctypes.POINTER(_MakeVariableTokenEditResult)],
     None,
 )
 
@@ -1401,6 +1434,84 @@ def json_pointer_edit(
         "end_byte": result.end_byte,
         "matched_values": result.matched_values,
         "kind": "insert" if result.kind == 1 else "replace",
+        "replacement": rendered,
+    }
+
+
+def make_variable_token_edit(
+    source: bytes,
+    source_sha256: str,
+    variable: str,
+    expected_token: str,
+    replacement_token: str,
+) -> dict[str, object]:
+    """Preview one exact source-locked token edit in a Make variable."""
+
+    source_bytes = _bytes(source, "source")
+    source_sha256_bytes = _text(source_sha256, "source_sha256")
+    variable_bytes = _text(variable, "variable")
+    expected_bytes = _text(expected_token, "expected_token")
+    replacement_bytes = _text(replacement_token, "replacement_token")
+    options = _MakeVariableTokenEditOptions()
+    result = _MakeVariableTokenEditResult()
+    _make_variable_token_edit_options_init(ctypes.byref(options))
+    _make_variable_token_edit_result_init(ctypes.byref(result))
+    options.source_sha256 = source_sha256_bytes
+    options.source_sha256_length = len(source_sha256_bytes)
+    storages = []
+    for value in (variable_bytes, expected_bytes, replacement_bytes):
+        storage = (
+            (ctypes.c_uint8 * len(value)).from_buffer_copy(value)
+            if value
+            else None
+        )
+        storages.append(storage)
+    options.variable = (
+        ctypes.cast(storages[0], _BYTES_POINTER)
+        if storages[0] is not None
+        else _BYTES_POINTER()
+    )
+    options.variable_length = len(variable_bytes)
+    options.expected_token = (
+        ctypes.cast(storages[1], _BYTES_POINTER)
+        if storages[1] is not None
+        else _BYTES_POINTER()
+    )
+    options.expected_token_length = len(expected_bytes)
+    options.replacement_token = (
+        ctypes.cast(storages[2], _BYTES_POINTER)
+        if storages[2] is not None
+        else _BYTES_POINTER()
+    )
+    options.replacement_token_length = len(replacement_bytes)
+    function = _declare(
+        "archbird_make_variable_token_edit",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(_MakeVariableTokenEditOptions),
+            ctypes.POINTER(_MakeVariableTokenEditResult),
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    rendered = _one_shot(
+        lambda engine, write: function(
+            engine,
+            source_bytes,
+            len(source_bytes),
+            ctypes.byref(options),
+            ctypes.byref(result),
+            write,
+            None,
+        ),
+        input_budget=len(source_bytes),
+    )
+    return {
+        "start_byte": result.start_byte,
+        "end_byte": result.end_byte,
+        "matched_tokens": result.matched_tokens,
         "replacement": rendered,
     }
 

@@ -313,6 +313,40 @@
         }
       ]
     },
+    "makeVariableTokenEdit": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Act requires exactly one direct token match across assignments and appends for the named Make variable. Empty replacement removes the token; insertion is a separate operation.",
+      "required": [
+        "action",
+        "path",
+        "source_sha256",
+        "variable",
+        "expected_token",
+        "replacement_token"
+      ],
+      "properties": {
+        "action": {"const": "edit_make_variable_token"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "variable": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 256
+        },
+        "expected_token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[^\\s#]+$"
+        },
+        "replacement_token": {
+          "type": "string",
+          "maxLength": 65536,
+          "pattern": "^[^\\s#]*$"
+        }
+      }
+    },
     "renameSite": {
       "type": "object",
       "additionalProperties": false,
@@ -530,6 +564,7 @@
         {"$ref": "#/$defs/deleteFile"},
         {"$ref": "#/$defs/moveFile"},
         {"$ref": "#/$defs/jsonPointerEdit"},
+        {"$ref": "#/$defs/makeVariableTokenEdit"},
         {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/manual"}
       ]
@@ -641,6 +676,25 @@
               "executable": {"const": true},
               "operation": {
                 "properties": {"action": {"const": "edit_json_pointer"}},
+                "required": ["action"]
+              }
+            },
+            "required": ["executable", "operation"]
+          },
+          "then": {
+            "properties": {
+              "provenance": {"const": "asserted"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executable": {"const": true},
+              "operation": {
+                "properties": {
+                  "action": {"const": "edit_make_variable_token"}
+                },
                 "required": ["action"]
               }
             },

@@ -88,23 +88,20 @@ def _verification_acceptance(
 def _replacement_plan(
     plan: dict[str, object],
     source: bytes,
-    replacement: str,
+    replacement_token: str,
 ) -> dict[str, object]:
     result = copy.deepcopy(plan)
-    start = source.index(b"core_add")
-    end = start + len(b"core_add")
     item = result["items"][0]
     assert isinstance(item, dict)
     item["statement"] = "Update the stale Wasm export registration."
     item["provenance"] = "asserted"
     item["operation"] = {
-        "action": "replace_range",
+        "action": "edit_make_variable_token",
         "path": "Makefile",
         "source_sha256": hashlib.sha256(source).hexdigest(),
-        "start_byte": start,
-        "end_byte": end,
-        "before": "core_add",
-        "replacement": replacement,
+        "variable": "WASM_EXPORTS",
+        "expected_token": "_core_add",
+        "replacement_token": replacement_token,
     }
     item["executable"] = True
     item["non_executable_reasons"] = []
@@ -178,7 +175,7 @@ class PlanActSurfaceClosureTest(unittest.TestCase):
 
         makefile = (self.root / "Makefile").read_bytes()
         incomplete = _replacement_plan(
-            plan, makefile, "core_add _core_sum"
+            plan, makefile, "_core_missing"
         )
         rejected = apply_plan(
             incomplete,
@@ -190,7 +187,7 @@ class PlanActSurfaceClosureTest(unittest.TestCase):
         self.assertEqual(rejected["acceptance"]["status"], "not_satisfied")
         self.assertEqual((self.root / "Makefile").read_bytes(), makefile)
 
-        complete = _replacement_plan(plan, makefile, "core_sum")
+        complete = _replacement_plan(plan, makefile, "_core_sum")
         preview = preview_plan(complete, self.root, before_map)
         self.assertEqual(preview["status"], "preview")
         self.assertEqual(len(preview["changes"]), 1)

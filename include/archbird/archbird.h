@@ -216,6 +216,25 @@ typedef struct ArchbirdJsonPointerEditResult {
   ArchbirdJsonPointerEditKind kind;
 } ArchbirdJsonPointerEditResult;
 
+typedef struct ArchbirdMakeVariableTokenEditOptions {
+  size_t struct_size;
+  const char *source_sha256;
+  size_t source_sha256_length;
+  const uint8_t *variable;
+  size_t variable_length;
+  const uint8_t *expected_token;
+  size_t expected_token_length;
+  const uint8_t *replacement_token;
+  size_t replacement_token_length;
+} ArchbirdMakeVariableTokenEditOptions;
+
+typedef struct ArchbirdMakeVariableTokenEditResult {
+  size_t struct_size;
+  size_t start_byte;
+  size_t end_byte;
+  size_t matched_tokens;
+} ArchbirdMakeVariableTokenEditResult;
+
 ARCHBIRD_API void archbird_engine_options_init(ArchbirdEngineOptions *options);
 
 ARCHBIRD_API ArchbirdStatus archbird_engine_options_init_for_input(
@@ -232,6 +251,12 @@ ARCHBIRD_API void archbird_json_pointer_edit_options_init(
 
 ARCHBIRD_API void
 archbird_json_pointer_edit_result_init(ArchbirdJsonPointerEditResult *result);
+
+ARCHBIRD_API void archbird_make_variable_token_edit_options_init(
+    ArchbirdMakeVariableTokenEditOptions *options);
+
+ARCHBIRD_API void archbird_make_variable_token_edit_result_init(
+    ArchbirdMakeVariableTokenEditResult *result);
 
 /* Return the lowercase SHA-256 identity of the compiled native core.
  * The returned process-lifetime string is owned by Archbird. */
@@ -294,6 +319,19 @@ ARCHBIRD_API ArchbirdStatus archbird_json_pointer_edit(
     ArchbirdEngine *engine, const uint8_t *input, size_t input_length,
     const ArchbirdJsonPointerEditOptions *options,
     ArchbirdJsonPointerEditResult *out_result, ArchbirdWriteFn write_fn,
+    void *user_data);
+
+/*
+ * Preview one source-locked replacement or removal of an exact direct token
+ * in assignments to a named Make variable. Assignment operators, comments,
+ * continuations, whitespace, and unrelated bytes are preserved. The edit is
+ * rejected unless the expected token occurs exactly once across every direct
+ * assignment and append for the variable. Variable expansion is not inferred.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_make_variable_token_edit(
+    ArchbirdEngine *engine, const uint8_t *input, size_t input_length,
+    const ArchbirdMakeVariableTokenEditOptions *options,
+    ArchbirdMakeVariableTokenEditResult *out_result, ArchbirdWriteFn write_fn,
     void *user_data);
 
 /*

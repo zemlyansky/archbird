@@ -331,6 +331,58 @@ class ActExecutionTest(unittest.TestCase):
             blocked["diagnostics"][0]["message"],
         )
 
+    def test_make_variable_token_edit_preserves_make_layout(self) -> None:
+        source = (
+            b"OTHER = _core_add\n"
+            b"WASM_EXPORTS := _core_first \\\n"
+            b"\t_core_add \\\n"
+            b"\t_core_last # keep\n"
+        )
+        self.write("Makefile", source)
+        operation = {
+            "action": "edit_make_variable_token",
+            "path": "Makefile",
+            "source_sha256": sha(source),
+            "variable": "WASM_EXPORTS",
+            "expected_token": "_core_add",
+            "replacement_token": "_core_sum",
+        }
+        document = plan(
+            item("replace-wasm-export", operation, provenance="asserted")
+        )
+        preview = preview_plan(document, self.root)
+        self.assertEqual(preview["status"], "preview")
+        self.assertIn(
+            "\t_core_sum \\\n",
+            preview["changes"][0]["unified_diff"],
+        )
+        self.assertIn(
+            "\t_core_last # keep",
+            preview["changes"][0]["unified_diff"],
+        )
+        applied = apply_plan(document, self.root, satisfied)
+        self.assertEqual(applied["status"], "applied")
+        changed = (self.root / "Makefile").read_bytes()
+        self.assertIn(b"OTHER = _core_add\n", changed)
+        self.assertIn(b"\t_core_sum \\\n", changed)
+        self.assertIn(b"\t_core_last # keep\n", changed)
+
+        duplicate = (
+            b"WASM_EXPORTS = _core_add\n"
+            b"WASM_EXPORTS += _core_add\n"
+        )
+        self.write("Makefile", duplicate)
+        operation["source_sha256"] = sha(duplicate)
+        blocked = preview_plan(
+            plan(item("ambiguous", operation, provenance="asserted")),
+            self.root,
+        )
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(
+            "expected one match but found 2",
+            blocked["diagnostics"][0]["message"],
+        )
+
     def test_rename_symbol_applies_one_evidence_bound_multifile_operation(
         self,
     ) -> None:

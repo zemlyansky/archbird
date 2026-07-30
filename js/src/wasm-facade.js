@@ -492,6 +492,65 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
         },
       );
     },
+    makeVariableTokenEdit(
+      source,
+      sourceSha256,
+      variable,
+      expectedToken,
+      replacementToken,
+    ) {
+      for (const [name, value] of Object.entries({
+        sourceSha256,
+        variable,
+        expectedToken,
+        replacementToken,
+      })) {
+        if (typeof value !== "string") {
+          throw new TypeError(`${name} must be a string`);
+        }
+      }
+      const sourceSha256Bytes = Buffer.from(sourceSha256, "ascii");
+      const variableBytes = Buffer.from(variable, "utf8");
+      const expectedBytes = Buffer.from(expectedToken, "utf8");
+      const replacementBytes = Buffer.from(replacementToken, "utf8");
+      return withInputs(
+        [
+          source,
+          sourceSha256Bytes,
+          variableBytes,
+          expectedBytes,
+          replacementBytes,
+        ],
+        ([
+          sourceInput,
+          sourceSha256Input,
+          variableInput,
+          expectedInput,
+          replacementInput,
+        ]) => {
+          const replacement = result(
+            module._ab_wasm_make_variable_token_edit(
+              sourceInput.pointer,
+              sourceInput.length,
+              sourceSha256Input.pointer,
+              sourceSha256Input.length,
+              variableInput.pointer,
+              variableInput.length,
+              expectedInput.pointer,
+              expectedInput.length,
+              replacementInput.pointer,
+              replacementInput.length,
+            ),
+          );
+          return {
+            startByte: module._ab_wasm_make_variable_token_edit_start(),
+            endByte: module._ab_wasm_make_variable_token_edit_end(),
+            matchedTokens: module._ab_wasm_make_variable_token_edit_matches(),
+            replacement,
+          };
+        },
+      );
+    },
     mapMarkdown: (map, full = false, maxChars = 0) =>
       oneInput(
         map,

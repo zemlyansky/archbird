@@ -105,6 +105,28 @@ assert.deepEqual(
     ),
   );
 }
+{
+  const source = Buffer.from(
+    "WASM_EXPORTS = _core_add \\\n\t_core_mul # keep\n",
+  );
+  const edit = nativeBinding.makeVariableTokenEdit(
+    source,
+    crypto.createHash("sha256").update(source).digest("hex"),
+    "WASM_EXPORTS",
+    "_core_add",
+    "_core_sum",
+  );
+  assert.equal(edit.matchedTokens, 1);
+  assert.deepEqual(edit.replacement, Buffer.from("_core_sum"));
+  assert.deepEqual(
+    Buffer.concat([
+      source.subarray(0, edit.startByte),
+      edit.replacement,
+      source.subarray(edit.endByte),
+    ]),
+    Buffer.from("WASM_EXPORTS = _core_sum \\\n\t_core_mul # keep\n"),
+  );
+}
 
 const conformanceCorpus = JSON.parse(fs.readFileSync(path.resolve(
   process.argv[3],
