@@ -1110,6 +1110,85 @@ class PlanGenerationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "map_input_sha256"):
             generate_plan(map_document, cross_map, None, self.root)
 
+    def test_one_issue_fingerprint_produces_one_plan_item(self) -> None:
+        make_sha256 = _write(
+            self.root, "Makefile", b"WASM_EXPORTS = _core_add\n"
+        )
+        header_sha256 = _write(
+            self.root,
+            "src/core.h",
+            b"int core_sum(int left, int right);\n",
+        )
+        map_document = _map(
+            [
+                _file("Makefile", make_sha256),
+                _file("src/core.h", header_sha256),
+            ]
+        )
+        unavailable = _finding(
+            "core_sum",
+            path="Makefile",
+            sha256=make_sha256,
+            comparison="different",
+            evidence_state="unknown",
+        )
+        current = _finding(
+            "core_sum",
+            path="src/core.h",
+            sha256=header_sha256,
+            comparison="different",
+        )
+        current["fingerprint"] = unavailable["fingerprint"]
+        check = _check(
+            "PROVIDER-PARITY",
+            assertion="mapped_values_equal",
+            actual="p.surface",
+            findings=[unavailable, current],
+        )
+        verification = _verification(
+            map_document,
+            [check],
+            {
+                "p.surface": {
+                    "name": "ffi",
+                    "select": "provider_surface",
+                }
+            },
+        )
+
+        plan = self.generate(map_document, verification)
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertEqual(
+            item["operation"]["candidate_paths"],
+            ["Makefile", "src/core.h"],
+        )
+        self.assertNotIn(
+            "Finding evidence is waived, stale, inapplicable, or otherwise "
+            "not current executable evidence.",
+            item["non_executable_reasons"],
+        )
+        self.assertEqual(
+            [row["path"] for row in item["evidence"]],
+            ["Makefile", "src/core.h"],
+        )
+        self.assertEqual(len(plan["unknowns"]), 1)
+        self.assertEqual(preview_plan(plan, self.root)["status"], "blocked")
+
+        inconsistent = json.loads(json.dumps(verification))
+        inconsistent["constraints"][0]["findings"][1]["key"] = "other"
+        inconsistent["verification_result_sha256"] = _digest(
+            {
+                key: value
+                for key, value in inconsistent.items()
+                if key != "verification_result_sha256"
+            }
+        )
+        with self.assertRaisesRegex(
+            ValueError, "one issue fingerprint across distinct"
+        ):
+            generate_plan(map_document, inconsistent, None, self.root)
+
     def test_passing_verification_generates_valid_no_op_plan(self) -> None:
         unicode_sha256 = _write(
             self.root, "src/caf\u00e9.py", "VALUE = '\u2615'\n".encode()

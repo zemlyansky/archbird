@@ -997,6 +997,85 @@ run("generation never deletes a path with known consumers", () => {
   });
 });
 
+run("one issue fingerprint produces one Plan item", () => {
+  withTemporary("node-plan-coalesced-finding", (root) => {
+    const makeSha = write(
+      root,
+      "Makefile",
+      Buffer.from("WASM_EXPORTS = _core_add\n"),
+    );
+    const headerSha = write(
+      root,
+      "src/core.h",
+      Buffer.from("int core_sum(int left, int right);\n"),
+    );
+    const map = mapArtifact([
+      { path: "Makefile", sha256: makeSha, symbols: [], exports: [] },
+      { path: "src/core.h", sha256: headerSha, symbols: [], exports: [] },
+    ]);
+    const unavailable = finding(
+      "core_sum",
+      "Makefile",
+      makeSha,
+      "different",
+    );
+    unavailable.evidence_state = "unknown";
+    const current = finding(
+      "core_sum",
+      "src/core.h",
+      headerSha,
+      "different",
+    );
+    current.fingerprint = unavailable.fingerprint;
+    const constraint = check(
+      "PROVIDER-PARITY",
+      "mapped_values_equal",
+      "p.surface",
+      [unavailable, current],
+    );
+    const verification = verificationArtifact(
+      map,
+      [constraint],
+      {
+        "p.surface": {
+          name: "ffi",
+          select: "provider_surface",
+        },
+      },
+    );
+
+    const generated = generatePlan(map, verification, null, root);
+    assert.equal(generated.items.length, 1);
+    assert.deepEqual(
+      generated.items[0].operation.candidate_paths,
+      ["Makefile", "src/core.h"],
+    );
+    assert.equal(
+      generated.items[0].non_executable_reasons.includes(
+        "Finding evidence is waived, stale, inapplicable, or otherwise " +
+        "not current executable evidence.",
+      ),
+      false,
+    );
+    assert.deepEqual(
+      generated.items[0].evidence.map((row) => row.path),
+      ["Makefile", "src/core.h"],
+    );
+    assert.equal(generated.unknowns.length, 1);
+    assert.equal(previewPlan(generated, root).status, "blocked");
+
+    const inconsistent = structuredClone(verification);
+    inconsistent.constraints[0].findings[1].key = "other";
+    const unsigned = structuredClone(inconsistent);
+    delete unsigned.verification_result_sha256;
+    inconsistent.verification_result_sha256 = canonicalDigest(unsigned);
+    assert.throws(
+      () => generatePlan(map, inconsistent, null, root),
+      /one issue fingerprint across distinct/,
+    );
+  });
+});
+
 run("generation uses exact declaration extents from a native Map", () => {
   withTemporary("node-plan-symbol", (root) => {
     const source = Buffer.from(

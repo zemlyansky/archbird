@@ -361,6 +361,64 @@ def _finding_is_current(finding: Mapping[str, object]) -> bool:
     )
 
 
+def _coalesce_findings(
+    findings: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Merge multiple renderings of one issue identity before planning."""
+
+    grouped: dict[tuple[str, object], list[Mapping[str, object]]] = {}
+    order: list[tuple[str, object]] = []
+    for index, finding in enumerate(findings):
+        fingerprint = finding.get("fingerprint")
+        key: tuple[str, object] = (
+            ("fingerprint", fingerprint)
+            if isinstance(fingerprint, str)
+            else ("row", index)
+        )
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(finding)
+
+    result: list[dict[str, object]] = []
+    for key in order:
+        rows = grouped[key]
+        semantic_keys = {
+            _canonical_bytes(
+                {
+                    "comparison": row.get("comparison"),
+                    "key": row.get("key"),
+                }
+            )
+            for row in rows
+        }
+        if len(semantic_keys) != 1:
+            raise ValueError(
+                "Verification reuses one issue fingerprint across distinct "
+                "finding keys or comparisons"
+            )
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                not _finding_is_current(row),
+                _canonical_bytes(row),
+            ),
+        )
+        merged = copy.deepcopy(dict(ordered[0]))
+        evidence_by_identity: dict[bytes, dict[str, object]] = {}
+        for row in rows:
+            for evidence in _evidence(row):
+                evidence_by_identity[_canonical_bytes(evidence)] = (
+                    copy.deepcopy(evidence)
+                )
+        merged["evidence"] = [
+            evidence_by_identity[identity]
+            for identity in sorted(evidence_by_identity)
+        ]
+        result.append(merged)
+    return result
+
+
 def _destructive_relation_frontier(
     map_document: Mapping[str, object],
 ) -> str | None:
@@ -1067,7 +1125,9 @@ def _forbidden_path_items(
     )
     findings = constraint.get("findings")
     finding_rows = (
-        [row for row in findings if isinstance(row, Mapping)]
+        _coalesce_findings(
+            [row for row in findings if isinstance(row, Mapping)]
+        )
         if isinstance(findings, list)
         else []
     )
@@ -1596,9 +1656,12 @@ def _apply_rename_directives(
             ]
         ] = []
         for constraint in ordered_checks:
-            findings = constraint.get("findings")
-            if not isinstance(findings, list):
+            raw_findings = constraint.get("findings")
+            if not isinstance(raw_findings, list):
                 continue
+            findings = _coalesce_findings(
+                [row for row in raw_findings if isinstance(row, Mapping)]
+            )
             extras = [
                 row
                 for row in findings
@@ -1725,9 +1788,12 @@ def _inferred_rename_directives(
 ) -> dict[str, str]:
     candidates: list[tuple[str, str]] = []
     for constraint in constraints:
-        findings = constraint.get("findings")
-        if not isinstance(findings, list):
+        raw_findings = constraint.get("findings")
+        if not isinstance(raw_findings, list):
             continue
+        findings = _coalesce_findings(
+            [row for row in raw_findings if isinstance(row, Mapping)]
+        )
         extras = [
             row
             for row in findings
@@ -1863,7 +1929,9 @@ def generate_plan(
             continue
         findings = constraint.get("findings")
         finding_rows = (
-            [row for row in findings if isinstance(row, Mapping)]
+            _coalesce_findings(
+                [row for row in findings if isinstance(row, Mapping)]
+            )
             if isinstance(findings, list)
             else []
         )

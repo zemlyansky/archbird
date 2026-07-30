@@ -403,6 +403,50 @@ function findingIsCurrent(finding) {
   );
 }
 
+function coalesceFindings(findings) {
+  const groups = new Map();
+  findings.forEach((finding, index) => {
+    const groupKey = typeof finding.fingerprint === "string"
+      ? `fingerprint:${finding.fingerprint}`
+      : `row:${index}`;
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push(finding);
+  });
+  const result = [];
+  for (const rows of groups.values()) {
+    const semanticKeys = new Set(rows.map((row) => canonicalBytes({
+      comparison: row.comparison ?? null,
+      key: row.key ?? null,
+    }).toString("hex")));
+    if (semanticKeys.size !== 1) {
+      throw new Error(
+        "Verification reuses one issue fingerprint across distinct " +
+        "finding keys or comparisons",
+      );
+    }
+    const ordered = [...rows].sort((left, right) => {
+      const current = Number(!findingIsCurrent(left)) -
+        Number(!findingIsCurrent(right));
+      return current || Buffer.compare(canonicalBytes(left), canonicalBytes(right));
+    });
+    const merged = structuredClone(ordered[0]);
+    const evidenceByIdentity = new Map();
+    for (const row of rows) {
+      for (const evidenceRow of evidence(row)) {
+        evidenceByIdentity.set(
+          canonicalBytes(evidenceRow).toString("hex"),
+          structuredClone(evidenceRow),
+        );
+      }
+    }
+    merged.evidence = [...evidenceByIdentity.entries()]
+      .sort(([left], [right]) => utf8Compare(left, right))
+      .map(([, row]) => row);
+    result.push(merged);
+  }
+  return result;
+}
+
 function destructiveRelationFrontier(mapDocument) {
   const definition = {
     id: "plan-destructive-relations",
@@ -1142,7 +1186,7 @@ function forbiddenPathItems({
       (row) => isObject(row) && row.name === actualName,
     ) : [];
   const findingRows = Array.isArray(constraint.findings)
-    ? constraint.findings.filter(isObject)
+    ? coalesceFindings(constraint.findings.filter(isObject))
     : [];
   const fallbackFinding = findingRows[0] || null;
 
@@ -1621,7 +1665,7 @@ function applyRenameDirectives({
     const matches = [];
     for (const constraint of orderedChecks) {
       const findings = Array.isArray(constraint.findings)
-        ? constraint.findings.filter(isObject)
+        ? coalesceFindings(constraint.findings.filter(isObject))
         : [];
       const extras = findings.filter((row) =>
         row.key === symbol &&
@@ -1728,7 +1772,7 @@ function inferredRenameDirectives(constraints) {
   const candidates = [];
   for (const constraint of constraints) {
     const findings = Array.isArray(constraint.findings)
-      ? constraint.findings.filter(isObject)
+      ? coalesceFindings(constraint.findings.filter(isObject))
       : [];
     const extras = findings.filter((row) =>
       ["extra", "overlap"].includes(row.comparison) &&
@@ -1861,7 +1905,7 @@ function generatePlan(
       continue;
     }
     const findingRows = Array.isArray(constraint.findings)
-      ? constraint.findings.filter(isObject)
+      ? coalesceFindings(constraint.findings.filter(isObject))
       : [];
     if (findingRows.length === 0) {
       const [item, rows] = nonExecutableItem({
