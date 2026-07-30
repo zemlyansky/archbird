@@ -1338,6 +1338,71 @@ let zeroProject = Project.fromRepository(zeroFixture, {
   typescript: false,
 });
 const zeroMap = zeroProject.map();
+const originalPython = fs.readFileSync(path.join(zeroFixture, "src/main.py"));
+const originalJavaScript = fs.readFileSync(path.join(zeroFixture, "src/main.js"));
+const overlayProject = zeroProject.withSourceOverlay({
+  "src/main.py": Buffer.from("def overlaid():\n    return 2\n"),
+  "src/main.js": null,
+  "src/added.py": Buffer.from("def added():\n    return 3\n"),
+}, {
+  mapCache: false,
+  typescript: false,
+});
+const overlayMap = overlayProject.map();
+const overlayFiles = new Map(overlayMap.files.map((row) => [row.path, row]));
+assert.equal(overlayFiles.has("src/main.js"), false);
+assert.deepEqual(
+  overlayFiles.get("src/main.py").symbols.map((row) => row.name),
+  ["overlaid"],
+);
+assert.deepEqual(
+  overlayFiles.get("src/added.py").symbols.map((row) => row.name),
+  ["added"],
+);
+assert.deepEqual(fs.readFileSync(path.join(zeroFixture, "src/main.py")), originalPython);
+assert.deepEqual(
+  fs.readFileSync(path.join(zeroFixture, "src/main.js")),
+  originalJavaScript,
+);
+assert.equal(fs.existsSync(path.join(zeroFixture, "src/added.py")), false);
+const ignoreOverlayProject = zeroProject.withSourceOverlay({
+  ".gitignore": Buffer.from("*.skip.py\nsrc/main.py\n"),
+}, {
+  mapCache: false,
+  typescript: false,
+});
+const ignoreOverlayPaths = new Set(
+  ignoreOverlayProject.map().files.map((row) => row.path),
+);
+assert.equal(ignoreOverlayPaths.has("ignored/drop.py"), true);
+assert.equal(ignoreOverlayPaths.has("src/main.py"), false);
+assert.deepEqual(
+  fs.readFileSync(path.join(zeroFixture, ".gitignore")),
+  Buffer.from("ignored/\n*.skip.py\n"),
+);
+ignoreOverlayProject.dispose();
+const overlaidConfig = Buffer.from(
+  '{"exclude":["src/main.py"],"project":"overlay-config"}',
+);
+const configOverlayProject = zeroProject.withSourceOverlay({
+  "archbird.json": overlaidConfig,
+}, {
+  config: overlaidConfig,
+  mapCache: false,
+  typescript: false,
+});
+const configOverlayMap = configOverlayProject.map();
+assert.equal(configOverlayMap.project, "overlay-config");
+assert.equal(
+  configOverlayMap.files.some((row) => row.path === "src/main.py"),
+  false,
+);
+assert.notDeepEqual(
+  fs.readFileSync(path.join(zeroFixture, "archbird.json")),
+  overlaidConfig,
+);
+configOverlayProject.dispose();
+overlayProject.dispose();
 const materializedProject = Project.fromRepository(zeroFixture, {
   config: materializedConfig,
   mapCache: false,

@@ -1543,6 +1543,28 @@ function actProject(options, repository, configJson, progress) {
   return current;
 }
 
+function actOverlayProject(options, before, configJson, overlay, progress) {
+  progress.emit({ phase: "discovery", state: "overlay" });
+  const current = before.withSourceOverlay(overlay, {
+    config: configJson,
+    scan: false,
+    typescript: !options.noTypescript,
+  });
+  progress.emit({ phase: "selected", files: current.sources.length });
+  current.scan("primary", {
+    cacheDir: options.noCache
+      ? null
+      : (options.cacheDir || archbird.defaultProviderCacheDir()),
+    cacheMaxBytes: cacheMaxBytes(options),
+    typescript: !options.noTypescript,
+    progress: (event) => progress.emit(event),
+    mapCache: true,
+  });
+  warnCacheStats(current.cacheStats);
+  warnMapCacheStats(current.mapCacheStats);
+  return current;
+}
+
 function planSourceMismatches(plan, mapJson, verification) {
   const source = plan.source;
   const map = JSON.parse(mapJson.toString("utf8"));
@@ -1852,18 +1874,40 @@ function actMain(argv) {
   const result = archbird.applyPlan(
     plan,
     resolvedInputs.repository,
-    (acceptedPlan, acceptedRoot) => {
-      const afterProject = actProject(
+    (acceptedPlan, acceptedRoot, overlay) => {
+      let afterConfigJson = resolvedInputs.configJson;
+      if (resolvedInputs.configPath) {
+        const relativeConfig = path.relative(
+          acceptedRoot,
+          resolvedInputs.configPath,
+        ).split(path.sep).join("/");
+        if (
+          relativeConfig &&
+          relativeConfig !== ".." &&
+          !relativeConfig.startsWith("../") &&
+          Object.hasOwn(overlay, relativeConfig)
+        ) {
+          if (overlay[relativeConfig] === null) {
+            throw new Error(
+              "Act cannot remove the project configuration used for acceptance",
+            );
+          }
+          afterConfigJson = overlay[relativeConfig];
+          validateProjectConfiguration(afterConfigJson);
+        }
+      }
+      const afterProject = actOverlayProject(
         options,
-        acceptedRoot,
-        resolvedInputs.configJson,
+        beforeProject,
+        afterConfigJson,
+        overlay,
         progress,
       );
       const afterMap = afterProject.mapJson();
       const afterMapDocument = JSON.parse(afterMap.toString("utf8"));
       if (hasErrors(afterMapDocument)) {
         throw new Error(
-          "fresh Map has error diagnostics after applying the Plan",
+          "isolated after-state Map has error diagnostics",
         );
       }
       const diagnosticRegressions = mapDiagnosticRegressions(
@@ -1876,13 +1920,17 @@ function actMain(argv) {
           diagnosticRegressions.join("; "),
         );
       }
+      const afterRequest = constraintRequest(options, afterConfigJson);
+      const afterRequestJson = Object.keys(afterRequest).length
+        ? Buffer.from(JSON.stringify(afterRequest))
+        : Buffer.alloc(0);
       const verification = JSON.parse(
         archbird.evaluateConstraints(
-          resolvedInputs.configJson,
+          afterConfigJson,
           afterMap,
           {
             resolutionJson: afterProject.resolutionJson || Buffer.alloc(0),
-            requestJson,
+            requestJson: afterRequestJson,
             pretty: false,
           },
         ).toString("utf8"),

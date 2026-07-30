@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import json
 import os
@@ -86,7 +87,11 @@ def plan(*items: dict) -> dict:
     }
 
 
-def satisfied(_plan: object, _root: Path) -> dict:
+def satisfied(
+    _plan: object,
+    _root: Path,
+    _overlay: Mapping[str, bytes | None],
+) -> dict:
     return {
         "status": "satisfied",
         "verification_sha256": "b" * 64,
@@ -207,7 +212,34 @@ class ActExecutionTest(unittest.TestCase):
                 if path.is_file()
             },
         )
-        applied = apply_plan(document, self.root, satisfied)
+        def accept_overlay(
+            _plan: object,
+            callback_root: Path,
+            overlay: Mapping[str, bytes | None],
+        ) -> dict:
+            self.assertEqual(
+                before,
+                {
+                    path.relative_to(callback_root).as_posix(): path.read_bytes()
+                    for path in callback_root.rglob("*")
+                    if path.is_file()
+                },
+            )
+            self.assertEqual(
+                overlay,
+                {
+                    "deleted.txt": None,
+                    "edited.py": b"alpha = 2\n",
+                    "new/file.txt": b"new\n",
+                    "new/name.txt": moved,
+                    "old/name.txt": None,
+                },
+            )
+            with self.assertRaises(TypeError):
+                overlay["unexpected.txt"] = b"unsafe"  # type: ignore[index]
+            return satisfied(_plan, callback_root, overlay)
+
+        applied = apply_plan(document, self.root, accept_overlay)
         self.assertEqual(applied["status"], "applied")
         self.assertEqual(applied["plan_sha256"], preview["plan_sha256"])
         self.assertEqual((self.root / "edited.py").read_text(), "alpha = 2\n")
@@ -561,7 +593,7 @@ class ActExecutionTest(unittest.TestCase):
         self.assertEqual(result["artifact"], "act-result")
         self.assertEqual(result["schema_version"], 1)
 
-    def test_acceptance_failure_rolls_back_application(self) -> None:
+    def test_acceptance_failure_never_writes_the_worktree(self) -> None:
         document = plan(
             item(
                 "create",
@@ -569,14 +601,20 @@ class ActExecutionTest(unittest.TestCase):
             )
         )
 
-        def fail(_plan: object, _root: Path) -> dict:
+        def fail(
+            _plan: object,
+            callback_root: Path,
+            overlay: Mapping[str, bytes | None],
+        ) -> dict:
+            self.assertFalse((callback_root / "created.txt").exists())
+            self.assertEqual(overlay, {"created.txt": b"ok"})
             raise RuntimeError("verification unavailable")
 
         result = apply_plan(document, self.root, fail)
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["acceptance"]["status"], "not_evaluated")
         self.assertIn(
-            "rolled back",
+            "not written",
             result["diagnostics"][0]["message"].lower(),
         )
         self.assertFalse((self.root / "created.txt").exists())
@@ -720,6 +758,7 @@ class ActExecutionTest(unittest.TestCase):
                 def acceptance(
                     _plan: object,
                     _root: Path,
+                    _overlay: Mapping[str, bytes | None],
                     rows: list[dict[str, str]] = constraints,
                 ) -> dict:
                     return {
@@ -751,7 +790,11 @@ class ActExecutionTest(unittest.TestCase):
         )
         exact["preserved_constraints"] = ["PRESERVED"]
 
-        def exact_acceptance(_plan: object, _root: Path) -> dict:
+        def exact_acceptance(
+            _plan: object,
+            _root: Path,
+            _overlay: Mapping[str, bytes | None],
+        ) -> dict:
             return {
                 "status": "satisfied",
                 "verification_sha256": "b" * 64,
@@ -767,7 +810,11 @@ class ActExecutionTest(unittest.TestCase):
         no_op_root = self.root / "no-op"
         no_op_root.mkdir()
 
-        def empty_acceptance(_plan: object, _root: Path) -> dict:
+        def empty_acceptance(
+            _plan: object,
+            _root: Path,
+            _overlay: Mapping[str, bytes | None],
+        ) -> dict:
             return {
                 "status": "satisfied",
                 "verification_sha256": "b" * 64,
@@ -798,7 +845,11 @@ class ActExecutionTest(unittest.TestCase):
                 repository = self.root / acceptance_status
                 repository.mkdir()
 
-                def reject(_plan: object, _root: Path) -> dict:
+                def reject(
+                    _plan: object,
+                    _root: Path,
+                    _overlay: Mapping[str, bytes | None],
+                ) -> dict:
                     return {
                         "status": acceptance_status,
                         "verification_sha256": "b" * 64,
@@ -810,13 +861,53 @@ class ActExecutionTest(unittest.TestCase):
                         ],
                     }
 
-                result = apply_plan(document, repository, reject)
+                with mock.patch.object(
+                    acting.os,
+                    "replace",
+                    side_effect=AssertionError(
+                        "rejected acceptance must not replace worktree files"
+                    ),
+                ):
+                    result = apply_plan(document, repository, reject)
                 self.assertEqual(result["status"], "rejected")
                 self.assertEqual(
                     result["acceptance"]["status"],
                     acceptance_status,
                 )
                 self.assertFalse((repository / "created.txt").exists())
+
+    def test_concurrent_touched_source_drift_is_not_overwritten(self) -> None:
+        source = b"value = 1\n"
+        external = b"value = 3\n"
+        self.write("source.py", source)
+        document = plan(
+            item(
+                "edit",
+                {
+                    "action": "replace_range",
+                    "path": "source.py",
+                    "source_sha256": sha(source),
+                    "start_byte": 8,
+                    "end_byte": 9,
+                    "before": "1",
+                    "replacement": "2",
+                },
+            )
+        )
+
+        def drift(
+            _plan: object,
+            callback_root: Path,
+            overlay: Mapping[str, bytes | None],
+        ) -> dict:
+            self.assertEqual(overlay, {"source.py": b"value = 2\n"})
+            (callback_root / "source.py").write_bytes(external)
+            return satisfied(_plan, callback_root, overlay)
+
+        result = apply_plan(document, self.root, drift)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["diagnostics"][0]["code"], "commit_failed")
+        self.assertEqual((self.root / "source.py").read_bytes(), external)
 
     def test_acceptance_cannot_mutate_the_consumed_plan(self) -> None:
         document = plan(
@@ -830,7 +921,11 @@ class ActExecutionTest(unittest.TestCase):
             )
         )
 
-        def mutate(callback_plan: object, _root: Path) -> dict:
+        def mutate(
+            callback_plan: object,
+            _root: Path,
+            _overlay: Mapping[str, bytes | None],
+        ) -> dict:
             assert isinstance(callback_plan, dict)
             callback_plan["items"][0]["acceptance"]["constraints"] = ["OTHER"]
             return {

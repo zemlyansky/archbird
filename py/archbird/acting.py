@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import tempfile
+from types import MappingProxyType
 from typing import Any, Callable
 
 from . import __version__, implementation_digest
@@ -89,14 +90,8 @@ class _Prepared:
     destinations: set[str]
 
 
-class _AcceptanceRejected(Exception):
-    def __init__(self, acceptance: dict[str, object]) -> None:
-        super().__init__(f"Plan acceptance is {acceptance['status']}")
-        self.acceptance = acceptance
-
-
 AcceptanceCallback = Callable[
-    [Mapping[str, object], Path],
+    [Mapping[str, object], Path, Mapping[str, bytes | None]],
     Mapping[str, object],
 ]
 
@@ -1736,11 +1731,16 @@ def _revalidate(root: Path, prepared: _Prepared) -> None:
         _destination_absent(root, destination)
 
 
-def _apply(
-    root: Path,
-    prepared: _Prepared,
-    evaluate_acceptance: Callable[[], dict[str, object]],
-) -> dict[str, object]:
+def _source_overlay(prepared: _Prepared) -> Mapping[str, bytes | None]:
+    return MappingProxyType(
+        {
+            path: prepared.final[path][0] if path in prepared.final else None
+            for path in sorted(set(prepared.initial) | set(prepared.final))
+        }
+    )
+
+
+def _commit(root: Path, prepared: _Prepared) -> None:
     _revalidate(root, prepared)
     affected = sorted(
         {
@@ -1755,7 +1755,6 @@ def _apply(
     created_directories: list[Path] = []
     committed = False
     mutated = False
-    acceptance: dict[str, object] | None = None
     primary_error: BaseException | None = None
     try:
         for index, path in enumerate(affected):
@@ -1779,11 +1778,7 @@ def _apply(
             _check_path_components(root, path, include_leaf=True)
             _candidate(root, path).unlink()
             mutated = True
-        acceptance = evaluate_acceptance()
-        if acceptance.get("status") != "satisfied":
-            raise _AcceptanceRejected(acceptance)
         committed = True
-        return acceptance
     except BaseException as error:
         primary_error = error
         raise
@@ -1887,27 +1882,14 @@ def _execute(
     required_constraint_ids = _acceptance_constraint_ids(plan_snapshot)
     assert verify_acceptance is not None
     try:
-        acceptance = _apply(
-            repository,
-            prepared,
-            lambda: _validate_acceptance(
-                verify_acceptance(copy.deepcopy(plan_snapshot), repository),
-                required_constraint_ids,
+        _revalidate(repository, prepared)
+        acceptance = _validate_acceptance(
+            verify_acceptance(
+                copy.deepcopy(plan_snapshot),
+                repository,
+                _source_overlay(prepared),
             ),
-        )
-    except _AcceptanceRejected as error:
-        return _result(
-            plan_sha256,
-            "rejected",
-            prepared.changes,
-            [
-                _Diagnostic(
-                    "acceptance_rejected",
-                    "Plan changes were rolled back because fresh acceptance is "
-                    f"{error.acceptance['status']}.",
-                )
-            ],
-            error.acceptance,
+            required_constraint_ids,
         )
     except Exception as error:
         return _result(
@@ -1917,10 +1899,40 @@ def _execute(
             [
                 _Diagnostic(
                     "acceptance_failed",
-                    "Plan changes were rolled back because acceptance evaluation "
-                    f"failed: {error}",
+                    "Plan changes were not written because isolated acceptance "
+                    f"evaluation failed: {error}",
                 )
             ],
+        )
+    if acceptance["status"] != "satisfied":
+        return _result(
+            plan_sha256,
+            "rejected",
+            prepared.changes,
+            [
+                _Diagnostic(
+                    "acceptance_rejected",
+                    "Plan changes were not written because isolated fresh "
+                    f"acceptance is {acceptance['status']}.",
+                )
+            ],
+            acceptance,
+        )
+    try:
+        _commit(repository, prepared)
+    except Exception as error:
+        return _result(
+            plan_sha256,
+            "failed",
+            prepared.changes,
+            [
+                _Diagnostic(
+                    "commit_failed",
+                    "Accepted Plan changes could not be committed "
+                    f"transactionally: {error}",
+                )
+            ],
+            acceptance,
         )
     return _result(
         plan_sha256,
@@ -1947,7 +1959,7 @@ def apply_plan(
     verify_acceptance: AcceptanceCallback,
     map_json: bytes | Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
-    """Apply a Plan, then evaluate its acceptance against the changed tree."""
+    """Evaluate a Plan in isolation, then commit its accepted exact edits."""
 
     if not callable(verify_acceptance):
         raise TypeError("apply_plan requires an acceptance callback")

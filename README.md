@@ -80,9 +80,9 @@ package entrypoint, tests, and build artifacts. Plan derives source-locked
 operations only where current Map and Verify evidence establish the exact edit.
 Underdetermined work remains a visible manual item rather than guessed code. A
 developer or agent may edit the Plan. Act validates the complete Plan and
-previews one deterministic patch; explicit `--apply` writes it, rebuilds the
-Map, and evaluates every acceptance and preserved constraint against fresh
-Verification.
+previews one deterministic patch; explicit `--apply` evaluates those exact
+bytes through an isolated source overlay and fresh Map/Verification before it
+writes the accepted patch.
 
 Across all stages, results retain links to the source, configuration, or
 test data that produced them. Archbird keeps ambiguous, incomplete, and stale
@@ -755,19 +755,23 @@ replacement route.
 
 `--apply` first rebuilds the current Map and Verify result. Their project,
 input, configuration, producer, policy, and result identities must match the
-Plan's source snapshot. After applying the staged patch, Act rebuilds Map again
-and evaluates the union of item acceptance constraints and preserved
-constraints. A `not_satisfied` or `unknown` result rejects the patch and restores
-the original files; the ActResult retains that evaluated acceptance as
-`rejected`. Filesystem or evaluation failures also roll back and report
-`failed`. Archbird does not run project compilers or tests; configure test
-observations and build evidence when those results must participate in Verify.
+Plan's source snapshot. Act then applies the prepared create/modify/delete/move
+set to an immutable source overlay, reruns discovery and providers from those
+bytes, and evaluates the union of item acceptance constraints and preserved
+constraints against that isolated after-Map. A `not_satisfied`, `unknown`, or
+evaluation failure performs no worktree write. Only satisfied acceptance
+advances to a second source-lock revalidation and transactional commit of the
+same prepared bytes. Commit failures restore only paths owned by the Plan;
+concurrent changes to Plan-owned paths are detected and never overwritten.
+Archbird does not run project compilers or tests; configure test observations
+and build evidence when those results must participate in Verify.
 
 Destructive generated items require a current, complete, exhaustive relation
 projection. Unresolved imports or other relation frontiers make the item
 non-executable rather than allowing an apparently unused file or symbol to be
-removed. Every constraint in the source Verification is checked after apply,
-including constraints that passed when the Plan was generated.
+removed. Every constraint in the source Verification is checked against the
+isolated after-state before commit, including constraints that passed when the
+Plan was generated.
 
 Plan ingestion is bounded before expensive work: 64 MiB for canonical Plan JSON
 and each source, 4,096 items or touched files, 16 MiB per operation text field,

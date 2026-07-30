@@ -250,7 +250,32 @@ run("preview and apply cover create delete move and modify", () => {
     }
     assert.equal(fs.readFileSync(path.join(root, "edited.py"), "utf8"), "alpha = 1\n");
 
-    const applied = applyPlan(document, root, () => satisfied());
+    const applied = applyPlan(document, root, (_plan, acceptedRoot, overlay) => {
+      assert.equal(
+        fs.readFileSync(path.join(acceptedRoot, "edited.py"), "utf8"),
+        "alpha = 1\n",
+      );
+      assert.deepEqual(
+        Object.fromEntries(
+          Object.entries(overlay).map(([filePath, data]) => [
+            filePath,
+            data === null ? null : data.toString("utf8"),
+          ]),
+        ),
+        {
+          "deleted.txt": null,
+          "edited.py": "alpha = 2\n",
+          "new/file.txt": "new\n",
+          "new/name.txt": "move me\n",
+          "old/name.txt": null,
+        },
+      );
+      assert.throws(() => {
+        overlay["unexpected.txt"] = Buffer.from("unsafe");
+      }, TypeError);
+      overlay["edited.py"][8] = "9".charCodeAt(0);
+      return satisfied();
+    });
     assert.equal(applied.status, "applied");
     assert.equal(applied.plan_sha256, preview.plan_sha256);
     assert.equal(applied.acceptance.status, "satisfied");
@@ -562,7 +587,7 @@ run("acceptance must exactly cover changed and preserved constraints", () => {
   });
 });
 
-run("rejected acceptance is evaluated and rolled back", () => {
+run("rejected acceptance performs no worktree replacements", () => {
   for (const [acceptanceStatus, constraintStatus] of [
     ["not_satisfied", "fail"],
     ["unknown", "unknown"],
@@ -573,19 +598,53 @@ run("rejected acceptance is evaluated and rolled back", () => {
         path: "new.txt",
         content: "new\n",
       }));
-      const result = applyPlan(document, root, () => ({
-        status: acceptanceStatus,
-        verification_sha256: "b".repeat(64),
-        constraints: [{
-          id: "TEST-CONSTRAINT",
-          status: constraintStatus,
-        }],
-      }));
+      const originalRename = fs.renameSync;
+      fs.renameSync = () => {
+        throw new Error("rejected acceptance must not replace worktree files");
+      };
+      let result;
+      try {
+        result = applyPlan(document, root, () => ({
+          status: acceptanceStatus,
+          verification_sha256: "b".repeat(64),
+          constraints: [{
+            id: "TEST-CONSTRAINT",
+            status: constraintStatus,
+          }],
+        }));
+      } finally {
+        fs.renameSync = originalRename;
+      }
       assert.equal(result.status, "rejected");
       assert.equal(result.acceptance.status, acceptanceStatus);
       assert.equal(fs.existsSync(path.join(root, "new.txt")), false);
     });
   }
+});
+
+run("concurrent touched source drift is not overwritten", () => {
+  withTemporary("node-act-drift", (root) => {
+    const source = Buffer.from("value = 1\n");
+    const external = Buffer.from("value = 3\n");
+    const sourceSha = write(root, "source.js", source);
+    const document = plan(operationItem("edit", {
+      action: "replace_range",
+      path: "source.js",
+      source_sha256: sourceSha,
+      start_byte: 8,
+      end_byte: 9,
+      before: "1",
+      replacement: "2",
+    }));
+    const result = applyPlan(document, root, (_plan, acceptedRoot, overlay) => {
+      assert.equal(overlay["source.js"].toString("utf8"), "value = 2\n");
+      fs.writeFileSync(path.join(acceptedRoot, "source.js"), external);
+      return satisfied();
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.diagnostics[0].code, "commit_failed");
+    assert.deepEqual(fs.readFileSync(path.join(root, "source.js")), external);
+  });
 });
 
 run("acceptance cannot mutate the consumed Plan", () => {
@@ -1695,7 +1754,7 @@ run("Node CLI renames one TypeScript symbol across TS TSX and aliases", () => {
   });
 });
 
-run("Node CLI rolls back a selected fix that breaks preserved policy", () => {
+run("Node CLI rejects a selected fix before writing when preserved policy breaks", () => {
   withTemporary("node-plan-act-rejected", (root) => {
     fs.writeFileSync(
       path.join(root, "archbird.json"),

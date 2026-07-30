@@ -35,8 +35,9 @@ produce it. Missing or uncertain information is shown instead of guessed.
 Map works without configuration. Add Verify when you want automated
 architecture constraints. Plan derives only edits established by current
 evidence and exposes underdetermined work as manual items. Act previews without
-writing; only `npx archbird act PLAN.json --apply` mutates the repository, then
-rebuilds Map and runs fresh acceptance constraints.
+writing; `npx archbird act PLAN.json --apply` first rebuilds Map and runs fresh
+acceptance constraints over isolated after-state bytes, then commits only a
+satisfied result.
 
 `npx archbird` and `npx archbird .` remain supported shortcuts for mapping the
 current repository. The explicit `npx archbird map` form is useful in scripts
@@ -479,11 +480,13 @@ instead of producing a partial rename.
 
 Existing sources use SHA-256 locks; ranges use UTF-8 byte offsets and include
 expected text. Manual items expose missing transformation inputs and block Act
-instead of inventing code. Apply stages and revalidates every operation before
-the first write, then derives a fresh Map and evaluates every source-policy
-constraint. Incomplete relation evidence blocks destructive generation.
-Failed, unknown, or unsatisfied fresh acceptance rolls back the patch; an
-architectural rejection remains visible as `rejected`. Plan input is bounded to
+instead of inventing code. Apply evaluates the complete prepared file set
+through `Project.withSourceOverlay()`, deriving a fresh Map and every
+source-policy constraint before the first write. Incomplete relation evidence
+blocks destructive generation. Failed, unknown, or unsatisfied fresh
+acceptance writes nothing and remains visible as `failed` or `rejected`; only a
+satisfied after-state advances to source-lock revalidation and transactional
+commit. Plan input is bounded to
 64 MiB, collections and touched files to 4,096, individual source files and
 patches to 64 MiB, and aggregate touched source and patch output to 256 MiB.
 Project compilers and tests remain external; their reviewed observations can
@@ -592,6 +595,12 @@ try {
 explicit options. `Project.fromConfig()` requires one reviewed configuration.
 Canonical JSON methods return stable artifact bytes; Markdown and graph outputs
 are presentation views.
+
+`applyPlan(plan, root, acceptance)` passes the acceptance callback a copied
+Plan, the repository root, and a frozen `path -> Buffer | null` source overlay.
+Build its after-state with `project.withSourceOverlay(overlay, { config })`;
+`null` represents a deletion. Returning anything except complete satisfied
+acceptance prevents the filesystem commit.
 
 <!-- archbird-node-api:start -->
 | Area | Public names |

@@ -2339,6 +2339,32 @@ def _act_project(
     return project
 
 
+def _act_overlay_project(
+    args: argparse.Namespace,
+    before: Project,
+    config_json: bytes,
+    overlay: Mapping[str, bytes | None],
+    progress: _Progress,
+) -> Project:
+    progress.emit({"phase": "discovery", "state": "overlay"})
+    project = before.with_source_overlay(
+        overlay,
+        config=config_json,
+        scan=False,
+    )
+    progress.emit({"phase": "selected", "files": len(project.sources)})
+    project.scan(
+        jobs=args.jobs,
+        python_provider_timeout=_python_provider_timeout(args),
+        cache_dir=_cache_dir(args),
+        cache_max_bytes=_cache_max_bytes(args),
+        progress=progress.emit,
+    )
+    _warn_cache_stats(project.cache_stats)
+    _warn_map_cache_stats(project.map_cache_stats)
+    return project
+
+
 def _plan_source_mismatches(
     plan: Mapping[str, object],
     map_json: bytes,
@@ -2663,7 +2689,7 @@ def _act_main(argv: Sequence[str]) -> int:
             if path is not None
         ]
         args._transient_exclude = tuple(dict.fromkeys(transient_artifacts))
-        repository, config_json, _ = _repository_inputs(args)
+        repository, config_json, config_path = _repository_inputs(args)
         if not config_json:
             raise ConfigError(
                 f"no archbird.json found in {repository}; "
@@ -2728,16 +2754,39 @@ def _act_main(argv: Sequence[str]) -> int:
             return 0
 
         def verify_acceptance(
-            plan: Mapping[str, object], resolved_root: Path
+            plan: Mapping[str, object],
+            resolved_root: Path,
+            overlay: Mapping[str, bytes | None],
         ) -> Mapping[str, object]:
-            after_project = _act_project(
-                args, resolved_root, config_json, progress
+            after_config_json = config_json
+            if config_path is not None:
+                try:
+                    relative_config = config_path.relative_to(
+                        resolved_root
+                    ).as_posix()
+                except ValueError:
+                    relative_config = None
+                if relative_config is not None and relative_config in overlay:
+                    overlaid_config = overlay[relative_config]
+                    if overlaid_config is None:
+                        raise ValueError(
+                            "Act cannot remove the project configuration used "
+                            "for acceptance"
+                        )
+                    after_config_json = overlaid_config
+                    _validate_project_configuration(after_config_json)
+            after_project = _act_overlay_project(
+                args,
+                before_project,
+                after_config_json,
+                overlay,
+                progress,
             )
             after_map = after_project.map_json()
             after_map_document = json.loads(after_map)
             if _has_error_diagnostics(after_map_document):
                 raise ValueError(
-                    "fresh Map has error diagnostics after applying the Plan"
+                    "isolated after-state Map has error diagnostics"
                 )
             diagnostic_regressions = _map_diagnostic_regressions(
                 before_map_document, after_map_document
@@ -2749,7 +2798,7 @@ def _act_main(argv: Sequence[str]) -> int:
                 )
             after_verification = json.loads(
                 evaluate_constraints_json(
-                    config_json,
+                    after_config_json,
                     after_map,
                     resolution_json=after_project.resolution_json or b"",
                     baseline=baseline,

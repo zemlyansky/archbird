@@ -259,6 +259,8 @@ class Project:
         self.map_cache_stats: Mapping[str, int] = MapCacheStats().as_dict()
         self._config_json: Optional[bytes] = None
         self._project_configuration_json: Optional[bytes] = None
+        self._authored_config_json: Optional[bytes] = None
+        self._discovery_options: Optional[dict[str, object]] = None
         self._cached_map: Optional[bytes] = None
         self._map_cache: Optional[ProviderCache] = None
         self._map_cache_parameters: Optional[dict[str, str]] = None
@@ -361,6 +363,19 @@ class Project:
                 config_json, resolution["effective_config"]
             ),
         )
+        project._authored_config_json = config_json
+        project._discovery_options = {
+            "project": None,
+            "source": (),
+            "only": (),
+            "exclude": (),
+            "ignore": False,
+            "ignore_files": (),
+            "default_excludes": True,
+            "max_file_bytes": None,
+            "max_index_bytes": None,
+            "_transient_exclude": (),
+        }
         if scan:
             project.scan(
                 jobs=jobs,
@@ -431,6 +446,82 @@ class Project:
                 config_json, resolution["effective_config"]
             ),
         )
+        current._authored_config_json = config_json
+        current._discovery_options = {
+            "project": project,
+            "source": tuple(source),
+            "only": tuple(only),
+            "exclude": tuple(exclude),
+            "ignore": ignore,
+            "ignore_files": tuple(ignore_files),
+            "default_excludes": default_excludes,
+            "max_file_bytes": max_file_bytes,
+            "max_index_bytes": max_index_bytes,
+            "_transient_exclude": tuple(_transient_exclude),
+        }
+        if scan:
+            current.scan(
+                jobs=jobs,
+                python_provider_timeout=python_provider_timeout,
+                cache_dir=cache_dir,
+                cache_max_bytes=cache_max_bytes,
+                map_cache=map_cache,
+            )
+        return current
+
+    def with_source_overlay(
+        self,
+        overlay: Mapping[str, Optional[bytes]],
+        *,
+        config: Optional[Union[str, Path, bytes]] = None,
+        scan: bool = True,
+        jobs: int = 0,
+        python_provider_timeout: float = DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS,
+        cache_dir: Optional[Union[str, Path]] = None,
+        cache_max_bytes: Optional[int] = None,
+        map_cache: bool = True,
+    ) -> "Project":
+        """Build the same repository model from an immutable source overlay."""
+
+        if (
+            self.root is None
+            or self.resolution_json is None
+            or self._discovery_options is None
+        ):
+            raise ConfigError(
+                "source overlays require a repository-backed Project"
+            )
+        config_json = (
+            _config_bytes(config)
+            if config is not None
+            else bytes(self._authored_config_json or b"")
+        )
+        normalized = _normalize_source_overlay(overlay)
+        resolution_json = resolve_discovery(
+            self.root,
+            config=config_json,
+            _source_overlay=normalized,
+            **self._discovery_options,
+        )
+        resolution = json.loads(resolution_json)
+        effective_config = _canonical(resolution["effective_config"])
+        sources = _read_sources(self.root, resolution, overlay=normalized)
+        current = Project(
+            str(resolution["project"]),
+            sources,
+            configuration_sha256=str(resolution["configuration_sha256"]),
+            resolution=resolution,
+        )
+        current.root = self.root
+        current.resolution_json = resolution_json
+        current.set_config(
+            effective_config,
+            project_configuration_json=_project_configuration_for_resolution(
+                config_json, resolution["effective_config"]
+            ),
+        )
+        current._authored_config_json = config_json
+        current._discovery_options = dict(self._discovery_options)
         if scan:
             current.scan(
                 jobs=jobs,
@@ -2538,12 +2629,95 @@ def _ignore_sort_key(path: str) -> tuple[int, tuple[str, ...], int, str]:
     return (len(parts) - 1, parts[:-1], priority, path)
 
 
-def _encoded_input(root: Path, path: str) -> dict[str, str]:
-    candidate = root.joinpath(*PurePosixPath(path).parts)
-    try:
-        data = candidate.read_bytes()
-    except OSError as error:
-        raise ConfigError(f"cannot read discovery input: {path}: {error}") from error
+def _normalize_source_overlay(
+    overlay: Mapping[str, Optional[bytes]],
+) -> dict[str, Optional[bytes]]:
+    if not isinstance(overlay, Mapping):
+        raise ConfigError("source overlay must be a path-to-bytes mapping")
+    normalized: dict[str, Optional[bytes]] = {}
+    for path, data in overlay.items():
+        if not isinstance(path, str):
+            raise ConfigError("source overlay paths must be strings")
+        parsed = PurePosixPath(path)
+        if (
+            not path
+            or parsed.is_absolute()
+            or parsed.as_posix() != path
+            or any(part in ("", ".", "..") for part in parsed.parts)
+        ):
+            raise ConfigError(f"invalid source overlay path: {path!r}")
+        if data is not None and not isinstance(data, bytes):
+            raise ConfigError(f"source overlay value must be bytes or null: {path}")
+        normalized[path] = data
+    return normalized
+
+
+def _overlay_changes_ignore_inputs(
+    root: Path,
+    overlay: Mapping[str, Optional[bytes]],
+    custom_ignore_files: Sequence[str],
+    *,
+    include_standard_ignores: bool,
+) -> bool:
+    ignore_names = {".gitignore", ".ignore", ".archbirdignore"}
+    protected = {
+        path
+        for path in overlay
+        if path in custom_ignore_files
+        or (
+            include_standard_ignores
+            and PurePosixPath(path).name in ignore_names
+        )
+    }
+    for path in sorted(protected):
+        candidate = root.joinpath(*PurePosixPath(path).parts)
+        try:
+            current = candidate.read_bytes()
+        except FileNotFoundError:
+            current = None
+        except OSError as error:
+            raise ConfigError(
+                f"cannot read discovery ignore input: {path}: {error}"
+            ) from error
+        if overlay[path] != current:
+            return True
+    return False
+
+
+def _overlay_rows(
+    rows: Sequence[Mapping[str, object]],
+    overlay: Mapping[str, Optional[bytes]],
+) -> list[dict[str, object]]:
+    indexed = {
+        str(row["path"]): {"bytes": int(row["bytes"]), "path": str(row["path"])}
+        for row in rows
+    }
+    for path, data in overlay.items():
+        if data is None:
+            indexed.pop(path, None)
+        else:
+            indexed[path] = {"bytes": len(data), "path": path}
+    return [indexed[path] for path in sorted(indexed, key=lambda value: value.encode())]
+
+
+def _encoded_input(
+    root: Path,
+    path: str,
+    overlay: Optional[Mapping[str, Optional[bytes]]] = None,
+) -> dict[str, str]:
+    if overlay is not None and path in overlay:
+        data = overlay[path]
+        if data is None:
+            raise ConfigError(f"discovery input was removed by source overlay: {path}")
+    else:
+        candidate = root.joinpath(*PurePosixPath(path).parts)
+        try:
+            data = candidate.read_bytes()
+        except OSError as error:
+            raise ConfigError(
+                f"cannot read discovery input: {path}: {error}"
+            ) from error
+    assert data is not None
     return {"content_hex": data.hex(), "path": path}
 
 
@@ -2554,6 +2728,7 @@ def _repository_inventory(
     include_standard_ignores: bool,
     ignore_files: Sequence[Union[str, Path]],
     pruned_directories: Sequence[str] = (),
+    overlay: Optional[Mapping[str, Optional[bytes]]] = None,
 ) -> bytes:
     paths = {str(row["path"]) for row in rows}
     standard = sorted(
@@ -2579,19 +2754,21 @@ def _repository_inventory(
             seen.add(relative)
     documents = []
     if "package.json" in paths:
-        documents.append(_encoded_input(root, "package.json"))
+        documents.append(_encoded_input(root, "package.json", overlay))
     if "pyproject.toml" in paths:
-        documents.append(_encoded_input(root, "pyproject.toml"))
+        documents.append(_encoded_input(root, "pyproject.toml", overlay))
     if "DESCRIPTION" in paths:
-        documents.append(_encoded_input(root, "DESCRIPTION"))
+        documents.append(_encoded_input(root, "DESCRIPTION", overlay))
     if "configure.ac" in paths:
-        documents.append(_encoded_input(root, "configure.ac"))
+        documents.append(_encoded_input(root, "configure.ac", overlay))
     return _canonical(
         {
             "artifact": "archbird-repository-inventory",
             "documents": documents,
             "files": list(rows),
-            "ignore_files": [_encoded_input(root, path) for path in selected],
+            "ignore_files": [
+                _encoded_input(root, path, overlay) for path in selected
+            ],
             "pruned_directories": list(pruned_directories),
             "schema_version": 1,
         }
@@ -2635,6 +2812,7 @@ def resolve_discovery(
     max_index_bytes: Optional[int] = None,
     pretty: bool = False,
     _transient_exclude: Sequence[Union[str, Path]] = (),
+    _source_overlay: Optional[Mapping[str, Optional[bytes]]] = None,
 ) -> bytes:
     """Return the canonical C-owned config-resolution artifact for a repository."""
 
@@ -2642,6 +2820,7 @@ def resolve_discovery(
     if not repository.is_dir():
         raise ConfigError(f"root is not a directory: {repository}")
     config_json = _config_bytes(config)
+    overlay = _normalize_source_overlay(_source_overlay or {})
     normalized_ignore_files = tuple(
         dict.fromkeys(_safe_relative(repository, value) for value in ignore_files)
     )
@@ -2649,6 +2828,12 @@ def resolve_discovery(
         dict.fromkeys(
             _safe_relative(repository, value) for value in _transient_exclude
         )
+    )
+    ignore_inputs_changed = _overlay_changes_ignore_inputs(
+        repository,
+        overlay,
+        normalized_ignore_files,
+        include_standard_ignores=ignore,
     )
     request = _map_request(
         project=project,
@@ -2661,12 +2846,30 @@ def resolve_discovery(
         max_file_bytes=max_file_bytes,
         max_index_bytes=max_index_bytes,
     )
-    bootstrap_rows = _root_rows(repository, normalized_transient_exclude)
+    bootstrap_paths = {
+        ".archbirdignore",
+        ".gitignore",
+        ".ignore",
+        "Makefile",
+        "DESCRIPTION",
+        "NAMESPACE",
+        "configure.ac",
+        "package.json",
+        "pyproject.toml",
+    }
+    bootstrap_overlay = {
+        path: data for path, data in overlay.items() if path in bootstrap_paths
+    }
+    bootstrap_rows = _overlay_rows(
+        _root_rows(repository, normalized_transient_exclude),
+        bootstrap_overlay,
+    )
     bootstrap_inventory = _repository_inventory(
         repository,
         bootstrap_rows,
         include_standard_ignores=ignore,
         ignore_files=normalized_ignore_files,
+        overlay=overlay,
     )
     bootstrap = json.loads(
         _native.discovery_resolve(config_json, request, bootstrap_inventory)
@@ -2675,23 +2878,40 @@ def resolve_discovery(
     rows, pruned_directories = _inventory_rows(
         effective,
         repository,
-        include_standard_ignores=ignore,
-        ignore_files=normalized_ignore_files,
+        # Disk ignore rules cannot safely prune the virtual after-state when
+        # the overlay changes one. Enumerate exhaustively and let the native
+        # resolver apply the overlaid ignore documents below.
+        include_standard_ignores=ignore and not ignore_inputs_changed,
+        ignore_files=(
+            () if ignore_inputs_changed else normalized_ignore_files
+        ),
         transient_exclude=normalized_transient_exclude,
     )
+    final_overlay = {
+        path: data
+        for path, data in overlay.items()
+        if path not in normalized_transient_exclude
+    }
+    rows = _overlay_rows(rows, final_overlay)
     inventory = _repository_inventory(
         repository,
         rows,
         include_standard_ignores=ignore,
         ignore_files=normalized_ignore_files,
         pruned_directories=pruned_directories,
+        overlay=overlay,
     )
     return _native.discovery_resolve(
         config_json, request, inventory, pretty=pretty
     )
 
 
-def _read_sources(root: Path, plan: Mapping[str, object]) -> Tuple[Source, ...]:
+def _read_sources(
+    root: Path,
+    plan: Mapping[str, object],
+    *,
+    overlay: Optional[Mapping[str, Optional[bytes]]] = None,
+) -> Tuple[Source, ...]:
     max_file_bytes = int(plan["max_file_bytes"])
     max_index_bytes = int(plan["max_index_bytes"])
     sources = []
@@ -2701,22 +2921,37 @@ def _read_sources(root: Path, plan: Mapping[str, object]) -> Tuple[Source, ...]:
         is_index = "index" in roles
         byte_limit = max_index_bytes if is_index else max_file_bytes
         limit_name = "max_index_bytes" if is_index else "max_file_bytes"
-        candidate = root / path
-        try:
-            metadata = candidate.lstat()
-        except OSError as error:
-            raise ConfigError(f"cannot stat selected source: {path}: {error}") from error
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ConfigError(f"selected source is no longer a regular file: {path}")
-        if metadata.st_size > byte_limit:
-            raise ConfigError(
-                f"selected {'index' if is_index else 'source'} exceeds "
-                f"limits.{limit_name}: {path}: {metadata.st_size} > {byte_limit}"
-            )
-        try:
-            data = candidate.read_bytes()
-        except OSError as error:
-            raise ConfigError(f"cannot read selected source: {path}: {error}") from error
+        if overlay is not None and path in overlay:
+            data = overlay[path]
+            if data is None:
+                raise ConfigError(
+                    f"selected source was removed by source overlay: {path}"
+                )
+        else:
+            candidate = root / path
+            try:
+                metadata = candidate.lstat()
+            except OSError as error:
+                raise ConfigError(
+                    f"cannot stat selected source: {path}: {error}"
+                ) from error
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ConfigError(
+                    f"selected source is no longer a regular file: {path}"
+                )
+            if metadata.st_size > byte_limit:
+                raise ConfigError(
+                    f"selected {'index' if is_index else 'source'} exceeds "
+                    f"limits.{limit_name}: {path}: {metadata.st_size} > "
+                    f"{byte_limit}"
+                )
+            try:
+                data = candidate.read_bytes()
+            except OSError as error:
+                raise ConfigError(
+                    f"cannot read selected source: {path}: {error}"
+                ) from error
+        assert data is not None
         if len(data) > byte_limit:
             raise ConfigError(
                 f"selected {'index' if is_index else 'source'} exceeds "

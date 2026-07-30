@@ -35,13 +35,6 @@ const RENAME_ROLES = new Set([
   "reference",
 ]);
 
-class AcceptanceRejected extends Error {
-  constructor(acceptance) {
-    super(`Plan acceptance is ${acceptance.status}`);
-    this.acceptance = acceptance;
-  }
-}
-
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -1807,7 +1800,18 @@ function replaceFile(source, destination) {
   }
 }
 
-function applyPrepared(root, prepared, evaluateAcceptance) {
+function sourceOverlay(prepared) {
+  const overlay = Object.create(null);
+  const paths = new Set([...prepared.initial.keys(), ...prepared.final.keys()]);
+  for (const filePath of [...paths].sort(utf8Compare)) {
+    overlay[filePath] = prepared.final.has(filePath)
+      ? Buffer.from(prepared.final.get(filePath).data)
+      : null;
+  }
+  return Object.freeze(overlay);
+}
+
+function commitPrepared(root, prepared) {
   const affected = new Set();
   for (const change of prepared.changes) {
     affected.add(change.source_path || change.path);
@@ -1853,12 +1857,7 @@ function applyPrepared(root, prepared, evaluateAcceptance) {
       fs.unlinkSync(candidate(root, filePath));
       mutated = true;
     }
-    const acceptance = evaluateAcceptance();
-    if (acceptance.status !== "satisfied") {
-      throw new AcceptanceRejected(acceptance);
-    }
     committed = true;
-    return acceptance;
   } catch (error) {
     primaryError = error;
     throw error;
@@ -1963,40 +1962,60 @@ function execute(plan, root, apply, verifyAcceptance, mapDocument = null) {
   }
   if (!apply) return result(planDigest, "preview", prepared.changes, []);
   const requiredConstraintIds = expectedAcceptanceIds(planSnapshot);
+  let acceptance;
   try {
-    const acceptance = applyPrepared(
-      repository,
-      prepared,
-      () => validateAcceptance(
-        verifyAcceptance(structuredClone(planSnapshot), repository),
-        requiredConstraintIds,
+    revalidate(repository, prepared);
+    acceptance = validateAcceptance(
+      verifyAcceptance(
+        structuredClone(planSnapshot),
+        repository,
+        sourceOverlay(prepared),
       ),
+      requiredConstraintIds,
     );
-    return result(planDigest, "applied", prepared.changes, [], acceptance);
   } catch (error) {
-    if (error instanceof AcceptanceRejected) {
-      return result(
-        planDigest,
-        "rejected",
-        prepared.changes,
-        [
-          diagnostic(
-            "acceptance_rejected",
-            "Plan changes were rolled back because fresh acceptance is " +
-            `${error.acceptance.status}.`,
-          ),
-        ],
-        error.acceptance,
-      );
-    }
     return result(planDigest, "failed", prepared.changes, [
       diagnostic(
         "acceptance_failed",
-        "Plan changes were rolled back because acceptance evaluation failed: " +
+        "Plan changes were not written because isolated acceptance " +
+        "evaluation failed: " +
         error.message,
       ),
     ]);
   }
+  if (acceptance.status !== "satisfied") {
+    return result(
+      planDigest,
+      "rejected",
+      prepared.changes,
+      [
+        diagnostic(
+          "acceptance_rejected",
+          "Plan changes were not written because isolated fresh acceptance is " +
+          `${acceptance.status}.`,
+        ),
+      ],
+      acceptance,
+    );
+  }
+  try {
+    commitPrepared(repository, prepared);
+  } catch (error) {
+    return result(
+      planDigest,
+      "failed",
+      prepared.changes,
+      [
+        diagnostic(
+          "commit_failed",
+          "Accepted Plan changes could not be committed transactionally: " +
+          error.message,
+        ),
+      ],
+      acceptance,
+    );
+  }
+  return result(planDigest, "applied", prepared.changes, [], acceptance);
 }
 
 function previewPlan(plan, root, mapDocument = null) {

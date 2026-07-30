@@ -1325,6 +1325,69 @@ writer.commit()
         raise AssertionError("custom-only ignore origin evidence is incomplete")
     zero_project = Project.from_repository(zero_fixture, map_cache=False)
     zero_map = json.loads(zero_project.map_json())
+    original_python = (zero_fixture / "src/main.py").read_bytes()
+    original_javascript = (zero_fixture / "src/main.js").read_bytes()
+    overlay_project = zero_project.with_source_overlay(
+        {
+            "src/main.py": b"def overlaid():\n    return 2\n",
+            "src/main.js": None,
+            "src/added.py": b"def added():\n    return 3\n",
+        },
+        map_cache=False,
+    )
+    overlay_map = json.loads(overlay_project.map_json())
+    overlay_files = {row["path"]: row for row in overlay_map["files"]}
+    if (
+        "src/main.js" in overlay_files
+        or "src/added.py" not in overlay_files
+        or [row["name"] for row in overlay_files["src/main.py"]["symbols"]]
+        != ["overlaid"]
+        or [row["name"] for row in overlay_files["src/added.py"]["symbols"]]
+        != ["added"]
+        or (zero_fixture / "src/main.py").read_bytes() != original_python
+        or (zero_fixture / "src/main.js").read_bytes() != original_javascript
+        or (zero_fixture / "src/added.py").exists()
+    ):
+        raise AssertionError(
+            "source overlay did not produce an isolated classified after-Map"
+        )
+    ignore_overlay = zero_project.with_source_overlay(
+        {".gitignore": b"*.skip.py\nsrc/main.py\n"},
+        map_cache=False,
+    )
+    ignore_overlay_files = {
+        row["path"] for row in json.loads(ignore_overlay.map_json())["files"]
+    }
+    if (
+        "ignored/drop.py" not in ignore_overlay_files
+        or "src/main.py" in ignore_overlay_files
+        or (zero_fixture / ".gitignore").read_bytes()
+        != b"ignored/\n*.skip.py\n"
+    ):
+        raise AssertionError(
+            "source overlay did not apply changed ignore rules exhaustively"
+        )
+    overlaid_config = (
+        b'{"exclude":["src/main.py"],"project":"overlay-config"}'
+    )
+    config_overlay = zero_project.with_source_overlay(
+        {"archbird.json": overlaid_config},
+        config=overlaid_config,
+        map_cache=False,
+    )
+    config_overlay_map = json.loads(config_overlay.map_json())
+    if (
+        config_overlay_map["project"] != "overlay-config"
+        or any(
+            row["path"] == "src/main.py"
+            for row in config_overlay_map["files"]
+        )
+        or (zero_fixture / "archbird.json").read_bytes()
+        == overlaid_config
+    ):
+        raise AssertionError(
+            "source overlay did not resolve the isolated project configuration"
+        )
     materialized_project = Project.from_repository(
         zero_fixture, config=materialized_config, map_cache=False
     )

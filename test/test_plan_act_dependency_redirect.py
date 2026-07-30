@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import copy
 import hashlib
 import json
@@ -33,9 +34,18 @@ def _project(root: Path) -> Project:
 
 
 def _verification_acceptance(
-    plan: dict[str, object], repository: Path
+    plan: dict[str, object],
+    repository: Path,
+    overlay: Mapping[str, bytes | None],
 ) -> dict[str, object]:
-    verification = json.loads(_project(repository).verify_json())
+    before = _project(repository)
+    after = before.with_source_overlay(
+        overlay,
+        config=(repository / "archbird.json").read_bytes(),
+        cache_dir=None,
+        map_cache=False,
+    )
+    verification = json.loads(after.verify_json())
     constraints = {
         row["id"]: row
         for row in verification["constraints"]

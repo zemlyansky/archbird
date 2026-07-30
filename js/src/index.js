@@ -237,6 +237,8 @@ class Project {
     this.mapCacheStats = emptyMapCacheStats();
     this._configJson = null;
     this._projectConfigurationJson = null;
+    this._authoredConfigJson = null;
+    this._discoveryOptions = null;
     this._cachedMap = null;
     this._mapCache = null;
     this._mapCacheParameters = null;
@@ -283,6 +285,19 @@ class Project {
       effectiveConfig,
       projectConfigurationForResolution(configJson, resolution.effective_config),
     );
+    project._authoredConfigJson = Buffer.from(configJson);
+    project._discoveryOptions = {
+      project: null,
+      source: [],
+      only: [],
+      exclude: [],
+      ignore: false,
+      ignoreFiles: [],
+      defaultExcludes: true,
+      maxFileBytes: null,
+      maxIndexBytes: null,
+      _transientExclude: [],
+    };
     if (scan) project.scan("primary", {
       typescript, cacheDir, cacheMaxBytes, mapCache,
     });
@@ -346,6 +361,75 @@ class Project {
       effectiveConfig,
       projectConfigurationForResolution(configJson, resolution.effective_config),
     );
+    current._authoredConfigJson = Buffer.from(configJson);
+    current._discoveryOptions = {
+      project: projectName,
+      source: [...source],
+      only: [...only],
+      exclude: [...exclude],
+      ignore,
+      ignoreFiles: [...ignoreFiles],
+      defaultExcludes,
+      maxFileBytes,
+      maxIndexBytes,
+      _transientExclude: [..._transientExclude],
+    };
+    if (scan) current.scan("primary", {
+      typescript, cacheDir, cacheMaxBytes, mapCache,
+    });
+    return current;
+  }
+
+  withSourceOverlay(
+    overlay,
+    {
+      config = null,
+      scan = true,
+      typescript = true,
+      cacheDir = null,
+      cacheMaxBytes = null,
+      mapCache = true,
+    } = {},
+  ) {
+    if (!this.root || !this.resolutionJson || !this._discoveryOptions) {
+      throw new Error("source overlays require a repository-backed Project");
+    }
+    const normalized = normalizeSourceOverlay(overlay);
+    const configJson = config === null
+      ? Buffer.from(this._authoredConfigJson || Buffer.alloc(0))
+      : configBytes(config);
+    const resolutionJson = resolveDiscovery(this.root, {
+      config: configJson,
+      ...this._discoveryOptions,
+      _sourceOverlay: normalized,
+    });
+    const resolution = JSON.parse(resolutionJson.toString("utf8"));
+    const effectiveConfig = Buffer.from(
+      JSON.stringify(canonicalForDigest(resolution.effective_config)),
+    );
+    const current = new Project(
+      resolution.project,
+      readSources(this.root, resolution, normalized),
+      {
+        configurationSha256: resolution.configuration_sha256,
+        resolution,
+      },
+    );
+    current.root = this.root;
+    current.resolutionJson = resolutionJson;
+    current.setConfig(
+      effectiveConfig,
+      projectConfigurationForResolution(configJson, resolution.effective_config),
+    );
+    current._authoredConfigJson = Buffer.from(configJson);
+    current._discoveryOptions = {
+      ...this._discoveryOptions,
+      source: [...this._discoveryOptions.source],
+      only: [...this._discoveryOptions.only],
+      exclude: [...this._discoveryOptions.exclude],
+      ignoreFiles: [...this._discoveryOptions.ignoreFiles],
+      _transientExclude: [...this._discoveryOptions._transientExclude],
+    };
     if (scan) current.scan("primary", {
       typescript, cacheDir, cacheMaxBytes, mapCache,
     });
@@ -1017,13 +1101,95 @@ function compareTuple(left, right) {
   return 0;
 }
 
-function encodedInput(root, relative) {
-  const candidate = path.join(root, ...relative.split("/"));
-  const metadata = fs.lstatSync(candidate);
-  if (!metadata.isFile() || metadata.isSymbolicLink()) {
-    throw new Error(`discovery input is not a regular file: ${relative}`);
+function normalizeSourceOverlay(overlay) {
+  if (!overlay || typeof overlay !== "object" || Array.isArray(overlay)) {
+    throw new Error("source overlay must be a path-to-bytes object");
   }
-  return { content_hex: fs.readFileSync(candidate).toString("hex"), path: relative };
+  const normalized = Object.create(null);
+  for (const [relative, data] of Object.entries(overlay)) {
+    if (
+      !relative ||
+      relative.startsWith("/") ||
+      relative.includes("\\") ||
+      relative.split("/").some((part) => !part || part === "." || part === "..")
+    ) {
+      throw new Error(`invalid source overlay path: ${JSON.stringify(relative)}`);
+    }
+    if (data !== null && !Buffer.isBuffer(data)) {
+      throw new Error(`source overlay value must be a Buffer or null: ${relative}`);
+    }
+    normalized[relative] = data === null ? null : Buffer.from(data);
+  }
+  return normalized;
+}
+
+function overlayChangesIgnoreInputs(
+  root,
+  overlay,
+  customIgnoreFiles,
+  includeStandardIgnores,
+) {
+  const ignoreNames = new Set([".gitignore", ".ignore", ".archbirdignore"]);
+  const protectedIgnores = new Set();
+  for (const relative of Object.keys(overlay)) {
+    if (
+      customIgnoreFiles.includes(relative) ||
+      (includeStandardIgnores && ignoreNames.has(path.posix.basename(relative)))
+    ) {
+      protectedIgnores.add(relative);
+    }
+  }
+  for (const relative of [...protectedIgnores].sort(utf8Compare)) {
+    let current = null;
+    try {
+      current = fs.readFileSync(path.join(root, ...relative.split("/")));
+    } catch (error) {
+      if (!error || error.code !== "ENOENT") {
+        throw new Error(
+          `cannot read discovery ignore input ${relative}: ${error.message}`,
+        );
+      }
+    }
+    const after = overlay[relative];
+    if (
+      (after === null) !== (current === null) ||
+      (after !== null && current !== null && !after.equals(current))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function overlayRows(rows, overlay) {
+  const indexed = new Map(rows.map((row) => [
+    row.path,
+    { bytes: row.bytes, path: row.path },
+  ]));
+  for (const [relative, data] of Object.entries(overlay)) {
+    if (data === null) indexed.delete(relative);
+    else indexed.set(relative, { bytes: data.length, path: relative });
+  }
+  return [...indexed.values()].sort((left, right) =>
+    utf8Compare(left.path, right.path));
+}
+
+function encodedInput(root, relative, overlay = null) {
+  let data;
+  if (overlay && Object.hasOwn(overlay, relative)) {
+    data = overlay[relative];
+    if (data === null) {
+      throw new Error(`discovery input was removed by source overlay: ${relative}`);
+    }
+  } else {
+    const candidate = path.join(root, ...relative.split("/"));
+    const metadata = fs.lstatSync(candidate);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`discovery input is not a regular file: ${relative}`);
+    }
+    data = fs.readFileSync(candidate);
+  }
+  return { content_hex: data.toString("hex"), path: relative };
 }
 
 function repositoryInventory(
@@ -1033,6 +1199,7 @@ function repositoryInventory(
     includeStandardIgnores = true,
     ignoreFiles = [],
     prunedDirectories = [],
+    overlay = null,
   } = {},
 ) {
   const paths = new Set(rows.map((row) => row.path));
@@ -1053,12 +1220,12 @@ function repositoryInventory(
   }
   const documents = ["package.json", "pyproject.toml", "DESCRIPTION", "configure.ac"]
     .filter((relative) => paths.has(relative))
-    .map((relative) => encodedInput(root, relative));
+    .map((relative) => encodedInput(root, relative, overlay));
   return Buffer.from(JSON.stringify(canonicalForDigest({
     artifact: "archbird-repository-inventory",
     documents,
     files: [...rows],
-    ignore_files: selected.map((relative) => encodedInput(root, relative)),
+    ignore_files: selected.map((relative) => encodedInput(root, relative, overlay)),
     pruned_directories: [...prunedDirectories],
     schema_version: 1,
   })));
@@ -1095,6 +1262,7 @@ function resolveDiscovery(
     maxIndexBytes = null,
     pretty = false,
     _transientExclude = [],
+    _sourceOverlay = null,
   } = {},
 ) {
   const repository = path.resolve(root);
@@ -1102,12 +1270,19 @@ function resolveDiscovery(
     throw new Error(`root is not a directory: ${repository}`);
   }
   const configJson = configBytes(config);
+  const overlay = normalizeSourceOverlay(_sourceOverlay || {});
   const normalizedIgnoreFiles = [...new Set(
     ignoreFiles.map((value) => safeRelative(repository, value)),
   )];
   const normalizedTransientExclude = [...new Set(
     _transientExclude.map((value) => safeRelative(repository, value)),
   )];
+  const ignoreInputsChanged = overlayChangesIgnoreInputs(
+    repository,
+    overlay,
+    normalizedIgnoreFiles,
+    ignore,
+  );
   const request = mapRequest({
     project,
     source,
@@ -1119,14 +1294,34 @@ function resolveDiscovery(
     maxFileBytes,
     maxIndexBytes,
   });
-  const bootstrapInventory = repositoryInventory(
-    repository,
+  const bootstrapPaths = new Set([
+    ".archbirdignore",
+    ".gitignore",
+    ".ignore",
+    "Makefile",
+    "DESCRIPTION",
+    "NAMESPACE",
+    "configure.ac",
+    "package.json",
+    "pyproject.toml",
+  ]);
+  const bootstrapOverlay = Object.create(null);
+  for (const [relative, data] of Object.entries(overlay)) {
+    if (bootstrapPaths.has(relative)) bootstrapOverlay[relative] = data;
+  }
+  const bootstrapRows = overlayRows(
     rootRows(repository).filter(
       (row) => !normalizedTransientExclude.includes(row.path),
     ),
+    bootstrapOverlay,
+  );
+  const bootstrapInventory = repositoryInventory(
+    repository,
+    bootstrapRows,
     {
       includeStandardIgnores: ignore,
       ignoreFiles: normalizedIgnoreFiles,
+      overlay,
     },
   );
   const bootstrap = JSON.parse(
@@ -1136,35 +1331,55 @@ function resolveDiscovery(
     JSON.stringify(canonicalForDigest(bootstrap.effective_config)),
   );
   const inventoryState = inventoryRows(effectiveConfig, repository, {
-    includeStandardIgnores: ignore,
-    ignoreFiles: normalizedIgnoreFiles,
+    // Do not prune the virtual after-state with stale disk ignore rules.
+    // The native resolver applies the overlaid ignore documents below.
+    includeStandardIgnores: ignore && !ignoreInputsChanged,
+    ignoreFiles: ignoreInputsChanged ? [] : normalizedIgnoreFiles,
     transientExclude: normalizedTransientExclude,
   });
-  const inventory = repositoryInventory(repository, inventoryState.rows, {
+  const finalOverlay = Object.create(null);
+  for (const [relative, data] of Object.entries(overlay)) {
+    if (!normalizedTransientExclude.includes(relative)) {
+      finalOverlay[relative] = data;
+    }
+  }
+  const rows = overlayRows(inventoryState.rows, finalOverlay);
+  const inventory = repositoryInventory(repository, rows, {
     includeStandardIgnores: ignore,
     ignoreFiles: normalizedIgnoreFiles,
     prunedDirectories: inventoryState.pruned,
+    overlay,
   });
   return native.discoveryResolve(configJson, request, inventory, pretty);
 }
 
-function readSources(root, plan) {
+function readSources(root, plan, overlay = null) {
   return plan.files.map((row) => {
-    const candidate = path.join(root, ...row.path.split("/"));
-    const metadata = fs.lstatSync(candidate);
-    if (!metadata.isFile()) {
-      throw new Error(`selected source is no longer a regular file: ${row.path}`);
-    }
     const isIndex = row.roles.includes("index");
     const byteLimit = isIndex ? plan.max_index_bytes : plan.max_file_bytes;
     const limitName = isIndex ? "max_index_bytes" : "max_file_bytes";
-    if (metadata.size > byteLimit) {
-      throw new Error(
-        `selected ${isIndex ? "index" : "source"} exceeds limits.${limitName}: ` +
-          `${row.path}: ${metadata.size} > ${byteLimit}`,
-      );
+    let data;
+    if (overlay && Object.hasOwn(overlay, row.path)) {
+      data = overlay[row.path];
+      if (data === null) {
+        throw new Error(
+          `selected source was removed by source overlay: ${row.path}`,
+        );
+      }
+    } else {
+      const candidate = path.join(root, ...row.path.split("/"));
+      const metadata = fs.lstatSync(candidate);
+      if (!metadata.isFile()) {
+        throw new Error(`selected source is no longer a regular file: ${row.path}`);
+      }
+      if (metadata.size > byteLimit) {
+        throw new Error(
+          `selected ${isIndex ? "index" : "source"} exceeds limits.${limitName}: ` +
+            `${row.path}: ${metadata.size} > ${byteLimit}`,
+        );
+      }
+      data = fs.readFileSync(candidate);
     }
-    const data = fs.readFileSync(candidate);
     if (data.length > byteLimit) {
       throw new Error(
         `selected ${isIndex ? "index" : "source"} exceeds ` +
