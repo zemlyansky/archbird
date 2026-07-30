@@ -19,6 +19,12 @@ typedef struct AbProjectionContext {
   ArchbirdEngine *engine;
   const AbValue *map;
   const AbValue *resolution;
+  const AbValue *files;
+  size_t *file_slots;
+  size_t file_slot_count;
+  const AbValue *inputs;
+  size_t *input_slots;
+  size_t input_slot_count;
 } AbProjectionContext;
 
 ArchbirdStatus ab_projection_map_validate(ArchbirdEngine *engine,

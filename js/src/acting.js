@@ -23,6 +23,16 @@ const SUPPORTED_ACTIONS = new Set([
   "create_file",
   "delete_file",
   "move_file",
+  "edit_json_pointer",
+  "rename_symbol",
+]);
+const PORTABLE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const RENAME_ROLES = new Set([
+  "binding",
+  "declaration",
+  "export",
+  "import",
+  "reference",
 ]);
 
 class AcceptanceRejected extends Error {
@@ -328,17 +338,65 @@ function validateOperationShape(operation) {
       "destination_path",
       "source_sha256",
     ]),
+    edit_json_pointer: new Set([
+      "action",
+      "path",
+      "source_sha256",
+      "pointer",
+      "expected_absent",
+      "replacement",
+    ]),
+    rename_symbol: new Set([
+      "action",
+      "symbol",
+      "new_name",
+      "projection",
+      "projection_result_sha256",
+      "sites",
+      "coverage",
+    ]),
     manual: new Set(["action", "instructions", "candidate_paths"]),
   };
   const action = operation.action;
   if (typeof action !== "string" || !Object.hasOwn(fields, action)) {
     throw new Error("Plan item operation action is unsupported");
   }
-  exactKeys(operation, fields[action], `${action} operation`);
+  const expectedFields = new Set(fields[action]);
+  if (action === "edit_json_pointer" && Object.hasOwn(operation, "expected")) {
+    expectedFields.add("expected");
+  }
+  exactKeys(operation, expectedFields, `${action} operation`);
   if (
-    ["replace_range", "delete_file", "move_file"].includes(action) &&
+    [
+      "replace_range",
+      "delete_file",
+      "move_file",
+      "edit_json_pointer",
+    ].includes(action) &&
     !validSha256(operation.source_sha256)
   ) throw new Error(`${action} operation has an invalid source_sha256`);
+  if (action === "edit_json_pointer") {
+    safeRelativePath(operation.path);
+    const expectedPresent = Object.hasOwn(operation, "expected");
+    if (
+      typeof operation.expected_absent !== "boolean" ||
+      operation.expected_absent === expectedPresent
+    ) {
+      throw new Error(
+        "edit_json_pointer requires expected exactly when " +
+        "expected_absent is false",
+      );
+    }
+    validateText(
+      operation.pointer,
+      "edit_json_pointer pointer",
+      MAX_METADATA_BYTES,
+    );
+    if (expectedPresent) {
+      canonicalBytes(operation.expected, MAX_OPERATION_TEXT_BYTES);
+    }
+    canonicalBytes(operation.replacement, MAX_OPERATION_TEXT_BYTES);
+  }
   if (action === "create_file") {
     safeRelativePath(operation.path);
     validateText(
@@ -381,6 +439,169 @@ function validateOperationShape(operation) {
       "replace_range replacement",
       MAX_OPERATION_TEXT_BYTES,
     );
+  }
+  if (action === "rename_symbol") {
+    validateText(
+      operation.symbol,
+      "rename_symbol symbol",
+      MAX_METADATA_BYTES,
+      { nonempty: true },
+    );
+    validateText(
+      operation.new_name,
+      "rename_symbol new_name",
+      256,
+      { nonempty: true },
+    );
+    const oldMatch = operation.symbol.match(/[A-Za-z_][A-Za-z0-9_]*$/);
+    if (
+      oldMatch === null ||
+      !PORTABLE_IDENTIFIER.test(operation.new_name) ||
+      oldMatch[0] === operation.new_name
+    ) {
+      throw new Error(
+        "rename_symbol requires distinct portable identifier leaves",
+      );
+    }
+    if (!isObject(operation.projection)) {
+      throw new Error("rename_symbol projection must be an object");
+    }
+    exactKeys(
+      operation.projection,
+      new Set([
+        "select",
+        "names",
+        ...(Object.hasOwn(operation.projection, "paths") ? ["paths"] : []),
+      ]),
+      "rename_symbol projection",
+    );
+    if (
+      operation.projection.select !== "symbol_occurrences" ||
+      !Array.isArray(operation.projection.names) ||
+      operation.projection.names.length !== 1 ||
+      operation.projection.names[0] !== operation.symbol
+    ) {
+      throw new Error(
+        "rename_symbol projection must select exactly its source symbol",
+      );
+    }
+    const projectionPaths = operation.projection.paths ?? [];
+    if (
+      !Array.isArray(projectionPaths) ||
+      projectionPaths.length > MAX_COLLECTION_ITEMS ||
+      new Set(projectionPaths).size !== projectionPaths.length
+    ) throw new Error("rename_symbol projection paths must be a unique array");
+    for (const projectionPath of projectionPaths) {
+      safeRelativePath(projectionPath);
+    }
+    if (!validSha256(operation.projection_result_sha256)) {
+      throw new Error("rename_symbol projection_result_sha256 is invalid");
+    }
+    if (
+      !Array.isArray(operation.sites) ||
+      operation.sites.length === 0 ||
+      operation.sites.length > MAX_COLLECTION_ITEMS
+    ) throw new Error("rename_symbol sites must be a non-empty bounded array");
+    canonicalIdentities(operation.sites, "rename_symbol sites");
+    for (const site of operation.sites) {
+      if (!isObject(site)) throw new Error("rename_symbol site must be an object");
+      exactKeys(
+        site,
+        new Set([
+          "path",
+          "source_sha256",
+          "start_byte",
+          "end_byte",
+          "before",
+          "role",
+          "fact_ids",
+          "providers",
+        ]),
+        "rename_symbol site",
+      );
+      safeRelativePath(site.path);
+      if (!validSha256(site.source_sha256)) {
+        throw new Error("rename_symbol site has an invalid source_sha256");
+      }
+      if (
+        !Number.isSafeInteger(site.start_byte) ||
+        !Number.isSafeInteger(site.end_byte) ||
+        site.start_byte < 0 ||
+        site.end_byte <= site.start_byte
+      ) throw new Error("rename_symbol site has an invalid byte range");
+      validateText(
+        site.before,
+        "rename_symbol site before",
+        MAX_METADATA_BYTES,
+        { nonempty: true },
+      );
+      if (site.before !== oldMatch[0]) {
+        throw new Error(
+          "rename_symbol site before must equal the declaration leaf",
+        );
+      }
+      if (!RENAME_ROLES.has(site.role)) {
+        throw new Error("rename_symbol site role is unsupported");
+      }
+      validateIds(site.fact_ids, "rename_symbol site fact_ids", {
+        nonempty: true,
+      });
+      if (
+        !Array.isArray(site.providers) ||
+        site.providers.length > MAX_COLLECTION_ITEMS ||
+        site.providers.some(
+          (provider) => typeof provider !== "string" || provider.length === 0,
+        ) ||
+        new Set(site.providers).size !== site.providers.length
+      ) {
+        throw new Error(
+          "rename_symbol site providers must contain unique non-empty strings",
+        );
+      }
+      for (const provider of site.providers) {
+        validateText(
+          provider,
+          "rename_symbol site provider",
+          MAX_METADATA_BYTES,
+          { nonempty: true },
+        );
+      }
+    }
+    if (!isObject(operation.coverage)) {
+      throw new Error("rename_symbol coverage must be an object");
+    }
+    exactKeys(
+      operation.coverage,
+      new Set([
+        "classification",
+        "exhaustive",
+        "selected",
+        "unknown",
+        "unsupported",
+      ]),
+      "rename_symbol coverage",
+    );
+    if (
+      !["complete", "incomplete", "unknown"].includes(
+        operation.coverage.classification,
+      ) ||
+      typeof operation.coverage.exhaustive !== "boolean"
+    ) throw new Error("rename_symbol coverage metadata is invalid");
+    for (const field of ["selected", "unknown", "unsupported"]) {
+      if (
+        !Number.isSafeInteger(operation.coverage[field]) ||
+        operation.coverage[field] < 0
+      ) {
+        throw new Error(
+          `rename_symbol coverage ${field} must be a nonnegative safe integer`,
+        );
+      }
+    }
+    if (operation.coverage.selected !== operation.sites.length) {
+      throw new Error(
+        "rename_symbol coverage selected must equal the site count",
+      );
+    }
   }
   if (action === "manual") {
     if (
@@ -613,6 +834,19 @@ function validatePlanShape(plan) {
       item.executable &&
       (item.non_executable_reasons.length > 0 || action === "manual")
     ) throw new Error(`Plan item ${item.id} has an invalid executable gate`);
+    if (
+      item.executable &&
+      ["rename_symbol", "edit_json_pointer"].includes(action) &&
+      item.provenance !== "asserted"
+    ) {
+      throw new Error(
+        `Plan item ${item.id} requires asserted ${
+          action === "rename_symbol"
+            ? "rename"
+            : "edit_json_pointer"
+        } intent`,
+      );
+    }
     if (!item.executable && item.non_executable_reasons.length === 0) {
       throw new Error(`Plan item ${item.id} requires a blocking reason`);
     }
@@ -860,7 +1094,93 @@ function unifiedDiff(
   ).toString("utf8");
 }
 
-function prepare(plan, root) {
+function renameProjectionSites(operation, mapDocument) {
+  if (mapDocument === null || mapDocument === undefined) {
+    throw new Error(
+      "rename_symbol requires the current source Map for closure validation",
+    );
+  }
+  const encodedMap = Buffer.isBuffer(mapDocument)
+    ? mapDocument
+    : canonicalBytes(mapDocument);
+  let result;
+  try {
+    result = JSON.parse(native.projectionEvaluate(
+      encodedMap,
+      Buffer.alloc(0),
+      canonicalBytes({
+        id: "act-symbol-occurrences",
+        ...operation.projection,
+      }),
+      false,
+    ).toString("utf8"));
+  } catch (error) {
+    throw new Error(
+      `rename_symbol closure could not be evaluated: ${error.message}`,
+    );
+  }
+  if (
+    result.projection_result_sha256 !== operation.projection_result_sha256
+  ) {
+    throw new Error(
+      "rename_symbol ProjectionResult does not match the current Map",
+    );
+  }
+  if (
+    result.artifact !== "projection-result" ||
+    !isObject(result.fact) ||
+    !Array.isArray(result.fact.items) ||
+    !isObject(result.completeness)
+  ) throw new Error("rename_symbol closure is not a valid ProjectionResult");
+  const leaf = operation.symbol.match(/[A-Za-z_][A-Za-z0-9_]*$/)[0];
+  const sites = result.fact.items
+    .filter((item) =>
+      isObject(item) &&
+      item.state === "current" &&
+      isObject(item.attributes)
+    )
+    .map(({ attributes }) => ({
+      path: attributes.path,
+      source_sha256: attributes.source_sha256,
+      start_byte: attributes.start_byte,
+      end_byte: attributes.end_byte,
+      before: leaf,
+      role: attributes.role,
+      fact_ids: [...(attributes.fact_ids ?? [])].sort(utf8Compare),
+      providers: [...(attributes.providers ?? [])].sort(utf8Compare),
+    }))
+    .sort((left, right) =>
+      utf8Compare(left.path, right.path) || left.start_byte - right.start_byte
+    );
+  const expectedSites = structuredClone(operation.sites)
+    .sort((left, right) =>
+      utf8Compare(left.path, right.path) || left.start_byte - right.start_byte
+    );
+  if (!canonicalBytes(sites).equals(canonicalBytes(expectedSites))) {
+    throw new Error(
+      "rename_symbol sites do not equal the current exhaustive projection",
+    );
+  }
+  const counts = result.completeness.counts;
+  if (!isObject(counts) || !isObject(operation.coverage)) {
+    throw new Error("rename_symbol closure has invalid completeness");
+  }
+  const actualCoverage = {
+    classification: result.completeness.classification,
+    exhaustive: result.completeness.exhaustive,
+    selected: sites.length,
+    unknown: counts.unknown,
+    unsupported: counts.unsupported,
+  };
+  if (!canonicalBytes(actualCoverage).equals(canonicalBytes(operation.coverage))) {
+    throw new Error(
+      "rename_symbol coverage does not equal the current projection",
+    );
+  }
+  return sites;
+}
+
+function prepare(plan, root, mapDocument = null) {
   const diagnostics = [];
   const initial = new Map();
   const replacements = new Map();
@@ -897,6 +1217,72 @@ function prepare(plan, root) {
     let filePath = null;
     try {
       let destination = "";
+      if (action === "rename_symbol") {
+        renameProjectionSites(operation, mapDocument);
+        const coverage = operation.coverage;
+        if (
+          coverage.classification !== "complete" ||
+          coverage.exhaustive !== true ||
+          coverage.unknown !== 0 ||
+          coverage.unsupported !== 0
+        ) {
+          throw new Error(
+            "rename_symbol requires complete exhaustive coverage without " +
+            "unknown or unsupported sites",
+          );
+        }
+        const replacement = Buffer.from(operation.new_name, "utf8");
+        for (const site of operation.sites) {
+          filePath = safeRelativePath(site.path);
+          touched.add(filePath);
+          if (touched.size > MAX_TOUCHED_FILES) {
+            throw new Error(
+              `Plan touches more than ${MAX_TOUCHED_FILES} files`,
+            );
+          }
+          const state = existingState(root, filePath, initial, sourceBudget);
+          if (state.sha256 !== site.source_sha256) {
+            throw new Error(
+              `source SHA-256 is stale: expected ${site.source_sha256}, ` +
+              `found ${state.sha256}`,
+            );
+          }
+          const start = site.start_byte;
+          const end = site.end_byte;
+          const before = Buffer.from(site.before, "utf8");
+          if (end > state.data.length) {
+            throw new Error(
+              "rename_symbol site exceeds current source bytes",
+            );
+          }
+          try {
+            const decoder = new TextDecoder("utf-8", { fatal: true });
+            decoder.decode(state.data);
+            decoder.decode(state.data.subarray(0, start));
+            decoder.decode(state.data.subarray(start, end));
+          } catch (_) {
+            throw new Error(
+              "rename_symbol offsets must bound valid UTF-8 text",
+            );
+          }
+          if (!state.data.subarray(start, end).equals(before)) {
+            throw new Error(
+              "rename_symbol site does not match current source bytes",
+            );
+          }
+          if (!replacements.has(filePath)) replacements.set(filePath, []);
+          replacements.get(filePath).push({
+            itemId,
+            path: filePath,
+            start,
+            end,
+            before,
+            replacement,
+            sourceSha256: site.source_sha256,
+          });
+        }
+        continue;
+      }
       if (action === "move_file") {
         filePath = safeRelativePath(operation.source_path);
         destination = safeRelativePath(operation.destination_path);
@@ -949,6 +1335,52 @@ function prepare(plan, root) {
           start,
           end,
           before,
+          replacement,
+          sourceSha256: operation.source_sha256,
+        });
+      } else if (action === "edit_json_pointer") {
+        const state = existingState(root, filePath, initial, sourceBudget);
+        if (state.sha256 !== operation.source_sha256) {
+          throw new Error(
+            `source SHA-256 is stale: expected ${operation.source_sha256}, ` +
+            `found ${state.sha256}`,
+          );
+        }
+        const expected = operation.expected_absent
+          ? Buffer.alloc(0)
+          : canonicalBytes(operation.expected, MAX_OPERATION_TEXT_BYTES);
+        const edit = native.jsonPointerEdit(
+          state.data,
+          operation.source_sha256,
+          operation.pointer,
+          expected,
+          canonicalBytes(operation.replacement, MAX_OPERATION_TEXT_BYTES),
+          operation.expected_absent,
+        );
+        const {
+          startByte: start,
+          endByte: end,
+          replacement,
+        } = edit;
+        if (
+          !Number.isSafeInteger(start) ||
+          !Number.isSafeInteger(end) ||
+          start < 0 ||
+          end < start ||
+          end > state.data.length ||
+          !Buffer.isBuffer(replacement)
+        ) {
+          throw new Error(
+            "native JSON Pointer edit returned an invalid range",
+          );
+        }
+        if (!replacements.has(filePath)) replacements.set(filePath, []);
+        replacements.get(filePath).push({
+          itemId,
+          path: filePath,
+          start,
+          end,
+          before: state.data.subarray(start, end),
           replacement,
           sourceSha256: operation.source_sha256,
         });
@@ -1205,9 +1637,9 @@ function prepare(plan, root) {
       prefix = [`deleted file mode ${beforeState.mode.toString(8).padStart(6, "0")}`];
     } else {
       kind = "modify";
-      itemIds = replacements.get(filePath)
-        .map((edit) => edit.itemId)
-        .sort(utf8Compare);
+      itemIds = [...new Set(
+        replacements.get(filePath).map((edit) => edit.itemId),
+      )].sort(utf8Compare);
       prefix = [];
     }
     changes.push({
@@ -1422,7 +1854,7 @@ function applyPrepared(root, prepared, evaluateAcceptance) {
   }
 }
 
-function execute(plan, root, apply, verifyAcceptance) {
+function execute(plan, root, apply, verifyAcceptance, mapDocument = null) {
   let planDigest;
   let planSnapshot;
   try {
@@ -1461,7 +1893,7 @@ function execute(plan, root, apply, verifyAcceptance) {
     if (!fs.statSync(repository).isDirectory()) {
       throw new Error("repository root must be a directory");
     }
-    prepared = prepare(planSnapshot, repository);
+    prepared = prepare(planSnapshot, repository, mapDocument);
   } catch (error) {
     return result(planDigest, "blocked", [], [
       diagnostic("invalid_root", error.message),
@@ -1508,15 +1940,15 @@ function execute(plan, root, apply, verifyAcceptance) {
   }
 }
 
-function previewPlan(plan, root) {
-  return execute(plan, root, false, null);
+function previewPlan(plan, root, mapDocument = null) {
+  return execute(plan, root, false, null, mapDocument);
 }
 
-function applyPlan(plan, root, verifyAcceptance) {
+function applyPlan(plan, root, verifyAcceptance, mapDocument = null) {
   if (typeof verifyAcceptance !== "function") {
     throw new TypeError("applyPlan requires an acceptance callback");
   }
-  return execute(plan, root, true, verifyAcceptance);
+  return execute(plan, root, true, verifyAcceptance, mapDocument);
 }
 
 module.exports = {

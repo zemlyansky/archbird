@@ -905,6 +905,16 @@ def plan_parser() -> argparse.ArgumentParser:
         "--objective",
         help="replace the derived Plan objective with reviewed text",
     )
+    result.add_argument(
+        "--rename",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+        help=(
+            "review one symbol rename that closes matching extra and missing "
+            "issues in a selected constraint"
+        ),
+    )
     result.add_argument("--pretty", action="store_true", help="pretty JSON")
     result.add_argument("-o", "--output", default="-")
     return result
@@ -2246,11 +2256,25 @@ def _plan_main(argv: Sequence[str]) -> int:
                 "Plan requires a Map without error diagnostics; "
                 "fix Map evidence before deriving edits"
             )
+        rename_directives: dict[str, str] = {}
+        for directive in args.rename:
+            old, separator, new = directive.partition("=")
+            if (
+                separator != "="
+                or not old
+                or not new
+                or old in rename_directives
+            ):
+                raise ValueError(
+                    "--rename requires unique non-empty OLD=NEW directives"
+                )
+            rename_directives[old] = new
         plan = generate_plan(
             map_document,
             json.loads(verification_json),
             args.constraint_ids or None,
             repository,
+            rename_directives or None,
         )
         if args.objective:
             plan["objective"] = args.objective
@@ -2266,6 +2290,20 @@ def _plan_main(argv: Sequence[str]) -> int:
             pretty=args.pretty,
         )
         _write(encoded, args.output)
+        if args.output != "-":
+            executable = sum(
+                1
+                for item in plan["items"]
+                if isinstance(item, Mapping) and item.get("executable") is True
+            )
+            print(
+                "Result: "
+                f"items={len(plan['items'])}; "
+                f"executable={executable}; "
+                f"non-executable={len(plan['items']) - executable}; "
+                f"unknowns={len(plan['unknowns'])}; "
+                f"preserved-constraints={len(plan['preserved_constraints'])}"
+            )
         progress.finish()
         return 0
     except (ConfigError, OSError, RuntimeError, ValueError, _native.Error) as error:
@@ -2553,6 +2591,19 @@ def _act_result_bytes(
         f"- Changes: {len(change_rows)}",
         f"- Acceptance: `{acceptance_status}`",
     ]
+    acceptance_rows = (
+        acceptance.get("constraints")
+        if isinstance(acceptance, Mapping)
+        else None
+    )
+    if isinstance(acceptance_rows, list) and acceptance_rows:
+        lines.extend(("", "## Acceptance", ""))
+        for row in acceptance_rows:
+            if isinstance(row, Mapping):
+                lines.append(
+                    f"- `{row.get('id', '')}`: "
+                    f"`{row.get('status', 'unknown')}`"
+                )
     diagnostics = result.get("diagnostics")
     diagnostic_rows = diagnostics if isinstance(diagnostics, list) else []
     if diagnostic_rows:
@@ -2612,16 +2663,6 @@ def _act_main(argv: Sequence[str]) -> int:
             if path is not None
         ]
         args._transient_exclude = tuple(dict.fromkeys(transient_artifacts))
-        preview = preview_plan(document, repository)
-        if not args.apply or preview["status"] == "blocked":
-            _write(
-                _act_result_bytes(
-                    preview, format=args.format, pretty=args.pretty
-                ),
-                args.output,
-            )
-            return 2 if preview["status"] == "blocked" else 0
-
         repository, config_json, _ = _repository_inputs(args)
         if not config_json:
             raise ConfigError(
@@ -2653,6 +2694,16 @@ def _act_main(argv: Sequence[str]) -> int:
             document, before_map, before_verification
         )
         _acceptance_from_verification(document, before_verification)
+        preview = preview_plan(document, repository, before_map)
+        if preview["status"] == "blocked":
+            _write(
+                _act_result_bytes(
+                    preview, format=args.format, pretty=args.pretty
+                ),
+                args.output,
+            )
+            progress.finish()
+            return 2
         if mismatches:
             blocked = _blocked_act_result(
                 preview,
@@ -2666,6 +2717,15 @@ def _act_main(argv: Sequence[str]) -> int:
             )
             progress.finish()
             return 2
+        if not args.apply:
+            _write(
+                _act_result_bytes(
+                    preview, format=args.format, pretty=args.pretty
+                ),
+                args.output,
+            )
+            progress.finish()
+            return 0
 
         def verify_acceptance(
             plan: Mapping[str, object], resolved_root: Path
@@ -2701,7 +2761,12 @@ def _act_main(argv: Sequence[str]) -> int:
             )
             return _acceptance_from_verification(plan, after_verification)
 
-        result = apply_plan(document, repository, verify_acceptance)
+        result = apply_plan(
+            document,
+            repository,
+            verify_acceptance,
+            before_map,
+        )
         _write(
             _act_result_bytes(
                 result, format=args.format, pretty=args.pretty

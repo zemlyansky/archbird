@@ -155,6 +155,13 @@ def _identifier_byte(value: int) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class _ImportAliasPositions:
+    imported: Tuple[int, int]
+    local: Tuple[int, int]
+    full: Tuple[int, int]
+
+
 class _SourcePositions:
     def __init__(self, text: str, raw: bytes, starts: Sequence[int]) -> None:
         self._text = text
@@ -198,24 +205,17 @@ class _SourcePositions:
         self._tokens = tokens
         return tokens
 
-    def import_aliases(self, node: ast.AST) -> Tuple[Tuple[int, int], ...]:
-        """Return exact import-alias spans on every supported CPython.
+    def import_aliases(self, node: ast.AST) -> Tuple["_ImportAliasPositions", ...]:
+        """Return exact imported, local-binding, and full alias spans.
 
-        CPython 3.9 gives ``ast.alias`` nodes no positions.  Token evidence is
-        used only for that missing child-node metadata and is validated against
-        the parsed alias names; the enclosing import must still have an exact
-        AST span.
+        CPython 3.9 gives ``ast.alias`` nodes no positions, while newer
+        runtimes make their spans cover the complete ``name as alias`` clause.
+        Token evidence supplies the distinct anchors on every runtime and is
+        validated against the parsed aliases; the enclosing import must still
+        have an exact AST span.
         """
 
         names = getattr(node, "names", ())
-        if all(
-            all(
-                isinstance(getattr(alias, attribute, None), int)
-                for attribute in ("lineno", "col_offset", "end_lineno", "end_col_offset")
-            )
-            for alias in names
-        ):
-            return tuple(_absolute_span(alias, self._starts) for alias in names)
         start, end = _absolute_span(node, self._starts)
         selected = [
             token
@@ -247,7 +247,7 @@ class _SourcePositions:
         groups = [group for group in groups if group]
         if len(groups) != len(names):
             raise ValueError("cannot align Python import aliases with source tokens")
-        spans: List[Tuple[int, int]] = []
+        spans: List[_ImportAliasPositions] = []
         for alias, group in zip(names, groups):
             parts = [token[1] for token in group]
             try:
@@ -258,7 +258,29 @@ class _SourcePositions:
             renamed = "".join(parts[as_index + 1 :]) if as_index < len(parts) else None
             if imported != alias.name or renamed != alias.asname:
                 raise ValueError("Python import alias tokens disagree with AST")
-            spans.append((group[0][2], group[-1][3]))
+            imported_tokens = group[:as_index]
+            if not imported_tokens:
+                raise ValueError("Python import alias has no imported name")
+            imported_span = (imported_tokens[0][2], imported_tokens[-1][3])
+            if as_index < len(parts):
+                local_tokens = group[as_index + 1 :]
+                if len(local_tokens) != 1 or local_tokens[0][0] != tokenize.NAME:
+                    raise ValueError("Python import alias has no exact local binding")
+                local_span = (local_tokens[0][2], local_tokens[0][3])
+            elif isinstance(node, ast.Import) and "." in alias.name:
+                local_token = imported_tokens[0]
+                if local_token[0] != tokenize.NAME:
+                    raise ValueError("Python dotted import has no root binding")
+                local_span = (local_token[2], local_token[3])
+            else:
+                local_span = imported_span
+            spans.append(
+                _ImportAliasPositions(
+                    imported=imported_span,
+                    local=local_span,
+                    full=(group[0][2], group[-1][3]),
+                )
+            )
         return tuple(spans)
 
     def named(
@@ -1542,13 +1564,13 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self._visit_comprehension(node, "dictcomp", (node.key, node.value))
 
     def visit_Import(self, node: ast.Import) -> None:
-        for alias, span in zip(node.names, self.tokens.import_aliases(node)):
+        for alias, positions in zip(node.names, self.tokens.import_aliases(node)):
             local = alias.asname or alias.name.split(".", 1)[0]
             bound_module = alias.name if alias.asname else local
             self.facts.add(
                 "imports",
                 "module",
-                span,
+                positions.imported,
                 alias.name,
                 alias.name,
                 {"stdlib": _is_stdlib(alias.name)},
@@ -1556,7 +1578,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             self.facts.add(
                 "module-bindings",
                 "module",
-                span,
+                positions.local,
                 f"{len(local.encode('utf-8'))}:{local}:{bound_module}",
                 local,
                 {"target_module": bound_module},
@@ -1578,7 +1600,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self.facts.add(
             "imported-name-groups", "module", node_span, prefix, prefix
         )
-        for alias, span in zip(node.names, self.tokens.import_aliases(node)):
+        for alias, positions in zip(node.names, self.tokens.import_aliases(node)):
             if alias.name == "*":
                 self.facts.add(
                     "module-reexports",
@@ -1591,7 +1613,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             self.facts.add(
                 "imported-names",
                 "member",
-                span,
+                positions.imported,
                 f"{len(prefix.encode('utf-8'))}:{prefix}{alias.name}",
                 alias.name,
                 {"module": prefix},
@@ -1602,7 +1624,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 self.facts.add(
                     "module-bindings",
                     "module",
-                    span,
+                    positions.local,
                     f"{len(local.encode('utf-8'))}:{local}:{target_module}",
                     local,
                     {"target_module": target_module},
@@ -1632,23 +1654,23 @@ def _top_level_exports(
     for node in tree.body:
         if isinstance(node, ast.ImportFrom):
             prefix = "." * node.level + (node.module or "")
-            for alias, span in zip(node.names, tokens.import_aliases(node)):
+            for alias, positions in zip(node.names, tokens.import_aliases(node)):
                 local_name = alias.asname or alias.name
                 if local_name == "*":
                     continue
                 imported.append(local_name)
-                imported_occurrences.append((local_name, span))
+                imported_occurrences.append((local_name, positions.local))
                 origins[local_name] = prefix
                 origin_names[local_name] = alias.name
-                spans[local_name] = span
+                spans[local_name] = positions.local
         elif isinstance(node, ast.Import):
-            for alias, span in zip(node.names, tokens.import_aliases(node)):
+            for alias, positions in zip(node.names, tokens.import_aliases(node)):
                 local_name = alias.asname or alias.name.split(".")[0]
                 imported.append(local_name)
-                imported_occurrences.append((local_name, span))
+                imported_occurrences.append((local_name, positions.local))
                 origins[local_name] = alias.name
                 origin_names[local_name] = ""
-                spans[local_name] = span
+                spans[local_name] = positions.local
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             node_span = _absolute_span(node, starts)
             span = tokens.named(node.name, node_span)

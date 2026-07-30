@@ -518,6 +518,10 @@ collect_named_domain(ArchbirdEngine *engine, const ArchbirdProject *project,
     items[count].builtin = fact_bool_attribute(fact, "stdlib");
     items[count].binding_mask = fact_call_binding(fact);
     items[count].import_delimiter_mask = fact_import_delimiter(fact);
+    items[count].exact_target = NULL;
+    items[count].exact_target_symbol = NULL;
+    items[count].exact_count = 0;
+    items[count].exact_conflict = 0;
     count++;
   }
   if (count > 1)
@@ -1419,6 +1423,83 @@ static ArchbirdStatus definition_candidates(
   return ARCHBIRD_OK;
 }
 
+static int named_reference_key_compare(const NamedReference *item,
+                                       const AbManifestFile *file,
+                                       const AbString *name) {
+  int compared = ab_string_compare(&item->file->path, &file->path);
+  if (compared != 0)
+    return compared;
+  return ab_string_compare(item->name, name);
+}
+
+static NamedReference *named_reference_find(NamedReference *items, size_t count,
+                                            const AbManifestFile *file,
+                                            const AbString *name) {
+  size_t low = 0;
+  size_t high = count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (named_reference_key_compare(&items[middle], file, name) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  if (low < count && named_reference_key_compare(&items[low], file, name) == 0)
+    return &items[low];
+  return NULL;
+}
+
+static ArchbirdStatus resolve_exact_named_calls(AbMapState *state,
+                                                NamedReference *calls,
+                                                size_t call_count) {
+  size_t index;
+  for (index = 0; index < ab_project_merged_fact_count(state->project);
+       index++) {
+    const AbFact *fact = ab_project_merged_fact(state->project, index);
+    const AbManifestFile *file;
+    NamedReference *group;
+    const AbFact *evidence = NULL;
+    AbMapReferenceResolution resolution;
+    ArchbirdStatus status;
+    if (!fact || !string_literal(&fact->domain, "calls") || !fact->has_name)
+      continue;
+    file = fact_file(state->manifest, fact);
+    if (!file || !file->has_layer)
+      continue;
+    group = named_reference_find(calls, call_count, file, &fact->name);
+    if (!group)
+      return archbird_error_set(
+          state->engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+          "Map call group is missing during exact resolution");
+    status = ab_map_resolve_call_reference(state, fact, &evidence, NULL,
+                                           &resolution);
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (!evidence || !resolution.exact || !resolution.target ||
+        !resolution.target_symbol)
+      continue;
+    if (group->exact_target && (!ab_string_equal(&group->exact_target->path,
+                                                 &resolution.target->path) ||
+                                !ab_string_equal(group->exact_target_symbol,
+                                                 resolution.target_symbol))) {
+      group->exact_conflict = 1;
+      continue;
+    }
+    group->exact_target = resolution.target;
+    group->exact_target_symbol = resolution.target_symbol;
+    group->exact_count++;
+  }
+  return ARCHBIRD_OK;
+}
+
+static const AbManifestFile *
+exact_named_call_target(const NamedReference *call) {
+  return call->exact_target && !call->exact_conflict &&
+                 call->exact_count == call->count
+             ? call->exact_target
+             : NULL;
+}
+
 static ArchbirdStatus build_graph(AbMapState *state) {
   ArchbirdEngine *engine = state->engine;
   const ArchbirdProject *project = state->project;
@@ -1444,6 +1525,8 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     status = collect_named_domain(engine, project, manifest, "calls", &calls,
                                   &call_count);
   if (status == ARCHBIRD_OK)
+    status = resolve_exact_named_calls(state, calls, call_count);
+  if (status == ARCHBIRD_OK)
     status = collect_named_domain(engine, project, manifest, "method-calls",
                                   &methods, &method_count);
   if (status == ARCHBIRD_OK)
@@ -1456,6 +1539,7 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     const AbManifestFile **candidates = NULL;
     size_t candidate_count = 0;
     const AbExternalNamespace *external = NULL;
+    const AbManifestFile *exact_target = NULL;
     const char *kind;
     char *external_target = NULL;
     size_t external_target_length = 0;
@@ -1464,12 +1548,15 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     int python = bytes_literal(family, family_length, "python");
     int builtin_name = python && python_builtin_call(calls[index].name);
     unsigned binding = calls[index].binding_mask;
+    exact_target = exact_named_call_target(&calls[index]);
     status = definition_candidates(engine, symbols, symbol_count,
                                    calls[index].file, calls[index].name, 1,
                                    &candidates, &candidate_count);
     if (status != ARCHBIRD_OK)
       break;
-    if (binding == AB_MAP_BINDING_BUILTIN) {
+    if (exact_target) {
+      kind = "unique";
+    } else if (binding == AB_MAP_BINDING_BUILTIN) {
       kind = "builtin";
     } else if (binding & (AB_MAP_BINDING_BUILTIN | AB_MAP_BINDING_LOCAL |
                           AB_MAP_BINDING_UNKNOWN)) {
@@ -1504,12 +1591,16 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     } else {
       kind = "unresolved";
     }
-    if (status == ARCHBIRD_OK)
+    if (status == ARCHBIRD_OK && exact_target)
+      status = add_resolution(engine, graph, &calls[index].file->path,
+                              calls[index].name, kind, calls[index].count,
+                              &exact_target, 1, NULL, 0);
+    else if (status == ARCHBIRD_OK)
       status = add_resolution(engine, graph, &calls[index].file->path,
                               calls[index].name, kind, calls[index].count,
                               candidates, candidate_count, external_target,
                               external_target_length);
-    if (status == ARCHBIRD_OK &&
+    if (status == ARCHBIRD_OK && !exact_target &&
         ((!strcmp(kind, "unique") && candidate_count == 1 &&
           candidates[0] != calls[index].file) ||
          external_target)) {

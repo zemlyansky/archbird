@@ -455,24 +455,39 @@ the Plan source snapshot.
 ```bash
 npx archbird plan --output .archbird/plan.json
 npx archbird plan CORE-PUBLIC-API --output .archbird/plan.json
+npx archbird plan CORE-PUBLIC-API --rename oldApi=newApi \
+  --output .archbird/plan.json
 npx archbird act .archbird/plan.json
 npx archbird act .archbird/plan.json --format patch
 npx archbird act .archbird/plan.json --apply \
   --format json --output .archbird/act-result.json
 ```
 
-Exact `replace_range`, `create_file`, `delete_file`, and `move_file` operations
-are executable. Existing sources use SHA-256 locks; ranges use UTF-8 byte
-offsets and include expected text. Manual items expose missing transformation
-inputs and block Act instead of inventing code. Apply stages and revalidates
-every operation before the first write, then derives a fresh Map and evaluates
-every source-policy constraint. Incomplete relation evidence blocks destructive
-generation. Failed, unknown, or unsatisfied fresh acceptance rolls back the
-patch; an architectural rejection remains visible as `rejected`. Plan input is
-bounded to 64 MiB, collections and touched files to 4,096, individual source
-files and patches to 64 MiB, and aggregate touched source and patch output to
-256 MiB. Project compilers and tests remain external; their reviewed
-observations can participate in Verify.
+Exact `replace_range`, `create_file`, `delete_file`, `move_file`,
+`edit_json_pointer`, and evidence-bound `rename_symbol` operations are
+executable. An asserted `edit_json_pointer` operation changes one reviewed
+manifest/export-table value under an exact source hash, RFC 6901 pointer, and
+expected old JSON value without reformatting the complete file. A derived
+one-extra/one-missing rename candidate is review evidence, not intent; it
+remains non-executable until `--rename OLD=NEW` is supplied. The reviewed Plan
+locks the exhaustive declaration/import/export/reference projection, and Act
+requires the same result digest, completeness ledger, and sites against the
+current Map. The TypeScript compiler provider proves JavaScript, TypeScript,
+and TSX references while preserving aliased local names. Candidate or
+unresolved calls, duplicate targets, and unsupported inputs block execution
+instead of producing a partial rename.
+
+Existing sources use SHA-256 locks; ranges use UTF-8 byte offsets and include
+expected text. Manual items expose missing transformation inputs and block Act
+instead of inventing code. Apply stages and revalidates every operation before
+the first write, then derives a fresh Map and evaluates every source-policy
+constraint. Incomplete relation evidence blocks destructive generation.
+Failed, unknown, or unsatisfied fresh acceptance rolls back the patch; an
+architectural rejection remains visible as `rejected`. Plan input is bounded to
+64 MiB, collections and touched files to 4,096, individual source files and
+patches to 64 MiB, and aggregate touched source and patch output to 256 MiB.
+Project compilers and tests remain external; their reviewed observations can
+participate in Verify.
 
 ## Runtime and language evidence
 

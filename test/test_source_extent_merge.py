@@ -93,6 +93,17 @@ def symbol_extents(project: Project) -> Mapping[str, Mapping[str, int]]:
     }
 
 
+def symbol_spans(project: Project) -> Mapping[str, Mapping[str, int]]:
+    files = project.file_facts()["files"]
+    if len(files) != 1:
+        raise AssertionError(f"expected one file-facts row, received {len(files)}")
+    return {
+        symbol["name"]: symbol["span"]
+        for symbol in files[0]["symbols"]
+        if "span" in symbol
+    }
+
+
 def test_real_python_providers() -> None:
     raw = (
         b"@decorate\n"
@@ -169,6 +180,7 @@ def test_real_python_providers() -> None:
             )
 
     extents = symbol_extents(project)
+    spans = symbol_spans(project)
     trailing_marker = {
         "decorated": b"# concrete-syntax trailing comment",
         "outer": b"# outer trailing comment",
@@ -183,6 +195,19 @@ def test_real_python_providers() -> None:
             raise AssertionError(
                 f"{name} did not retain the concrete-syntax boundary"
             )
+        anchor = spans[name]
+        leaf = name.rsplit(".", 1)[-1].encode()
+        if raw[anchor["start"] : anchor["end"]] != leaf:
+            raise AssertionError(
+                f"{name} did not retain its exact declaration anchor"
+            )
+        symbol = next(
+            row
+            for row in project.file_facts()["files"][0]["symbols"]
+            if row["name"] == name
+        )
+        if not symbol["fact_id"].startswith("f:"):
+            raise AssertionError(f"{name} omitted its canonical fact identity")
     decorated = extents["decorated"]
     if not raw[decorated["start"] : decorated["end"]].startswith(
         b"@decorate\ndef decorated"

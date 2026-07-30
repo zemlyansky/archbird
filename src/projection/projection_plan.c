@@ -75,17 +75,18 @@ static int string_array_unique(const AbValue *value) {
 
 static int select_supported(const AbValue *select) {
   static const char *const supported[] = {
-      "artifact_routes", "build_routes",
-      "component_edges", "component_membership",
-      "components",      "constant_memberships",
-      "constant_values", "file_edges",
-      "file_metrics",    "graph",
-      "inventory_paths", "macro_members",
-      "mapped_paths",    "package_entrypoints",
-      "package_exports", "provider_surface",
-      "search_domain",   "symbols",
-      "symbol_entities", "symbol_relations",
-      "test_routes",     "test_selectors",
+      "artifact_routes",  "build_routes",
+      "component_edges",  "component_membership",
+      "components",       "constant_memberships",
+      "constant_values",  "file_edges",
+      "file_metrics",     "graph",
+      "inventory_paths",  "macro_members",
+      "mapped_paths",     "package_entrypoints",
+      "package_exports",  "provider_surface",
+      "search_domain",    "symbols",
+      "symbol_entities",  "symbol_occurrences",
+      "symbol_relations", "test_routes",
+      "test_selectors",
   };
   size_t index;
   if (!select || select->kind != AB_VALUE_STRING)
@@ -194,6 +195,10 @@ static int projection_field_allowed(const AbValue *select,
   if (select_is(select, "symbol_entities")) {
     static const char *const fields[] = {"kinds", "layer", "name_patterns",
                                          "names", "paths", "public_only"};
+    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
+  }
+  if (select_is(select, "symbol_occurrences")) {
+    static const char *const fields[] = {"names", "paths"};
     return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
   }
   if (select_is(select, "symbol_relations")) {
@@ -315,6 +320,14 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
   if (string_is(&select->as.text, "provider_surface") &&
       !ab_projection_nonblank(ab_value_member(definition, "name")))
     return invalid(engine, "provider_surface requires a name");
+  if (string_is(&select->as.text, "symbol_occurrences")) {
+    const AbValue *names = ab_value_member(definition, "names");
+    if (!names || !string_array_unique(names) || names->as.array.count != 1 ||
+        !ab_projection_nonblank(&names->as.array.items[0]))
+      return invalid(
+          engine,
+          "symbol_occurrences requires exactly one non-empty symbol name");
+  }
   if ((string_is(&select->as.text, "constant_values") ||
        string_is(&select->as.text, "constant_memberships")) &&
       !ab_projection_nonblank(ab_value_member(definition, "container")))

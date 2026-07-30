@@ -21,7 +21,11 @@ static int string_is(const AbString *value, const char *literal) {
 static int map_fact_domain(const AbString *domain) {
   return string_is(domain, "constant-memberships") ||
          string_is(domain, "constant-values") ||
-         string_is(domain, "macro-invocations");
+         string_is(domain, "export-bindings") ||
+         string_is(domain, "export-origins") || string_is(domain, "exports") ||
+         string_is(domain, "imported-names") ||
+         string_is(domain, "macro-invocations") ||
+         string_is(domain, "reexport-candidates");
 }
 
 static ArchbirdStatus render_string(AbBuffer *buffer, const AbString *value) {

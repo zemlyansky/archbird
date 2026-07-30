@@ -64,6 +64,7 @@
           "search-domain": {"select": "search_domain"},
           "symbols": {"select": "symbols", "paths": ["include/**"], "kinds": ["function"], "names": ["open"], "name_patterns": ["op*"], "layer": "c", "public_only": true, "strip_prefix": "api_"},
           "symbol-entities": {"select": "symbol_entities", "paths": ["include/**"], "kinds": ["function"], "names": ["open"], "name_patterns": ["op*"], "layer": "c", "public_only": true},
+          "symbol-occurrences": {"select": "symbol_occurrences", "names": ["open"], "paths": ["include/**"]},
           "symbol-relations": {"select": "symbol_relations", "from_paths": ["src/**"], "to_paths": ["src/**"], "kinds": ["calls"], "resolutions": ["unique", "candidate"]},
           "test-routes": {"select": "test_routes", "group": "native", "paths": ["test/**"], "selectors": ["test_*"], "target_paths": ["src/**"], "configured_only": true},
           "test-selectors": {"select": "test_selectors", "group": "native", "paths": ["test/**"], "selectors": ["test_*"], "strip_suffix": "_case"}

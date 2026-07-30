@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "py"))
 
 from archbird.acting import preview_plan
+from archbird.native import Project
+from archbird.planning import _projected_rename_operation
 
 
 def _sha(value: bytes) -> str:
@@ -98,6 +100,37 @@ class PlanActFrontendParityTest(unittest.TestCase):
             unicode_source = "café\r\nlast".encode()
             moved = b"move without newline"
             binary = b"\xff\x00\x01"
+            api = b"export function calculate() { return 1; }\n"
+            consumer = b'import { calculate } from "./api.js";\n'
+            (repository / "api.js").write_bytes(api)
+            (repository / "consumer.js").write_bytes(consumer)
+            project = Project.from_repository(
+                repository,
+                config=json.dumps(
+                    {
+                        "project": "frontend-parity",
+                        "layers": [
+                            {
+                                "globs": ["*.js"],
+                                "language": "javascript",
+                                "name": "javascript",
+                            }
+                        ],
+                    },
+                    separators=(",", ":"),
+                ).encode(),
+                jobs=1,
+                map_cache=False,
+            )
+            map_json = project.map_json()
+            rename_operation, rename_reasons = _projected_rename_operation(
+                map_document=json.loads(map_json),
+                root=repository,
+                symbol="calculate",
+                new_name="compute",
+                seed_paths=["api.js"],
+            )
+            self.assertEqual(rename_reasons, ())
             for relative, value in (
                 ("repeat.txt", repeated),
                 ("unicode.txt", unicode_source),
@@ -158,14 +191,20 @@ class PlanActFrontendParityTest(unittest.TestCase):
                             "content": "created without newline",
                         },
                     ),
+                    _item(
+                        "rename-symbol",
+                        rename_operation,
+                    ),
                 ]
             )
             plan_path = repository / "plan.json"
+            map_path = repository / "map.json"
             plan_path.write_text(
                 json.dumps(document, ensure_ascii=False, sort_keys=True),
                 encoding="utf-8",
             )
-            python_result = preview_plan(document, repository)
+            map_path.write_bytes(map_json)
+            python_result = preview_plan(document, repository, map_json)
             environment = {
                 **os.environ,
                 "ARCHBIRD_ENGINE": "native",
@@ -174,13 +213,19 @@ class PlanActFrontendParityTest(unittest.TestCase):
             completed = subprocess.run(
                 [
                     str(node),
-                    str(ROOT / "js/src/cli.js"),
-                    "act",
+                    "-e",
+                    (
+                        "const fs=require('node:fs');"
+                        "const {previewPlan}=require(process.argv[1]);"
+                        "const plan=JSON.parse(fs.readFileSync(process.argv[2]));"
+                        "const map=fs.readFileSync(process.argv[3]);"
+                        "process.stdout.write(JSON.stringify("
+                        "previewPlan(plan,process.argv[4],map)));"
+                    ),
+                    str(ROOT / "js/src/acting.js"),
                     str(plan_path),
-                    "--root",
+                    str(map_path),
                     str(repository),
-                    "--format",
-                    "json",
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

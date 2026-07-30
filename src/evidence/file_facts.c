@@ -439,7 +439,11 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
     if (!first)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer, "{\"kind\":");
+      status = ab_buffer_literal(buffer, "{\"fact_id\":");
+    if (status == ARCHBIRD_OK)
+      status = json_string(buffer, &fact->id);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"kind\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, &fact->kind);
     if (status == ARCHBIRD_OK)
@@ -458,6 +462,18 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
       status = ab_buffer_literal(buffer, ",\"signature\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, signature ? signature : &empty);
+    if (status == ARCHBIRD_OK && fact->span_end > fact->span_start &&
+        fact->span_end <= file->byte_length) {
+      status = ab_buffer_literal(buffer, ",\"span\":{\"end\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_u64(buffer, fact->span_end);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, ",\"start\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_u64(buffer, fact->span_start);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, "}");
+    }
     if (status == ARCHBIRD_OK && extent_end > extent_start &&
         extent_end <= file->byte_length) {
       status = ab_buffer_literal(buffer, ",\"extent\":{\"end\":");

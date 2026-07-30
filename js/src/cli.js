@@ -1423,6 +1423,7 @@ function planMain(argv) {
     mapInput: { flag: "map-input", type: "multiple" },
     resolutionInput: { flag: "resolution-input", type: "multiple" },
     objective: { type: "string" },
+    rename: { type: "multiple" },
   }, { positionals: Number.POSITIVE_INFINITY });
   if (options.help) { process.stdout.write(usage("plan")); return 0; }
   const positionals = [...options._];
@@ -1460,11 +1461,28 @@ function planMain(argv) {
       "fix Map evidence before deriving edits",
     );
   }
+  const renameDirectives = {};
+  for (const directive of options.rename || []) {
+    const separator = directive.indexOf("=");
+    const oldName = separator >= 0 ? directive.slice(0, separator) : "";
+    const newName = separator >= 0 ? directive.slice(separator + 1) : "";
+    if (
+      separator < 1 ||
+      newName.length === 0 ||
+      Object.hasOwn(renameDirectives, oldName)
+    ) {
+      throw new Error(
+        "--rename requires unique non-empty OLD=NEW directives",
+      );
+    }
+    renameDirectives[oldName] = newName;
+  }
   const generated = archbird.generatePlan(
     mapDocument,
     JSON.parse(verificationJson.toString("utf8")),
     positionals.length ? positionals : null,
     repository,
+    Object.keys(renameDirectives).length ? renameDirectives : null,
   );
   if (options.objective) {
     generated.objective = options.objective;
@@ -1478,6 +1496,17 @@ function planMain(argv) {
     ),
     options.output,
   );
+  if (options.output !== "-") {
+    const executable = generated.items.filter((item) => item.executable).length;
+    process.stdout.write(
+      "Result: " +
+      `items=${generated.items.length}; ` +
+      `executable=${executable}; ` +
+      `non-executable=${generated.items.length - executable}; ` +
+      `unknowns=${generated.unknowns.length}; ` +
+      `preserved-constraints=${generated.preserved_constraints.length}\n`,
+    );
+  }
   progress.finish();
   return 0;
 }
@@ -1711,6 +1740,13 @@ function actResultBytes(result, format, pretty) {
     `- Changes: ${changes.length}`,
     `- Acceptance: \`${acceptance}\``,
   ];
+  if (Array.isArray(result.acceptance?.constraints) &&
+      result.acceptance.constraints.length) {
+    lines.push("", "## Acceptance", "");
+    for (const row of result.acceptance.constraints) {
+      lines.push(`- \`${row.id || ""}\`: \`${row.status || "unknown"}\``);
+    }
+  }
   if (Array.isArray(result.diagnostics) && result.diagnostics.length) {
     lines.push("", "## Diagnostics", "");
     for (const row of result.diagnostics) {
@@ -1760,12 +1796,6 @@ function actMain(argv) {
   ].filter((value, index, values) =>
     value !== null && values.indexOf(value) === index
   );
-  const preview = archbird.previewPlan(plan, repository);
-  if (!options.apply || preview.status === "blocked") {
-    write(actResultBytes(preview, options.format, options.pretty), options.output);
-    return preview.status === "blocked" ? 2 : 0;
-  }
-
   const progress = new Progress(options.progress);
   const resolvedInputs = repositoryInputs({ ...options, _: [], noConfig: false });
   if (!resolvedInputs.configJson.length) {
@@ -1798,6 +1828,12 @@ function actMain(argv) {
   );
   const mismatches = planSourceMismatches(plan, beforeMap, beforeVerification);
   acceptanceFromVerification(plan, beforeVerification);
+  const preview = archbird.previewPlan(plan, repository, beforeMap);
+  if (preview.status === "blocked") {
+    write(actResultBytes(preview, options.format, options.pretty), options.output);
+    progress.finish();
+    return 2;
+  }
   if (mismatches.length) {
     const blocked = blockedActResult(
       preview,
@@ -1806,6 +1842,11 @@ function actMain(argv) {
     write(actResultBytes(blocked, options.format, options.pretty), options.output);
     progress.finish();
     return 2;
+  }
+  if (!options.apply) {
+    write(actResultBytes(preview, options.format, options.pretty), options.output);
+    progress.finish();
+    return 0;
   }
 
   const result = archbird.applyPlan(
@@ -1848,6 +1889,7 @@ function actMain(argv) {
       );
       return acceptanceFromVerification(acceptedPlan, verification);
     },
+    beforeMap,
   );
   write(actResultBytes(result, options.format, options.pretty), options.output);
   progress.finish();

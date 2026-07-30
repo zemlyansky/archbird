@@ -36,8 +36,9 @@ int ab_map_fact_u64_attribute(const AbFact *fact, const char *name,
                               uint64_t *out);
 const AbFact *ab_map_enclosing_symbol(const ArchbirdProject *project,
                                       const AbFact *occurrence);
-const AbFact *ab_map_unique_semantic_target(const ArchbirdProject *project,
-                                            const AbFact *occurrence);
+const AbFact *ab_map_unique_semantic_target(
+    const ArchbirdProject *project, const AbFact *occurrence,
+    const AbProviderBundle **out_provider, int *out_conflict);
 
 ArchbirdStatus ab_map_render_facts(AbBuffer *buffer,
                                    const ArchbirdProject *project);
@@ -51,6 +52,10 @@ typedef struct AbMapNamedReference {
   int builtin;
   unsigned binding_mask;
   unsigned import_delimiter_mask;
+  const AbManifestFile *exact_target;
+  const AbString *exact_target_symbol;
+  size_t exact_count;
+  int exact_conflict;
 } AbMapNamedReference;
 
 typedef struct AbMapEdgeMention {
@@ -413,8 +418,7 @@ ArchbirdStatus ab_map_analyze_named_entries(AbMapState *state);
 ArchbirdStatus ab_map_render_named_entries(AbBuffer *buffer,
                                            const AbMapState *state);
 
-ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer,
-                                          const AbMapState *state);
+ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state);
 ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
                                                const AbMapState *state);
 

@@ -54,7 +54,10 @@ def main() -> int:
     import_source = "import a, b.c as d\nfrom .x import (y,\n z as q,)\n"
     import_raw = import_source.encode("utf-8")
     import_tree = ast.parse(import_source)
-    expected_alias_spans = [((7, 8), (10, 18)), ((35, 36), (39, 45))]
+    expected_alias_spans = [
+        [((7, 8), (7, 8), (7, 8)), ((10, 13), (17, 18), (10, 18))],
+        [((35, 36), (35, 36), (35, 36)), ((39, 40), (44, 45), (39, 45))],
+    ]
     for statement in import_tree.body:
         for alias in statement.names:
             alias.lineno = None
@@ -65,7 +68,11 @@ def main() -> int:
         import_source, import_raw, provider._line_starts(import_raw)
     )
     actual_alias_spans = [
-        positions.import_aliases(statement) for statement in import_tree.body
+        [
+            (alias.imported, alias.local, alias.full)
+            for alias in positions.import_aliases(statement)
+        ]
+        for statement in import_tree.body
     ]
     if actual_alias_spans != expected_alias_spans:
         raise AssertionError((actual_alias_spans, expected_alias_spans))

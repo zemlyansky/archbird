@@ -70,6 +70,33 @@ function markedNames(relative, name) {
       "+created\n",
     ),
   );
+  {
+    const source = Buffer.from(
+      '{\n  "exports": {\n    ".": "./old.js"\n  }\n}\n',
+    );
+    const sourceSha256 = archbird.core.sha256(source).toString("ascii");
+    const edit = archbird.core.jsonPointerEdit(
+      source,
+      sourceSha256,
+      "/exports/.",
+      Buffer.from('"./old.js"'),
+      Buffer.from('"./dist/index.js"'),
+      false,
+    );
+    assert.equal(edit.kind, "replace");
+    assert.equal(edit.matchedValues, 1);
+    assert.deepEqual(edit.replacement, Buffer.from('"./dist/index.js"'));
+    assert.deepEqual(
+      Buffer.concat([
+        source.subarray(0, edit.startByte),
+        edit.replacement,
+        source.subarray(edit.endByte),
+      ]),
+      Buffer.from(
+        '{\n  "exports": {\n    ".": "./dist/index.js"\n  }\n}\n',
+      ),
+    );
+  }
   for (const relative of ["README.md", "js/README.md"]) {
     assert.deepEqual(
       markedNames(relative, "archbird-browser-api"),

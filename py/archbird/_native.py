@@ -120,6 +120,31 @@ class _UnifiedDiffOptions(ctypes.Structure):
     ]
 
 
+class _JsonPointerEditOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("source_sha256", ctypes.c_char_p),
+        ("source_sha256_length", ctypes.c_size_t),
+        ("pointer", _BYTES_POINTER),
+        ("pointer_length", ctypes.c_size_t),
+        ("expected_absent", ctypes.c_int),
+        ("expected_json", _BYTES_POINTER),
+        ("expected_json_length", ctypes.c_size_t),
+        ("replacement_json", _BYTES_POINTER),
+        ("replacement_json_length", ctypes.c_size_t),
+    ]
+
+
+class _JsonPointerEditResult(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("start_byte", ctypes.c_size_t),
+        ("end_byte", ctypes.c_size_t),
+        ("matched_values", ctypes.c_size_t),
+        ("kind", ctypes.c_int),
+    ]
+
+
 class _EngineOptions(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_size_t),
@@ -178,6 +203,16 @@ _graph_options_init = _declare(
 _unified_diff_options_init = _declare(
     "archbird_unified_diff_options_init",
     [ctypes.POINTER(_UnifiedDiffOptions)],
+    None,
+)
+_json_pointer_edit_options_init = _declare(
+    "archbird_json_pointer_edit_options_init",
+    [ctypes.POINTER(_JsonPointerEditOptions)],
+    None,
+)
+_json_pointer_edit_result_init = _declare(
+    "archbird_json_pointer_edit_result_init",
+    [ctypes.POINTER(_JsonPointerEditResult)],
     None,
 )
 
@@ -1279,6 +1314,95 @@ def unified_diff(
         ),
         input_budget=max(len(before_bytes), len(after_bytes)),
     )
+
+
+def json_pointer_edit(
+    source: bytes,
+    source_sha256: str,
+    pointer: str,
+    expected: Optional[bytes],
+    replacement: bytes,
+) -> dict[str, object]:
+    """Preview one source-locked JSON Pointer replacement or insertion."""
+
+    source_bytes = _bytes(source, "source")
+    source_sha256_bytes = _text(source_sha256, "source_sha256")
+    pointer_bytes = _text(pointer, "pointer")
+    replacement_bytes = _bytes(replacement, "replacement")
+    expected_bytes = None if expected is None else _bytes(expected, "expected")
+    options = _JsonPointerEditOptions()
+    result = _JsonPointerEditResult()
+    _json_pointer_edit_options_init(ctypes.byref(options))
+    _json_pointer_edit_result_init(ctypes.byref(result))
+    options.source_sha256 = source_sha256_bytes
+    options.source_sha256_length = len(source_sha256_bytes)
+    pointer_storage = (
+        (ctypes.c_uint8 * len(pointer_bytes)).from_buffer_copy(pointer_bytes)
+        if pointer_bytes
+        else None
+    )
+    options.pointer = (
+        ctypes.cast(pointer_storage, _BYTES_POINTER)
+        if pointer_storage is not None
+        else _BYTES_POINTER()
+    )
+    options.pointer_length = len(pointer_bytes)
+    options.expected_absent = expected_bytes is None
+    expected_storage = (
+        (ctypes.c_uint8 * len(expected_bytes)).from_buffer_copy(expected_bytes)
+        if expected_bytes
+        else None
+    )
+    options.expected_json = (
+        ctypes.cast(expected_storage, _BYTES_POINTER)
+        if expected_storage is not None
+        else _BYTES_POINTER()
+    )
+    options.expected_json_length = len(expected_bytes or b"")
+    replacement_storage = (
+        (ctypes.c_uint8 * len(replacement_bytes)).from_buffer_copy(
+            replacement_bytes
+        )
+        if replacement_bytes
+        else None
+    )
+    options.replacement_json = (
+        ctypes.cast(replacement_storage, _BYTES_POINTER)
+        if replacement_storage is not None
+        else _BYTES_POINTER()
+    )
+    options.replacement_json_length = len(replacement_bytes)
+    function = _declare(
+        "archbird_json_pointer_edit",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(_JsonPointerEditOptions),
+            ctypes.POINTER(_JsonPointerEditResult),
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    rendered = _one_shot(
+        lambda engine, write: function(
+            engine,
+            source_bytes,
+            len(source_bytes),
+            ctypes.byref(options),
+            ctypes.byref(result),
+            write,
+            None,
+        ),
+        input_budget=len(source_bytes),
+    )
+    return {
+        "start_byte": result.start_byte,
+        "end_byte": result.end_byte,
+        "matched_values": result.matched_values,
+        "kind": "insert" if result.kind == 1 else "replace",
+        "replacement": rendered,
+    }
 
 
 def map_freshness(snapshot: bytes, current: bytes, pretty=False) -> bytes:

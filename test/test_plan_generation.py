@@ -60,7 +60,7 @@ def _map(
 ) -> dict[str, object]:
     document: dict[str, object] = {
         "artifact": "map",
-        "schema_version": 9,
+        "schema_version": 10,
         "project": "planning-test",
         "description": "Plan generation fixture.",
         "files": files,
@@ -185,6 +185,65 @@ def _forbidden_path_operand(
         }
     )
     return operand, finding
+
+
+def _symbol_operand(
+    name: str,
+    values: list[str],
+    evidence: dict[str, list[dict[str, object]]] | None = None,
+) -> dict[str, object]:
+    operand_sha256 = hashlib.sha256(
+        f"operand:{name}:{','.join(values)}".encode()
+    ).hexdigest()
+    items = []
+    for value in values:
+        rows = (evidence or {}).get(value)
+        if rows is None:
+            rows = [
+                {
+                    "provenance": "asserted",
+                    "project": "",
+                    "path": "",
+                    "line": 0,
+                    "sha256": operand_sha256,
+                    "detail": f"literal symbol {value}",
+                }
+            ]
+        items.append(
+            {
+                "attributes": {},
+                "evidence": rows,
+                "key": value,
+                "label": value,
+                "message": "",
+                "state": "current",
+                "value": None,
+            }
+        )
+    return {
+        "completeness": {
+            "classification": "complete",
+            "counts": {
+                "evaluated": len(values),
+                "excluded": 0,
+                "selected": len(values),
+                "universe": len(values),
+                "unknown": 0,
+                "unsupported": 0,
+            },
+            "exhaustive": True,
+            "truncated": False,
+            "unit": "symbol",
+        },
+        "items": items,
+        "message": "",
+        "name": name,
+        "project": "planning-test",
+        "provenance": "derived" if evidence else "asserted",
+        "sha256": operand_sha256,
+        "shape": "set",
+        "state": "current",
+    }
 
 
 def _check(
@@ -638,6 +697,124 @@ class PlanGenerationTest(unittest.TestCase):
         )
         self.assertEqual((self.root / "api.py").read_bytes(), source)
 
+    def test_primitive_symbol_constraints_remove_or_propose_exact_rename(
+        self,
+    ) -> None:
+        source = b"def keep():\n    pass\n\ndef _obsolete():\n    pass\n"
+        source_sha256 = _write(self.root, "api.py", source)
+        config = json.dumps(
+            {
+                "project": "planning-test",
+                "projections": {
+                    "api-symbols": {
+                        "select": "symbols",
+                        "paths": ["api.py"],
+                    }
+                },
+                "constraints": {
+                    "SYMBOL-SUBSET": {
+                        "assert": "subset",
+                        "actual": {"projection": "api-symbols"},
+                        "expected": {"literal": ["keep"]},
+                        "owner": "architecture",
+                        "rationale": "Only reviewed symbols remain.",
+                    },
+                    "SYMBOL-DISJOINT": {
+                        "assert": "disjoint",
+                        "actual": {"projection": "api-symbols"},
+                        "expected": {"literal": ["_obsolete"]},
+                        "owner": "architecture",
+                        "rationale": "Obsolete symbols remain absent.",
+                    },
+                    "SYMBOL-EQUAL": {
+                        "assert": "set_equal",
+                        "actual": {"projection": "api-symbols"},
+                        "expected": {"literal": ["keep", "missing"]},
+                        "owner": "architecture",
+                        "rationale": "The reviewed symbol set remains exact.",
+                    },
+                },
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        project = Project.from_repository(
+            self.root,
+            config=config,
+            jobs=1,
+            cache_dir=None,
+            map_cache=False,
+        )
+        map_document = json.loads(project.map_json())
+        verification = json.loads(project.verify_json())
+
+        for constraint_id in ("SYMBOL-SUBSET", "SYMBOL-DISJOINT"):
+            plan = self.generate(
+                map_document, verification, [constraint_id]
+            )
+            self.assertEqual(len(plan["items"]), 1)
+            item = plan["items"][0]
+            self.assertTrue(item["executable"])
+            self.assertEqual(item["operation"]["action"], "replace_range")
+            self.assertEqual(item["operation"]["path"], "api.py")
+            self.assertEqual(item["operation"]["source_sha256"], source_sha256)
+            self.assertIn("_obsolete", item["operation"]["before"])
+
+        equal_plan = self.generate(
+            map_document, verification, ["SYMBOL-EQUAL"]
+        )
+        self.assertEqual(len(equal_plan["items"]), 1)
+        suggestion = equal_plan["items"][0]
+        self.assertEqual(len(suggestion["origins"]), 2)
+        self.assertFalse(suggestion["executable"])
+        self.assertEqual(
+            suggestion["operation"]["action"], "rename_symbol"
+        )
+        self.assertEqual(suggestion["operation"]["symbol"], "_obsolete")
+        self.assertEqual(suggestion["operation"]["new_name"], "missing")
+        self.assertEqual(len(suggestion["operation"]["sites"]), 1)
+        self.assertIn(
+            "review it with --rename",
+            suggestion["non_executable_reasons"][-1],
+        )
+        self.assertEqual(
+            preview_plan(equal_plan, self.root, map_document)["status"],
+            "blocked",
+        )
+        intent_laundering = json.loads(json.dumps(equal_plan))
+        intent_laundering["items"][0]["executable"] = True
+        intent_laundering["items"][0]["non_executable_reasons"] = []
+        blocked = preview_plan(intent_laundering, self.root, map_document)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(
+            "requires asserted rename intent",
+            blocked["diagnostics"][0]["message"],
+        )
+
+        incomplete = json.loads(json.dumps(verification))
+        subset = next(
+            row
+            for row in incomplete["constraints"]
+            if row["id"] == "SYMBOL-SUBSET"
+        )
+        actual_name = subset["operands"]["actual"]
+        actual = next(
+            row for row in incomplete["operands"] if row["name"] == actual_name
+        )
+        actual["completeness"]["classification"] = "partial"
+        actual["completeness"]["exhaustive"] = False
+        del incomplete["verification_result_sha256"]
+        incomplete["verification_result_sha256"] = _digest(incomplete)
+        guarded = self.generate(
+            map_document, incomplete, ["SYMBOL-SUBSET"]
+        )["items"][0]
+        self.assertFalse(guarded["executable"])
+        self.assertEqual(guarded["operation"]["action"], "manual")
+        self.assertIn(
+            "not current, complete",
+            guarded["non_executable_reasons"][0],
+        )
+
     def test_ambiguous_forbidden_symbol_is_manual_and_explicitly_unknown(
         self,
     ) -> None:
@@ -680,6 +857,12 @@ class PlanGenerationTest(unittest.TestCase):
                 "p.symbols": {"select": "symbols", "names": ["obsolete"]},
                 "l.symbols": {"kind": "literal_set", "values": ["obsolete"]},
             },
+            [
+                _symbol_operand(
+                    "p.symbols", ["obsolete"], {"obsolete": evidence}
+                ),
+                _symbol_operand("l.symbols", ["obsolete"]),
+            ],
         )
 
         plan = self.generate(map_document, verification)
@@ -815,6 +998,20 @@ class PlanGenerationTest(unittest.TestCase):
                 "p.symbols": {"select": "symbols", "names": ["obsolete"]},
                 "l.symbols": {"kind": "literal_set", "values": ["obsolete"]},
             },
+            [
+                _symbol_operand(
+                    "p.symbols",
+                    ["obsolete"],
+                    {
+                        "obsolete": _finding(
+                            "obsolete",
+                            path="api.py",
+                            sha256=mapped_sha256,
+                        )["evidence"]
+                    },
+                ),
+                _symbol_operand("l.symbols", ["obsolete"]),
+            ],
         )
 
         item = self.generate(map_document, verification)["items"][0]

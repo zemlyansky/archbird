@@ -380,6 +380,193 @@ def check_external_call_namespace(extension) -> None:
         raise AssertionError(mapped["edges"])
 
 
+def check_conflicting_call_targets(extension, provider) -> None:
+    sources = {
+        "py/caller.py": (
+            b"from target_a import helper\n\n"
+            b"def run(value):\n"
+            b"    return helper(value)\n"
+        ),
+        "py/target_a.py": b"def helper(value):\n    return value\n",
+        "py/target_b.py": b"def helper(value):\n    return value + 1\n",
+    }
+    manifest = {
+        "artifact": "archbird-source-manifest",
+        "files": [
+            {
+                "bytes": len(raw),
+                "language": "python",
+                "layer": "python",
+                "path": path,
+                "roles": ["source"],
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+            for path, raw in sorted(sources.items())
+        ],
+        "producer": {
+            "implementation_sha256": "8" * 64,
+            "name": "conflicting-call-target-fixture",
+            "version": "1",
+        },
+        "project": "conflicting-call-targets",
+        "resolution": {
+            "coverage": {
+                "assets": 0,
+                "ignored": 0,
+                "inventory_files": len(sources),
+                "oversized": 0,
+                "pruned_directories": 0,
+                "selected": len(sources),
+                "unsupported_known": 0,
+            },
+            "profile": {
+                "implementation_sha256": "b" * 64,
+                "name": "conflicting-call-target-fixture",
+            },
+            "sha256": "c" * 64,
+        },
+        "schema_version": 1,
+    }
+    config = {
+        "layers": [
+            {
+                "globs": ["py/**/*.py"],
+                "import_roots": ["py"],
+                "language": "python",
+                "name": "python",
+            }
+        ],
+        "project": "conflicting-call-targets",
+    }
+    project = extension.project_create(canonical(manifest))
+    for path, raw in sorted(sources.items()):
+        extension.project_add_source(project, path, raw)
+    extension.project_finalize_sources(project)
+    extension.project_set_config(project, canonical(config))
+    for path, raw in sorted(sources.items()):
+        extension.project_add_provider(
+            project,
+            "primary",
+            provider.python_ast_provider_facts(
+                project="conflicting-call-targets",
+                path=path,
+                text=raw.decode(),
+                source_manifest_sha256=extension.project_manifest_sha256(project),
+            ),
+        )
+
+    caller = sources["py/caller.py"]
+    call_start = caller.rindex(b"helper")
+    target = sources["py/target_b.py"]
+    target_start = target.index(b"helper")
+    extension.project_add_provider(
+        project,
+        "augment",
+        canonical(
+            {
+                "artifact": "archbird-provider-facts",
+                "capabilities": [
+                    {
+                        "boundary": "one exact semantic call target",
+                        "claims": ["semantic-target"],
+                        "coverage": "bounded",
+                        "domain": "reference-targets",
+                    }
+                ],
+                "diagnostics": [],
+                "facts": [
+                    {
+                        "attributes": {
+                            "evidence_state": "current",
+                            "index": "conflicting-semantic-fixture",
+                            "target_path": "py/target_b.py",
+                            "target_span_end": target_start + len("helper"),
+                            "target_span_start": target_start,
+                            "target_symbol": "helper",
+                        },
+                        "claim": "semantic-target",
+                        "domain": "reference-targets",
+                        "id": "conflicting-helper-target",
+                        "key": "conflicting-helper-target",
+                        "kind": "reference",
+                        "name": "helper",
+                        "path": "py/caller.py",
+                        "project": "conflicting-call-targets",
+                        "span": {
+                            "end": call_start + len("helper"),
+                            "start": call_start,
+                        },
+                    }
+                ],
+                "inputs": [
+                    {
+                        "project": "conflicting-call-targets",
+                        "source_manifest_sha256": extension.project_manifest_sha256(
+                            project
+                        ),
+                    }
+                ],
+                "producer": {
+                    "configuration_sha256": "9" * 64,
+                    "implementation_sha256": "a" * 64,
+                    "name": "conflicting-call-semantic-provider",
+                    "version": "1",
+                },
+                "provenance": "derived",
+                "resolutions": [
+                    {
+                        "fact_id": "conflicting-helper-target",
+                        "state": "unique",
+                        "targets": ["semantic:target-b-helper"],
+                    }
+                ],
+                "schema_version": 1,
+                "subject": {
+                    "project": "conflicting-call-targets",
+                    "scope": "project",
+                },
+            }
+        ),
+    )
+    extension.project_finalize_providers(project)
+    mapped = json.loads(extension.project_map(project))
+    call = next(
+        row
+        for row in mapped["symbol_calls"]
+        if row["source"] == {"path": "py/caller.py", "symbol": "run"}
+        and row["name"] == "helper"
+    )
+    if call["resolution"] != "ambiguous" or {
+        row["path"] for row in call["candidates"]
+    } != {"py/target_a.py", "py/target_b.py"}:
+        raise AssertionError(call)
+    if any(
+        edge["source"] == "py/caller.py"
+        and edge["kind"] in {"imported-call", "semantic-call"}
+        for edge in mapped["edges"]
+    ):
+        raise AssertionError(mapped["edges"])
+
+    projected = json.loads(
+        extension.projection_evaluate(
+            canonical(mapped),
+            canonical(
+                {
+                    "id": "target-a-helper-occurrences",
+                    "names": ["helper"],
+                    "paths": ["py/target_a.py"],
+                    "select": "symbol_occurrences",
+                }
+            ),
+        )
+    )
+    if (
+        projected["completeness"]["classification"] != "incomplete"
+        or projected["completeness"]["counts"]["unknown"] < 1
+    ):
+        raise AssertionError(projected)
+
+
 def main() -> int:
     if len(sys.argv) != 4:
         raise SystemExit(
@@ -1062,7 +1249,7 @@ def main() -> int:
         raise AssertionError(resolutions[("py/caller.py", "bool")])
     if resolutions[("py/local.py", "helper")]["kind"] != "unresolved":
         raise AssertionError(resolutions[("py/local.py", "helper")])
-    if resolutions[("py/imported.py", "helper")]["kind"] != "candidate":
+    if resolutions[("py/imported.py", "helper")]["kind"] != "unique":
         raise AssertionError(resolutions[("py/imported.py", "helper")])
     if resolutions[("py/shadow.py", "bool")]["kind"] != "unique":
         raise AssertionError(resolutions[("py/shadow.py", "bool")])
@@ -1793,10 +1980,10 @@ def main() -> int:
         1200,
     ).decode()
     for budget_evidence in (
-        "Emitted: files=0/3 canonical=3; symbol-calls=0/2; "
+        "Emitted: files=0/2 canonical=2; symbol-calls=0/1; "
         "symbol-references=0/0; test-matches=0/2.",
         "Budget=1200 characters; sections=0/2; ranked-file node cap=0; "
-        "canonical-files=3.",
+        "canonical-files=2.",
         "Omitted complete sections: Ranked neighborhood Routed evidence",
     ):
         if budget_evidence not in budget_report:
@@ -2504,6 +2691,7 @@ def main() -> int:
     check_c_test_function_candidates(extension)
     check_stable_duplicate_reference_witness(extension)
     check_external_call_namespace(extension)
+    check_conflicting_call_targets(extension, provider)
     print(
         "typed calls, preprocessing-token selectors, named dispatch, and "
         "generated test provenance passed"

@@ -262,6 +262,76 @@ run("preview and apply cover create delete move and modify", () => {
   });
 });
 
+run("JSON Pointer edits preserve layout and require asserted intent", () => {
+  withTemporary("node-act-json-pointer", (root) => {
+    const packageSource = Buffer.from(
+      '{\n  "name": "demo",\n  "exports": {\n' +
+      '    ".": "./old.js"\n  }\n}\n',
+    );
+    const buildSource = Buffer.from(
+      '{"scripts":{"test":"node test.js"},"name":"demo"}\n',
+    );
+    const packageSha = write(root, "package.json", packageSource);
+    const buildSha = write(root, "build.json", buildSource);
+    const document = plan(
+      operationItem("replace-export", {
+        action: "edit_json_pointer",
+        path: "package.json",
+        source_sha256: packageSha,
+        pointer: "/exports/.",
+        expected_absent: false,
+        expected: "./old.js",
+        replacement: "./dist/index.js",
+      }, { provenance: "asserted" }),
+      operationItem("insert-build", {
+        action: "edit_json_pointer",
+        path: "build.json",
+        source_sha256: buildSha,
+        pointer: "/scripts/build",
+        expected_absent: true,
+        replacement: "node build.js",
+      }, { provenance: "asserted" }),
+    );
+    const preview = previewPlan(document, root);
+    assert.equal(preview.status, "preview");
+    assert.ok(
+      preview.changes.find((row) => row.path === "package.json").unified_diff
+        .includes('+    ".": "./dist/index.js"'),
+    );
+    const applied = applyPlan(document, root, () => satisfied());
+    assert.equal(applied.status, "applied");
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(root, "package.json"))).exports["."],
+      "./dist/index.js",
+    );
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(root, "build.json"))).scripts.build,
+      "node build.js",
+    );
+    assert.ok(
+      fs.readFileSync(path.join(root, "package.json"), "utf8")
+        .includes('\n  "name": "demo",\n  "exports": {\n'),
+    );
+
+    const changed = fs.readFileSync(path.join(root, "package.json"));
+    const unreviewed = plan(operationItem("unreviewed", {
+      action: "edit_json_pointer",
+      path: "package.json",
+      source_sha256: sha(changed),
+      pointer: "/exports/.",
+      expected_absent: false,
+      expected: "./dist/index.js",
+      replacement: "./other.js",
+    }));
+    const blocked = previewPlan(unreviewed, root);
+    assert.equal(blocked.status, "blocked");
+    assert.match(
+      blocked.diagnostics[0].message,
+      /requires asserted edit_json_pointer intent/,
+    );
+  });
+});
+
 run("invalid and overlapping operations block every write", () => {
   withTemporary("node-act-blocked", (root) => {
     const source = Buffer.from("abcdef\n");
@@ -971,6 +1041,123 @@ run("generation uses exact declaration extents from a native Map", () => {
   });
 });
 
+run("primitive symbol constraints remove or propose exact rename", () => {
+  withTemporary("node-plan-symbol-extras", (root) => {
+    const source = Buffer.from(
+      "function keep() {}\nfunction obsolete() {}\n",
+    );
+    const sourceSha = write(root, "src/api.js", source);
+    const config = Buffer.from(JSON.stringify({
+      project: "node-plan-symbol-extras",
+      projections: {
+        "api-symbols": {
+          select: "symbols",
+          paths: ["src/api.js"],
+        },
+      },
+      constraints: {
+        "SYMBOL-SUBSET": {
+          assert: "subset",
+          actual: { projection: "api-symbols" },
+          expected: { literal: ["keep"] },
+          owner: "architecture",
+          rationale: "Only reviewed symbols remain.",
+        },
+        "SYMBOL-DISJOINT": {
+          assert: "disjoint",
+          actual: { projection: "api-symbols" },
+          expected: { literal: ["obsolete"] },
+          owner: "architecture",
+          rationale: "Obsolete symbols remain absent.",
+        },
+        "SYMBOL-EQUAL": {
+          assert: "set_equal",
+          actual: { projection: "api-symbols" },
+          expected: { literal: ["keep", "missing"] },
+          owner: "architecture",
+          rationale: "The reviewed symbol set remains exact.",
+        },
+      },
+    }));
+    const project = Project.fromRepository(root, {
+      config,
+      cacheDir: null,
+      mapCache: false,
+    });
+    const map = JSON.parse(project.mapJson());
+    const verification = JSON.parse(project.verifyJson());
+
+    for (const constraintId of ["SYMBOL-SUBSET", "SYMBOL-DISJOINT"]) {
+      const generated = generatePlan(
+        map,
+        verification,
+        [constraintId],
+        root,
+      );
+      assert.equal(generated.items.length, 1);
+      const item = generated.items[0];
+      assert.equal(item.executable, true);
+      assert.equal(item.operation.action, "replace_range");
+      assert.equal(item.operation.path, "src/api.js");
+      assert.equal(item.operation.source_sha256, sourceSha);
+      assert.match(item.operation.before, /obsolete/);
+    }
+
+    const equalPlan = generatePlan(
+      map,
+      verification,
+      ["SYMBOL-EQUAL"],
+      root,
+    );
+    assert.equal(equalPlan.items.length, 1);
+    const suggestion = equalPlan.items[0];
+    assert.equal(suggestion.origins.length, 2);
+    assert.equal(suggestion.executable, false);
+    assert.equal(suggestion.operation.action, "rename_symbol");
+    assert.equal(suggestion.operation.symbol, "obsolete");
+    assert.equal(suggestion.operation.new_name, "missing");
+    assert.equal(suggestion.operation.sites.length, 1);
+    assert.match(
+      suggestion.non_executable_reasons.at(-1),
+      /review it with --rename/,
+    );
+    assert.equal(previewPlan(equalPlan, root, map).status, "blocked");
+    const intentLaundering = structuredClone(equalPlan);
+    intentLaundering.items[0].executable = true;
+    intentLaundering.items[0].non_executable_reasons = [];
+    const blocked = previewPlan(intentLaundering, root, map);
+    assert.equal(blocked.status, "blocked");
+    assert.match(
+      blocked.diagnostics[0].message,
+      /requires asserted rename intent/,
+    );
+
+    const incomplete = structuredClone(verification);
+    const subset = incomplete.constraints.find(
+      (row) => row.id === "SYMBOL-SUBSET",
+    );
+    const actual = incomplete.operands.find(
+      (row) => row.name === subset.operands.actual,
+    );
+    actual.completeness.classification = "partial";
+    actual.completeness.exhaustive = false;
+    delete incomplete.verification_result_sha256;
+    incomplete.verification_result_sha256 = canonicalDigest(incomplete);
+    const guarded = generatePlan(
+      map,
+      incomplete,
+      ["SYMBOL-SUBSET"],
+      root,
+    ).items[0];
+    assert.equal(guarded.executable, false);
+    assert.equal(guarded.operation.action, "manual");
+    assert.match(
+      guarded.non_executable_reasons[0],
+      /not current, complete/,
+    );
+  });
+});
+
 run("generation rejects tampered Verification seals and stale roots", () => {
   withTemporary("node-plan-seal", (root) => {
     const sourceSha = write(root, "legacy", Buffer.from("old\n"));
@@ -1047,7 +1234,12 @@ run("Node CLI plans, previews, applies, and freshly verifies an exact delete", (
     );
     write(root, "legacy.js", Buffer.from("export const obsolete = true;\n"));
     const planPath = path.join(root, "plan.json");
-    cli(["plan", "--root", root, "--output", planPath]);
+    const planResult = cli(["plan", "--root", root, "--output", planPath]);
+    assert.equal(
+      Buffer.from(planResult.stdout).toString("utf8"),
+      "Result: items=1; executable=1; non-executable=0; " +
+      "unknowns=0; preserved-constraints=0\n",
+    );
     const generated = JSON.parse(fs.readFileSync(planPath));
     assert.equal(generated.items.length, 1);
     assert.equal(generated.items[0].operation.action, "delete_file");
@@ -1074,6 +1266,270 @@ run("Node CLI plans, previews, applies, and freshly verifies an exact delete", (
       status: "pass",
     }]);
     assert.equal(fs.existsSync(path.join(root, "legacy.js")), false);
+  });
+});
+
+run("Node CLI closes Map Query Verify Plan Act symbol rename loop", () => {
+  withTemporary("node-plan-act-rename", (root) => {
+    fs.writeFileSync(
+      path.join(root, "archbird.json"),
+      JSON.stringify({
+        project: "node-plan-act-rename",
+        layers: [{
+          name: "javascript",
+          language: "javascript",
+          globs: ["*.js"],
+        }],
+        projections: {
+          "api-symbols": {
+            select: "symbols",
+            paths: ["api.js"],
+          },
+        },
+        constraints: {
+          "API-SURFACE": {
+            assert: "set_equal",
+            actual: { projection: "api-symbols" },
+            expected: { literal: ["newApi"] },
+            owner: "architecture",
+            rationale: "The reviewed JavaScript API rename is complete.",
+          },
+        },
+      }),
+    );
+    write(
+      root,
+      "api.js",
+      Buffer.from("export function oldApi(value) { return value + 1; }\n"),
+    );
+    write(
+      root,
+      "consumer.js",
+      Buffer.from(
+        'import { oldApi } from "./api.js";\n' +
+        "export const result = oldApi(1);\n",
+      ),
+    );
+    const beforeQuery = cli([
+      "query",
+      "--root",
+      root,
+      "--symbol",
+      "oldApi",
+      "--format",
+      "json",
+      "--check",
+    ]);
+    assert.match(beforeQuery.stdout.toString("utf8"), /"oldApi"/);
+    cli(["verify", "--root", root, "--check"], 1);
+
+    const planPath = path.join(root, "rename-plan.json");
+    cli([
+      "plan",
+      "API-SURFACE",
+      "--root",
+      root,
+      "--output",
+      planPath,
+    ]);
+    const suggestion = JSON.parse(fs.readFileSync(planPath));
+    assert.equal(suggestion.items[0].operation.action, "rename_symbol");
+    assert.equal(suggestion.items[0].executable, false);
+    cli([
+      "act",
+      planPath,
+      "--root",
+      root,
+      "--format",
+      "json",
+    ], 2);
+    cli([
+      "plan",
+      "API-SURFACE",
+      "--root",
+      root,
+      "--rename",
+      "oldApi=newApi",
+      "--output",
+      planPath,
+    ]);
+    const generated = JSON.parse(fs.readFileSync(planPath));
+    assert.equal(generated.items.length, 1);
+    assert.equal(generated.items[0].executable, true);
+    assert.equal(generated.items[0].operation.action, "rename_symbol");
+    assert.deepEqual(
+      new Set(generated.items[0].operation.sites.map((row) => row.path)),
+      new Set(["api.js", "consumer.js"]),
+    );
+    assert.equal(generated.items[0].operation.sites.length, 3);
+
+    const patch = cli([
+      "act",
+      planPath,
+      "--root",
+      root,
+      "--format",
+      "patch",
+    ]).stdout.toString("utf8");
+    assert.match(patch, /--- a\/api\.js/);
+    assert.match(patch, /--- a\/consumer\.js/);
+    cli([
+      "act",
+      planPath,
+      "--root",
+      root,
+      "--apply",
+      "--format",
+      "json",
+    ]);
+    assert.doesNotMatch(fs.readFileSync(path.join(root, "api.js"), "utf8"), /oldApi/);
+    assert.doesNotMatch(
+      fs.readFileSync(path.join(root, "consumer.js"), "utf8"),
+      /oldApi/,
+    );
+    cli(["verify", "--root", root, "--check"]);
+    const afterQuery = cli([
+      "query",
+      "--root",
+      root,
+      "--symbol",
+      "newApi",
+      "--format",
+      "json",
+      "--check",
+    ]);
+    assert.match(afterQuery.stdout.toString("utf8"), /"newApi"/);
+  });
+});
+
+run("Node CLI renames one TypeScript symbol across TS TSX and aliases", () => {
+  withTemporary("node-plan-act-typescript-rename", (root) => {
+    fs.writeFileSync(
+      path.join(root, "archbird.json"),
+      JSON.stringify({
+        project: "node-plan-act-typescript-rename",
+        layers: [{
+          name: "typescript",
+          language: "typescript",
+          globs: ["*.ts", "*.tsx"],
+        }],
+        projections: {
+          "api-symbols": {
+            select: "symbols",
+            paths: ["api.ts"],
+          },
+        },
+        constraints: {
+          "API-SURFACE": {
+            assert: "set_equal",
+            actual: { projection: "api-symbols" },
+            expected: { literal: ["newApi"] },
+            owner: "architecture",
+            rationale: "The reviewed TypeScript API rename is complete.",
+          },
+        },
+      }),
+    );
+    write(
+      root,
+      "api.ts",
+      Buffer.from("export function oldApi(value: number) { return value + 1; }\n"),
+    );
+    write(
+      root,
+      "alias.ts",
+      Buffer.from(
+        'import { oldApi as keptAlias } from "./api";\n' +
+        "export const aliasResult = keptAlias(2);\n",
+      ),
+    );
+    write(
+      root,
+      "consumer.ts",
+      Buffer.from(
+        'import { oldApi } from "./api";\n' +
+        "export const result = oldApi(1);\n",
+      ),
+    );
+    write(
+      root,
+      "view.tsx",
+      Buffer.from(
+        'import { oldApi } from "./api";\n' +
+        "export const View = () => <output>{oldApi(3)}</output>;\n",
+      ),
+    );
+    write(
+      root,
+      "unrelated.ts",
+      Buffer.from(
+        "function oldApi(value: number) { return value - 1; }\n" +
+        "export const unrelated = oldApi(4);\n",
+      ),
+    );
+
+    cli(["verify", "--root", root, "--check"], 1);
+    const planPath = path.join(root, "rename-plan.json");
+    cli([
+      "plan",
+      "API-SURFACE",
+      "--root",
+      root,
+      "--rename",
+      "oldApi=newApi",
+      "--output",
+      planPath,
+    ]);
+    const plan = JSON.parse(fs.readFileSync(planPath));
+    const operation = plan.items[0].operation;
+    assert.equal(plan.items[0].executable, true);
+    assert.equal(operation.action, "rename_symbol");
+    assert.deepEqual(
+      new Set(operation.sites.map((row) => row.path)),
+      new Set(["alias.ts", "api.ts", "consumer.ts", "view.tsx"]),
+    );
+    assert.equal(
+      operation.sites.some((row) => row.path === "unrelated.ts"),
+      false,
+    );
+
+    const patch = cli([
+      "act",
+      planPath,
+      "--root",
+      root,
+      "--format",
+      "patch",
+    ]).stdout.toString("utf8");
+    assert.match(patch, /--- a\/api\.ts/);
+    assert.match(patch, /--- a\/view\.tsx/);
+    assert.doesNotMatch(patch, /--- a\/unrelated\.ts/);
+    cli([
+      "act",
+      planPath,
+      "--root",
+      root,
+      "--apply",
+      "--format",
+      "json",
+    ]);
+    assert.match(
+      fs.readFileSync(path.join(root, "alias.ts"), "utf8"),
+      /newApi as keptAlias/,
+    );
+    assert.match(
+      fs.readFileSync(path.join(root, "alias.ts"), "utf8"),
+      /keptAlias\(2\)/,
+    );
+    assert.doesNotMatch(
+      fs.readFileSync(path.join(root, "api.ts"), "utf8"),
+      /oldApi/,
+    );
+    assert.match(
+      fs.readFileSync(path.join(root, "unrelated.ts"), "utf8"),
+      /oldApi/,
+    );
+    cli(["verify", "--root", root, "--check"]);
   });
 });
 
@@ -1118,6 +1574,12 @@ run("Node CLI rolls back a selected fix that breaks preserved policy", () => {
     assert.equal(result.status, "rejected");
     assert.equal(result.acceptance.status, "not_satisfied");
     assert.equal(fs.readFileSync(path.join(root, "legacy.js"), "utf8"), source);
+
+    const markdown = Buffer.from(cli([
+      "act", planPath, "--root", root, "--apply",
+    ], 1).stdout).toString("utf8");
+    assert.match(markdown, /- `NO-LEGACY`: `pass`/);
+    assert.match(markdown, /- `KEEP-API`: `fail`/);
   });
 });
 

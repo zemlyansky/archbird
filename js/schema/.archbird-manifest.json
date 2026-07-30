@@ -8,9 +8,9 @@
       "source": "schema/act-result.schema.json"
     },
     {
-      "bytes": 43109,
+      "bytes": 43765,
       "path": "archbird.schema.json",
-      "sha256": "4b6b825d6183125588dc55eb98a2368c2e555fa22b05769b5a2be33f083dbfad",
+      "sha256": "5e6fdf8aea47aee8f31ee7584db731a46afa963ebeaa5ed917d270eed9bd3807",
       "source": "schema/archbird.schema.json"
     },
     {
@@ -140,9 +140,9 @@
       "source": "schema/okf-text-normalization.schema.json"
     },
     {
-      "bytes": 11837,
+      "bytes": 17649,
       "path": "plan.schema.json",
-      "sha256": "dbe69675fcf6f8c7660c1572477d3a4455fd2f5ffd65ca3b3a6d8d3a5947f138",
+      "sha256": "69661f9770245b14a1add0e5f77c0cdb1d21593629dfdb007bcc8519f8b024d0",
       "source": "schema/plan.schema.json"
     },
     {

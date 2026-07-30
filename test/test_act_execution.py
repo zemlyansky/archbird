@@ -19,17 +19,25 @@ sys.path.insert(0, str(ROOT / "py"))
 from archbird import _native
 from archbird import acting
 from archbird.acting import apply_plan, preview_plan
+from archbird.native import Project
+from archbird.planning import _projected_rename_operation
 
 
 def sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def item(identifier: str, operation: dict, *, executable: bool = True) -> dict:
+def item(
+    identifier: str,
+    operation: dict,
+    *,
+    executable: bool = True,
+    provenance: str = "derived",
+) -> dict:
     return {
         "id": identifier,
         "statement": identifier,
-        "provenance": "derived",
+        "provenance": provenance,
         "origins": [
             {
                 "constraint_id": "TEST-CONSTRAINT",
@@ -207,6 +215,160 @@ class ActExecutionTest(unittest.TestCase):
         self.assertEqual((self.root / "new/name.txt").read_bytes(), moved)
         self.assertFalse((self.root / "deleted.txt").exists())
         self.assertFalse((self.root / "old/name.txt").exists())
+
+    def test_json_pointer_edits_preserve_layout_and_require_asserted_intent(
+        self,
+    ) -> None:
+        package = (
+            b'{\n  "name": "demo",\n  "exports": {\n'
+            b'    ".": "./old.js"\n  }\n}\n'
+        )
+        build = b'{"scripts":{"test":"node test.js"},"name":"demo"}\n'
+        self.write("package.json", package)
+        self.write("build.json", build)
+        document = plan(
+            item(
+                "replace-export",
+                {
+                    "action": "edit_json_pointer",
+                    "path": "package.json",
+                    "source_sha256": sha(package),
+                    "pointer": "/exports/.",
+                    "expected_absent": False,
+                    "expected": "./old.js",
+                    "replacement": "./dist/index.js",
+                },
+                provenance="asserted",
+            ),
+            item(
+                "insert-build",
+                {
+                    "action": "edit_json_pointer",
+                    "path": "build.json",
+                    "source_sha256": sha(build),
+                    "pointer": "/scripts/build",
+                    "expected_absent": True,
+                    "replacement": "node build.js",
+                },
+                provenance="asserted",
+            ),
+        )
+        preview = preview_plan(document, self.root)
+        self.assertEqual(preview["status"], "preview")
+        self.assertIn(
+            '+    ".": "./dist/index.js"',
+            preview["changes"][1]["unified_diff"],
+        )
+        applied = apply_plan(document, self.root, satisfied)
+        self.assertEqual(applied["status"], "applied")
+        self.assertEqual(
+            json.loads((self.root / "package.json").read_text())["exports"]["."],
+            "./dist/index.js",
+        )
+        self.assertEqual(
+            json.loads((self.root / "build.json").read_text())["scripts"][
+                "build"
+            ],
+            "node build.js",
+        )
+        self.assertIn(
+            b'\n  "name": "demo",\n  "exports": {\n',
+            (self.root / "package.json").read_bytes(),
+        )
+
+        derived = plan(
+            item(
+                "unreviewed",
+                {
+                    "action": "edit_json_pointer",
+                    "path": "package.json",
+                    "source_sha256": sha(
+                        (self.root / "package.json").read_bytes()
+                    ),
+                    "pointer": "/exports/.",
+                    "expected_absent": False,
+                    "expected": "./dist/index.js",
+                    "replacement": "./other.js",
+                },
+            )
+        )
+        blocked = preview_plan(derived, self.root)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(
+            "requires asserted edit_json_pointer intent",
+            blocked["diagnostics"][0]["message"],
+        )
+
+    def test_rename_symbol_applies_one_evidence_bound_multifile_operation(
+        self,
+    ) -> None:
+        declaration = b"def calculate(value):\n    return value + 1\n"
+        consumer = b"from api import calculate\n"
+        self.write("api.py", declaration)
+        self.write("consumer.py", consumer)
+        configuration = {
+            "project": "test",
+            "layers": [
+                {
+                    "globs": ["*.py"],
+                    "import_roots": ["."],
+                    "language": "python",
+                    "name": "python",
+                }
+            ],
+        }
+        project = Project.from_repository(
+            self.root,
+            config=json.dumps(configuration, separators=(",", ":")).encode(),
+            jobs=1,
+            map_cache=False,
+        )
+        map_json = project.map_json()
+        operation, reasons = _projected_rename_operation(
+            map_document=json.loads(map_json),
+            root=self.root,
+            symbol="calculate",
+            new_name="compute",
+            seed_paths=["api.py"],
+        )
+        self.assertEqual(reasons, ())
+        document = plan(
+            item(
+                "rename-api",
+                operation,
+                provenance="asserted",
+            )
+        )
+        missing_map = preview_plan(document, self.root)
+        self.assertEqual(missing_map["status"], "blocked")
+        self.assertIn("current source Map", missing_map["diagnostics"][0]["message"])
+        preview = preview_plan(document, self.root, map_json)
+        self.assertEqual(preview["status"], "preview")
+        self.assertEqual(
+            {row["path"] for row in preview["changes"]},
+            {"api.py", "consumer.py"},
+        )
+        self.assertTrue(
+            all(row["item_ids"] == ["rename-api"] for row in preview["changes"])
+        )
+        self.assertIn("+def compute(value):", preview["changes"][0]["unified_diff"])
+        applied = apply_plan(document, self.root, satisfied, map_json)
+        self.assertEqual(applied["status"], "applied")
+        self.assertNotIn("calculate", (self.root / "api.py").read_text())
+        self.assertNotIn("calculate", (self.root / "consumer.py").read_text())
+
+        incomplete = json.loads(json.dumps(document))
+        incomplete["items"][0]["operation"]["coverage"].update(
+            classification="incomplete",
+            exhaustive=False,
+            unknown=1,
+        )
+        blocked = preview_plan(incomplete, self.root, map_json)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(
+            "coverage does not equal the current projection",
+            blocked["diagnostics"][0]["message"],
+        )
 
     def test_overlapping_edits_are_blocked(self) -> None:
         source = b"abcdef\n"

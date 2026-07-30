@@ -1155,6 +1155,70 @@ static PyObject *py_unified_diff(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_json_pointer_edit(PyObject *self, PyObject *args,
+                                      PyObject *kwargs) {
+  static char *keywords[] = {"source",   "source_sha256", "pointer",
+                             "expected", "replacement",   NULL};
+  const char *source;
+  const char *source_sha256;
+  const char *pointer;
+  const char *replacement;
+  Py_ssize_t source_length;
+  Py_ssize_t source_sha256_length;
+  Py_ssize_t pointer_length;
+  Py_ssize_t replacement_length;
+  PyObject *expected_object;
+  Py_buffer expected = {0};
+  int expected_absent;
+  ArchbirdJsonPointerEditOptions options;
+  ArchbirdJsonPointerEditResult edit_result;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *replacement_bytes;
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#s#s#Oy#:json_pointer_edit", keywords, &source,
+          &source_length, &source_sha256, &source_sha256_length, &pointer,
+          &pointer_length, &expected_object, &replacement, &replacement_length))
+    return NULL;
+  expected_absent = expected_object == Py_None;
+  if (!expected_absent &&
+      PyObject_GetBuffer(expected_object, &expected, PyBUF_SIMPLE) != 0)
+    return NULL;
+  archbird_json_pointer_edit_options_init(&options);
+  options.source_sha256 = source_sha256;
+  options.source_sha256_length = (size_t)source_sha256_length;
+  options.pointer = (const uint8_t *)pointer;
+  options.pointer_length = (size_t)pointer_length;
+  options.expected_absent = expected_absent;
+  options.expected_json =
+      expected_absent ? NULL : (const uint8_t *)expected.buf;
+  options.expected_json_length = expected_absent ? 0 : (size_t)expected.len;
+  options.replacement_json = (const uint8_t *)replacement;
+  options.replacement_json_length = (size_t)replacement_length;
+  archbird_json_pointer_edit_result_init(&edit_result);
+  status = input_engine((size_t)source_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_json_pointer_edit(engine, (const uint8_t *)source,
+                                        (size_t)source_length, &options,
+                                        &edit_result, output_write, &output);
+  if (!expected_absent)
+    PyBuffer_Release(&expected);
+  replacement_bytes = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  if (!replacement_bytes)
+    return NULL;
+  result = Py_BuildValue(
+      "{s:n,s:n,s:n,s:s,s:N}", "start_byte", (Py_ssize_t)edit_result.start_byte,
+      "end_byte", (Py_ssize_t)edit_result.end_byte, "matched_values",
+      (Py_ssize_t)edit_result.matched_values, "kind",
+      edit_result.kind == ARCHBIRD_JSON_POINTER_INSERT ? "insert" : "replace",
+      "replacement", replacement_bytes);
+  return result;
+}
+
 static PyObject *py_map_freshness(PyObject *self, PyObject *args,
                                   PyObject *kwargs) {
   static char *keywords[] = {"snapshot", "current", "pretty", NULL};
@@ -1945,6 +2009,9 @@ static PyMethodDef archbird_methods[] = {
      "Structurally diff two canonical saved maps."},
     {"unified_diff", (PyCFunction)py_unified_diff, METH_VARARGS | METH_KEYWORDS,
      "Render one deterministic git-style unified diff."},
+    {"json_pointer_edit", (PyCFunction)py_json_pointer_edit,
+     METH_VARARGS | METH_KEYWORDS,
+     "Preview one source-locked JSON Pointer edit."},
     {"map_freshness", (PyCFunction)py_map_freshness,
      METH_VARARGS | METH_KEYWORDS,
      "Audit a saved Map or Query against a freshly derived current Map."},

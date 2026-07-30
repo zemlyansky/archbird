@@ -122,6 +122,149 @@ class PlanActCliTest(unittest.TestCase):
         )
         self.assertFalse(legacy.exists())
 
+    def test_map_query_verify_plan_act_closes_a_multifile_rename(self) -> None:
+        (self.root / "api.py").write_text(
+            "def old_api(value):\n    return value + 1\n"
+        )
+        (self.root / "consumer.py").write_text(
+            "from api import old_api\n"
+            "result = old_api(1)\n"
+        )
+        (self.root / "archbird.json").write_text(
+            json.dumps(
+                {
+                    "project": "plan-act-rename",
+                    "layers": [
+                        {
+                            "name": "python",
+                            "language": "python",
+                            "globs": ["*.py"],
+                            "import_roots": ["."],
+                        }
+                    ],
+                    "projections": {
+                        "api-symbols": {
+                            "select": "symbols",
+                            "paths": ["api.py"],
+                        }
+                    },
+                    "constraints": {
+                        "API-SURFACE": {
+                            "assert": "set_equal",
+                            "actual": {"projection": "api-symbols"},
+                            "expected": {"literal": ["new_api"]},
+                            "owner": "architecture",
+                            "rationale": "The reviewed API rename is complete.",
+                        }
+                    },
+                },
+                sort_keys=True,
+            )
+        )
+        map_path = self.plan_path("before-map.json")
+        run(
+            "map",
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            "--output",
+            str(map_path),
+            "--check",
+        )
+        before_query = run(
+            "query",
+            "--root",
+            str(self.root),
+            "--symbol",
+            "old_api",
+            "--format",
+            "json",
+            "--check",
+        )
+        self.assertIn(b'"old_api"', before_query.stdout)
+        run("verify", "--root", str(self.root), "--check", expected=1)
+
+        plan_path = self.plan_path("rename-plan.json")
+        run(
+            "plan",
+            "API-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        suggestion = json.loads(plan_path.read_bytes())["items"][0]
+        self.assertEqual(suggestion["operation"]["action"], "rename_symbol")
+        self.assertFalse(suggestion["executable"])
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        run(
+            "plan",
+            "API-SURFACE",
+            "--root",
+            str(self.root),
+            "--rename",
+            "old_api=new_api",
+            "--output",
+            str(plan_path),
+        )
+        plan_document = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan_document["items"]), 1)
+        item = plan_document["items"][0]
+        self.assertTrue(item["executable"])
+        self.assertEqual(item["operation"]["action"], "rename_symbol")
+        self.assertEqual(
+            item["operation"]["projection"]["select"],
+            "symbol_occurrences",
+        )
+        self.assertEqual(
+            {row["path"] for row in item["operation"]["sites"]},
+            {"api.py", "consumer.py"},
+        )
+        self.assertEqual(len(item["operation"]["sites"]), 3)
+
+        patch = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn("--- a/api.py", patch)
+        self.assertIn("--- a/consumer.py", patch)
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--apply",
+            "--format",
+            "json",
+        )
+        self.assertNotIn("old_api", (self.root / "api.py").read_text())
+        self.assertNotIn("old_api", (self.root / "consumer.py").read_text())
+        run("verify", "--root", str(self.root), "--check")
+        after_query = run(
+            "query",
+            "--root",
+            str(self.root),
+            "--symbol",
+            "new_api",
+            "--format",
+            "json",
+            "--check",
+        )
+        self.assertIn(b'"new_api"', after_query.stdout)
+
     def test_plan_saved_in_repository_does_not_invalidate_itself(self) -> None:
         self.configure(
             {
@@ -136,7 +279,14 @@ class PlanActCliTest(unittest.TestCase):
         legacy = self.root / "legacy.py"
         legacy.write_text("obsolete = True\n")
         plan_path = self.root / "plan.json"
-        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        summary = run(
+            "plan", "--root", str(self.root), "--output", str(plan_path)
+        ).stdout.decode()
+        self.assertEqual(
+            summary,
+            "Result: items=1; executable=1; non-executable=0; "
+            "unknowns=0; preserved-constraints=0\n",
+        )
         first = json.loads(plan_path.read_bytes())
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         second = json.loads(plan_path.read_bytes())
@@ -303,6 +453,19 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(result["status"], "rejected")
         self.assertEqual(result["acceptance"]["status"], "not_satisfied")
         self.assertEqual(legacy.read_text(), original)
+
+        markdown = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--apply",
+            "--format",
+            "markdown",
+            expected=1,
+        ).stdout.decode()
+        self.assertIn("- `NO-LEGACY`: `pass`", markdown)
+        self.assertIn("- `KEEP-API`: `fail`", markdown)
 
     def test_act_rejects_a_symlink_plan_locator(self) -> None:
         self.configure(

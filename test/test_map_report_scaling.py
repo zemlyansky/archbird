@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import statistics
+import tempfile
 from time import perf_counter
 
 from archbird import _native
@@ -125,6 +127,169 @@ def _check_empty_summary() -> None:
         raise AssertionError(f"empty Map report has an unstable tail: {tail!r}")
 
 
+def _occurrence_map(count: int) -> bytes:
+    config = json.dumps(
+        {
+            "project": f"occurrence-scaling-{count}",
+            "layers": [
+                {
+                    "globs": ["*.py"],
+                    "import_roots": ["."],
+                    "language": "python",
+                    "name": "python",
+                }
+            ],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    build = Path(__file__).resolve().parents[1] / "build"
+    with tempfile.TemporaryDirectory(
+        prefix=f"occurrence-scaling-{count}-", dir=build
+    ) as temporary:
+        root = Path(temporary)
+        (root / "api.py").write_text(
+            "def old_api(value):\n    return value\n", encoding="utf-8"
+        )
+        for index in range(count):
+            (root / f"caller_{index:04d}.py").write_text(
+                "from api import old_api\n\n"
+                f"def use_{index:04d}(value):\n"
+                "    return old_api(value)\n",
+                encoding="utf-8",
+            )
+        project = Project.from_repository(
+            root,
+            config=config,
+            jobs=1,
+            map_cache=False,
+        )
+        return project.map_json()
+
+
+def _same_file_occurrence_map(count: int) -> tuple[bytes, float]:
+    config = json.dumps(
+        {
+            "project": f"same-file-occurrence-scaling-{count}",
+            "layers": [
+                {
+                    "globs": ["*.py"],
+                    "import_roots": ["."],
+                    "language": "python",
+                    "name": "python",
+                }
+            ],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    build = Path(__file__).resolve().parents[1] / "build"
+    with tempfile.TemporaryDirectory(
+        prefix=f"same-file-occurrence-scaling-{count}-", dir=build
+    ) as temporary:
+        root = Path(temporary)
+        (root / "api.py").write_text(
+            "def old_api(value):\n    return value\n", encoding="utf-8"
+        )
+        (root / "caller.py").write_text(
+            "from api import old_api\n\n"
+            "def use_all():\n"
+            + "".join(f"    old_api({index})\n" for index in range(count)),
+            encoding="utf-8",
+        )
+        started = perf_counter()
+        project = Project.from_repository(
+            root,
+            config=config,
+            jobs=1,
+            map_cache=False,
+        )
+        mapped = project.map_json()
+        return mapped, perf_counter() - started
+
+
+def _check_symbol_occurrence_scaling() -> None:
+    plan = {
+        "id": "old-api-occurrences",
+        "names": ["old_api"],
+        "paths": ["api.py"],
+        "select": "symbol_occurrences",
+    }
+    elapsed: dict[int, float] = {}
+    for count in (400, 800):
+        mapped = _occurrence_map(count)
+        durations = []
+        outputs = []
+        for _ in range(6):
+            started = perf_counter()
+            outputs.append(evaluate_projection_json(mapped, plan))
+            durations.append(perf_counter() - started)
+        if len(set(outputs)) != 1:
+            raise AssertionError("symbol occurrence projection is not repeatable")
+        result = json.loads(outputs[-1])
+        roles: dict[str, int] = {}
+        for item in result["fact"]["items"]:
+            role = item["attributes"]["role"]
+            roles[role] = roles.get(role, 0) + 1
+        if (
+            result["completeness"]["classification"] != "complete"
+            or roles
+            != {
+                "declaration": 1,
+                "import": count,
+                "reference": count,
+            }
+        ):
+            raise AssertionError(
+                f"symbol occurrence projection lost evidence: {roles!r}"
+            )
+        elapsed[count] = statistics.median(durations[1:])
+    if elapsed[800] > elapsed[400] * 2.8 + 0.01 or elapsed[800] >= 2.0:
+        raise AssertionError(
+            "symbol occurrence projection no longer scales near-linearly: "
+            f"400={elapsed[400]:.3f}s 800={elapsed[800]:.3f}s"
+        )
+    print(
+        "symbol occurrence scaling passed "
+        f"(400={elapsed[400]:.3f}s, 800={elapsed[800]:.3f}s)"
+    )
+    map_elapsed: dict[int, float] = {}
+    for count in (2_000, 4_000):
+        mapped, map_elapsed[count] = _same_file_occurrence_map(count)
+        result = json.loads(evaluate_projection_json(mapped, plan))
+        roles: dict[str, int] = {}
+        for item in result["fact"]["items"]:
+            role = item["attributes"]["role"]
+            roles[role] = roles.get(role, 0) + 1
+        if (
+            result["completeness"]["classification"] != "complete"
+            or roles
+            != {
+                "declaration": 1,
+                "import": 1,
+                "reference": count,
+            }
+        ):
+            raise AssertionError(
+                "same-file symbol occurrence projection lost evidence: "
+                f"{roles!r}"
+            )
+    if (
+        map_elapsed[4_000] > map_elapsed[2_000] * 2.7 + 0.02
+        or map_elapsed[4_000] >= 2.0
+    ):
+        raise AssertionError(
+            "same-file call correlation no longer scales near-linearly: "
+            f"2000={map_elapsed[2_000]:.3f}s "
+            f"4000={map_elapsed[4_000]:.3f}s"
+        )
+    print(
+        "same-file call correlation scaling passed "
+        f"(2000={map_elapsed[2_000]:.3f}s, "
+        f"4000={map_elapsed[4_000]:.3f}s)"
+    )
+
+
 def main() -> int:
     fixture = Path(__file__).parent / "fixtures/report_map.json"
     document = json.loads(fixture.read_bytes())
@@ -157,6 +322,7 @@ def main() -> int:
     _check_graph_aggregation(document)
     _check_empty_summary()
     print("empty Map report summary passed")
+    _check_symbol_occurrence_scaling()
     return 0
 
 

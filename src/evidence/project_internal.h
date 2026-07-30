@@ -42,8 +42,17 @@ void ab_project_merged_fact_range(const ArchbirdProject *project,
                                   const AbString *path, const char *domain,
                                   size_t *out_start, size_t *out_end);
 
+void ab_project_merged_fact_span_range(const ArchbirdProject *project,
+                                       const AbString *path, const char *domain,
+                                       size_t span_start, size_t span_end,
+                                       size_t *out_start, size_t *out_end);
+
 const AbFact *ab_project_merged_fact_by_path(const ArchbirdProject *project,
                                              size_t index);
+
+const AbProviderBundle *
+ab_project_merged_fact_provider_by_path(const ArchbirdProject *project,
+                                        size_t index);
 
 const AbProviderBundle *
 ab_project_provider_bundle(const ArchbirdProject *project, size_t index);

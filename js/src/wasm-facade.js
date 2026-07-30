@@ -436,6 +436,62 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
           )),
       );
     },
+    jsonPointerEdit(
+      source,
+      sourceSha256,
+      pointer,
+      expected,
+      replacement,
+      expectedAbsent = false,
+    ) {
+      if (typeof sourceSha256 !== "string") {
+        throw new TypeError("sourceSha256 must be a string");
+      }
+      if (typeof pointer !== "string") {
+        throw new TypeError("pointer must be a string");
+      }
+      const sourceSha256Bytes = Buffer.from(sourceSha256, "ascii");
+      const pointerBytes = Buffer.from(pointer, "utf8");
+      return withInputs(
+        [
+          source,
+          sourceSha256Bytes,
+          pointerBytes,
+          expected,
+          replacement,
+        ],
+        ([
+          sourceInput,
+          sourceSha256Input,
+          pointerInput,
+          expectedInput,
+          replacementInput,
+        ]) => {
+          const replacementBytes = result(module._ab_wasm_json_pointer_edit(
+            sourceInput.pointer,
+            sourceInput.length,
+            sourceSha256Input.pointer,
+            sourceSha256Input.length,
+            pointerInput.pointer,
+            pointerInput.length,
+            expectedInput.pointer,
+            expectedInput.length,
+            replacementInput.pointer,
+            replacementInput.length,
+            expectedAbsent ? 1 : 0,
+          ));
+          return {
+            startByte: module._ab_wasm_json_pointer_edit_start(),
+            endByte: module._ab_wasm_json_pointer_edit_end(),
+            matchedValues: module._ab_wasm_json_pointer_edit_matches(),
+            kind: module._ab_wasm_json_pointer_edit_kind() === 1
+              ? "insert"
+              : "replace",
+            replacement: replacementBytes,
+          };
+        },
+      );
+    },
     mapMarkdown: (map, full = false, maxChars = 0) =>
       oneInput(
         map,

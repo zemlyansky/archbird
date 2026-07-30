@@ -361,20 +361,27 @@ def main() -> int:
             "lexical module fallback invented alias exports or lost routes: "
             f"exports={sorted(module_exports)!r} routes={sorted(module_routes)!r}"
         )
+    type_reexport_source = (
+        "export { type $RefinementCtx as RefinementCtx, type LocalType, "
+        "value as alias, type as literalType } from './core.js';\n"
+        "export { type TypeOnly, runtime };\n"
+    ).encode()
     type_reexport_regression = subprocess.run(
         [str(executable), "typescript", "src/type-reexports.ts"],
-        input=(
-            "export { type $RefinementCtx as RefinementCtx, type LocalType, "
-            "value as alias, type as literalType } from './core.js';\n"
-            "export { type TypeOnly, runtime };\n"
-        ).encode(),
+        input=type_reexport_source,
         capture_output=True,
         check=True,
     )
+    type_reexport_document = json.loads(type_reexport_regression.stdout)
     type_reexport_facts = [
         fact
-        for fact in json.loads(type_reexport_regression.stdout)["facts"]
+        for fact in type_reexport_document["facts"]
         if fact["domain"] == "exports"
+    ]
+    type_export_bindings = [
+        fact
+        for fact in type_reexport_document["facts"]
+        if fact["domain"] == "export-bindings"
     ]
     type_reexports = {
         fact["name"]: fact["attributes"].get("origin_name")
@@ -395,6 +402,28 @@ def main() -> int:
         raise AssertionError(
             "type-only export modifiers were treated as binding names: "
             f"reexports={type_reexports!r} local={type_local_exports!r}"
+        )
+    binding_exports = {
+        fact["name"]: fact["attributes"]["exported"]
+        for fact in type_export_bindings
+    }
+    binding_anchors = {
+        fact["name"]: type_reexport_source[
+            fact["span"]["start"] : fact["span"]["end"]
+        ].decode()
+        for fact in type_export_bindings
+    }
+    if binding_exports != {
+        "$RefinementCtx": "RefinementCtx",
+        "LocalType": "LocalType",
+        "value": "alias",
+        "type": "literalType",
+        "TypeOnly": "TypeOnly",
+        "runtime": "runtime",
+    } or binding_anchors != {name: name for name in binding_exports}:
+        raise AssertionError(
+            "export binding origins lost their exact source anchors: "
+            f"exports={binding_exports!r} anchors={binding_anchors!r}"
         )
     print(f"native JS/TS/Vue scanner parity passed: {len(CASES)} cases")
     return 0

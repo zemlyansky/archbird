@@ -687,6 +687,108 @@ ab_map_resolve_provider_reference(AbMapState *state, const AbFact *fact,
   return ARCHBIRD_OK;
 }
 
+ArchbirdStatus ab_map_resolve_call_reference(
+    AbMapState *state, const AbFact *call, const AbFact **out_evidence,
+    const AbProviderBundle **out_provider, AbMapReferenceResolution *out) {
+  const AbFact *semantic;
+  size_t start;
+  size_t end;
+  size_t index;
+  int found = 0;
+  int semantic_conflict = 0;
+  if (!state || !call || !out_evidence || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  *out_evidence = NULL;
+  if (out_provider)
+    *out_provider = NULL;
+  memset(out, 0, sizeof(*out));
+  if (!fact_domain(call, "calls") || !call->has_name)
+    return archbird_error_set(state->engine, ARCHBIRD_INVALID_ARGUMENT,
+                              ARCHBIRD_NO_OFFSET,
+                              "call resolution requires one named call fact");
+  semantic = ab_map_unique_semantic_target(state->project, call, out_provider,
+                                           &semantic_conflict);
+  if (semantic_conflict)
+    return ARCHBIRD_OK;
+  if (semantic) {
+    ArchbirdStatus status =
+        ab_map_resolve_provider_reference(state, semantic, out);
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (out->exact) {
+      *out_evidence = semantic;
+      found = 1;
+    }
+  }
+  ab_project_merged_fact_span_range(state->project, &call->path, "name-uses",
+                                    call->span_start, call->span_end, &start,
+                                    &end);
+  for (index = start; index < end; index++) {
+    const AbFact *fact = ab_project_merged_fact_by_path(state->project, index);
+    const AbManifestFile *source;
+    AbMapReferenceResolution candidate;
+    ArchbirdStatus status;
+    if (!fact || !fact->has_name ||
+        !ab_string_equal(&fact->path, &call->path) ||
+        !ab_string_equal(&fact->name, &call->name) ||
+        fact->span_start != call->span_start ||
+        fact->span_end != call->span_end)
+      continue;
+    source = fact_file(state, fact);
+    if (!source)
+      continue;
+    if (string_literal(&fact->kind, "imported-name-call"))
+      status = ab_map_resolve_imported_name_reference(state, source, fact,
+                                                      &candidate);
+    else if (string_literal(&fact->kind, "imported-attribute-call") ||
+             string_literal(&fact->kind, "inferred-receiver-call"))
+      status =
+          ab_map_resolve_imported_reference(state, source, fact, &candidate);
+    else
+      continue;
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (!candidate.exact || !candidate.target || !candidate.target_symbol)
+      continue;
+    if (found) {
+      if (!ab_string_equal(&out->target->path, &candidate.target->path) ||
+          !ab_string_equal(out->target_symbol, candidate.target_symbol)) {
+        memset(out, 0, sizeof(*out));
+        *out_evidence = NULL;
+        if (out_provider)
+          *out_provider = NULL;
+        return ARCHBIRD_OK;
+      }
+    } else {
+      *out = candidate;
+      *out_evidence = fact;
+      if (out_provider)
+        *out_provider =
+            ab_project_merged_fact_provider_by_path(state->project, index);
+      found = 1;
+    }
+  }
+  return ARCHBIRD_OK;
+}
+
+static int fact_has_matching_call(const ArchbirdProject *project,
+                                  const AbFact *fact) {
+  size_t start;
+  size_t end;
+  size_t index;
+  ab_project_merged_fact_span_range(project, &fact->path, "calls",
+                                    fact->span_start, fact->span_end, &start,
+                                    &end);
+  for (index = start; index < end; index++) {
+    const AbFact *call = ab_project_merged_fact_by_path(project, index);
+    if (call && call->has_name && ab_string_equal(&call->name, &fact->name) &&
+        call->span_start == fact->span_start &&
+        call->span_end == fact->span_end)
+      return 1;
+  }
+  return 0;
+}
+
 ArchbirdStatus ab_map_add_reference_edges(AbMapState *state) {
   static char current_bytes[] = "current";
   static const AbString current = {current_bytes, sizeof(current_bytes) - 1};
@@ -696,27 +798,45 @@ ArchbirdStatus ab_map_add_reference_edges(AbMapState *state) {
                   index < ab_project_merged_fact_count(state->project);
        index++) {
     const AbFact *fact = ab_project_merged_fact(state->project, index);
+    const AbFact *edge_evidence = fact;
     const AbManifestFile *source;
-    const AbProviderBundle *provider;
+    const AbProviderBundle *provider = NULL;
     AbMapReferenceResolution resolution;
     const char *kind;
+    int resolved_call = 0;
     if (!fact->has_name)
       continue;
     source = fact_file(state, fact);
     if (!source)
       continue;
-    if (fact_domain(fact, "reference-targets") ||
-        fact_domain(fact, "semantic-relationships")) {
+    if (fact_domain(fact, "calls")) {
+      const AbFact *evidence = NULL;
+      status = ab_map_resolve_call_reference(state, fact, &evidence, &provider,
+                                             &resolution);
+      if (status != ARCHBIRD_OK || !evidence)
+        continue;
+      edge_evidence = evidence;
+      resolved_call = 1;
+    } else if (fact_domain(fact, "reference-targets") &&
+               fact_has_matching_call(state->project, fact)) {
+      continue;
+    } else if (fact_domain(fact, "reference-targets") ||
+               fact_domain(fact, "semantic-relationships")) {
       status = ab_map_resolve_provider_reference(state, fact, &resolution);
     } else if (fact_domain(fact, "name-uses") &&
                (string_literal(&fact->kind, "imported-attribute-call") ||
                 string_literal(&fact->kind, "inferred-receiver-call") ||
                 string_literal(&fact->kind, "decorator-reference"))) {
+      if (fact_has_matching_call(state->project, fact))
+        continue;
       status =
           ab_map_resolve_imported_reference(state, source, fact, &resolution);
     } else if (fact_domain(fact, "name-uses") &&
                (string_literal(&fact->kind, "imported-name-call") ||
                 string_literal(&fact->kind, "imported-name-use"))) {
+      if (string_literal(&fact->kind, "imported-name-call") &&
+          fact_has_matching_call(state->project, fact))
+        continue;
       status = ab_map_resolve_imported_name_reference(state, source, fact,
                                                       &resolution);
     } else {
@@ -725,24 +845,32 @@ ArchbirdStatus ab_map_add_reference_edges(AbMapState *state) {
     if (status != ARCHBIRD_OK || !resolution.exact || !resolution.target ||
         !resolution.target_symbol || resolution.target == source)
       continue;
-    if (fact_domain(fact, "reference-targets") ||
-        fact_domain(fact, "semantic-relationships"))
+    if (resolved_call && fact_domain(edge_evidence, "reference-targets"))
+      kind = string_literal(&edge_evidence->kind, "construct")
+                 ? "semantic-construct"
+                 : (string_literal(&edge_evidence->kind, "decorator")
+                        ? "semantic-decorator"
+                        : "semantic-call");
+    else if (fact_domain(edge_evidence, "reference-targets") ||
+             fact_domain(edge_evidence, "semantic-relationships"))
       kind = resolution.relation;
-    else if (string_literal(&fact->kind, "imported-name-call"))
+    else if (string_literal(&edge_evidence->kind, "imported-name-call"))
       kind = "imported-call";
-    else if (string_literal(&fact->kind, "imported-name-use"))
+    else if (string_literal(&edge_evidence->kind, "imported-name-use"))
       kind = "imported-reference";
     else
-      kind = string_literal(&fact->kind, "decorator-reference")
+      kind = string_literal(&edge_evidence->kind, "decorator-reference")
                  ? "decorator"
                  : (!strcmp(resolution.relation, "imported-member-call")
                         ? "member-call"
                         : "attribute-call");
-    if (fact_domain(fact, "reference-targets") ||
-        fact_domain(fact, "semantic-relationships")) {
-      const AbString *index_name = string_attribute(fact, "index");
-      const AbString *evidence_state = string_attribute(fact, "evidence_state");
-      provider = ab_project_merged_fact_provider(state->project, index);
+    if (fact_domain(edge_evidence, "reference-targets") ||
+        fact_domain(edge_evidence, "semantic-relationships")) {
+      const AbString *index_name = string_attribute(edge_evidence, "index");
+      const AbString *evidence_state =
+          string_attribute(edge_evidence, "evidence_state");
+      if (!provider)
+        provider = ab_project_merged_fact_provider(state->project, index);
       if (!provider)
         return archbird_error_set(
             state->engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,

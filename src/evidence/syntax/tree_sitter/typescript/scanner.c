@@ -18,6 +18,8 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
     AbProviderBundle *out_bundle) {
   static const AbTreeSitterCapabilitySpec capabilities[] = {
       {"calls", "direct identifier call_expression nodes"},
+      {"export-bindings",
+       "exact local/origin identifiers associated with static exports"},
       {"exports", "statically named ESM and bounded CommonJS properties"},
       {"imported-name-groups", "static ESM module requests"},
       {"imported-names", "static ESM default, namespace, and named imports"},
@@ -31,8 +33,8 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TYPESCRIPT
   static const AbTreeSitterDescriptor typescript = {
       "archbird-tree-sitter-typescript",
-      "3",
-      "archbird-tree-sitter-typescript-v3;runtime=0.26.9;grammar=0.23.2;abi=14",
+      "4",
+      "archbird-tree-sitter-typescript-v4;runtime=0.26.9;grammar=0.23.2;abi=14",
       "tree-sitter-0.26.9;tree-sitter-typescript-0.23.2;grammar-abi-14",
       "typescript",
       tree_sitter_typescript,
@@ -45,8 +47,8 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TSX
   static const AbTreeSitterDescriptor typescript_react = {
       "archbird-tree-sitter-tsx",
-      "3",
-      "archbird-tree-sitter-tsx-v3;runtime=0.26.9;grammar=0.23.2;abi=14",
+      "4",
+      "archbird-tree-sitter-tsx-v4;runtime=0.26.9;grammar=0.23.2;abi=14",
       "tree-sitter-0.26.9;tree-sitter-tsx-0.23.2;grammar-abi-14",
       "tsx",
       tree_sitter_tsx,

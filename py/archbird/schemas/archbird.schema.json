@@ -263,6 +263,27 @@
           "type": "object",
           "allOf": [
             {"$ref": "#/$defs/projection_base"},
+            {
+              "required": ["names"],
+              "properties": {
+                "select": {"const": "symbol_occurrences"},
+                "names": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "minLength": 1}
+                },
+                "paths": {"$ref": "#/$defs/collection_patterns"}
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "allOf": [
+            {"$ref": "#/$defs/projection_base"},
             {"properties": {"select": {"const": "symbol_relations"}, "from_paths": {"$ref": "#/$defs/collection_patterns"}, "to_paths": {"$ref": "#/$defs/collection_patterns"}, "kinds": {"type": "array", "uniqueItems": true, "items": {"enum": ["calls", "references"]}}, "resolutions": {"type": "array", "uniqueItems": true, "items": {"enum": ["ambiguous", "builtin", "candidate", "unique", "unresolved"]}}}}
           ],
           "unevaluatedProperties": false

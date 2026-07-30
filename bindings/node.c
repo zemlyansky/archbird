@@ -1293,6 +1293,84 @@ static napi_value unified_diff(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value json_pointer_edit(napi_env env, napi_callback_info info) {
+  size_t argc = 6;
+  napi_value argv[6];
+  const uint8_t *source;
+  const uint8_t *expected;
+  const uint8_t *replacement;
+  size_t source_length;
+  size_t expected_length;
+  size_t replacement_length;
+  size_t source_sha256_length;
+  size_t pointer_length;
+  char *source_sha256;
+  char *pointer;
+  int expected_absent;
+  ArchbirdJsonPointerEditOptions options;
+  ArchbirdJsonPointerEditResult edit_result;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value replacement_buffer;
+  napi_value result;
+  napi_value value;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc != 6 || !get_buffer(env, argv[0], &source, &source_length))
+    return NULL;
+  source_sha256 = get_string(env, argv[1], &source_sha256_length);
+  if (!source_sha256)
+    return NULL;
+  pointer = get_string(env, argv[2], &pointer_length);
+  if (!pointer) {
+    free(source_sha256);
+    return NULL;
+  }
+  if (!get_buffer(env, argv[3], &expected, &expected_length) ||
+      !get_buffer(env, argv[4], &replacement, &replacement_length) ||
+      !get_optional_bool(env, argc, argv, 5, 0, &expected_absent)) {
+    free(pointer);
+    free(source_sha256);
+    return NULL;
+  }
+  archbird_json_pointer_edit_options_init(&options);
+  options.source_sha256 = source_sha256;
+  options.source_sha256_length = source_sha256_length;
+  options.pointer = (const uint8_t *)pointer;
+  options.pointer_length = pointer_length;
+  options.expected_absent = expected_absent;
+  options.expected_json = expected_absent ? NULL : expected;
+  options.expected_json_length = expected_absent ? 0 : expected_length;
+  options.replacement_json = replacement;
+  options.replacement_json_length = replacement_length;
+  archbird_json_pointer_edit_result_init(&edit_result);
+  status = input_engine(source_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_json_pointer_edit(engine, source, source_length, &options,
+                                        &edit_result, output_write, &output);
+  free(pointer);
+  free(source_sha256);
+  replacement_buffer = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  if (!replacement_buffer)
+    return NULL;
+  NAPI_TRY(napi_create_object(env, &result));
+  NAPI_TRY(napi_create_double(env, (double)edit_result.start_byte, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "startByte", value));
+  NAPI_TRY(napi_create_double(env, (double)edit_result.end_byte, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "endByte", value));
+  NAPI_TRY(napi_create_double(env, (double)edit_result.matched_values, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "matchedValues", value));
+  NAPI_TRY(napi_create_string_utf8(
+      env,
+      edit_result.kind == ARCHBIRD_JSON_POINTER_INSERT ? "insert" : "replace",
+      NAPI_AUTO_LENGTH, &value));
+  NAPI_TRY(napi_set_named_property(env, result, "kind", value));
+  NAPI_TRY(
+      napi_set_named_property(env, result, "replacement", replacement_buffer));
+  return result;
+}
+
 static napi_value map_freshness(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -2106,6 +2184,8 @@ static napi_value init(napi_env env, napi_value exports) {
        NULL},
       {"mapDiff", NULL, map_diff, NULL, NULL, NULL, napi_default, NULL},
       {"unifiedDiff", NULL, unified_diff, NULL, NULL, NULL, napi_default, NULL},
+      {"jsonPointerEdit", NULL, json_pointer_edit, NULL, NULL, NULL,
+       napi_default, NULL},
       {"mapFreshness", NULL, map_freshness, NULL, NULL, NULL, napi_default,
        NULL},
       {"mapMarkdown", NULL, map_markdown, NULL, NULL, NULL, napi_default, NULL},

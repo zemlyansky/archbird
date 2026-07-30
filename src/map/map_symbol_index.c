@@ -233,14 +233,20 @@ const AbFact *ab_map_enclosing_symbol(const ArchbirdProject *project,
   return matched;
 }
 
-const AbFact *ab_map_unique_semantic_target(const ArchbirdProject *project,
-                                            const AbFact *occurrence) {
+const AbFact *ab_map_unique_semantic_target(
+    const ArchbirdProject *project, const AbFact *occurrence,
+    const AbProviderBundle **out_provider, int *out_conflict) {
   size_t start;
   size_t end;
   size_t index;
   const AbFact *matched = NULL;
-  ab_project_merged_fact_range(project, &occurrence->path, "reference-targets",
-                               &start, &end);
+  if (out_provider)
+    *out_provider = NULL;
+  if (out_conflict)
+    *out_conflict = 0;
+  ab_project_merged_fact_span_range(project, &occurrence->path,
+                                    "reference-targets", occurrence->span_start,
+                                    occurrence->span_end, &start, &end);
   for (index = start; index < end; index++) {
     const AbFact *candidate = ab_project_merged_fact_by_path(project, index);
     const AbString *target_path;
@@ -261,11 +267,18 @@ const AbFact *ab_map_unique_semantic_target(const ArchbirdProject *project,
           ab_map_fact_string_attribute(matched, "target_symbol");
       if (!matched_path || !matched_symbol ||
           !ab_string_equal(matched_path, target_path) ||
-          !ab_string_equal(matched_symbol, target_symbol))
+          !ab_string_equal(matched_symbol, target_symbol)) {
+        if (out_provider)
+          *out_provider = NULL;
+        if (out_conflict)
+          *out_conflict = 1;
         return NULL;
+      }
       continue;
     }
     matched = candidate;
+    if (out_provider)
+      *out_provider = ab_project_merged_fact_provider_by_path(project, index);
   }
   return matched;
 }

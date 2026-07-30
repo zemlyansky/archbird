@@ -540,10 +540,161 @@ def _assert_invalid_projection(
         raise AssertionError("malformed Map inventory produced a projection")
 
 
+def _assert_symbol_occurrence_projection() -> None:
+    root = ROOT / "build/symbol-occurrence-projection"
+    shutil.rmtree(root, ignore_errors=True)
+    sources = {
+        "c/api.c": '#include "api.h"\nint old_api(int value) { return value + 1; }\n',
+        "c/api.h": "int old_api(int value);\n",
+        "c/use.c": '#include "api.h"\nint result(void) { return old_api(1); }\n',
+        "js/alias.js": (
+            'import { oldApi as keptAlias } from "./api.js";\n'
+            'export { oldApi as publicAlias } from "./api.js";\n'
+            "export const result = keptAlias(2);\n"
+        ),
+        "js/api.js": "export function oldApi(value) { return value + 1; }\n",
+        "js/use.js": (
+            'import { oldApi } from "./api.js";\n'
+            "export const result = oldApi(1);\n"
+        ),
+        "py/alias.py": (
+            "from api import old_api as kept_alias\n"
+            "result = kept_alias(2)\n"
+        ),
+        "py/api.py": "def old_api(value):\n    return value + 1\n",
+        "py/nested.py": (
+            "def outer():\n"
+            "    def old_api(value):\n"
+            "        return value + 1\n"
+            "    return old_api(3)\n"
+        ),
+        "py/shadow.py": (
+            "from api import old_api\n"
+            "def local_use():\n"
+            "    old_api = lambda value: value - 1\n"
+            "    return old_api(2)\n"
+        ),
+        "py/use.py": "from api import old_api\nresult = old_api(1)\n",
+    }
+    for relative, source in sources.items():
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source)
+    configuration = {
+        "project": "symbol-occurrence-projection",
+        "layers": [
+            {
+                "globs": ["c/**"],
+                "import_roots": ["c"],
+                "language": "c",
+                "name": "c",
+            },
+            {
+                "globs": ["js/**"],
+                "language": "javascript",
+                "name": "javascript",
+            },
+            {
+                "globs": ["py/**"],
+                "import_roots": ["py"],
+                "language": "python",
+                "name": "python",
+            },
+        ],
+    }
+    project = Project.from_repository(
+        root,
+        config=json.dumps(configuration, separators=(",", ":")).encode(),
+        jobs=1,
+        map_cache=False,
+    )
+    map_json = project.map_json()
+
+    def evaluate(
+        name: str,
+        path: str,
+        *,
+        classification: str = "incomplete",
+        unknown: int = 1,
+    ) -> dict[str, object]:
+        definition = {
+            "id": "rename-sites",
+            "names": [name],
+            "paths": [path],
+            "select": "symbol_occurrences",
+        }
+        first = json.loads(evaluate_projection_json(map_json, definition))
+        second = json.loads(evaluate_projection_json(map_json, definition))
+        assert (
+            first["projection_result_sha256"]
+            == second["projection_result_sha256"]
+        )
+        assert first["completeness"]["classification"] == classification
+        assert first["completeness"]["exhaustive"] is (
+            classification == "complete"
+        )
+        assert first["completeness"]["counts"]["unknown"] == unknown
+        for item in first["fact"]["items"]:
+            attributes = item["attributes"]
+            start = attributes["start_byte"]
+            end = attributes["end_byte"]
+            expected = name.rsplit(".", 1)[-1]
+            assert sources[attributes["path"]].encode()[start:end] == expected.encode()
+            assert all(
+                fact_id.startswith("f:")
+                for fact_id in attributes.get("fact_ids", [])
+            )
+        return first
+
+    c_result = evaluate("old_api", "c/api.h")
+    assert {
+        (row["attributes"]["path"], row["attributes"]["role"], row["state"])
+        for row in c_result["fact"]["items"]
+    } == {
+        ("c/api.c", "declaration", "current"),
+        ("c/api.h", "declaration", "current"),
+        ("c/use.c", "reference", "unknown"),
+    }
+    python_result = evaluate(
+        "old_api", "py/api.py", classification="complete", unknown=0
+    )
+    assert {
+        (row["attributes"]["path"], row["attributes"]["role"], row["state"])
+        for row in python_result["fact"]["items"]
+    } == {
+        ("py/alias.py", "import", "current"),
+        ("py/api.py", "declaration", "current"),
+        ("py/shadow.py", "import", "current"),
+        ("py/use.py", "import", "current"),
+        ("py/use.py", "reference", "current"),
+    }
+    nested_result = evaluate("outer.old_api", "py/nested.py")
+    assert {
+        (row["attributes"]["path"], row["attributes"]["role"], row["state"])
+        for row in nested_result["fact"]["items"]
+    } == {
+        ("py/nested.py", "declaration", "current"),
+        ("py/nested.py", "reference", "unknown"),
+    }
+    javascript_result = evaluate("oldApi", "js/api.js")
+    assert {
+        (row["attributes"]["path"], row["attributes"]["role"], row["state"])
+        for row in javascript_result["fact"]["items"]
+    } == {
+        ("js/alias.js", "export", "current"),
+        ("js/alias.js", "import", "current"),
+        ("js/api.js", "declaration", "current"),
+        ("js/use.js", "import", "current"),
+        ("js/use.js", "reference", "unknown"),
+    }
+    shutil.rmtree(root)
+
+
 def main() -> None:
     _assert_project_configuration_conformance()
     _assert_import_resolution_soundness()
     _assert_partial_configuration_overlay()
+    _assert_symbol_occurrence_projection()
     project_model = json.loads((ROOT / "archbird.json").read_text())
     project_model.pop("projections", None)
     project_model.pop("queries", None)
@@ -1506,15 +1657,21 @@ def main() -> None:
     reference_map = _fixture_map(reference_root)
     subject_document = json.loads(subject_map)
     reference_document = json.loads(reference_map)
-    assert subject_document["schema_version"] == 9
-    assert reference_document["schema_version"] == 9
+    assert subject_document["schema_version"] == 10
+    assert reference_document["schema_version"] == 10
     assert {row["domain"] for row in subject_document["facts"]} == {
         "constant-values",
+        "export-origins",
+        "exports",
         "macro-invocations",
     }
     assert {row["domain"] for row in reference_document["facts"]} == {
         "constant-memberships",
         "constant-values",
+        "export-origins",
+        "exports",
+        "imported-names",
+        "reexport-candidates",
     }
     malformed = json.loads(json.dumps(subject_document))
     malformed["facts"][0].pop("domain")

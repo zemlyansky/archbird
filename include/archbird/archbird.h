@@ -190,6 +190,32 @@ typedef struct ArchbirdUnifiedDiffOptions {
   size_t metadata_length;
 } ArchbirdUnifiedDiffOptions;
 
+typedef struct ArchbirdJsonPointerEditOptions {
+  size_t struct_size;
+  const char *source_sha256;
+  size_t source_sha256_length;
+  const uint8_t *pointer;
+  size_t pointer_length;
+  int expected_absent;
+  const uint8_t *expected_json;
+  size_t expected_json_length;
+  const uint8_t *replacement_json;
+  size_t replacement_json_length;
+} ArchbirdJsonPointerEditOptions;
+
+typedef enum ArchbirdJsonPointerEditKind {
+  ARCHBIRD_JSON_POINTER_REPLACE = 0,
+  ARCHBIRD_JSON_POINTER_INSERT = 1
+} ArchbirdJsonPointerEditKind;
+
+typedef struct ArchbirdJsonPointerEditResult {
+  size_t struct_size;
+  size_t start_byte;
+  size_t end_byte;
+  size_t matched_values;
+  ArchbirdJsonPointerEditKind kind;
+} ArchbirdJsonPointerEditResult;
+
 ARCHBIRD_API void archbird_engine_options_init(ArchbirdEngineOptions *options);
 
 ARCHBIRD_API ArchbirdStatus archbird_engine_options_init_for_input(
@@ -200,6 +226,12 @@ ARCHBIRD_API void archbird_graph_options_init(ArchbirdGraphOptions *options);
 
 ARCHBIRD_API void
 archbird_unified_diff_options_init(ArchbirdUnifiedDiffOptions *options);
+
+ARCHBIRD_API void archbird_json_pointer_edit_options_init(
+    ArchbirdJsonPointerEditOptions *options);
+
+ARCHBIRD_API void
+archbird_json_pointer_edit_result_init(ArchbirdJsonPointerEditResult *result);
 
 /* Return the lowercase SHA-256 identity of the compiled native core.
  * The returned process-lifetime string is owned by Archbird. */
@@ -245,6 +277,24 @@ ARCHBIRD_API size_t archbird_engine_error_offset(const ArchbirdEngine *engine);
 ARCHBIRD_API ArchbirdStatus archbird_json_validate(ArchbirdEngine *engine,
                                                    const uint8_t *input,
                                                    size_t input_length);
+
+/*
+ * Preview one source-locked RFC 6901 JSON Pointer edit without mutating input.
+ * expected_json is required for a replacement and compared by canonical JSON
+ * value. An insertion requires expected_absent and an existing object parent.
+ * JSON arrays may be addressed for replacement, but this operation never
+ * infers array insertion semantics. Duplicate keys, non-UTF-8 input, stale
+ * source locks, unresolved pointers, and precondition mismatches are rejected.
+ *
+ * On success, out_result contains one half-open source byte range and write_fn
+ * receives its deterministic replacement bytes. Existing bytes outside that
+ * range are preserved exactly.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_json_pointer_edit(
+    ArchbirdEngine *engine, const uint8_t *input, size_t input_length,
+    const ArchbirdJsonPointerEditOptions *options,
+    ArchbirdJsonPointerEditResult *out_result, ArchbirdWriteFn write_fn,
+    void *user_data);
 
 /*
  * Validate and normalize one archbird.json project configuration.

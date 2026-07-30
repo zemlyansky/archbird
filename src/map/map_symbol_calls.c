@@ -1,4 +1,5 @@
 #include "map_internal.h"
+#include "map_references.h"
 
 #include "archbird_internal.h"
 
@@ -16,6 +17,7 @@ typedef struct AbSymbolCallRow {
   const AbProviderBundle *semantic_provider;
   const AbString *semantic_path;
   const AbString *semantic_symbol;
+  const AbString *binding;
   size_t candidate_start;
   size_t candidate_end;
   size_t candidate_count;
@@ -41,6 +43,12 @@ static int row_compare(const void *left_raw, const void *right_raw) {
   if (compared)
     return compared;
   compared = ab_string_compare(&left->call->name, &right->call->name);
+  if (compared)
+    return compared;
+  if (!left->binding || !right->binding)
+    compared = (left->binding != NULL) - (right->binding != NULL);
+  else
+    compared = ab_string_compare(left->binding, right->binding);
   if (compared)
     return compared;
   compared = strcmp(left->resolution, right->resolution);
@@ -72,6 +80,8 @@ static int same_group(const AbSymbolCallRow *left,
       (left->source &&
        !ab_string_equal(&left->source->name, &right->source->name)) ||
       !ab_string_equal(&left->call->name, &right->call->name) ||
+      (left->binding != NULL) != (right->binding != NULL) ||
+      (left->binding && !ab_string_equal(left->binding, right->binding)) ||
       strcmp(left->resolution, right->resolution) ||
       left->candidate_count != right->candidate_count)
     return 0;
@@ -193,8 +203,7 @@ static ArchbirdStatus render_evidence(AbBuffer *buffer, const AbFact *fact,
   return status;
 }
 
-ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer,
-                                          const AbMapState *state) {
+ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
   size_t total = ab_project_merged_fact_count(state->project);
   AbSymbolCallSymbol *symbols = NULL;
   AbSymbolCallRow *rows = NULL;
@@ -246,31 +255,27 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer,
           ab_map_symbol_reference_compare);
   for (index = 0; index < row_count; index++) {
     AbSymbolCallRow *row = &rows[index];
-    const AbString *binding =
-        ab_map_fact_string_attribute(row->call, "binding");
+    AbMapReferenceResolution exact;
+    const AbFact *exact_evidence = NULL;
     size_t candidate;
-    row->semantic = ab_map_unique_semantic_target(state->project, row->call);
-    row->semantic_path =
-        row->semantic
-            ? ab_map_fact_string_attribute(row->semantic, "target_path")
-            : NULL;
-    row->semantic_symbol =
-        row->semantic
-            ? ab_map_fact_string_attribute(row->semantic, "target_symbol")
-            : NULL;
-    if (binding && bytes_literal(binding, "builtin")) {
-      row->resolution = "builtin";
-    } else if (row->semantic && row->semantic_path && row->semantic_symbol) {
-      size_t fact_index;
-      for (fact_index = 0; fact_index < total; fact_index++)
-        if (ab_project_merged_fact(state->project, fact_index) ==
-            row->semantic) {
-          row->semantic_provider =
-              ab_project_merged_fact_provider(state->project, fact_index);
-          break;
-        }
+    row->binding = ab_map_fact_string_attribute(row->call, "binding");
+    status = ab_map_resolve_call_reference(state, row->call, &exact_evidence,
+                                           &row->semantic_provider, &exact);
+    if (status != ARCHBIRD_OK)
+      goto done;
+    if (exact_evidence && exact.exact && exact.target && exact.target_symbol) {
+      row->semantic = exact_evidence;
+      row->semantic_path = &exact.target->path;
+      row->semantic_symbol = exact.target_symbol;
       row->candidate_count = 1;
       row->resolution = "unique";
+      continue;
+    }
+    if (row->binding && bytes_literal(row->binding, "builtin")) {
+      row->resolution = "builtin";
+    } else if (row->binding && (bytes_literal(row->binding, "local") ||
+                                bytes_literal(row->binding, "unknown"))) {
+      row->resolution = "unresolved";
     } else {
       ab_map_symbol_reference_range(symbols, symbol_count, row->source_file,
                                     &row->call->name, &row->candidate_start,
@@ -318,8 +323,15 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer,
     }
     if (!first)
       status = ab_buffer_literal(buffer, ",");
-    if (status == ARCHBIRD_OK)
+    if (status == ARCHBIRD_OK && row->binding) {
+      status = ab_buffer_literal(buffer, "{\"binding\":");
+      if (status == ARCHBIRD_OK)
+        status = json_string(buffer, row->binding);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, ",\"candidates\":[");
+    } else if (status == ARCHBIRD_OK) {
       status = ab_buffer_literal(buffer, "{\"candidates\":[");
+    }
     if (status == ARCHBIRD_OK && row->semantic)
       status = render_candidate(buffer, row->semantic_path,
                                 row->semantic_symbol, semantic_definition);

@@ -278,6 +278,178 @@
         "source_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
+    "jsonPointerEdit": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Act resolves the RFC 6901 pointer exactly against the source-locked JSON document. Replacement compares expected by canonical JSON value; insertion requires expected_absent and an existing object parent.",
+      "required": [
+        "action",
+        "path",
+        "source_sha256",
+        "pointer",
+        "expected_absent",
+        "replacement"
+      ],
+      "properties": {
+        "action": {"const": "edit_json_pointer"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "pointer": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "expected_absent": {"type": "boolean"},
+        "expected": {},
+        "replacement": {}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"expected_absent": {"const": true}},
+            "required": ["expected_absent"]
+          },
+          "then": {"not": {"required": ["expected"]}},
+          "else": {"required": ["expected"]}
+        }
+      ]
+    },
+    "renameSite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "source_sha256",
+        "start_byte",
+        "end_byte",
+        "before",
+        "role",
+        "fact_ids",
+        "providers"
+      ],
+      "properties": {
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "start_byte": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_byte": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "before": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "role": {
+          "enum": [
+            "binding",
+            "declaration",
+            "export",
+            "import",
+            "reference"
+          ]
+        },
+        "fact_ids": {"$ref": "#/$defs/nonEmptyStrings"},
+        "providers": {"$ref": "#/$defs/nonEmptyStrings"}
+      }
+    },
+    "renameCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "exhaustive",
+        "selected",
+        "unknown",
+        "unsupported"
+      ],
+      "properties": {
+        "classification": {
+          "enum": ["complete", "incomplete", "unknown"]
+        },
+        "exhaustive": {"type": "boolean"},
+        "selected": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unknown": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unsupported": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "symbolOccurrenceProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["select", "names"],
+      "properties": {
+        "select": {"const": "symbol_occurrences"},
+        "names": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          }
+        },
+        "paths": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/repositoryPath"}
+        }
+      }
+    },
+    "renameSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Act requires complete exhaustive coverage, unique non-overlapping sites, selected equal to the site count, exact source locks, and every site before value to equal the renamed declaration leaf.",
+      "required": [
+        "action",
+        "symbol",
+        "new_name",
+        "projection",
+        "projection_result_sha256",
+        "sites",
+        "coverage"
+      ],
+      "properties": {
+        "action": {"const": "rename_symbol"},
+        "symbol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "new_name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 256
+        },
+        "projection": {"$ref": "#/$defs/symbolOccurrenceProjection"},
+        "projection_result_sha256": {"$ref": "#/$defs/sha256"},
+        "sites": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/renameSite"}
+        },
+        "coverage": {"$ref": "#/$defs/renameCoverage"}
+      }
+    },
     "manual": {
       "type": "object",
       "additionalProperties": false,
@@ -303,6 +475,8 @@
         {"$ref": "#/$defs/createFile"},
         {"$ref": "#/$defs/deleteFile"},
         {"$ref": "#/$defs/moveFile"},
+        {"$ref": "#/$defs/jsonPointerEdit"},
+        {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/manual"}
       ]
     },
@@ -387,6 +561,40 @@
             "properties": {
               "executable": {"const": false},
               "non_executable_reasons": {"minItems": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executable": {"const": true},
+              "operation": {
+                "properties": {"action": {"const": "rename_symbol"}},
+                "required": ["action"]
+              }
+            },
+            "required": ["executable", "operation"]
+          },
+          "then": {
+            "properties": {
+              "provenance": {"const": "asserted"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "executable": {"const": true},
+              "operation": {
+                "properties": {"action": {"const": "edit_json_pointer"}},
+                "required": ["action"]
+              }
+            },
+            "required": ["executable", "operation"]
+          },
+          "then": {
+            "properties": {
+              "provenance": {"const": "asserted"}
             }
           }
         }

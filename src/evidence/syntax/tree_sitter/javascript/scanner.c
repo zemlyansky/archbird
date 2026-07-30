@@ -11,6 +11,8 @@ ArchbirdStatus ab_scan_tree_sitter_javascript_file(
     const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle) {
   static const AbTreeSitterCapabilitySpec capabilities[] = {
       {"calls", "direct identifier call_expression nodes"},
+      {"export-bindings",
+       "exact local/origin identifiers associated with static exports"},
       {"exports", "statically named ESM and bounded CommonJS properties"},
       {"imported-name-groups", "static ESM module requests"},
       {"imported-names", "static ESM default, namespace, and named imports"},
@@ -23,8 +25,8 @@ ArchbirdStatus ab_scan_tree_sitter_javascript_file(
                   "values, and statically proven descriptor-helper members"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-javascript",
-      "3",
-      "archbird-tree-sitter-javascript-v3;runtime=0.26.9;grammar=0.25.0;abi=15",
+      "4",
+      "archbird-tree-sitter-javascript-v4;runtime=0.26.9;grammar=0.25.0;abi=15",
       "tree-sitter-0.26.9;tree-sitter-javascript-0.25.0;grammar-abi-15",
       "javascript",
       tree_sitter_javascript,

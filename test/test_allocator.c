@@ -224,6 +224,44 @@ static ArchbirdStatus exercise_json(TestAllocator *allocator) {
   return status;
 }
 
+static ArchbirdStatus exercise_json_pointer_edit(TestAllocator *allocator) {
+  static const char input[] =
+      "{\"scripts\":{\"test\":\"node test.js\"},\"name\":\"demo\"}";
+  ArchbirdJsonPointerEditOptions options;
+  ArchbirdJsonPointerEditResult result;
+  ArchbirdStatus status;
+  ArchbirdEngine *engine = create_engine(allocator, &status);
+  FixedOutput output = {{0}, 0};
+  uint8_t digest[32];
+  char sha256[65];
+  if (!engine)
+    return status;
+  status = archbird_sha256((const uint8_t *)input, sizeof(input) - 1, digest);
+  if (status == ARCHBIRD_OK)
+    archbird_sha256_hex(digest, sha256);
+  archbird_json_pointer_edit_options_init(&options);
+  options.source_sha256 = sha256;
+  options.source_sha256_length = 64;
+  options.pointer = (const uint8_t *)"/scripts/build";
+  options.pointer_length = strlen("/scripts/build");
+  options.expected_absent = 1;
+  options.replacement_json = (const uint8_t *)"\"node build.js\"";
+  options.replacement_json_length = strlen("\"node build.js\"");
+  archbird_json_pointer_edit_result_init(&result);
+  if (status == ARCHBIRD_OK) {
+    status = archbird_json_pointer_edit(engine, (const uint8_t *)input,
+                                        sizeof(input) - 1, &options, &result,
+                                        fixed_write, &output);
+  }
+  if (status == ARCHBIRD_OK &&
+      (result.kind != ARCHBIRD_JSON_POINTER_INSERT ||
+       result.matched_values != 0 || output.length == 0)) {
+    status = ARCHBIRD_CONFLICT;
+  }
+  archbird_engine_destroy(engine);
+  return status;
+}
+
 static ArchbirdStatus exercise_pattern(TestAllocator *allocator) {
   ArchbirdStatus status;
   ArchbirdEngine *engine = create_engine(allocator, &status);
@@ -890,6 +928,7 @@ int main(void) {
   test_invalid_options();
   test_invalid_okf_layer_cleanup();
   run_failure_sweep("json-every-n", exercise_json);
+  run_failure_sweep("json-pointer-edit-every-n", exercise_json_pointer_edit);
   run_failure_sweep("pattern-every-n", exercise_pattern);
   run_failure_sweep("config-resolution-every-n", exercise_config_resolution);
   run_failure_sweep("map-every-n", exercise_map);
@@ -921,7 +960,7 @@ int main(void) {
   report_verification_length = 0;
   if (failures)
     return 1;
-  puts("native allocator tests passed: JSON, PCRE2, config resolution, "
+  puts("native allocator tests passed: JSON/edit, PCRE2, config resolution, "
        "SCIP, Map/reports, Verify/authoring, and Act every-N sweeps");
   return 0;
 }

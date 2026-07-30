@@ -22,6 +22,13 @@ from ._plan_limits import (
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
+_PORTABLE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_RENAME_FACT_ROLES = {
+    "export-origins": "export",
+    "exports": "export",
+    "imported-names": "import",
+    "reexport-candidates": "export",
+}
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -328,8 +335,8 @@ def _constraint_form(
         return "forbidden_paths", actual
     if select == "mapped_paths" and assertion == "required_subset":
         return "required_paths", actual
-    if select == "symbols" and assertion == "disjoint":
-        return "forbidden_symbols", actual
+    if select == "symbols" and assertion in ("disjoint", "set_equal", "subset"):
+        return "removable_symbol_set", actual
     if select == "symbols" and assertion == "required_subset":
         return "required_symbols", actual
     if select == "component_membership":
@@ -503,6 +510,187 @@ def _read_locked_source(
     if hashlib.sha256(source).hexdigest() != expected_sha256:
         return None, f"Source path {path} no longer matches the Map source hash."
     return source, None
+
+
+def _projected_rename_operation(
+    *,
+    map_document: Mapping[str, object],
+    root: Path,
+    symbol: str,
+    new_name: str,
+    seed_paths: Sequence[str],
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    old_match = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", symbol)
+    if (
+        old_match is None
+        or _PORTABLE_IDENTIFIER.fullmatch(new_name) is None
+        or old_match.group(0) == new_name
+    ):
+        raise ValueError(
+            "rename directives require distinct portable identifier leaves"
+        )
+    leaf = old_match.group(0)
+    projection: dict[str, object] = {
+        "select": "symbol_occurrences",
+        "names": [symbol],
+    }
+    paths = sorted(
+        {
+            path
+            for path in seed_paths
+            if isinstance(path, str) and _is_repository_path(path)
+        }
+    )
+    if paths:
+        projection["paths"] = paths
+    request = {"id": "plan-symbol-occurrences", **projection}
+    try:
+        result = json.loads(
+            _native.projection_evaluate(
+                _canonical_bytes(map_document),
+                _canonical_bytes(request),
+            )
+        )
+    except (_native.Error, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"symbol occurrence projection could not be evaluated: {error}"
+        ) from error
+    fact = result.get("fact")
+    completeness = result.get("completeness")
+    if (
+        result.get("artifact") != "projection-result"
+        or not isinstance(fact, Mapping)
+        or not isinstance(fact.get("items"), list)
+        or not isinstance(completeness, Mapping)
+        or not _SHA256.fullmatch(str(result.get("projection_result_sha256", "")))
+    ):
+        raise ValueError("symbol occurrence projection returned an invalid artifact")
+
+    reasons: list[str] = []
+    sites: list[dict[str, object]] = []
+    seen_sites: set[tuple[str, int, int]] = set()
+    for item in fact["items"]:
+        if not isinstance(item, Mapping) or not isinstance(
+            item.get("attributes"), Mapping
+        ):
+            raise ValueError("symbol occurrence projection contains an invalid item")
+        attributes = item["attributes"]
+        path = attributes.get("path")
+        start = attributes.get("start_byte")
+        end = attributes.get("end_byte")
+        if item.get("state") != "current":
+            location = path if isinstance(path, str) else "<unknown>"
+            message = item.get("message")
+            reasons.append(
+                f"Rename occurrence at {location} is unknown: "
+                f"{message if isinstance(message, str) and message else 'evidence is incomplete'}."
+            )
+            continue
+        if (
+            not isinstance(path, str)
+            or not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(end, int)
+            or isinstance(end, bool)
+            or start < 0
+            or end <= start
+        ):
+            reasons.append("Current rename evidence has no exact source location.")
+            continue
+        source_sha256 = attributes.get("source_sha256")
+        if not isinstance(source_sha256, str) or not _SHA256.fullmatch(
+            source_sha256
+        ):
+            reasons.append(f"Rename occurrence at {path} has no source lock.")
+            continue
+        source, read_error = _read_locked_source(root, path, source_sha256)
+        if read_error or source is None:
+            reasons.append(read_error or f"Source bytes are unavailable for {path}.")
+            continue
+        if end > len(source) or source[start:end] != leaf.encode("utf-8"):
+            reasons.append(
+                f"Rename occurrence {path}:{start}-{end} does not select {leaf}."
+            )
+            continue
+        fact_ids = sorted(
+            {
+                value
+                for value in attributes.get("fact_ids", [])
+                if isinstance(value, str) and value.startswith("f:")
+            }
+        )
+        providers = sorted(
+            {
+                value
+                for value in attributes.get("providers", [])
+                if isinstance(value, str) and value
+            }
+        )
+        if not fact_ids:
+            reasons.append(
+                f"Rename occurrence {path}:{start}-{end} has no provider fact identity."
+            )
+            continue
+        key = (path, start, end)
+        if key in seen_sites:
+            raise ValueError("symbol occurrence projection contains duplicate sites")
+        seen_sites.add(key)
+        sites.append(
+            {
+                "path": path,
+                "source_sha256": source_sha256,
+                "start_byte": start,
+                "end_byte": end,
+                "before": leaf,
+                "role": attributes.get("role"),
+                "fact_ids": fact_ids,
+                "providers": providers,
+            }
+        )
+    counts = completeness.get("counts")
+    if not isinstance(counts, Mapping):
+        raise ValueError("symbol occurrence projection has no completeness counts")
+    unknown = counts.get("unknown")
+    unsupported = counts.get("unsupported")
+    if (
+        not isinstance(unknown, int)
+        or isinstance(unknown, bool)
+        or unknown < 0
+        or not isinstance(unsupported, int)
+        or isinstance(unsupported, bool)
+        or unsupported < 0
+    ):
+        raise ValueError("symbol occurrence projection has invalid completeness counts")
+    if unsupported:
+        reasons.append(
+            f"Rename analysis excludes {unsupported} unsupported repository inputs."
+        )
+    classification = completeness.get("classification")
+    exhaustive = completeness.get("exhaustive")
+    if (classification != "complete" or exhaustive is not True) and not reasons:
+        reasons.append("Rename occurrence evidence is not complete and exhaustive.")
+    if not sites:
+        reasons.append(f"No exact source sites were available for renaming {symbol}.")
+    unique_reasons = tuple(dict.fromkeys(reasons))
+    sites.sort(key=lambda row: (str(row["path"]), int(row["start_byte"])))
+    return (
+        {
+            "action": "rename_symbol",
+            "symbol": symbol,
+            "new_name": new_name,
+            "projection": projection,
+            "projection_result_sha256": result["projection_result_sha256"],
+            "sites": sites,
+            "coverage": {
+                "classification": classification,
+                "exhaustive": exhaustive,
+                "selected": len(sites),
+                "unknown": unknown,
+                "unsupported": unsupported,
+            },
+        },
+        unique_reasons,
+    )
 
 
 def _candidate_targets_path(candidate: object, path: str) -> bool:
@@ -1033,7 +1221,108 @@ def _symbol_candidates(
     return candidates
 
 
-def _forbidden_symbol_item(
+def _complete_symbol_operands(
+    verification_document: Mapping[str, object],
+    constraint: Mapping[str, object],
+) -> tuple[Mapping[str, object] | None, str | None]:
+    operands = constraint.get("operands")
+    if not isinstance(operands, Mapping):
+        return None, "Constraint does not identify its symbol operands."
+    mapping = operands.get("mapping")
+    if mapping not in (None, ""):
+        return None, (
+            "Mapped symbol identities do not identify the declaration that may "
+            "be removed."
+        )
+    evaluated = verification_document.get("operands")
+    if not isinstance(evaluated, list):
+        return None, "Verification does not contain evaluated symbol operands."
+    selected: dict[str, Mapping[str, object]] = {}
+    for role in ("actual", "expected"):
+        name = operands.get(role)
+        if not isinstance(name, str) or not name:
+            return None, f"Constraint does not identify its {role} symbol operand."
+        matches = [
+            row
+            for row in evaluated
+            if isinstance(row, Mapping) and row.get("name") == name
+        ]
+        if len(matches) != 1:
+            return None, (
+                f"Verification does not contain one exact {role} symbol "
+                f"ProjectionResult for {constraint.get('id', 'constraint')}."
+            )
+        result = matches[0]
+        completeness = result.get("completeness")
+        if (
+            result.get("state") != "current"
+            or result.get("shape") != "set"
+            or not isinstance(result.get("items"), list)
+            or not isinstance(result.get("sha256"), str)
+            or not _SHA256.fullmatch(result["sha256"])
+            or not isinstance(completeness, Mapping)
+            or completeness.get("classification") != "complete"
+            or completeness.get("exhaustive") is not True
+            or completeness.get("truncated") is not False
+        ):
+            return None, (
+                f"The {role} symbol ProjectionResult is not current, complete, "
+                "exhaustive, untruncated, and independently identified."
+            )
+        selected[role] = result
+    return selected["actual"], None
+
+
+def _removable_symbol_finding(
+    constraint: Mapping[str, object], finding: Mapping[str, object]
+) -> bool:
+    assertion = constraint.get("assert")
+    comparison = finding.get("comparison")
+    if assertion == "disjoint":
+        return comparison in ("extra", "overlap")
+    return assertion in ("set_equal", "subset") and comparison == "extra"
+
+
+def _correlate_symbol_finding(
+    actual: Mapping[str, object], finding: Mapping[str, object]
+) -> tuple[Mapping[str, object] | None, str | None]:
+    name = finding.get("key")
+    if not isinstance(name, str) or not name:
+        return None, "Verification did not identify one exact removable symbol."
+    items = actual.get("items")
+    assert isinstance(items, list)
+    matches = [
+        row
+        for row in items
+        if isinstance(row, Mapping) and row.get("key") == name
+    ]
+    if len(matches) != 1 or matches[0].get("state") != "current":
+        return None, (
+            f"Verification issue {name} does not correlate to one current "
+            "actual symbol projection item."
+        )
+    projected_evidence = matches[0].get("evidence")
+    merged = dict(finding)
+    merged["evidence"] = [
+        *(projected_evidence if isinstance(projected_evidence, list) else []),
+        *(
+            finding["evidence"]
+            if isinstance(finding.get("evidence"), list)
+            else []
+        ),
+    ]
+    if not any(
+        isinstance(row.get("path"), str) and row.get("path")
+        for row in _evidence(merged)
+    ):
+        return None, (
+            f"Actual symbol projection item {name} has no repository source "
+            "witness."
+        )
+    return merged, None
+
+
+def _removable_symbol_item(
     *,
     root: Path,
     map_document: Mapping[str, object],
@@ -1050,9 +1339,9 @@ def _forbidden_symbol_item(
             constraint_id=constraint_id,
             policy_result=policy_result,
             finding=finding,
-            statement=f"Remove the symbol forbidden by {constraint_id}.",
-            instructions="Identify and remove the exact forbidden declaration.",
-            reasons=("Verification did not identify one exact forbidden symbol.",),
+            statement=f"Remove the symbol selected by {constraint_id}.",
+            instructions="Identify and remove the exact unexpected declaration.",
+            reasons=("Verification did not identify one exact removable symbol.",),
         )
     candidates = _symbol_candidates(files, finding, name)
     if len(candidates) != 1:
@@ -1061,9 +1350,9 @@ def _forbidden_symbol_item(
             constraint_id=constraint_id,
             policy_result=policy_result,
             finding=finding,
-            statement=f"Remove forbidden symbol {name}.",
+            statement=f"Remove symbol {name} to satisfy {constraint_id}.",
             instructions=(
-                f"Choose and remove every declaration of forbidden symbol {name}."
+                f"Choose and remove every unexpected declaration of symbol {name}."
             ),
             reasons=(
                 f"Expected one exact declaration extent for {name}, found "
@@ -1135,7 +1424,7 @@ def _forbidden_symbol_item(
             constraint_id=constraint_id,
             policy_result=policy_result,
             finding=finding,
-            statement=f"Remove forbidden symbol {name}.",
+            statement=f"Remove symbol {name} to satisfy {constraint_id}.",
             instructions=(
                 f"Remove {name} after selecting one complete, source-locked "
                 "declaration extent and reviewing its consumers."
@@ -1156,7 +1445,7 @@ def _forbidden_symbol_item(
         constraint_id=constraint_id,
         policy_result=policy_result,
         finding=finding,
-        statement=f"Remove forbidden symbol {name} from {path}.",
+        statement=f"Remove symbol {name} from {path} to satisfy {constraint_id}.",
         operation=operation,
         executable=not reasons,
         reasons=tuple(dict.fromkeys(reasons)),
@@ -1287,11 +1576,194 @@ def _non_executable_item(
     )
 
 
+def _apply_rename_directives(
+    *,
+    map_document: Mapping[str, object],
+    root: Path,
+    ordered_checks: Sequence[Mapping[str, object]],
+    policy_results: Mapping[str, Mapping[str, object]],
+    items: list[dict[str, object]],
+    unknowns: list[dict[str, object]],
+    renames: Mapping[str, str],
+    asserted: bool,
+) -> None:
+    for symbol, new_name in sorted(renames.items()):
+        matches: list[
+            tuple[
+                Mapping[str, object],
+                Mapping[str, object],
+                Mapping[str, object],
+            ]
+        ] = []
+        for constraint in ordered_checks:
+            findings = constraint.get("findings")
+            if not isinstance(findings, list):
+                continue
+            extras = [
+                row
+                for row in findings
+                if isinstance(row, Mapping)
+                and row.get("key") == symbol
+                and row.get("comparison") in {"extra", "overlap"}
+                and _finding_is_current(row)
+            ]
+            missing = [
+                row
+                for row in findings
+                if isinstance(row, Mapping)
+                and row.get("key") == new_name
+                and row.get("comparison") == "missing"
+                and _finding_is_current(row)
+            ]
+            if len(extras) == 1 and len(missing) == 1:
+                matches.append((constraint, extras[0], missing[0]))
+        if len(matches) != 1:
+            raise ValueError(
+                f"rename {symbol}={new_name} must match exactly one selected "
+                "constraint containing one current extra/overlap source and one "
+                "current missing target"
+            )
+        constraint, source_finding, target_finding = matches[0]
+        constraint_id = constraint.get("id")
+        assert isinstance(constraint_id, str)
+        evidence = _evidence(source_finding)
+        seed_paths = [
+            row["path"]
+            for row in evidence
+            if isinstance(row.get("path"), str) and row["path"]
+        ]
+        operation, reasons = _projected_rename_operation(
+            map_document=map_document,
+            root=root,
+            symbol=symbol,
+            new_name=new_name,
+            seed_paths=seed_paths,
+        )
+        item_id = _operation_id(constraint_id, None, operation)
+        policy_result = policy_results.get(constraint_id)
+        origins = [
+            _origin(constraint_id, source_finding, policy_result),
+            _origin(constraint_id, target_finding, policy_result),
+        ]
+        origin_by_identity = {
+            _canonical_bytes(origin): origin for origin in origins
+        }
+        combined_evidence = _evidence(source_finding) + _evidence(target_finding)
+        evidence_by_identity = {
+            _canonical_bytes(row): row for row in combined_evidence
+        }
+        unique_reasons = list(dict.fromkeys(reasons))
+        if not operation["sites"]:
+            unique_reasons.append(
+                f"No exact source sites were available for renaming {symbol}."
+            )
+        if not asserted:
+            unique_reasons.append(
+                f"Rename intent {symbol}={new_name} is inferred from one extra "
+                "and one missing symbol; review it with --rename before Act."
+            )
+        unknown_rows = [
+            {
+                "id": _unknown_id(item_id, reason),
+                "statement": reason,
+                "item_id": item_id,
+                "constraint_id": constraint_id,
+            }
+            for reason in unique_reasons
+        ]
+        replaced_fingerprints = {
+            source_finding.get("fingerprint"),
+            target_finding.get("fingerprint"),
+        }
+        removed_ids = {
+            str(item["id"])
+            for item in items
+            if any(
+                isinstance(origin, Mapping)
+                and origin.get("issue_fingerprint") in replaced_fingerprints
+                for origin in item.get("origins", [])
+            )
+        }
+        items[:] = [item for item in items if item.get("id") not in removed_ids]
+        unknowns[:] = [
+            row for row in unknowns if row.get("item_id") not in removed_ids
+        ]
+        items.append(
+            {
+                "id": item_id,
+                "statement": (
+                    (
+                        f"Rename {symbol} to {new_name} across its complete "
+                        f"architecture evidence closure for {constraint_id}."
+                    )
+                    if asserted
+                    else (
+                        f"Review the inferred rename from {symbol} to {new_name} "
+                        f"for {constraint_id}."
+                    )
+                ),
+                "provenance": "asserted" if asserted else "derived",
+                "origins": [
+                    origin_by_identity[key] for key in sorted(origin_by_identity)
+                ],
+                "evidence": [
+                    evidence_by_identity[key] for key in sorted(evidence_by_identity)
+                ],
+                "depends_on": [],
+                "executable": not unique_reasons,
+                "non_executable_reasons": unique_reasons,
+                "operation": operation,
+                "acceptance": {"constraints": [constraint_id]},
+                "unknowns": [row["id"] for row in unknown_rows],
+            }
+        )
+        unknowns.extend(unknown_rows)
+
+
+def _inferred_rename_directives(
+    constraints: Sequence[Mapping[str, object]],
+) -> dict[str, str]:
+    candidates: list[tuple[str, str]] = []
+    for constraint in constraints:
+        findings = constraint.get("findings")
+        if not isinstance(findings, list):
+            continue
+        extras = [
+            row
+            for row in findings
+            if isinstance(row, Mapping)
+            and row.get("comparison") in {"extra", "overlap"}
+            and isinstance(row.get("key"), str)
+            and row["key"]
+            and _finding_is_current(row)
+        ]
+        missing = [
+            row
+            for row in findings
+            if isinstance(row, Mapping)
+            and row.get("comparison") == "missing"
+            and isinstance(row.get("key"), str)
+            and row["key"]
+            and _finding_is_current(row)
+        ]
+        if len(extras) == 1 and len(missing) == 1:
+            candidates.append((str(extras[0]["key"]), str(missing[0]["key"])))
+    counts: dict[str, int] = {}
+    for symbol, _ in candidates:
+        counts[symbol] = counts.get(symbol, 0) + 1
+    return {
+        symbol: new_name
+        for symbol, new_name in candidates
+        if counts[symbol] == 1
+    }
+
+
 def generate_plan(
     map_document: Mapping[str, object],
     verification_document: Mapping[str, object],
     constraint_ids: Sequence[str] | None,
     root: Path,
+    renames: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Generate deterministic Plan items without inventing transformation inputs."""
 
@@ -1406,21 +1878,63 @@ def generate_plan(
             items.append(item)
             unknowns.extend(rows)
             continue
+        actual_symbol_operand: Mapping[str, object] | None = None
+        symbol_operand_error: str | None = None
+        if form == "removable_symbol_set":
+            actual_symbol_operand, symbol_operand_error = _complete_symbol_operands(
+                verification_document, constraint
+            )
         for finding in finding_rows:
-            if form == "forbidden_symbols" and _finding_is_current(finding):
-                item, rows = _forbidden_symbol_item(
-                    root=root,
-                    map_document=map_document,
-                    files=files,
-                    duplicate_paths=duplicate_paths,
-                    constraint_id=constraint_id,
-                    policy_result=policy_results.get(constraint_id),
-                    finding=finding,
-                    relation_frontier_error=relation_frontier_error,
-                )
+            if (
+                form == "removable_symbol_set"
+                and _finding_is_current(finding)
+                and _removable_symbol_finding(constraint, finding)
+            ):
+                correlated: Mapping[str, object] | None = None
+                correlation_error: str | None = None
+                if actual_symbol_operand is not None:
+                    correlated, correlation_error = _correlate_symbol_finding(
+                        actual_symbol_operand, finding
+                    )
+                reason = symbol_operand_error or correlation_error
+                if reason or correlated is None:
+                    item, rows = _manual_item(
+                        constraint_id=constraint_id,
+                        policy_result=policy_results.get(constraint_id),
+                        finding=finding,
+                        statement=(
+                            f"Remove symbol {finding.get('key', constraint_id)} "
+                            f"to satisfy {constraint_id}."
+                        ),
+                        instructions=(
+                            "Establish exhaustive current symbol operands and one "
+                            "source-witnessed declaration before removing code."
+                        ),
+                        reasons=(reason or "Symbol evidence is not removable.",),
+                        candidate_paths=_candidate_paths(
+                            finding, actual_definition
+                        ),
+                    )
+                else:
+                    item, rows = _removable_symbol_item(
+                        root=root,
+                        map_document=map_document,
+                        files=files,
+                        duplicate_paths=duplicate_paths,
+                        constraint_id=constraint_id,
+                        policy_result=policy_results.get(constraint_id),
+                        finding=correlated,
+                        relation_frontier_error=relation_frontier_error,
+                    )
             else:
+                manual_form = (
+                    "required_symbols"
+                    if form == "removable_symbol_set"
+                    and finding.get("comparison") == "missing"
+                    else form
+                )
                 item, rows = _non_executable_item(
-                    form=form,
+                    form=manual_form,
                     constraint_id=constraint_id,
                     policy_result=policy_results.get(constraint_id),
                     finding=finding,
@@ -1445,6 +1959,39 @@ def generate_plan(
             items.append(item)
             unknowns.extend(rows)
 
+    if renames:
+        if any(
+            not isinstance(symbol, str)
+            or not symbol
+            or not isinstance(new_name, str)
+            or not new_name
+            for symbol, new_name in renames.items()
+        ):
+            raise ValueError("renames must map non-empty symbol names")
+        _apply_rename_directives(
+            map_document=map_document,
+            root=root,
+            ordered_checks=ordered_checks,
+            policy_results=policy_results,
+            items=items,
+            unknowns=unknowns,
+            renames=renames,
+            asserted=True,
+        )
+    else:
+        inferred_renames = _inferred_rename_directives(ordered_checks)
+        if inferred_renames:
+            _apply_rename_directives(
+                map_document=map_document,
+                root=root,
+                ordered_checks=ordered_checks,
+                policy_results=policy_results,
+                items=items,
+                unknowns=unknowns,
+                renames=inferred_renames,
+                asserted=False,
+            )
+
     targeted = {
         constraint_id
         for item in items
@@ -1456,9 +2003,12 @@ def generate_plan(
     plan = {
         "schema_version": 1,
         "artifact": "plan",
-        "provenance": "derived",
+        "provenance": "asserted" if renames else "derived",
         "objective": (
-            "Satisfy the selected Verification constraints without regressing "
+            "Apply the reviewed symbol renames and satisfy the selected "
+            "Verification constraints without regressing preserved constraints."
+            if renames
+            else "Satisfy the selected Verification constraints without regressing "
             "preserved constraints."
         ),
         "tool": {

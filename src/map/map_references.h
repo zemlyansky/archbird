@@ -36,6 +36,14 @@ ArchbirdStatus ab_map_resolve_provider_reference(AbMapState *state,
                                                  const AbFact *fact,
                                                  AbMapReferenceResolution *out);
 
+/* Resolve one concrete call occurrence through the strongest exact evidence
+ * already present in the Map.  Provider semantic targets and exact imported
+ * Python name bindings share this path so renderers cannot disagree about the
+ * same source span. */
+ArchbirdStatus ab_map_resolve_call_reference(
+    AbMapState *state, const AbFact *call, const AbFact **out_evidence,
+    const AbProviderBundle **out_provider, AbMapReferenceResolution *out);
+
 ArchbirdStatus ab_map_add_reference_edges(AbMapState *state);
 
 #endif

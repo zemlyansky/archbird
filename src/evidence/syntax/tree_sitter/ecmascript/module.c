@@ -899,6 +899,7 @@ static ArchbirdStatus add_export_fact(AbTreeSitterScan *scan,
                                       const JsSlice *origin_name,
                                       const char *evidence_kind) {
   AbFact *fact = NULL;
+  AbFact *binding = NULL;
   ArchbirdStatus status =
       add_named_fact(scan, "exports", "export", name, anchor, &fact);
   if (status == ARCHBIRD_OK)
@@ -915,6 +916,20 @@ static ArchbirdStatus add_export_fact(AbTreeSitterScan *scan,
   if (status == ARCHBIRD_OK)
     status = ab_fact_add_u64_attribute(scan->engine, fact, "local_definition",
                                        origin && origin->length ? 0 : 1);
+  if (status == ARCHBIRD_OK && origin_name && origin_name->length) {
+    status = add_named_fact(scan, "export-bindings", "origin", origin_name,
+                            anchor, &binding);
+    if (status == ARCHBIRD_OK)
+      status = ab_fact_add_string_attribute(scan->engine, binding, "exported",
+                                            name->data, name->length);
+    if (status == ARCHBIRD_OK && origin && origin->length)
+      status = ab_fact_add_string_attribute(scan->engine, binding, "module",
+                                            origin->data, origin->length);
+    if (status == ARCHBIRD_OK)
+      status = ab_fact_add_string_attribute(
+          scan->engine, binding, "evidence_kind",
+          (const uint8_t *)evidence_kind, strlen(evidence_kind));
+  }
   return status;
 }
 

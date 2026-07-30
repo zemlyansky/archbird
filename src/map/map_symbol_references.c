@@ -451,7 +451,8 @@ ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
     row->semantic =
         string_literal(&row->occurrence->kind, "declaration")
             ? NULL
-            : ab_map_unique_semantic_target(state->project, row->occurrence);
+            : ab_map_unique_semantic_target(state->project, row->occurrence,
+                                            &row->semantic_provider, NULL);
     row->semantic_path =
         row->semantic
             ? ab_map_fact_string_attribute(row->semantic, "target_path")
@@ -461,14 +462,6 @@ ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
             ? ab_map_fact_string_attribute(row->semantic, "target_symbol")
             : NULL;
     if (row->semantic && row->semantic_path && row->semantic_symbol) {
-      size_t fact_index;
-      for (fact_index = 0; fact_index < total; fact_index++)
-        if (ab_project_merged_fact(state->project, fact_index) ==
-            row->semantic) {
-          row->semantic_provider =
-              ab_project_merged_fact_provider(state->project, fact_index);
-          break;
-        }
       row->candidate_count = 1;
       row->candidate_capacity = 1;
       row->candidates = (AbSymbolReferenceCandidate *)ab_malloc(

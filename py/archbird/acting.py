@@ -38,7 +38,11 @@ _SUPPORTED_ACTIONS = {
     "create_file",
     "delete_file",
     "move_file",
+    "edit_json_pointer",
+    "rename_symbol",
 }
+_PORTABLE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_RENAME_ROLES = {"binding", "declaration", "export", "import", "reference"}
 
 
 @dataclass(frozen=True)
@@ -327,15 +331,58 @@ def _validate_operation_shape(operation: object) -> str:
             "destination_path",
             "source_sha256",
         },
+        "edit_json_pointer": {
+            "action",
+            "path",
+            "source_sha256",
+            "pointer",
+            "expected_absent",
+            "replacement",
+        },
+        "rename_symbol": {
+            "action",
+            "symbol",
+            "new_name",
+            "projection",
+            "projection_result_sha256",
+            "sites",
+            "coverage",
+        },
         "manual": {"action", "instructions", "candidate_paths"},
     }
     if not isinstance(action, str) or action not in fields:
         raise ValueError("Plan item operation action is unsupported")
-    _exact_keys(operation, fields[action], f"{action} operation")
-    if action in {"replace_range", "delete_file", "move_file"} and not _valid_sha256(
-        operation["source_sha256"]
-    ):
+    expected_fields = set(fields[action])
+    if action == "edit_json_pointer" and "expected" in operation:
+        expected_fields.add("expected")
+    _exact_keys(operation, expected_fields, f"{action} operation")
+    if action in {
+        "replace_range",
+        "delete_file",
+        "move_file",
+        "edit_json_pointer",
+    } and not _valid_sha256(operation["source_sha256"]):
         raise ValueError(f"{action} operation has an invalid source_sha256")
+    if action == "edit_json_pointer":
+        expected_absent = operation["expected_absent"]
+        expected_present = "expected" in operation
+        if (
+            not isinstance(expected_absent, bool)
+            or expected_absent == expected_present
+        ):
+            raise ValueError(
+                "edit_json_pointer requires expected exactly when "
+                "expected_absent is false"
+            )
+        _bounded_text(operation["pointer"], "edit_json_pointer pointer")
+        for field in ("expected", "replacement"):
+            if field in operation and len(_canonical(operation[field])) > (
+                MAX_OPERATION_TEXT_BYTES
+            ):
+                raise ValueError(
+                    f"edit_json_pointer {field} exceeds "
+                    f"{MAX_OPERATION_TEXT_BYTES} canonical bytes"
+                )
     if action == "create_file":
         _bounded_text(
             operation["content"],
@@ -366,6 +413,163 @@ def _validate_operation_shape(operation: object) -> str:
             "replace_range replacement",
             maximum=MAX_OPERATION_TEXT_BYTES,
         )
+    if action == "rename_symbol":
+        symbol = _bounded_text(
+            operation["symbol"],
+            "rename_symbol symbol",
+            nonempty=True,
+        )
+        new_name = _bounded_text(
+            operation["new_name"],
+            "rename_symbol new_name",
+            maximum=256,
+            nonempty=True,
+        )
+        old_match = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", symbol)
+        if (
+            old_match is None
+            or _PORTABLE_IDENTIFIER.fullmatch(new_name) is None
+            or old_match.group(0) == new_name
+        ):
+            raise ValueError(
+                "rename_symbol requires distinct portable identifier leaves"
+            )
+        projection = operation["projection"]
+        if not isinstance(projection, Mapping):
+            raise ValueError("rename_symbol projection must be an object")
+        allowed_projection_fields = {"select", "names", "paths"}
+        if set(projection) - allowed_projection_fields or set(projection) < {
+            "select",
+            "names",
+        }:
+            raise ValueError("rename_symbol projection fields are invalid")
+        if (
+            projection["select"] != "symbol_occurrences"
+            or projection["names"] != [symbol]
+        ):
+            raise ValueError(
+                "rename_symbol projection must select exactly its source symbol"
+            )
+        projection_paths = _bounded_collection(
+            projection.get("paths", []),
+            "rename_symbol projection paths",
+        )
+        if len(set(projection_paths)) != len(projection_paths):
+            raise ValueError("rename_symbol projection paths must be unique")
+        for projection_path in projection_paths:
+            _safe_relative_path(projection_path)
+        if not _valid_sha256(operation["projection_result_sha256"]):
+            raise ValueError(
+                "rename_symbol projection_result_sha256 is invalid"
+            )
+        sites = _bounded_collection(
+            operation["sites"],
+            "rename_symbol sites",
+            nonempty=True,
+        )
+        _validate_unique_json_rows(sites, "rename_symbol sites")
+        for site in sites:
+            if not isinstance(site, Mapping):
+                raise ValueError("rename_symbol site must be an object")
+            _exact_keys(
+                site,
+                {
+                    "path",
+                    "source_sha256",
+                    "start_byte",
+                    "end_byte",
+                    "before",
+                    "role",
+                    "fact_ids",
+                    "providers",
+                },
+                "rename_symbol site",
+            )
+            _safe_relative_path(site["path"])
+            if not _valid_sha256(site["source_sha256"]):
+                raise ValueError("rename_symbol site has an invalid source_sha256")
+            start = site["start_byte"]
+            end = site["end_byte"]
+            if (
+                not isinstance(start, int)
+                or isinstance(start, bool)
+                or not isinstance(end, int)
+                or isinstance(end, bool)
+                or start < 0
+                or end <= start
+                or end > MAX_SAFE_INTEGER
+            ):
+                raise ValueError("rename_symbol site has an invalid byte range")
+            before = _bounded_text(
+                site["before"],
+                "rename_symbol site before",
+                nonempty=True,
+            )
+            if before != old_match.group(0):
+                raise ValueError(
+                    "rename_symbol site before must equal the declaration leaf"
+                )
+            if site["role"] not in _RENAME_ROLES:
+                raise ValueError("rename_symbol site role is unsupported")
+            _validate_ids(
+                site["fact_ids"],
+                "rename_symbol site fact_ids",
+                nonempty=True,
+            )
+            providers = _bounded_collection(
+                site["providers"],
+                "rename_symbol site providers",
+            )
+            if (
+                any(not isinstance(provider, str) or not provider for provider in providers)
+                or len(set(providers)) != len(providers)
+            ):
+                raise ValueError(
+                    "rename_symbol site providers must contain unique non-empty strings"
+                )
+            for provider in providers:
+                _bounded_text(
+                    provider,
+                    "rename_symbol site provider",
+                    nonempty=True,
+                )
+        coverage = operation["coverage"]
+        if not isinstance(coverage, Mapping):
+            raise ValueError("rename_symbol coverage must be an object")
+        _exact_keys(
+            coverage,
+            {
+                "classification",
+                "exhaustive",
+                "selected",
+                "unknown",
+                "unsupported",
+            },
+            "rename_symbol coverage",
+        )
+        if coverage["classification"] not in {
+            "complete",
+            "incomplete",
+            "unknown",
+        }:
+            raise ValueError("rename_symbol coverage classification is invalid")
+        if not isinstance(coverage["exhaustive"], bool):
+            raise ValueError("rename_symbol coverage exhaustive must be boolean")
+        for field in ("selected", "unknown", "unsupported"):
+            value = coverage[field]
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                or value > MAX_SAFE_INTEGER
+            ):
+                raise ValueError(
+                    f"rename_symbol coverage {field} must be a nonnegative safe integer"
+                )
+        if coverage["selected"] != len(sites):
+            raise ValueError(
+                "rename_symbol coverage selected must equal the site count"
+            )
     if action == "manual":
         _bounded_text(
             operation["instructions"],
@@ -568,6 +772,18 @@ def _validate_plan_shape(plan: Mapping[str, object]) -> None:
         if raw_item["executable"]:
             if reasons or action == "manual":
                 raise ValueError(f"Plan item {item_id} has an invalid executable gate")
+            if (
+                action in {"rename_symbol", "edit_json_pointer"}
+                and raw_item["provenance"] != "asserted"
+            ):
+                raise ValueError(
+                    f"Plan item {item_id} requires asserted "
+                    + (
+                        "rename intent"
+                        if action == "rename_symbol"
+                        else "edit_json_pointer intent"
+                    )
+                )
         elif not reasons:
             raise ValueError(f"Plan item {item_id} requires a blocking reason")
 
@@ -848,7 +1064,103 @@ def _unified_diff(
     ).decode("utf-8")
 
 
-def _prepare(plan: Mapping[str, object], root: Path) -> _Prepared:
+def _rename_projection_sites(
+    operation: Mapping[str, object],
+    map_json: bytes | Mapping[str, object] | None,
+) -> tuple[list[dict[str, object]], Mapping[str, object]]:
+    if map_json is None:
+        raise ValueError(
+            "rename_symbol requires the current source Map for closure validation"
+        )
+    encoded_map = (
+        _canonical(map_json) if isinstance(map_json, Mapping) else bytes(map_json)
+    )
+    projection = operation.get("projection")
+    assert isinstance(projection, Mapping)
+    request = {"id": "act-symbol-occurrences", **projection}
+    try:
+        result = json.loads(
+            _native.projection_evaluate(
+                encoded_map,
+                _canonical(request),
+            )
+        )
+    except (_native.Error, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"rename_symbol closure could not be evaluated: {error}"
+        ) from error
+    if result.get("projection_result_sha256") != operation.get(
+        "projection_result_sha256"
+    ):
+        raise ValueError(
+            "rename_symbol ProjectionResult does not match the current Map"
+        )
+    fact = result.get("fact")
+    completeness = result.get("completeness")
+    if (
+        result.get("artifact") != "projection-result"
+        or not isinstance(fact, Mapping)
+        or not isinstance(fact.get("items"), list)
+        or not isinstance(completeness, Mapping)
+    ):
+        raise ValueError("rename_symbol closure is not a valid ProjectionResult")
+    sites: list[dict[str, object]] = []
+    leaf = re.search(
+        r"[A-Za-z_][A-Za-z0-9_]*$", str(operation.get("symbol"))
+    )
+    assert leaf is not None
+    for item in fact["items"]:
+        if (
+            not isinstance(item, Mapping)
+            or item.get("state") != "current"
+            or not isinstance(item.get("attributes"), Mapping)
+        ):
+            continue
+        attributes = item["attributes"]
+        sites.append(
+            {
+                "path": attributes.get("path"),
+                "source_sha256": attributes.get("source_sha256"),
+                "start_byte": attributes.get("start_byte"),
+                "end_byte": attributes.get("end_byte"),
+                "before": leaf.group(0),
+                "role": attributes.get("role"),
+                "fact_ids": sorted(attributes.get("fact_ids", [])),
+                "providers": sorted(attributes.get("providers", [])),
+            }
+        )
+    sites.sort(key=lambda row: (str(row["path"]), int(row["start_byte"])))
+    expected_sites = sorted(
+        copy.deepcopy(operation["sites"]),
+        key=lambda row: (str(row["path"]), int(row["start_byte"])),
+    )
+    if _canonical(sites) != _canonical(expected_sites):
+        raise ValueError(
+            "rename_symbol sites do not equal the current exhaustive projection"
+        )
+    counts = completeness.get("counts")
+    coverage = operation.get("coverage")
+    if not isinstance(counts, Mapping) or not isinstance(coverage, Mapping):
+        raise ValueError("rename_symbol closure has invalid completeness")
+    actual_coverage = {
+        "classification": completeness.get("classification"),
+        "exhaustive": completeness.get("exhaustive"),
+        "selected": len(sites),
+        "unknown": counts.get("unknown"),
+        "unsupported": counts.get("unsupported"),
+    }
+    if _canonical(actual_coverage) != _canonical(coverage):
+        raise ValueError(
+            "rename_symbol coverage does not equal the current projection"
+        )
+    return sites, completeness
+
+
+def _prepare(
+    plan: Mapping[str, object],
+    root: Path,
+    map_json: bytes | Mapping[str, object] | None = None,
+) -> _Prepared:
     diagnostics: list[_Diagnostic] = []
     initial: dict[str, _FileState] = {}
     replacements: dict[str, list[_Replacement]] = {}
@@ -941,6 +1253,71 @@ def _prepare(plan: Mapping[str, object], root: Path) -> _Prepared:
             continue
         path = ""
         try:
+            if action == "rename_symbol":
+                path = ""
+                destination = ""
+                _rename_projection_sites(operation, map_json)
+                coverage = operation.get("coverage")
+                assert isinstance(coverage, Mapping)
+                if (
+                    coverage.get("classification") != "complete"
+                    or coverage.get("exhaustive") is not True
+                    or coverage.get("unknown") != 0
+                    or coverage.get("unsupported") != 0
+                ):
+                    raise ValueError(
+                        "rename_symbol requires complete exhaustive coverage "
+                        "without unknown or unsupported sites"
+                    )
+                replacement = str(operation.get("new_name")).encode("utf-8")
+                sites = operation.get("sites")
+                assert isinstance(sites, list)
+                for site in sites:
+                    assert isinstance(site, Mapping)
+                    site_path = _safe_relative_path(site.get("path"))
+                    path = site_path
+                    touch(site_path)
+                    state = load_state(site_path)
+                    expected = _validate_sha256(site.get("source_sha256"))
+                    if state.sha256 != expected:
+                        raise ValueError(
+                            f"source SHA-256 is stale: expected {expected}, "
+                            f"found {state.sha256}"
+                        )
+                    start = site.get("start_byte")
+                    end = site.get("end_byte")
+                    before = site.get("before")
+                    assert isinstance(start, int) and isinstance(end, int)
+                    assert isinstance(before, str)
+                    before_bytes = before.encode("utf-8")
+                    if end > len(state.data):
+                        raise ValueError(
+                            "rename_symbol site exceeds current source bytes"
+                        )
+                    try:
+                        state.data.decode("utf-8")
+                        state.data[:start].decode("utf-8")
+                        state.data[start:end].decode("utf-8")
+                    except UnicodeError as error:
+                        raise ValueError(
+                            "rename_symbol offsets must bound valid UTF-8 text"
+                        ) from error
+                    if state.data[start:end] != before_bytes:
+                        raise ValueError(
+                            "rename_symbol site does not match current source bytes"
+                        )
+                    replacements.setdefault(site_path, []).append(
+                        _Replacement(
+                            item_id,
+                            site_path,
+                            start,
+                            end,
+                            before_bytes,
+                            replacement,
+                            expected,
+                        )
+                    )
+                continue
             if action == "move_file":
                 path = _safe_relative_path(operation.get("source_path"))
                 destination = _safe_relative_path(
@@ -1001,6 +1378,55 @@ def _prepare(plan: Mapping[str, object], root: Path) -> _Prepared:
                         before_bytes,
                         replacement_bytes,
                         expected,
+                    )
+                )
+            elif action == "edit_json_pointer":
+                state = load_state(path)
+                expected_sha = _validate_sha256(
+                    operation.get("source_sha256")
+                )
+                if state.sha256 != expected_sha:
+                    raise ValueError(
+                        f"source SHA-256 is stale: expected {expected_sha}, "
+                        f"found {state.sha256}"
+                    )
+                expected_value = (
+                    None
+                    if operation.get("expected_absent") is True
+                    else _canonical(operation.get("expected"))
+                )
+                edit = _native.json_pointer_edit(
+                    state.data,
+                    expected_sha,
+                    str(operation.get("pointer")),
+                    expected_value,
+                    _canonical(operation.get("replacement")),
+                )
+                start = edit.get("start_byte")
+                end = edit.get("end_byte")
+                replacement_bytes = edit.get("replacement")
+                if (
+                    not isinstance(start, int)
+                    or isinstance(start, bool)
+                    or not isinstance(end, int)
+                    or isinstance(end, bool)
+                    or start < 0
+                    or end < start
+                    or end > len(state.data)
+                    or not isinstance(replacement_bytes, bytes)
+                ):
+                    raise ValueError(
+                        "native JSON Pointer edit returned an invalid range"
+                    )
+                replacements.setdefault(path, []).append(
+                    _Replacement(
+                        item_id,
+                        path,
+                        start,
+                        end,
+                        state.data[start:end],
+                        replacement_bytes,
+                        expected_sha,
                     )
                 )
             elif action == "create_file":
@@ -1180,7 +1606,7 @@ def _prepare(plan: Mapping[str, object], root: Path) -> _Prepared:
             prefix = [f"deleted file mode {before_state.mode:06o}"]
         else:
             kind = "modify"
-            item_ids = sorted(edit.item_id for edit in replacements[path])
+            item_ids = sorted({edit.item_id for edit in replacements[path]})
             prefix = None
         changes.append(
             {
@@ -1353,6 +1779,7 @@ def _execute(
     *,
     apply: bool,
     verify_acceptance: AcceptanceCallback | None = None,
+    map_json: bytes | Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     try:
         canonical_plan = _canonical(plan)
@@ -1388,7 +1815,7 @@ def _execute(
         repository = requested_root.resolve(strict=True)
         if not repository.is_dir():
             raise ValueError("repository root must be a directory")
-        prepared = _prepare(plan_snapshot, repository)
+        prepared = _prepare(plan_snapshot, repository, map_json)
     except (OSError, ValueError) as error:
         return _result(
             plan_sha256,
@@ -1452,16 +1879,21 @@ def _execute(
     )
 
 
-def preview_plan(plan: Mapping[str, object], root: Path) -> dict[str, Any]:
+def preview_plan(
+    plan: Mapping[str, object],
+    root: Path,
+    map_json: bytes | Mapping[str, object] | None = None,
+) -> dict[str, Any]:
     """Validate a Plan and return its deterministic patch without writing."""
 
-    return _execute(plan, root, apply=False)
+    return _execute(plan, root, apply=False, map_json=map_json)
 
 
 def apply_plan(
     plan: Mapping[str, object],
     root: Path,
     verify_acceptance: AcceptanceCallback,
+    map_json: bytes | Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Apply a Plan, then evaluate its acceptance against the changed tree."""
 
@@ -1472,6 +1904,7 @@ def apply_plan(
         root,
         apply=True,
         verify_acceptance=verify_acceptance,
+        map_json=map_json,
     )
 
 

@@ -82,6 +82,28 @@ def main() -> int:
         b"+new\n"
     ):
         raise AssertionError("native Python unified-diff binding diverged")
+    json_source = (
+        b'{\n  "exports": {\n    ".": "./old.js"\n  }\n}\n'
+    )
+    json_edit = _native.json_pointer_edit(
+        json_source,
+        hashlib.sha256(json_source).hexdigest(),
+        "/exports/.",
+        b'"./old.js"',
+        b'"./dist/index.js"',
+    )
+    if (
+        json_edit["kind"] != "replace"
+        or json_edit["matched_values"] != 1
+        or json_edit["replacement"] != b'"./dist/index.js"'
+        or (
+            json_source[: json_edit["start_byte"]]
+            + json_edit["replacement"]
+            + json_source[json_edit["end_byte"] :]
+        )
+        != b'{\n  "exports": {\n    ".": "./dist/index.js"\n  }\n}\n'
+    ):
+        raise AssertionError("native Python JSON Pointer edit binding diverged")
 
     conflict_project = Project(
         "merge-conflict",

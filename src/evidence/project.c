@@ -72,7 +72,7 @@ struct ArchbirdProject {
   size_t max_facts;
   AbMergedFact *merged_facts;
   size_t merged_fact_count;
-  const AbFact **merged_facts_by_path;
+  AbMergedFact **merged_facts_by_path;
   AbMergeConflict *merge_conflicts;
   size_t merge_conflict_count;
   size_t merge_conflict_capacity;
@@ -876,21 +876,21 @@ ab_project_merged_fact_provider(const ArchbirdProject *project, size_t index) {
 
 static int fact_path_index_compare(const void *left_raw,
                                    const void *right_raw) {
-  const AbFact *left = *(const AbFact *const *)left_raw;
-  const AbFact *right = *(const AbFact *const *)right_raw;
+  const AbFact *left = (*(AbMergedFact *const *)left_raw)->value;
+  const AbFact *right = (*(AbMergedFact *const *)right_raw)->value;
   int compared = ab_string_compare(&left->path, &right->path);
   if (compared != 0)
     return compared;
   compared = ab_string_compare(&left->domain, &right->domain);
   if (compared != 0)
     return compared;
-  compared = ab_string_compare(&left->kind, &right->kind);
-  if (compared != 0)
-    return compared;
   if (left->span_start != right->span_start)
     return left->span_start < right->span_start ? -1 : 1;
   if (left->span_end != right->span_end)
     return left->span_end < right->span_end ? -1 : 1;
+  compared = ab_string_compare(&left->kind, &right->kind);
+  if (compared != 0)
+    return compared;
   return ab_string_compare(&left->id, &right->id);
 }
 
@@ -911,8 +911,8 @@ void ab_project_merged_fact_range(const ArchbirdProject *project,
   size_t high = project ? project->merged_fact_count : 0;
   while (low < high) {
     size_t middle = low + (high - low) / 2;
-    if (fact_path_domain_compare(project->merged_facts_by_path[middle], path,
-                                 domain, domain_length) < 0)
+    if (fact_path_domain_compare(project->merged_facts_by_path[middle]->value,
+                                 path, domain, domain_length) < 0)
       low = middle + 1;
     else
       high = middle;
@@ -921,8 +921,53 @@ void ab_project_merged_fact_range(const ArchbirdProject *project,
   high = project ? project->merged_fact_count : 0;
   while (low < high) {
     size_t middle = low + (high - low) / 2;
-    if (fact_path_domain_compare(project->merged_facts_by_path[middle], path,
-                                 domain, domain_length) <= 0)
+    if (fact_path_domain_compare(project->merged_facts_by_path[middle]->value,
+                                 path, domain, domain_length) <= 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  *out_end = low;
+}
+
+static int fact_path_domain_span_compare(const AbFact *fact,
+                                         const AbString *path,
+                                         const char *domain,
+                                         size_t domain_length,
+                                         size_t span_start, size_t span_end) {
+  int compared = fact_path_domain_compare(fact, path, domain, domain_length);
+  if (compared != 0)
+    return compared;
+  if (fact->span_start != span_start)
+    return fact->span_start < span_start ? -1 : 1;
+  if (fact->span_end != span_end)
+    return fact->span_end < span_end ? -1 : 1;
+  return 0;
+}
+
+void ab_project_merged_fact_span_range(const ArchbirdProject *project,
+                                       const AbString *path, const char *domain,
+                                       size_t span_start, size_t span_end,
+                                       size_t *out_start, size_t *out_end) {
+  size_t domain_length = strlen(domain);
+  size_t low = 0;
+  size_t high = project ? project->merged_fact_count : 0;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (fact_path_domain_span_compare(
+            project->merged_facts_by_path[middle]->value, path, domain,
+            domain_length, span_start, span_end) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  *out_start = low;
+  high = project ? project->merged_fact_count : 0;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (fact_path_domain_span_compare(
+            project->merged_facts_by_path[middle]->value, path, domain,
+            domain_length, span_start, span_end) <= 0)
       low = middle + 1;
     else
       high = middle;
@@ -934,7 +979,19 @@ const AbFact *ab_project_merged_fact_by_path(const ArchbirdProject *project,
                                              size_t index) {
   if (!project || index >= project->merged_fact_count)
     return NULL;
-  return project->merged_facts_by_path[index];
+  return project->merged_facts_by_path[index]->value;
+}
+
+const AbProviderBundle *
+ab_project_merged_fact_provider_by_path(const ArchbirdProject *project,
+                                        size_t index) {
+  size_t provider_index;
+  if (!project || index >= project->merged_fact_count)
+    return NULL;
+  provider_index = project->merged_facts_by_path[index]->provider_index;
+  return provider_index < project->provider_count
+             ? &project->providers[provider_index]
+             : NULL;
 }
 
 size_t archbird_project_provider_count(const ArchbirdProject *project) {
@@ -1746,7 +1803,7 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
   project->merge_summary.variations = project->merge_variation_count;
   if (project->merged_fact_count) {
     size_t fact_index;
-    project->merged_facts_by_path = (const AbFact **)ab_malloc(
+    project->merged_facts_by_path = (AbMergedFact **)ab_malloc(
         engine,
         project->merged_fact_count * sizeof(*project->merged_facts_by_path));
     if (!project->merged_facts_by_path) {
@@ -1757,7 +1814,7 @@ ArchbirdStatus archbird_project_finalize_providers(ArchbirdEngine *engine,
     }
     for (fact_index = 0; fact_index < project->merged_fact_count; fact_index++)
       project->merged_facts_by_path[fact_index] =
-          project->merged_facts[fact_index].value;
+          &project->merged_facts[fact_index];
     if (project->merged_fact_count > 1)
       qsort(project->merged_facts_by_path, project->merged_fact_count,
             sizeof(*project->merged_facts_by_path), fact_path_index_compare);

@@ -12,6 +12,7 @@ ALLOWED = {
     Path("src/base/json.c"),
     Path("src/base/json_internal.h"),
     Path("src/base/json_number.c"),
+    Path("src/base/json_pointer_edit.c"),
     Path("src/base/json_value.c"),
     Path("src/evidence/evidence.c"),
     Path("src/evidence/config_json.c"),
@@ -54,7 +55,7 @@ def main() -> int:
         print("\n".join(pattern_leaks), file=sys.stderr)
         return 1
     print(
-        "parser boundaries: yyjson in 7 JSON/decode files, PCRE2 in pattern.c; "
+        "parser boundaries: yyjson in 8 JSON/decode files, PCRE2 in pattern.c; "
         "no typed-core leaks"
     )
     return 0

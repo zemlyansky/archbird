@@ -9,6 +9,7 @@ const { MAX_COLLECTION_ITEMS } = require("./plan-limits");
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const STABLE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
+const PORTABLE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -370,8 +371,11 @@ function constraintForm(constraint, definitions) {
   if (select === "mapped_paths" && assertion === "required_subset") {
     return ["required_paths", actual];
   }
-  if (select === "symbols" && assertion === "disjoint") {
-    return ["forbidden_symbols", actual];
+  if (
+    select === "symbols" &&
+    ["disjoint", "set_equal", "subset"].includes(assertion)
+  ) {
+    return ["removable_symbol_set", actual];
   }
   if (select === "symbols" && assertion === "required_subset") {
     return ["required_symbols", actual];
@@ -552,6 +556,182 @@ function readLockedSource(root, filePath, expectedSha256) {
     }
     return [null, `Source path ${filePath} cannot be read: ${error.message}.`];
   }
+}
+
+function projectedRenameOperation({
+  mapDocument,
+  root,
+  symbol,
+  newName,
+  seedPaths,
+}) {
+  const oldMatch = symbol.match(/[A-Za-z_][A-Za-z0-9_]*$/);
+  if (
+    oldMatch === null ||
+    !PORTABLE_IDENTIFIER.test(newName) ||
+    oldMatch[0] === newName
+  ) {
+    throw new Error(
+      "rename directives require distinct portable identifier leaves",
+    );
+  }
+  const leaf = oldMatch[0];
+  const paths = [...new Set(seedPaths.filter(isRepositoryPath))]
+    .sort(utf8Compare);
+  const projection = {
+    select: "symbol_occurrences",
+    names: [symbol],
+    ...(paths.length ? { paths } : {}),
+  };
+  let result;
+  try {
+    result = JSON.parse(native.projectionEvaluate(
+      canonicalBytes(mapDocument),
+      Buffer.alloc(0),
+      canonicalBytes({ id: "plan-symbol-occurrences", ...projection }),
+      false,
+    ).toString("utf8"));
+  } catch (error) {
+    throw new Error(
+      `symbol occurrence projection could not be evaluated: ${error.message}`,
+    );
+  }
+  if (
+    result.artifact !== "projection-result" ||
+    !isObject(result.fact) ||
+    !Array.isArray(result.fact.items) ||
+    !isObject(result.completeness) ||
+    !SHA256.test(String(result.projection_result_sha256 ?? ""))
+  ) throw new Error("symbol occurrence projection returned an invalid artifact");
+
+  const reasons = [];
+  const sites = [];
+  const seen = new Set();
+  for (const item of result.fact.items) {
+    if (!isObject(item) || !isObject(item.attributes)) {
+      throw new Error("symbol occurrence projection contains an invalid item");
+    }
+    const attributes = item.attributes;
+    if (item.state !== "current") {
+      const location = typeof attributes.path === "string"
+        ? attributes.path : "<unknown>";
+      const message = typeof item.message === "string" && item.message
+        ? item.message : "evidence is incomplete";
+      reasons.push(`Rename occurrence at ${location} is unknown: ${message}.`);
+      continue;
+    }
+    const filePath = attributes.path;
+    const start = attributes.start_byte;
+    const end = attributes.end_byte;
+    if (
+      !isRepositoryPath(filePath) ||
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < 0 ||
+      end <= start
+    ) {
+      reasons.push("Current rename evidence has no exact source location.");
+      continue;
+    }
+    const sourceSha256 = attributes.source_sha256;
+    if (typeof sourceSha256 !== "string" || !SHA256.test(sourceSha256)) {
+      reasons.push(`Rename occurrence at ${filePath} has no source lock.`);
+      continue;
+    }
+    const [source, readError] = readLockedSource(root, filePath, sourceSha256);
+    if (readError || source === null) {
+      reasons.push(readError || `Source bytes are unavailable for ${filePath}.`);
+      continue;
+    }
+    if (
+      end > source.length ||
+      !source.subarray(start, end).equals(Buffer.from(leaf, "utf8"))
+    ) {
+      reasons.push(
+        `Rename occurrence ${filePath}:${start}-${end} does not select ${leaf}.`,
+      );
+      continue;
+    }
+    const factIds = [...new Set(
+      Array.isArray(attributes.fact_ids)
+        ? attributes.fact_ids.filter(
+          (value) => typeof value === "string" && value.startsWith("f:"),
+        )
+        : [],
+    )].sort(utf8Compare);
+    const providers = [...new Set(
+      Array.isArray(attributes.providers)
+        ? attributes.providers.filter(
+          (value) => typeof value === "string" && value.length > 0,
+        )
+        : [],
+    )].sort(utf8Compare);
+    if (factIds.length === 0) {
+      reasons.push(
+        `Rename occurrence ${filePath}:${start}-${end} has no provider fact identity.`,
+      );
+      continue;
+    }
+    const key = `${filePath}\0${start}\0${end}`;
+    if (seen.has(key)) {
+      throw new Error("symbol occurrence projection contains duplicate sites");
+    }
+    seen.add(key);
+    sites.push({
+      path: filePath,
+      source_sha256: sourceSha256,
+      start_byte: start,
+      end_byte: end,
+      before: leaf,
+      role: attributes.role,
+      fact_ids: factIds,
+      providers,
+    });
+  }
+  const counts = result.completeness.counts;
+  if (
+    !isObject(counts) ||
+    !Number.isSafeInteger(counts.unknown) ||
+    counts.unknown < 0 ||
+    !Number.isSafeInteger(counts.unsupported) ||
+    counts.unsupported < 0
+  ) {
+    throw new Error(
+      "symbol occurrence projection has invalid completeness counts",
+    );
+  }
+  if (counts.unsupported > 0) {
+    reasons.push(
+      `Rename analysis excludes ${counts.unsupported} unsupported repository inputs.`,
+    );
+  }
+  const classification = result.completeness.classification;
+  const exhaustive = result.completeness.exhaustive;
+  if (
+    (classification !== "complete" || exhaustive !== true) &&
+    reasons.length === 0
+  ) reasons.push("Rename occurrence evidence is not complete and exhaustive.");
+  if (sites.length === 0) {
+    reasons.push(`No exact source sites were available for renaming ${symbol}.`);
+  }
+  sites.sort((left, right) =>
+    utf8Compare(left.path, right.path) || left.start_byte - right.start_byte
+  );
+  return [{
+    action: "rename_symbol",
+    symbol,
+    new_name: newName,
+    projection,
+    projection_result_sha256: result.projection_result_sha256,
+    sites,
+    coverage: {
+      classification,
+      exhaustive,
+      selected: sites.length,
+      unknown: counts.unknown,
+      unsupported: counts.unsupported,
+    },
+  }, [...new Set(reasons)]];
 }
 
 function candidateTargetsPath(value, filePath) {
@@ -1103,7 +1283,105 @@ function decodeUtf8(value) {
   return new TextDecoder("utf-8", { fatal: true }).decode(value);
 }
 
-function forbiddenSymbolItem({
+function completeSymbolOperands(verificationDocument, constraint) {
+  if (!isObject(constraint.operands)) {
+    return [null, "Constraint does not identify its symbol operands."];
+  }
+  if (![undefined, null, ""].includes(constraint.operands.mapping)) {
+    return [
+      null,
+      "Mapped symbol identities do not identify the declaration that may be removed.",
+    ];
+  }
+  if (!Array.isArray(verificationDocument.operands)) {
+    return [null, "Verification does not contain evaluated symbol operands."];
+  }
+  const selected = {};
+  for (const role of ["actual", "expected"]) {
+    const name = constraint.operands[role];
+    if (typeof name !== "string" || name.length === 0) {
+      return [null, `Constraint does not identify its ${role} symbol operand.`];
+    }
+    const matches = verificationDocument.operands.filter(
+      (row) => isObject(row) && row.name === name,
+    );
+    if (matches.length !== 1) {
+      return [
+        null,
+        `Verification does not contain one exact ${role} symbol ` +
+          `ProjectionResult for ${constraint.id ?? "constraint"}.`,
+      ];
+    }
+    const result = matches[0];
+    const completeness = result.completeness;
+    if (
+      result.state !== "current" ||
+      result.shape !== "set" ||
+      !Array.isArray(result.items) ||
+      typeof result.sha256 !== "string" ||
+      !SHA256.test(result.sha256) ||
+      !isObject(completeness) ||
+      completeness.classification !== "complete" ||
+      completeness.exhaustive !== true ||
+      completeness.truncated !== false
+    ) {
+      return [
+        null,
+        `The ${role} symbol ProjectionResult is not current, complete, ` +
+          "exhaustive, untruncated, and independently identified.",
+      ];
+    }
+    selected[role] = result;
+  }
+  return [selected.actual, null];
+}
+
+function removableSymbolFinding(constraint, finding) {
+  if (constraint.assert === "disjoint") {
+    return ["extra", "overlap"].includes(finding.comparison);
+  }
+  return (
+    ["set_equal", "subset"].includes(constraint.assert) &&
+    finding.comparison === "extra"
+  );
+}
+
+function correlateSymbolFinding(actual, finding) {
+  const name = finding.key;
+  if (typeof name !== "string" || name.length === 0) {
+    return [null, "Verification did not identify one exact removable symbol."];
+  }
+  const matches = actual.items.filter(
+    (row) => isObject(row) && row.key === name,
+  );
+  if (matches.length !== 1 || matches[0].state !== "current") {
+    return [
+      null,
+      `Verification issue ${name} does not correlate to one current actual ` +
+        "symbol projection item.",
+    ];
+  }
+  const projectedEvidence = Array.isArray(matches[0].evidence)
+    ? matches[0].evidence : [];
+  const merged = {
+    ...finding,
+    evidence: [
+      ...projectedEvidence,
+      ...(Array.isArray(finding.evidence) ? finding.evidence : []),
+    ],
+  };
+  if (!evidence(merged).some(
+    (row) => typeof row.path === "string" && row.path.length > 0
+  )) {
+    return [
+      null,
+      `Actual symbol projection item ${name} has no repository source witness.`,
+    ];
+  }
+  return [merged, null];
+}
+
+function removableSymbolItem({
   root,
   mapDocument,
   files,
@@ -1119,9 +1397,9 @@ function forbiddenSymbolItem({
       constraintId,
       policyResult,
       finding,
-      statement: `Remove the symbol forbidden by ${constraintId}.`,
-      instructions: "Identify and remove the exact forbidden declaration.",
-      reasons: ["Verification did not identify one exact forbidden symbol."],
+      statement: `Remove the symbol selected by ${constraintId}.`,
+      instructions: "Identify and remove the exact unexpected declaration.",
+      reasons: ["Verification did not identify one exact removable symbol."],
     });
   }
   const candidates = symbolCandidates(files, finding, name);
@@ -1130,9 +1408,9 @@ function forbiddenSymbolItem({
       constraintId,
       policyResult,
       finding,
-      statement: `Remove forbidden symbol ${name}.`,
+      statement: `Remove symbol ${name} to satisfy ${constraintId}.`,
       instructions:
-        `Choose and remove every declaration of forbidden symbol ${name}.`,
+        `Choose and remove every unexpected declaration of symbol ${name}.`,
       reasons: [
         `Expected one exact declaration extent for ${name}, found ` +
         `${candidates.length}.`,
@@ -1204,7 +1482,7 @@ function forbiddenSymbolItem({
       constraintId,
       policyResult,
       finding,
-      statement: `Remove forbidden symbol ${name}.`,
+      statement: `Remove symbol ${name} to satisfy ${constraintId}.`,
       instructions:
         `Remove ${name} after selecting one complete, source-locked ` +
         "declaration extent and reviewing its consumers.",
@@ -1216,7 +1494,7 @@ function forbiddenSymbolItem({
     constraintId,
     policyResult,
     finding,
-    statement: `Remove forbidden symbol ${name} from ${filePath}.`,
+    statement: `Remove symbol ${name} from ${filePath} to satisfy ${constraintId}.`,
     operation: {
       action: "replace_range",
       path: filePath,
@@ -1319,7 +1597,169 @@ function nonExecutableItem({
   });
 }
 
-function generatePlan(mapDocument, verificationDocument, constraintIds, root) {
+function applyRenameDirectives({
+  mapDocument,
+  root,
+  orderedChecks,
+  policies,
+  items,
+  unknowns,
+  renames,
+  asserted,
+}) {
+  const entries = renames instanceof Map
+    ? [...renames.entries()]
+    : Object.entries(renames);
+  entries.sort(([left], [right]) => utf8Compare(left, right));
+  for (const [symbol, newName] of entries) {
+    if (
+      typeof symbol !== "string" ||
+      symbol.length === 0 ||
+      typeof newName !== "string" ||
+      newName.length === 0
+    ) throw new Error("renames must map non-empty symbol names");
+    const matches = [];
+    for (const constraint of orderedChecks) {
+      const findings = Array.isArray(constraint.findings)
+        ? constraint.findings.filter(isObject)
+        : [];
+      const extras = findings.filter((row) =>
+        row.key === symbol &&
+        ["extra", "overlap"].includes(row.comparison) &&
+        findingIsCurrent(row)
+      );
+      const missing = findings.filter((row) =>
+        row.key === newName &&
+        row.comparison === "missing" &&
+        findingIsCurrent(row)
+      );
+      if (extras.length === 1 && missing.length === 1) {
+        matches.push([constraint, extras[0], missing[0]]);
+      }
+    }
+    if (matches.length !== 1) {
+      throw new Error(
+        `rename ${symbol}=${newName} must match exactly one selected ` +
+        "constraint containing one current extra/overlap source and one " +
+        "current missing target",
+      );
+    }
+    const [constraint, sourceFinding, targetFinding] = matches[0];
+    const constraintId = constraint.id;
+    const seedPaths = evidence(sourceFinding)
+      .map((row) => row.path)
+      .filter((value) => typeof value === "string" && value.length > 0);
+    const [operation, operationReasons] = projectedRenameOperation({
+      mapDocument,
+      root,
+      symbol,
+      newName,
+      seedPaths,
+    });
+    const itemId = operationId(constraintId, null, operation);
+    const policyResult = policies.get(constraintId);
+    const originRows = [
+      origin(constraintId, sourceFinding, policyResult),
+      origin(constraintId, targetFinding, policyResult),
+    ];
+    const originByIdentity = new Map(
+      originRows.map((row) => [canonicalBytes(row).toString("hex"), row]),
+    );
+    const evidenceRows = [...evidence(sourceFinding), ...evidence(targetFinding)];
+    const evidenceByIdentity = new Map(
+      evidenceRows.map((row) => [canonicalBytes(row).toString("hex"), row]),
+    );
+    const reasons = [...new Set(operationReasons)];
+    if (!asserted) {
+      reasons.push(
+        `Rename intent ${symbol}=${newName} is inferred from one extra ` +
+        "and one missing symbol; review it with --rename before Act.",
+      );
+    }
+    const unknownRows = reasons.map((reason) => ({
+      id: unknownId(itemId, reason),
+      statement: reason,
+      item_id: itemId,
+      constraint_id: constraintId,
+    }));
+    const replacedFingerprints = new Set([
+      sourceFinding.fingerprint,
+      targetFinding.fingerprint,
+    ]);
+    const removedIds = new Set(
+      items
+        .filter((item) => item.origins.some(
+          (row) => replacedFingerprints.has(row.issue_fingerprint),
+        ))
+        .map((item) => item.id),
+    );
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      if (removedIds.has(items[index].id)) items.splice(index, 1);
+    }
+    for (let index = unknowns.length - 1; index >= 0; index -= 1) {
+      if (removedIds.has(unknowns[index].item_id)) unknowns.splice(index, 1);
+    }
+    appendPlanRows(items, unknowns, {
+      id: itemId,
+      statement:
+        asserted
+          ? `Rename ${symbol} to ${newName} across its complete architecture ` +
+            `evidence closure for ${constraintId}.`
+          : `Review the inferred rename from ${symbol} to ${newName} for ` +
+            `${constraintId}.`,
+      provenance: asserted ? "asserted" : "derived",
+      origins: [...originByIdentity.entries()]
+        .sort(([left], [right]) => utf8Compare(left, right))
+        .map(([, row]) => row),
+      evidence: [...evidenceByIdentity.entries()]
+        .sort(([left], [right]) => utf8Compare(left, right))
+        .map(([, row]) => row),
+      depends_on: [],
+      executable: reasons.length === 0,
+      non_executable_reasons: reasons,
+      operation,
+      acceptance: { constraints: [constraintId] },
+      unknowns: unknownRows.map((row) => row.id),
+    }, unknownRows);
+  }
+}
+
+function inferredRenameDirectives(constraints) {
+  const candidates = [];
+  for (const constraint of constraints) {
+    const findings = Array.isArray(constraint.findings)
+      ? constraint.findings.filter(isObject)
+      : [];
+    const extras = findings.filter((row) =>
+      ["extra", "overlap"].includes(row.comparison) &&
+      typeof row.key === "string" &&
+      row.key.length > 0 &&
+      findingIsCurrent(row)
+    );
+    const missing = findings.filter((row) =>
+      row.comparison === "missing" &&
+      typeof row.key === "string" &&
+      row.key.length > 0 &&
+      findingIsCurrent(row)
+    );
+    if (extras.length === 1 && missing.length === 1) {
+      candidates.push([extras[0].key, missing[0].key]);
+    }
+  }
+  const counts = new Map();
+  for (const [symbol] of candidates) {
+    counts.set(symbol, (counts.get(symbol) || 0) + 1);
+  }
+  return new Map(candidates.filter(([symbol]) => counts.get(symbol) === 1));
+}
+
+function generatePlan(
+  mapDocument,
+  verificationDocument,
+  constraintIds,
+  root,
+  renames = null,
+) {
   if (!isObject(mapDocument) || mapDocument.artifact !== "map") {
     throw new Error("generatePlan requires a Map artifact");
   }
@@ -1434,23 +1874,64 @@ function generatePlan(mapDocument, verificationDocument, constraintIds, root) {
       appendPlanRows(items, unknowns, item, rows);
       continue;
     }
+    let actualSymbolOperand = null;
+    let symbolOperandError = null;
+    if (form === "removable_symbol_set") {
+      [actualSymbolOperand, symbolOperandError] = completeSymbolOperands(
+        verificationDocument,
+        constraint,
+      );
+    }
     for (const finding of findingRows) {
       let item;
       let rows;
-      if (form === "forbidden_symbols" && findingIsCurrent(finding)) {
-        [item, rows] = forbiddenSymbolItem({
-          root: repository,
-          mapDocument,
-          files,
-          duplicatePaths,
-          constraintId,
-          policyResult: policies.get(constraintId),
-          finding,
-          relationFrontierError,
-        });
+      if (
+        form === "removable_symbol_set" &&
+        findingIsCurrent(finding) &&
+        removableSymbolFinding(constraint, finding)
+      ) {
+        let correlated = null;
+        let correlationError = null;
+        if (actualSymbolOperand !== null) {
+          [correlated, correlationError] = correlateSymbolFinding(
+            actualSymbolOperand,
+            finding,
+          );
+        }
+        const reason = symbolOperandError || correlationError;
+        if (reason || correlated === null) {
+          [item, rows] = manualItem({
+            constraintId,
+            policyResult: policies.get(constraintId),
+            finding,
+            statement:
+              `Remove symbol ${finding.key ?? constraintId} to satisfy ` +
+              `${constraintId}.`,
+            instructions:
+              "Establish exhaustive current symbol operands and one " +
+              "source-witnessed declaration before removing code.",
+            reasons: [reason || "Symbol evidence is not removable."],
+            candidatePaths: candidatePaths(finding, actualDefinition),
+          });
+        } else {
+          [item, rows] = removableSymbolItem({
+            root: repository,
+            mapDocument,
+            files,
+            duplicatePaths,
+            constraintId,
+            policyResult: policies.get(constraintId),
+            finding: correlated,
+            relationFrontierError,
+          });
+        }
       } else {
+        const manualForm = (
+          form === "removable_symbol_set" &&
+          finding.comparison === "missing"
+        ) ? "required_symbols" : form;
         [item, rows] = nonExecutableItem({
-          form,
+          form: manualForm,
           constraintId,
           policyResult: policies.get(constraintId),
           finding,
@@ -1476,20 +1957,48 @@ function generatePlan(mapDocument, verificationDocument, constraintIds, root) {
       appendPlanRows(items, unknowns, item, rows);
     }
   }
+  if (renames !== null && renames !== undefined) {
+    applyRenameDirectives({
+      mapDocument,
+      root: repository,
+      orderedChecks,
+      policies,
+      items,
+      unknowns,
+      renames,
+      asserted: true,
+    });
+  } else {
+    const inferredRenames = inferredRenameDirectives(orderedChecks);
+    if (inferredRenames.size > 0) {
+      applyRenameDirectives({
+        mapDocument,
+        root: repository,
+        orderedChecks,
+        policies,
+        items,
+        unknowns,
+        renames: inferredRenames,
+        asserted: false,
+      });
+    }
+  }
 
   const plan = {
     schema_version: 1,
     artifact: "plan",
-    provenance: "derived",
+    provenance: renames ? "asserted" : "derived",
     tool: {
       name: "archbird",
       version: native.VERSION,
       implementation_sha256: implementationDigest(),
     },
     source,
-    objective:
-      "Satisfy the selected Verification constraints without regressing " +
-      "preserved constraints.",
+    objective: renames
+      ? "Apply the reviewed symbol renames and satisfy the selected " +
+        "Verification constraints without regressing preserved constraints."
+      : "Satisfy the selected Verification constraints without regressing " +
+        "preserved constraints.",
     items,
     preserved_constraints: [...checks.keys()].filter((identifier) =>
       !items.some((item) => item.acceptance.constraints.includes(identifier))

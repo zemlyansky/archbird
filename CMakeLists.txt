@@ -621,6 +621,8 @@ if(ARCHBIRD_ENABLE_FUZZERS)
   endfunction()
 
   archbird_add_fuzzer(archbird_fuzz_json test/fuzz/fuzz_json.c)
+  archbird_add_fuzzer(archbird_fuzz_json_pointer_edit
+                      test/fuzz/fuzz_json_pointer_edit.c)
   archbird_add_fuzzer(archbird_fuzz_schemas test/fuzz/fuzz_schemas.c)
   archbird_add_fuzzer(archbird_fuzz_pattern test/fuzz/fuzz_pattern.c)
   archbird_add_fuzzer(archbird_fuzz_okf test/fuzz/fuzz_okf.c)
@@ -677,6 +679,8 @@ if(ARCHBIRD_ENABLE_FUZZERS)
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus
     COMMAND archbird_fuzz_json ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/json
+    COMMAND archbird_fuzz_json_pointer_edit ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/json
     COMMAND archbird_fuzz_schemas ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/schemas
     COMMAND archbird_fuzz_pattern ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
@@ -714,7 +718,8 @@ if(ARCHBIRD_ENABLE_FUZZERS)
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/lex-python
     COMMAND archbird_fuzz_lex_r ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/lex-r
-    DEPENDS archbird_fuzz_json archbird_fuzz_schemas archbird_fuzz_pattern
+    DEPENDS archbird_fuzz_json archbird_fuzz_json_pointer_edit
+            archbird_fuzz_schemas archbird_fuzz_pattern
             archbird_fuzz_okf archbird_fuzz_map
             archbird_fuzz_query_input archbird_fuzz_workspace
             archbird_fuzz_workspace_maps archbird_fuzz_scip
@@ -734,6 +739,16 @@ if(BUILD_TESTING)
   target_link_libraries(archbird_native_json_test PRIVATE archbird_native)
   target_compile_features(archbird_native_json_test PRIVATE c_std_11)
   set_target_properties(archbird_native_json_test PROPERTIES C_EXTENSIONS OFF)
+
+  add_executable(archbird_native_json_pointer_edit_test
+                 test/test_json_pointer_edit.c)
+  target_link_libraries(archbird_native_json_pointer_edit_test
+                        PRIVATE archbird_native)
+  target_include_directories(archbird_native_json_pointer_edit_test
+                             PRIVATE ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
+  target_compile_features(archbird_native_json_pointer_edit_test PRIVATE c_std_11)
+  set_target_properties(archbird_native_json_pointer_edit_test
+                        PROPERTIES C_EXTENSIONS OFF)
 
   add_executable(archbird_native_json test/json_cli.c)
   target_link_libraries(archbird_native_json PRIVATE archbird_native)
@@ -905,6 +920,7 @@ if(BUILD_TESTING)
 
   if(ARCHBIRD_ENABLE_SANITIZERS)
     foreach(target archbird_native_json_test archbird_native_json
+                   archbird_native_json_pointer_edit_test
                    archbird_native_sha256_test archbird_native_hash
                    archbird_native_project_test archbird_native_lex_test
                    archbird_native_scip_test
@@ -939,6 +955,8 @@ if(BUILD_TESTING)
   endif()
 
   add_test(NAME archbird_native_json COMMAND archbird_native_json_test)
+  add_test(NAME archbird_native_json_pointer_edit
+           COMMAND archbird_native_json_pointer_edit_test)
   add_test(NAME archbird_native_sha256 COMMAND archbird_native_sha256_test)
   add_test(NAME archbird_native_project COMMAND archbird_native_project_test)
   add_test(NAME archbird_native_scip COMMAND archbird_native_scip_test)
