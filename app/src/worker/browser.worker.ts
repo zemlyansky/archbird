@@ -494,9 +494,6 @@ async function handle(request: HostRequest): Promise<unknown> {
     const generation = requireCurrent(String(request.payload.generation || ""));
     return generation.verification ? artifact(generation.verification, generation) : null;
   }
-  if (["act-proposal", "act-contract", "act-result"].includes(request.method)) {
-    return null;
-  }
   if (request.method === "dispose") {
     current?.project?.dispose();
     current = null;

@@ -2,40 +2,16 @@
   "artifact": "archbird-python-schemas",
   "files": [
     {
-      "bytes": 11897,
-      "path": "act-result.schema.json",
-      "sha256": "b8fc17a9cba7460ded99067279317530a328946acd6c047ffcf6db859525e903",
-      "source": "schema/act-result.schema.json"
-    },
-    {
       "bytes": 43765,
       "path": "archbird.schema.json",
       "sha256": "5e6fdf8aea47aee8f31ee7584db731a46afa963ebeaa5ed917d270eed9bd3807",
       "source": "schema/archbird.schema.json"
     },
     {
-      "bytes": 1962,
+      "bytes": 2124,
       "path": "baseline.schema.json",
-      "sha256": "4ec09b0303f33391f136ac16c338bc46bcc842c04bc6f0b3c9b92f1f558abe07",
+      "sha256": "bb7f42d4507ff9c20cbe4bbdd4022c126da859e158d41256067e62c98e78c577",
       "source": "schema/baseline.schema.json"
-    },
-    {
-      "bytes": 2542,
-      "path": "change-contract.schema.json",
-      "sha256": "cf6909a22fd2e1425a30abf601bfd59281e0fdfff03e05ed6f4ca16bebaf9fda",
-      "source": "schema/change-contract.schema.json"
-    },
-    {
-      "bytes": 13954,
-      "path": "change-proposal.schema.json",
-      "sha256": "01ac36c8a449c5b03466bdc933467c797dbda8e3093e399f1c4b3364a3f29cee",
-      "source": "schema/change-proposal.schema.json"
-    },
-    {
-      "bytes": 3221,
-      "path": "change-result.schema.json",
-      "sha256": "6490becbd728e6ff9a2c31623c9ff221aac060e537d8511cb5d4477c44473867",
-      "source": "schema/change-result.schema.json"
     },
     {
       "bytes": 1890,
@@ -116,9 +92,9 @@
       "source": "schema/observation.schema.json"
     },
     {
-      "bytes": 2362,
+      "bytes": 2215,
       "path": "okf-output-bundle.schema.json",
-      "sha256": "3619479d453029f537b93f845688ef00e90b7d7714f9cb81872a90192ecb6cd0",
+      "sha256": "2b831c4d72eec7d1a8cc5aea1d1051ebde5aab298c623ae4f15ba85c042157f4",
       "source": "schema/okf-output-bundle.schema.json"
     },
     {
@@ -138,6 +114,12 @@
       "path": "okf-text-normalization.schema.json",
       "sha256": "13365bc6beaaa3555415da18b5418165556c2e0f89a898fcb0140174917779fd",
       "source": "schema/okf-text-normalization.schema.json"
+    },
+    {
+      "bytes": 10906,
+      "path": "patch.schema.json",
+      "sha256": "b09ea84cb4b93c171e95db63cf8ee845d3ee5dd92558c5448134ff5b061960ae",
+      "source": "schema/patch.schema.json"
     },
     {
       "bytes": 22290,
@@ -182,9 +164,9 @@
       "source": "schema/visualization-event.schema.json"
     },
     {
-      "bytes": 1015,
+      "bytes": 985,
       "path": "visualization-request.schema.json",
-      "sha256": "f51d3c6b43aa7bff7dee331f0ccdbffd08db3103a4e4a305ea0a5918f82d793f",
+      "sha256": "8ae9cd1008d9e3342011b2a3640966650f06795cbb49f8b6247b59459c0cc587",
       "source": "schema/visualization-request.schema.json"
     },
     {

@@ -280,8 +280,9 @@ set(ARCHBIRD_INTERNAL_INCLUDE_DIRS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/projection"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/query"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/constraints"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/plan"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/patch"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/verify"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/act"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/graph"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/okf"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/reports"
@@ -654,14 +655,6 @@ if(ARCHBIRD_ENABLE_FUZZERS)
     set(ARCHBIRD_FUZZ_SYNTAX_DEPENDENCY archbird_fuzz_syntax)
   endif()
 
-  foreach(mode IN ITEMS verification proposal review contract result)
-    archbird_add_fuzzer(archbird_fuzz_act_${mode} test/fuzz/fuzz_act.c)
-    string(TOUPPER ${mode} upper_mode)
-    target_compile_definitions(archbird_fuzz_act_${mode} PRIVATE
-      ARCHBIRD_FUZZ_ACT_${upper_mode}=1)
-  endforeach()
-  archbird_add_fuzzer(archbird_fuzz_act_after test/fuzz/fuzz_act.c)
-
   foreach(language IN ITEMS c javascript python r)
     archbird_add_fuzzer(archbird_fuzz_lex_${language}
                         test/fuzz/fuzz_lexical.c)
@@ -698,18 +691,6 @@ if(ARCHBIRD_ENABLE_FUZZERS)
     COMMAND archbird_fuzz_scip ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/scip
     ${ARCHBIRD_FUZZ_SYNTAX_COMMAND}
-    COMMAND archbird_fuzz_act_verification ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
-            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/act-verification
-    COMMAND archbird_fuzz_act_proposal ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
-            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/act-proposal
-    COMMAND archbird_fuzz_act_review ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
-            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/act-review
-    COMMAND archbird_fuzz_act_contract ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
-            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/act-contract
-    COMMAND archbird_fuzz_act_after ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
-            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/act-after
-    COMMAND archbird_fuzz_act_result ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
-            ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/act-result
     COMMAND archbird_fuzz_lex_c ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/lex-c
     COMMAND archbird_fuzz_lex_javascript ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
@@ -724,10 +705,7 @@ if(ARCHBIRD_ENABLE_FUZZERS)
             archbird_fuzz_query_input archbird_fuzz_workspace
             archbird_fuzz_workspace_maps archbird_fuzz_scip
             ${ARCHBIRD_FUZZ_SYNTAX_DEPENDENCY}
-            archbird_fuzz_act_verification
-            archbird_fuzz_act_proposal archbird_fuzz_act_review
-            archbird_fuzz_act_contract archbird_fuzz_act_after
-            archbird_fuzz_act_result archbird_fuzz_lex_c
+            archbird_fuzz_lex_c
             archbird_fuzz_lex_javascript archbird_fuzz_lex_python
             archbird_fuzz_lex_r
     USES_TERMINAL
@@ -749,6 +727,34 @@ if(BUILD_TESTING)
   target_compile_features(archbird_native_json_pointer_edit_test PRIVATE c_std_11)
   set_target_properties(archbird_native_json_pointer_edit_test
                         PROPERTIES C_EXTENSIONS OFF)
+  add_executable(archbird_native_plan_model_test test/test_plan_model.c)
+  target_link_libraries(archbird_native_plan_model_test PRIVATE archbird_native)
+  target_compile_features(archbird_native_plan_model_test PRIVATE c_std_11)
+  set_target_properties(archbird_native_plan_model_test
+                        PROPERTIES C_EXTENSIONS OFF)
+  add_executable(archbird_native_plan_compile_test test/test_plan_compile.c)
+  target_link_libraries(archbird_native_plan_compile_test
+                        PRIVATE archbird_native)
+  target_include_directories(archbird_native_plan_compile_test
+                             PRIVATE src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
+  target_compile_features(archbird_native_plan_compile_test PRIVATE c_std_11)
+  set_target_properties(archbird_native_plan_compile_test
+                        PROPERTIES C_EXTENSIONS OFF)
+  add_executable(archbird_native_patch_model_test test/test_patch_model.c)
+  target_link_libraries(archbird_native_patch_model_test PRIVATE archbird_native)
+  target_compile_features(archbird_native_patch_model_test PRIVATE c_std_11)
+  set_target_properties(archbird_native_patch_model_test
+    PROPERTIES C_EXTENSIONS OFF)
+  add_executable(archbird_native_patch_materialize_test
+    test/test_patch_materialize.c)
+  target_link_libraries(archbird_native_patch_materialize_test PRIVATE
+    archbird_native)
+  target_include_directories(archbird_native_patch_materialize_test PRIVATE
+    src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
+  target_compile_features(archbird_native_patch_materialize_test PRIVATE
+    c_std_11)
+  set_target_properties(archbird_native_patch_materialize_test
+    PROPERTIES C_EXTENSIONS OFF)
   add_executable(archbird_native_make_variable_token_edit_test
                  test/test_make_variable_token_edit.c)
   target_link_libraries(archbird_native_make_variable_token_edit_test
@@ -890,22 +896,6 @@ if(BUILD_TESTING)
   target_compile_features(archbird_native_scanner PRIVATE c_std_11)
   set_target_properties(archbird_native_scanner PROPERTIES C_EXTENSIONS OFF)
 
-  add_executable(archbird_native_act test/act_cli.c)
-  target_link_libraries(archbird_native_act PRIVATE archbird_native)
-  target_include_directories(archbird_native_act PRIVATE src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
-  target_compile_features(archbird_native_act PRIVATE c_std_11)
-  set_target_properties(archbird_native_act PROPERTIES C_EXTENSIONS OFF)
-
-  add_executable(archbird_native_act_projection_test
-    test/test_act_projection.c)
-  target_link_libraries(archbird_native_act_projection_test PRIVATE
-    archbird_native)
-  target_include_directories(archbird_native_act_projection_test PRIVATE
-    src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
-  target_compile_features(archbird_native_act_projection_test PRIVATE c_std_11)
-  set_target_properties(archbird_native_act_projection_test PROPERTIES
-    C_EXTENSIONS OFF)
-
   add_executable(archbird_native_unified_diff_test test/test_unified_diff.c)
   target_link_libraries(archbird_native_unified_diff_test PRIVATE
     archbird_native)
@@ -931,6 +921,10 @@ if(BUILD_TESTING)
   if(ARCHBIRD_ENABLE_SANITIZERS)
     foreach(target archbird_native_json_test archbird_native_json
                    archbird_native_json_pointer_edit_test
+                   archbird_native_plan_model_test
+                   archbird_native_plan_compile_test
+                   archbird_native_patch_model_test
+                   archbird_native_patch_materialize_test
                    archbird_native_sha256_test archbird_native_hash
                    archbird_native_project_test archbird_native_lex_test
                    archbird_native_scip_test
@@ -945,8 +939,6 @@ if(BUILD_TESTING)
                    archbird_native_pattern
                    archbird_native_lex
                    archbird_native_scanner
-                   archbird_native_act
-                   archbird_native_act_projection_test
                    archbird_native_unified_diff_test
                    archbird_native_graph
                    archbird_native_okf
@@ -967,6 +959,14 @@ if(BUILD_TESTING)
   add_test(NAME archbird_native_json COMMAND archbird_native_json_test)
   add_test(NAME archbird_native_json_pointer_edit
            COMMAND archbird_native_json_pointer_edit_test)
+  add_test(NAME archbird_native_plan_model
+           COMMAND archbird_native_plan_model_test)
+  add_test(NAME archbird_native_plan_compile
+           COMMAND archbird_native_plan_compile_test)
+  add_test(NAME archbird_native_patch_model
+           COMMAND archbird_native_patch_model_test)
+  add_test(NAME archbird_native_patch_materialize
+           COMMAND archbird_native_patch_materialize_test)
   add_test(NAME archbird_native_make_variable_token_edit
            COMMAND archbird_native_make_variable_token_edit_test)
   add_test(NAME archbird_native_sha256 COMMAND archbird_native_sha256_test)
@@ -987,8 +987,6 @@ if(BUILD_TESTING)
   add_test(NAME archbird_native_build_identity
            COMMAND archbird_native_build_identity_test)
   add_test(NAME archbird_native_builds COMMAND archbird_native_builds_test)
-  add_test(NAME archbird_native_act_projection
-           COMMAND archbird_native_act_projection_test)
   add_test(NAME archbird_native_unified_diff
            COMMAND archbird_native_unified_diff_test)
   find_package(Python3 COMPONENTS Interpreter)

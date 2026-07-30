@@ -1756,7 +1756,7 @@ def run_historical_verification(
                     "sha256": sha256_file(preview_path),
                 },
                 "observation": preview_observation,
-                "status": preview.get("status"),
+                "status": preview.get("state"),
             }
             if preview is not None
             else {

@@ -38,26 +38,12 @@ static const AbOkfPubSource *sources(const AbOkfPublication *pub,
   if (pub->has_verification) {
     if (index == 1)
       return &pub->verification_source;
-    index--;
   }
-  if (pub->has_proposal) {
-    if (index == 1)
-      return &pub->proposal_source;
-    index--;
-  }
-  if (pub->has_contract) {
-    if (index == 1)
-      return &pub->contract_source;
-    index--;
-  }
-  if (pub->has_result && index == 1)
-    return &pub->result_source;
   return NULL;
 }
 
 static size_t source_count(const AbOkfPublication *pub) {
-  return 1 + (size_t)pub->has_verification + (size_t)pub->has_proposal +
-         (size_t)pub->has_contract + (size_t)pub->has_result;
+  return 1 + (size_t)pub->has_verification;
 }
 
 static ArchbirdStatus source_list_json(AbOkfPublication *pub, AbString *out,
@@ -314,8 +300,6 @@ static const char *directory_description(const AbString *path) {
   if (path->length == 12 && !memcmp(path->data, "verification", 12))
     return "Typed constraints, operands, findings, requirements, and "
            "observations.";
-  if (path->length == 7 && !memcmp(path->data, "changes", 7))
-    return "Derived proposals, asserted contracts, and derived results.";
   if (path->length == 10 && !memcmp(path->data, "provenance", 10))
     return "Canonical source identities and generated-content integrity.";
   return NULL;

@@ -4,10 +4,15 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const native = require("./native");
-const { applyPlan, previewPlan } = require("./acting");
+const {
+  applyAcceptedPatch,
+  observePatchSources,
+  observePlanSources,
+  patchOverlay,
+  renderPatch,
+} = require("./patching");
 const { okfNormalization } = require("./adapters/okf/normalization");
 const { compileTestObservations: compileCoverageObservations } = require("./adapters/coverage");
-const { generatePlan } = require("./planning");
 const {
   ProviderCache,
   defaultProviderCacheDir,
@@ -1640,6 +1645,84 @@ function evaluateConstraints(
   );
 }
 
+function validatePlan(planJson) {
+  native.planValidate(Buffer.from(planJson));
+}
+
+function compilePlan(
+  project,
+  mapJson,
+  verificationJson,
+  { requestJson = Buffer.alloc(0), pretty = false } = {},
+) {
+  if (!(project instanceof Project)) {
+    throw new TypeError("Plan compilation requires a Project");
+  }
+  return native.planCompile(
+    project._handle,
+    Buffer.from(mapJson),
+    Buffer.from(verificationJson),
+    Buffer.from(requestJson),
+    pretty,
+  );
+}
+
+function validatePatch(patchJson) {
+  native.patchValidate(Buffer.from(patchJson));
+}
+
+function actSourceRequirements(planJson, { pretty = false } = {}) {
+  return native.actSourceRequirements(Buffer.from(planJson), pretty);
+}
+
+function patchSourceRequirements(patchJson, { pretty = false } = {}) {
+  return native.patchSourceRequirements(Buffer.from(patchJson), pretty);
+}
+
+function materializePatch(
+  project,
+  planJson,
+  mapJson,
+  verificationJson,
+  sourceMetadataJson,
+  { pretty = false } = {},
+) {
+  if (!(project instanceof Project)) {
+    throw new TypeError("Patch materialization requires a Project");
+  }
+  return native.actMaterializePatch(
+    project._handle,
+    Buffer.from(planJson),
+    Buffer.from(mapJson),
+    Buffer.from(verificationJson),
+    Buffer.from(sourceMetadataJson),
+    pretty,
+  );
+}
+
+function acceptPatch(
+  patchJson,
+  beforeMapJson,
+  afterMapJson,
+  verificationJson,
+  { pretty = false } = {},
+) {
+  return native.patchAccept(
+    Buffer.from(patchJson),
+    Buffer.from(beforeMapJson),
+    Buffer.from(afterMapJson),
+    Buffer.from(verificationJson),
+    pretty,
+  );
+}
+
+function preflightPatchApply(patchJson, sourceMetadataJson) {
+  native.patchPreflightApply(
+    Buffer.from(patchJson),
+    Buffer.from(sourceMetadataJson),
+  );
+}
+
 function reportConstraints(
   configJson,
   mapJson,
@@ -1689,73 +1772,6 @@ function freezeConstraints(
     Buffer.from(requestJson),
     owner,
     rationale,
-    pretty,
-  );
-}
-
-function compileChangeProposal(
-  verificationJson,
-  fingerprint,
-  {
-    format = "json",
-    full = false,
-    maxCandidates = 100,
-    pretty = true,
-  } = {},
-) {
-  if (!Number.isInteger(maxCandidates) || maxCandidates < 0 || maxCandidates > 0xffffffff) {
-    throw new RangeError("maxCandidates must be an integer in [0, 2^32-1]");
-  }
-  return native.changeProposal(
-    Buffer.from(verificationJson),
-    fingerprint,
-    format,
-    full,
-    maxCandidates,
-    pretty,
-  );
-}
-
-function createChangeContract(
-  proposalJson,
-  {
-    objective,
-    owner,
-    rationale,
-    preserveConstraints = [],
-    selectedCandidates = [],
-    format = "json",
-    pretty = true,
-  } = {},
-) {
-  const review = canonicalForDigest({
-    objective,
-    owner,
-    rationale,
-    preserve_constraints: [...preserveConstraints],
-    selected_candidates: [...selectedCandidates],
-  });
-  return native.changeContract(
-    Buffer.from(proposalJson),
-    Buffer.from(JSON.stringify(review)),
-    format,
-    pretty,
-  );
-}
-
-function verifyChangeContract(
-  proposalJson,
-  contractJson,
-  beforeVerificationJson,
-  afterVerificationJson,
-  { format = "json", pretty = true } = {},
-) {
-  return native.changeVerify(
-    Buffer.from(proposalJson),
-    Buffer.from(contractJson),
-    Buffer.from(beforeVerificationJson),
-    Buffer.from(afterVerificationJson),
-    format,
     pretty,
   );
 }
@@ -1812,20 +1828,13 @@ function publishOkfBundle(
   mapJson,
   {
     verificationJson = Buffer.alloc(0),
-    proposalJson = Buffer.alloc(0),
-    contractJson = Buffer.alloc(0),
-    resultJson = Buffer.alloc(0),
     normalizationJson = null,
     pretty = false,
   } = {},
 ) {
-  const artifacts = [
-    mapJson,
-    verificationJson,
-    proposalJson,
-    contractJson,
-    resultJson,
-  ].map((value) => Buffer.from(value));
+  const artifacts = [mapJson, verificationJson].map((value) =>
+    Buffer.from(value)
+  );
   let normalization = normalizationJson;
   if (normalization === null) {
     normalization = okfNormalization(artifacts);
@@ -1835,57 +1844,6 @@ function publishOkfBundle(
     Buffer.from(normalization),
     pretty,
   );
-}
-
-class ChangeProposal {
-  constructor(jsonBytes) {
-    this.jsonBytes = Buffer.from(jsonBytes);
-  }
-
-  static compile(verificationJson, fingerprint) {
-    return new ChangeProposal(
-      compileChangeProposal(verificationJson, fingerprint, {
-        format: "json",
-        pretty: false,
-      }),
-    );
-  }
-
-  data() {
-    return JSON.parse(this.jsonBytes.toString("utf8"));
-  }
-
-  review(options) {
-    return new ChangeContract(
-      this.jsonBytes,
-      createChangeContract(this.jsonBytes, {
-        ...options,
-        format: "json",
-        pretty: false,
-      }),
-    );
-  }
-}
-
-class ChangeContract {
-  constructor(proposalJson, jsonBytes) {
-    this.proposalJson = Buffer.from(proposalJson);
-    this.jsonBytes = Buffer.from(jsonBytes);
-  }
-
-  data() {
-    return JSON.parse(this.jsonBytes.toString("utf8"));
-  }
-
-  verify(beforeVerificationJson, afterVerificationJson, options = {}) {
-    return verifyChangeContract(
-      this.proposalJson,
-      this.jsonBytes,
-      beforeVerificationJson,
-      afterVerificationJson,
-      options,
-    );
-  }
 }
 
 module.exports = {
@@ -1904,9 +1862,12 @@ module.exports = {
   Workspace,
   auditMapFreshness,
   analyzeOkfSource,
+  actSourceRequirements,
   publishOkfBundle,
   analyzeWorkspace,
-  applyPlan,
+  applyAcceptedPatch,
+  acceptPatch,
+  compilePlan,
   compileProjectConfiguration,
   compileQueryPlan,
   compileTestObservations,
@@ -1924,7 +1885,14 @@ module.exports = {
   renderMapMarkdown,
   renderSourceMarkdown,
   freezeConstraints,
-  generatePlan,
-  previewPlan,
+  materializePatch,
+  observePatchSources,
+  observePlanSources,
+  patchOverlay,
+  patchSourceRequirements,
+  preflightPatchApply,
+  renderPatch,
+  validatePatch,
+  validatePlan,
   jsonCanonicalize: native.jsonCanonicalize,
 };

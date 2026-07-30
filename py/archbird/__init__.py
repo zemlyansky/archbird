@@ -43,6 +43,8 @@ _NATIVE_EXPORTS = (
     "analyze_workspace_json",
     "analyze_okf_source",
     "audit_map_freshness",
+    "accept_patch_json",
+    "compile_plan_json",
     "compile_project_configuration",
     "compile_query_plan_json",
     "compile_test_observations",
@@ -52,49 +54,68 @@ _NATIVE_EXPORTS = (
     "export_graph",
     "export_okf_bundle",
     "freeze_constraints_json",
+    "materialize_patch_json",
+    "patch_source_requirements",
+    "act_source_requirements",
+    "preflight_patch_apply",
     "publish_okf_bundle",
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",
     "render_source_markdown",
     "resolve_discovery",
+    "validate_patch",
+    "validate_plan",
     "validate_test_symbol_observations",
     "write_okf_bundle",
 )
 
-_PLAN_ACT_EXPORTS = (
-    "apply_plan",
-    "generate_plan",
+_ADAPTER_EXPORTS = (
+    "apply_accepted_patch",
     "inspect_ast_grep_executable",
     "materialize_ast_grep_operations",
-    "preview_plan",
+    "observe_patch_sources",
+    "observe_plan_sources",
+    "patch_overlay",
+    "render_patch",
 )
 
 
 def __getattr__(name: str) -> Any:
     """Lazily expose the native host without hiding package metadata."""
 
-    if name in _PLAN_ACT_EXPORTS:
-        if name == "generate_plan":
-            from .planning import generate_plan
-
-            return generate_plan
+    if name in _ADAPTER_EXPORTS:
         if name in {
-            "inspect_ast_grep_executable",
-            "materialize_ast_grep_operations",
+            "apply_accepted_patch",
+            "observe_patch_sources",
+            "observe_plan_sources",
+            "patch_overlay",
+            "render_patch",
         }:
-            from .adapters.ast_grep import (
-                inspect_ast_grep_executable,
-                materialize_ast_grep_operations,
+            from .patching import (
+                apply_accepted_patch,
+                observe_patch_sources,
+                observe_plan_sources,
+                patch_overlay,
+                render_patch,
             )
 
             return {
-                "inspect_ast_grep_executable": inspect_ast_grep_executable,
-                "materialize_ast_grep_operations": materialize_ast_grep_operations,
+                "apply_accepted_patch": apply_accepted_patch,
+                "observe_patch_sources": observe_patch_sources,
+                "observe_plan_sources": observe_plan_sources,
+                "patch_overlay": patch_overlay,
+                "render_patch": render_patch,
             }[name]
-        from .acting import apply_plan, preview_plan
+        from .adapters.ast_grep import (
+            inspect_ast_grep_executable,
+            materialize_ast_grep_operations,
+        )
 
-        return {"apply_plan": apply_plan, "preview_plan": preview_plan}[name]
+        return {
+            "inspect_ast_grep_executable": inspect_ast_grep_executable,
+            "materialize_ast_grep_operations": materialize_ast_grep_operations,
+        }[name]
     if name not in _NATIVE_EXPORTS:
         raise AttributeError(name)
     from . import native
@@ -107,6 +128,6 @@ __all__ = [
     "implementation_digest",
     "read_schema",
     "schema_names",
-    *_PLAN_ACT_EXPORTS,
+    *_ADAPTER_EXPORTS,
     *_NATIVE_EXPORTS,
 ]

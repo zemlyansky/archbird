@@ -1186,6 +1186,24 @@ class Project:
             pretty=pretty,
         )
 
+    def plan_json(
+        self,
+        verification_json: bytes,
+        *,
+        map_json: Optional[bytes] = None,
+        request_json: bytes = b"",
+        pretty: bool = False,
+    ) -> bytes:
+        """Compile one native Plan against this Project's exact source bytes."""
+
+        return _native.plan_compile(
+            self._capsule,
+            self.map_json() if map_json is None else map_json,
+            verification_json,
+            request_json,
+            pretty=pretty,
+        )
+
     def query_markdown(
         self,
         *,
@@ -1752,24 +1770,12 @@ def publish_okf_bundle(
     map_json: bytes,
     *,
     verification_json: bytes = b"",
-    proposal_json: bytes = b"",
-    contract_json: bytes = b"",
-    result_json: bytes = b"",
     normalization_json: Optional[bytes] = None,
     pretty: bool = False,
 ) -> bytes:
     """Project canonical artifacts into a native content-addressed OKF bundle."""
 
-    artifacts = tuple(
-        bytes(value)
-        for value in (
-            map_json,
-            verification_json,
-            proposal_json,
-            contract_json,
-            result_json,
-        )
-    )
+    artifacts = (bytes(map_json), bytes(verification_json))
     normalization = (
         _okf_normalization(*artifacts)
         if normalization_json is None
@@ -2022,17 +2028,13 @@ def export_okf_bundle(
     output: Union[str, Path],
     *,
     verification_path: Optional[Union[str, Path]] = None,
-    proposal_path: Optional[Union[str, Path]] = None,
-    contract_path: Optional[Union[str, Path]] = None,
-    result_path: Optional[Union[str, Path]] = None,
     replace: bool = False,
 ) -> bytes:
     """Read stable canonical inputs, publish, and atomically install OKF."""
 
     map_source = Path(map_path).resolve()
-    optional_sources = tuple(
-        Path(value).resolve() if value is not None else None
-        for value in (verification_path, proposal_path, contract_path, result_path)
+    optional_sources = (
+        Path(verification_path).resolve() if verification_path is not None else None,
     )
     paths = [map_source, *(path for path in optional_sources if path is not None)]
     before_by_path = {path: path.read_bytes() for path in paths}
@@ -2040,15 +2042,6 @@ def export_okf_bundle(
         before_by_path[map_source],
         verification_json=(
             before_by_path[optional_sources[0]] if optional_sources[0] else b""
-        ),
-        proposal_json=(
-            before_by_path[optional_sources[1]] if optional_sources[1] else b""
-        ),
-        contract_json=(
-            before_by_path[optional_sources[2]] if optional_sources[2] else b""
-        ),
-        result_json=(
-            before_by_path[optional_sources[3]] if optional_sources[3] else b""
         ),
     )
     for path, expected in before_by_path.items():
@@ -2108,6 +2101,104 @@ def compile_query_plan_json(
         overrides_json=_canonical(dict(overrides or {})),
         pretty=pretty,
     )
+
+
+def validate_plan(plan_json: bytes) -> None:
+    """Validate one canonical Plan artifact."""
+
+    _native.plan_validate(plan_json)
+
+
+def compile_plan_json(
+    project: Project,
+    map_json: bytes,
+    verification_json: bytes,
+    *,
+    request: Optional[Mapping[str, object]] = None,
+    pretty: bool = False,
+) -> bytes:
+    """Compile a Plan in the native core against exact project source bytes."""
+
+    if not isinstance(project, Project):
+        raise TypeError("Plan compilation requires a Project")
+    return project.plan_json(
+        verification_json,
+        map_json=map_json,
+        request_json=_canonical(dict(request or {})) if request else b"",
+        pretty=pretty,
+    )
+
+
+def validate_patch(patch_json: bytes) -> None:
+    """Validate one canonical Patch artifact."""
+
+    _native.patch_validate(patch_json)
+
+
+def act_source_requirements(
+    plan_json: bytes, *, pretty: bool = False
+) -> bytes:
+    """Return the source observations required to materialize a Plan."""
+
+    return _native.act_source_requirements(plan_json, pretty=pretty)
+
+
+def patch_source_requirements(
+    patch_json: bytes, *, pretty: bool = False
+) -> bytes:
+    """Return the source observations required to apply a Patch."""
+
+    return _native.patch_source_requirements(patch_json, pretty=pretty)
+
+
+def materialize_patch_json(
+    project: Project,
+    plan_json: bytes,
+    map_json: bytes,
+    verification_json: bytes,
+    source_metadata_json: bytes,
+    *,
+    pretty: bool = False,
+) -> bytes:
+    """Materialize exact Plan operations into a source-locked Patch."""
+
+    if not isinstance(project, Project):
+        raise TypeError("Patch materialization requires a Project")
+    return _native.act_materialize_patch(
+        project._capsule,
+        plan_json,
+        map_json,
+        verification_json,
+        source_metadata_json,
+        pretty=pretty,
+    )
+
+
+def accept_patch_json(
+    patch_json: bytes,
+    before_map_json: bytes,
+    after_map_json: bytes,
+    verification_json: bytes,
+    *,
+    pretty: bool = False,
+) -> bytes:
+    """Bind a materialized Patch to its verified isolated after-state."""
+
+    return _native.patch_accept(
+        patch_json,
+        before_map_json,
+        after_map_json,
+        verification_json,
+        pretty=pretty,
+    )
+
+
+def preflight_patch_apply(
+    patch_json: bytes, source_metadata_json: bytes
+) -> None:
+    """Revalidate an accepted Patch and its current source preimages."""
+
+    _native.patch_preflight_apply(patch_json, source_metadata_json)
 
 
 def _constraint_request_json(
@@ -2245,168 +2336,6 @@ def freeze_constraints_json(
         request_json=_canonical(request) if request else b"",
         pretty=pretty,
     )
-
-
-def change_proposal(
-    verification_json: bytes,
-    fingerprint: str,
-    *,
-    format: str = "json",
-    full: bool = False,
-    max_candidates: int = 100,
-    pretty: bool = True,
-) -> bytes:
-    """Derive one sealed proposal from one exact verification finding."""
-
-    if max_candidates < 0:
-        raise ValueError("max_candidates must be nonnegative")
-    return _native.change_proposal(
-        verification_json,
-        fingerprint,
-        format=format,
-        full=full,
-        max_candidates=max_candidates,
-        pretty=pretty,
-    )
-
-
-def change_contract(
-    proposal_json: bytes,
-    *,
-    objective: str,
-    owner: str,
-    rationale: str,
-    preserve_constraints: Sequence[str] = (),
-    selected_candidates: Sequence[str] = (),
-    format: str = "json",
-    pretty: bool = True,
-) -> bytes:
-    """Seal explicit review metadata as an asserted change contract."""
-
-    review = {
-        "objective": objective,
-        "owner": owner,
-        "rationale": rationale,
-        "preserve_constraints": list(preserve_constraints),
-        "selected_candidates": list(selected_candidates),
-    }
-    return _native.change_contract(
-        proposal_json, _canonical(review), format=format, pretty=pretty
-    )
-
-
-def change_verify(
-    proposal_json: bytes,
-    contract_json: bytes,
-    before_verification_json: bytes,
-    after_verification_json: bytes,
-    *,
-    format: str = "json",
-    pretty: bool = True,
-) -> bytes:
-    """Judge an asserted fact transition without executing or editing a project."""
-
-    return _native.change_verify(
-        proposal_json,
-        contract_json,
-        before_verification_json,
-        after_verification_json,
-        format=format,
-        pretty=pretty,
-    )
-
-
-@dataclass(frozen=True)
-class ChangeProposal:
-    """Immutable derived proposal bytes with review helpers."""
-
-    json_bytes: bytes
-
-    @classmethod
-    def compile(cls, verification_json: bytes, fingerprint: str) -> "ChangeProposal":
-        return cls(
-            change_proposal(
-                verification_json, fingerprint, format="json", pretty=False
-            )
-        )
-
-    def data(self) -> Mapping[str, object]:
-        return json.loads(self.json_bytes)
-
-    def report(
-        self,
-        verification_json: bytes,
-        *,
-        full: bool = False,
-        max_candidates: int = 100,
-    ) -> bytes:
-        fingerprint = str(self.data()["origin"]["finding"]["fingerprint"])
-        regenerated = change_proposal(
-            verification_json,
-            fingerprint,
-            format="json",
-            pretty=False,
-        )
-        if json.loads(regenerated)["sha256"] != self.data()["sha256"]:
-            raise ConfigError("change proposal no longer matches verification evidence")
-        return change_proposal(
-            verification_json,
-            fingerprint,
-            format="markdown",
-            full=full,
-            max_candidates=max_candidates,
-        )
-
-    def review(
-        self,
-        *,
-        objective: str,
-        owner: str,
-        rationale: str,
-        preserve_constraints: Sequence[str] = (),
-        selected_candidates: Sequence[str] = (),
-    ) -> "ChangeContract":
-        return ChangeContract(
-            proposal_json=self.json_bytes,
-            json_bytes=change_contract(
-                self.json_bytes,
-                objective=objective,
-                owner=owner,
-                rationale=rationale,
-                preserve_constraints=preserve_constraints,
-                selected_candidates=selected_candidates,
-                format="json",
-                pretty=False,
-            ),
-        )
-
-
-@dataclass(frozen=True)
-class ChangeContract:
-    """Immutable asserted contract bound to its exact proposal."""
-
-    proposal_json: bytes
-    json_bytes: bytes
-
-    def data(self) -> Mapping[str, object]:
-        return json.loads(self.json_bytes)
-
-    def verify(
-        self,
-        before_verification_json: bytes,
-        after_verification_json: bytes,
-        *,
-        format: str = "json",
-        pretty: bool = True,
-    ) -> bytes:
-        return change_verify(
-            self.proposal_json,
-            self.json_bytes,
-            before_verification_json,
-            after_verification_json,
-            format=format,
-            pretty=pretty,
-        )
 
 
 def _strict_document(raw: bytes, label: str) -> Mapping[str, object]:
@@ -2980,7 +2909,9 @@ __all__ = [
     "Workspace",
     "analyze_okf_source",
     "analyze_workspace_json",
+    "accept_patch_json",
     "audit_map_freshness",
+    "compile_plan_json",
     "compile_project_configuration",
     "compile_query_plan_json",
     "compile_test_observations",
@@ -2990,12 +2921,18 @@ __all__ = [
     "export_graph",
     "export_okf_bundle",
     "freeze_constraints_json",
+    "materialize_patch_json",
+    "patch_source_requirements",
+    "act_source_requirements",
+    "preflight_patch_apply",
     "publish_okf_bundle",
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",
     "render_source_markdown",
     "resolve_discovery",
+    "validate_patch",
+    "validate_plan",
     "validate_test_symbol_observations",
     "write_okf_bundle",
 ]

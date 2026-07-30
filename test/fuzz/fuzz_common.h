@@ -55,25 +55,11 @@ static const uint8_t fuzz_project_configuration_json[] =
     "\"owner\":\"fuzz\",\"rationale\":"
     "\"Exercise native verification.\"}}}";
 
-static const uint8_t fuzz_review_json[] =
-    "{\"objective\":\"Exercise one reviewed transition.\",\"owner\":"
-    "\"fuzz\",\"preserve_constraints\":[],\"rationale\":"
-    "\"Exercise native Act artifact boundaries.\","
-    "\"selected_candidates\":[]}";
-
 typedef struct FuzzBuffer {
   uint8_t *data;
   size_t length;
   size_t capacity;
 } FuzzBuffer;
-
-typedef struct FuzzActChain {
-  FuzzBuffer verification;
-  FuzzBuffer proposal;
-  FuzzBuffer contract;
-  FuzzBuffer result;
-  char fingerprint[65];
-} FuzzActChain;
 
 static int fuzz_discard(void *user_data, const uint8_t *bytes, size_t length) {
   (void)user_data;
@@ -119,76 +105,6 @@ static void fuzz_buffer_free(FuzzBuffer *buffer) {
     return;
   free(buffer->data);
   memset(buffer, 0, sizeof(*buffer));
-}
-
-static int fuzz_first_fingerprint(const FuzzBuffer *verification,
-                                  char fingerprint[65]) {
-  static const uint8_t prefix[] = "\"fingerprint\":\"";
-  size_t index;
-  if (!verification || !fingerprint)
-    return 0;
-  for (index = 0; index + sizeof(prefix) - 1 + 64 < verification->length;
-       index++) {
-    size_t digit;
-    const uint8_t *candidate;
-    if (memcmp(verification->data + index, prefix, sizeof(prefix) - 1) != 0)
-      continue;
-    candidate = verification->data + index + sizeof(prefix) - 1;
-    for (digit = 0; digit < 64; digit++) {
-      uint8_t byte = candidate[digit];
-      if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-        break;
-    }
-    if (digit == 64 && candidate[64] == '"') {
-      memcpy(fingerprint, candidate, 64);
-      fingerprint[64] = '\0';
-      return 1;
-    }
-  }
-  return 0;
-}
-
-static void fuzz_act_chain_free(FuzzActChain *chain) {
-  if (!chain)
-    return;
-  fuzz_buffer_free(&chain->result);
-  fuzz_buffer_free(&chain->contract);
-  fuzz_buffer_free(&chain->proposal);
-  fuzz_buffer_free(&chain->verification);
-  memset(chain, 0, sizeof(*chain));
-}
-
-static int fuzz_build_act_chain(ArchbirdEngine *engine, FuzzActChain *chain) {
-  ArchbirdStatus status;
-  if (!engine || !chain)
-    return 0;
-  memset(chain, 0, sizeof(*chain));
-  status = archbird_constraints_evaluate(
-      engine, fuzz_project_configuration_json,
-      sizeof(fuzz_project_configuration_json) - 1, fuzz_map_json,
-      sizeof(fuzz_map_json) - 1, NULL, 0, NULL, 0, 0, fuzz_buffer_write,
-      &chain->verification);
-  if (status == ARCHBIRD_OK &&
-      !fuzz_first_fingerprint(&chain->verification, chain->fingerprint))
-    status = ARCHBIRD_CONFLICT;
-  if (status == ARCHBIRD_OK)
-    status = archbird_change_proposal(
-        engine, chain->verification.data, chain->verification.length,
-        chain->fingerprint, 64, 0, fuzz_buffer_write, &chain->proposal);
-  if (status == ARCHBIRD_OK)
-    status = archbird_change_contract(
-        engine, chain->proposal.data, chain->proposal.length, fuzz_review_json,
-        sizeof(fuzz_review_json) - 1, 0, fuzz_buffer_write, &chain->contract);
-  if (status == ARCHBIRD_OK)
-    status = archbird_change_verify(
-        engine, chain->proposal.data, chain->proposal.length,
-        chain->contract.data, chain->contract.length, chain->verification.data,
-        chain->verification.length, chain->verification.data,
-        chain->verification.length, 0, fuzz_buffer_write, &chain->result);
-  if (status == ARCHBIRD_OK)
-    return 1;
-  fuzz_act_chain_free(chain);
-  return 0;
 }
 
 static ArchbirdEngine *fuzz_engine(void) {

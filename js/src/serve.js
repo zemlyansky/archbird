@@ -555,7 +555,6 @@ async function hostRequest(repository, selections, request) {
       ? repository.artifact(snapshot, snapshot.verification)
       : null;
   }
-  if (["act-proposal", "act-contract", "act-result"].includes(request.method)) return null;
   if (request.method === "dispose") {
     selections.delete(request.session);
     return { disposed: true };

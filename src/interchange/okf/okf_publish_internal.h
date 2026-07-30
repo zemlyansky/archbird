@@ -1,10 +1,10 @@
 #ifndef ARCHBIRD_OKF_PUBLISH_INTERNAL_H
 #define ARCHBIRD_OKF_PUBLISH_INTERNAL_H
 
-#include "act_internal.h"
 #include "json_value.h"
 #include "render_internal.h"
 #include "sha256.h"
+#include "verification_artifact.h"
 
 typedef struct AbOkfPubSource {
   const char *artifact;
@@ -55,18 +55,9 @@ typedef struct AbOkfPublication {
   AbValue map;
   AbOkfPubNormalization normalization;
   AbOkfPubSource map_source;
-  AbActVerification verification;
+  AbVerificationArtifact verification;
   AbOkfPubSource verification_source;
   int has_verification;
-  AbActProposalView proposal;
-  AbOkfPubSource proposal_source;
-  int has_proposal;
-  AbActContractView contract;
-  AbOkfPubSource contract_source;
-  int has_contract;
-  AbActResultView result;
-  AbOkfPubSource result_source;
-  int has_result;
   AbOkfPubConcept *concepts;
   size_t concept_count;
   size_t concept_capacity;
@@ -167,19 +158,16 @@ ArchbirdStatus ab_okf_pub_add_file(AbOkfPublication *pub, const char *path,
 const AbOkfPubConcept *ab_okf_pub_find_concept(const AbOkfPublication *pub,
                                                const char *path);
 
-ArchbirdStatus
-ab_okf_pub_load(AbOkfPublication *pub, const uint8_t *map_json,
-                size_t map_length, const uint8_t *verification_json,
-                size_t verification_length, const uint8_t *proposal_json,
-                size_t proposal_length, const uint8_t *contract_json,
-                size_t contract_length, const uint8_t *result_json,
-                size_t result_length, const uint8_t *normalization_json,
-                size_t normalization_length);
+ArchbirdStatus ab_okf_pub_load(AbOkfPublication *pub, const uint8_t *map_json,
+                               size_t map_length,
+                               const uint8_t *verification_json,
+                               size_t verification_length,
+                               const uint8_t *normalization_json,
+                               size_t normalization_length);
 void ab_okf_pub_free(AbOkfPublication *pub);
 
 ArchbirdStatus ab_okf_pub_map(AbOkfPublication *pub);
 ArchbirdStatus ab_okf_pub_verify(AbOkfPublication *pub);
-ArchbirdStatus ab_okf_pub_act(AbOkfPublication *pub);
 ArchbirdStatus ab_okf_pub_finish(AbOkfPublication *pub, AbBuffer *out);
 
 #endif

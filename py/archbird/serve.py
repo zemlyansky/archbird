@@ -581,8 +581,6 @@ class LiveRepository:
                 if snapshot["verification"]
                 else None
             )
-        if method in {"act-proposal", "act-contract", "act-result"}:
-            return None
         if method == "dispose":
             self._selections.pop(session, None)
             return {"disposed": True}

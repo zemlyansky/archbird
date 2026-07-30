@@ -55,15 +55,7 @@
         "file_sha256"
       ],
       "properties": {
-        "artifact": {
-          "enum": [
-            "map",
-            "verification",
-            "change-proposal",
-            "change-contract",
-            "change-result"
-          ]
-        },
+        "artifact": {"enum": ["map", "verification"]},
         "schema_version": {"type": "integer", "minimum": 1},
         "producer": {"$ref": "#/$defs/tool"},
         "evidence_sha256": {"$ref": "#/$defs/sha256"},

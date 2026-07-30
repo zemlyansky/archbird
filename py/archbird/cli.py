@@ -1,4 +1,4 @@
-"""Command line for deterministic repository maps and architecture contracts."""
+"""Command line for deterministic repository maps and architecture constraints."""
 
 from __future__ import annotations
 
@@ -47,9 +47,13 @@ from .native import (
     resolve_discovery,
 )
 from .adapters.okf.parser import okf_query_input, parse_okf_bundle
-from .acting import apply_plan, preview_plan
-from ._plan_limits import MAX_PLAN_BYTES
-from .planning import generate_plan
+from .patching import (
+    apply_accepted_patch,
+    observe_plan_sources,
+    patch_overlay,
+    render_patch,
+)
+from ._plan_limits import MAX_PATCH_BYTES, MAX_PLAN_BYTES
 from .project_configuration import (
     compile_named_query,
 )
@@ -73,6 +77,7 @@ _PORTABLE_PROVIDERS = (
 _COMMANDS = (
     "config",
     "act",
+    "apply",
     "diff",
     "export",
     "freshness",
@@ -924,18 +929,13 @@ def act_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird act",
         description=(
-            "Preview or explicitly apply a source-locked Plan. Applying rebuilds "
-            "the Map and verifies its acceptance constraints."
+            "Materialize a source-locked Plan in isolation and emit an accepted "
+            "Patch after a fresh Map and Verify."
         ),
     )
     result.add_argument("plan", help="editable Plan JSON")
     result.add_argument("-c", "--config", help="project configuration JSON")
     result.add_argument("--root", dest="root_override", help="repository root (default: .)")
-    result.add_argument(
-        "--apply",
-        action="store_true",
-        help="apply only after validating the Plan against a fresh current Map",
-    )
     _add_python_analysis_options(result)
     _add_cache_options(result)
     _add_progress_options(result)
@@ -977,6 +977,21 @@ def act_parser() -> argparse.ArgumentParser:
     result.add_argument("--pretty", action="store_true")
     result.add_argument("-o", "--output", default="-")
     result.set_defaults(no_config=False, root_path=None)
+    return result
+
+
+def apply_parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog="archbird apply",
+        description=(
+            "Replay the exact bytes of an accepted Patch after source-preimage "
+            "and destination checks."
+        ),
+    )
+    result.add_argument("patch", help="accepted Patch JSON")
+    result.add_argument(
+        "--root", dest="root_override", help="repository root (default: .)"
+    )
     return result
 
 
@@ -1383,7 +1398,7 @@ def _git_change_set(repository: Path, revision: str) -> dict[str, object]:
     }
 
 
-def _project_from_args(
+def _discover_project_from_args(
     args: argparse.Namespace,
     progress: Optional[_Progress] = None,
     *,
@@ -1415,6 +1430,22 @@ def _project_from_args(
     )
     if progress is not None:
         progress.emit({"phase": "selected", "files": len(current.sources)})
+    return current
+
+
+def _project_from_args(
+    args: argparse.Namespace,
+    progress: Optional[_Progress] = None,
+    *,
+    resolved_repository: Optional[Path] = None,
+    resolved_config_json: Optional[bytes] = None,
+) -> Project:
+    current = _discover_project_from_args(
+        args,
+        progress,
+        resolved_repository=resolved_repository,
+        resolved_config_json=resolved_config_json,
+    )
     ledger_path = getattr(args, "merge_ledger", None)
     if ledger_path and ledger_path == getattr(args, "output", None):
         raise ValueError("--merge-ledger and --output must be different paths")
@@ -2064,6 +2095,7 @@ def _constraint_evaluation_inputs(
     bytes,
     bytes,
     bytes,
+    Optional[Project],
     object,
     Mapping[str, Mapping[str, object]],
     Mapping[str, Mapping[str, object]],
@@ -2094,6 +2126,7 @@ def _constraint_evaluation_inputs(
         resolution_json = (
             Path(args.resolution).read_bytes() if args.resolution else b""
         )
+        project = None
     else:
         project = _project_from_args(
             args,
@@ -2109,6 +2142,7 @@ def _constraint_evaluation_inputs(
         config_json,
         map_json,
         resolution_json,
+        project,
         baseline,
         maps,
         observations,
@@ -2146,6 +2180,7 @@ def _verify_main(argv: Sequence[str]) -> int:
             config_json,
             map_json,
             resolution_json,
+            _project,
             baseline,
             maps,
             observations,
@@ -2235,6 +2270,7 @@ def _plan_main(argv: Sequence[str]) -> int:
             config_json,
             map_json,
             resolution_json,
+            project,
             baseline,
             maps,
             observations,
@@ -2256,6 +2292,13 @@ def _plan_main(argv: Sequence[str]) -> int:
                 "Plan requires a Map without error diagnostics; "
                 "fix Map evidence before deriving edits"
             )
+        if project is None:
+            project = _discover_project_from_args(
+                args,
+                progress,
+                resolved_repository=repository,
+                resolved_config_json=config_json,
+            )
         rename_directives: dict[str, str] = {}
         for directive in args.rename:
             old, separator, new = directive.partition("=")
@@ -2269,26 +2312,30 @@ def _plan_main(argv: Sequence[str]) -> int:
                     "--rename requires unique non-empty OLD=NEW directives"
                 )
             rename_directives[old] = new
-        plan = generate_plan(
-            map_document,
-            json.loads(verification_json),
-            args.constraint_ids or None,
-            repository,
-            rename_directives or None,
-        )
+        request: dict[str, object] = {}
+        if args.constraint_ids:
+            request["constraint_ids"] = args.constraint_ids
+        if rename_directives:
+            request["renames"] = rename_directives
         if args.objective:
-            plan["objective"] = args.objective
-            plan["provenance"] = "asserted"
-        encoded = _native.json_canonicalize(
-            json.dumps(
-                plan,
-                allow_nan=False,
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8"),
+            request["objective"] = args.objective
+        encoded = project.plan_json(
+            verification_json,
+            map_json=map_json,
+            request_json=(
+                json.dumps(
+                    request,
+                    allow_nan=False,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+                if request
+                else b""
+            ),
             pretty=args.pretty,
         )
+        plan = json.loads(encoded)
         _write(encoded, args.output)
         if args.output != "-":
             executable = sum(
@@ -2365,296 +2412,6 @@ def _act_overlay_project(
     return project
 
 
-def _plan_source_mismatches(
-    plan: Mapping[str, object],
-    map_json: bytes,
-    verification: Mapping[str, object],
-) -> list[str]:
-    source = plan.get("source")
-    if not isinstance(source, Mapping):
-        return ["Plan has no source identity"]
-    expected_map = source.get("map")
-    expected_verification = source.get("verification")
-    map_document = json.loads(map_json)
-    evidence = map_document.get("evidence")
-    map_tool = map_document.get("tool")
-    verification_policy = verification.get("policy")
-    verification_tool = verification.get("tool")
-    if not all(
-        isinstance(value, Mapping)
-        for value in (
-            expected_map,
-            expected_verification,
-            evidence,
-            map_tool,
-            verification_policy,
-            verification_tool,
-        )
-    ):
-        return ["Plan, Map, or Verification is missing source identity fields"]
-    assert isinstance(expected_map, Mapping)
-    assert isinstance(expected_verification, Mapping)
-    assert isinstance(evidence, Mapping)
-    assert isinstance(map_tool, Mapping)
-    assert isinstance(verification_policy, Mapping)
-    assert isinstance(verification_tool, Mapping)
-    actual = {
-        "project": map_document.get("project"),
-        "map.sha256": hashlib.sha256(
-            _native.json_canonicalize(map_json)
-        ).hexdigest(),
-        "map.input_sha256": evidence.get("input_sha256"),
-        "map.configuration_sha256": evidence.get("config_sha256"),
-        "map.producer_implementation_sha256": map_tool.get(
-            "implementation_sha256"
-        ),
-        "verification.sha256": verification.get("verification_result_sha256"),
-        "verification.policy_sha256": verification_policy.get(
-            "constraint_policy_sha256"
-        ),
-        "verification.producer_implementation_sha256": verification_tool.get(
-            "implementation_sha256"
-        ),
-    }
-    expected = {
-        "project": source.get("project"),
-        "map.sha256": expected_map.get("sha256"),
-        "map.input_sha256": expected_map.get("input_sha256"),
-        "map.configuration_sha256": expected_map.get("configuration_sha256"),
-        "map.producer_implementation_sha256": expected_map.get(
-            "producer_implementation_sha256"
-        ),
-        "verification.sha256": expected_verification.get("sha256"),
-        "verification.policy_sha256": expected_verification.get("policy_sha256"),
-        "verification.producer_implementation_sha256": expected_verification.get(
-            "producer_implementation_sha256"
-        ),
-    }
-    return [
-        f"{field} changed"
-        for field in expected
-        if expected[field] != actual[field]
-    ]
-
-
-def _plan_acceptance_ids(plan: Mapping[str, object]) -> list[str]:
-    identifiers: list[str] = []
-    for item in plan.get("items", []):
-        if not isinstance(item, Mapping):
-            raise ValueError("Plan items must be objects")
-        acceptance = item.get("acceptance")
-        if not isinstance(acceptance, Mapping):
-            raise ValueError("Plan item acceptance must be an object")
-        values = acceptance.get("constraints")
-        if not isinstance(values, list) or not values:
-            raise ValueError("Plan item acceptance must name constraints")
-        for value in values:
-            if not isinstance(value, str) or not value:
-                raise ValueError("Plan acceptance constraint IDs must be strings")
-            if value not in identifiers:
-                identifiers.append(value)
-    preserved = plan.get("preserved_constraints")
-    if not isinstance(preserved, list):
-        raise ValueError("Plan preserved_constraints must be an array")
-    for value in preserved:
-        if not isinstance(value, str) or not value:
-            raise ValueError("preserved constraint IDs must be strings")
-        if value not in identifiers:
-            identifiers.append(value)
-    return identifiers
-
-
-def _acceptance_from_verification(
-    plan: Mapping[str, object],
-    verification: Mapping[str, object],
-) -> dict[str, object]:
-    rows = verification.get("constraints")
-    if not isinstance(rows, list):
-        raise ValueError("fresh Verification has no constraint results")
-    by_id = {
-        row["id"]: row
-        for row in rows
-        if isinstance(row, Mapping) and isinstance(row.get("id"), str)
-    }
-    identifiers = _plan_acceptance_ids(plan)
-    omitted = sorted(set(by_id) - set(identifiers))
-    extra = sorted(set(identifiers) - set(by_id))
-    if omitted or extra:
-        details = []
-        if omitted:
-            details.append("omits " + ", ".join(omitted))
-        if extra:
-            details.append("includes unknown " + ", ".join(extra))
-        raise ValueError(
-            "Plan acceptance must cover the complete Verification policy: "
-            + "; ".join(details)
-        )
-    missing = [identifier for identifier in identifiers if identifier not in by_id]
-    if missing:
-        raise ValueError(
-            "Plan names constraints absent from fresh Verification: "
-            + ", ".join(missing)
-        )
-    constraints = [
-        {"id": identifier, "status": by_id[identifier].get("status")}
-        for identifier in identifiers
-    ]
-    allowed = {"pass", "fail", "unknown", "waived", "not_applicable"}
-    if any(row["status"] not in allowed for row in constraints):
-        raise ValueError("fresh Verification contains an invalid constraint status")
-    statuses = {str(row["status"]) for row in constraints}
-    status = (
-        "not_satisfied"
-        if "fail" in statuses
-        else "unknown"
-        if "unknown" in statuses
-        else "satisfied"
-    )
-    verification_sha256 = verification.get("verification_result_sha256")
-    if not isinstance(verification_sha256, str):
-        raise ValueError("fresh Verification is missing its result digest")
-    return {
-        "status": status,
-        "verification_sha256": verification_sha256,
-        "constraints": constraints,
-    }
-
-
-def _map_diagnostic_regressions(
-    before: Mapping[str, object],
-    after: Mapping[str, object],
-) -> list[str]:
-    def inventory(document: Mapping[str, object]) -> dict[tuple[str, str, str], int]:
-        counts: dict[tuple[str, str, str], int] = {}
-        rows = document.get("diagnostics")
-        if not isinstance(rows, list):
-            return counts
-        for row in rows:
-            if not isinstance(row, Mapping):
-                continue
-            identity = (
-                str(row.get("severity", "")),
-                str(row.get("code", "")),
-                str(row.get("path", "")),
-            )
-            counts[identity] = counts.get(identity, 0) + 1
-        return counts
-
-    prior = inventory(before)
-    current = inventory(after)
-    regressions = []
-    for identity, count in sorted(current.items()):
-        added = count - prior.get(identity, 0)
-        if added > 0:
-            severity, code, path = identity
-            location = f" at {path}" if path else ""
-            regressions.append(
-                f"{added} new {severity or 'unknown'} diagnostic {code or 'unknown'}"
-                f"{location}"
-            )
-    return regressions
-
-
-def _blocked_act_result(
-    preview: Mapping[str, object],
-    message: str,
-) -> dict[str, object]:
-    result = dict(preview)
-    result["status"] = "blocked"
-    result["changes"] = []
-    result["acceptance"] = {
-        "status": "not_evaluated",
-        "verification_sha256": None,
-        "constraints": [],
-    }
-    result["diagnostics"] = [
-        {
-            "code": "source_context_mismatch",
-            "severity": "error",
-            "message": message,
-            "item_id": None,
-            "path": None,
-        }
-    ]
-    return result
-
-
-def _act_result_bytes(
-    result: Mapping[str, object],
-    *,
-    format: str,
-    pretty: bool,
-) -> bytes:
-    if format == "json":
-        return _native.json_canonicalize(
-            json.dumps(
-                result,
-                allow_nan=False,
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8"),
-            pretty=pretty,
-        )
-    changes = result.get("changes")
-    change_rows = changes if isinstance(changes, list) else []
-    if format == "patch":
-        return "".join(
-            str(change.get("unified_diff", ""))
-            for change in change_rows
-            if isinstance(change, Mapping)
-        ).encode("utf-8")
-    acceptance = result.get("acceptance")
-    acceptance_status = (
-        acceptance.get("status")
-        if isinstance(acceptance, Mapping)
-        else "not_evaluated"
-    )
-    lines = [
-        f"# Act {result.get('status', 'unknown')}",
-        "",
-        f"- Plan: `{result.get('plan_sha256', '')}`",
-        f"- Changes: {len(change_rows)}",
-        f"- Acceptance: `{acceptance_status}`",
-    ]
-    acceptance_rows = (
-        acceptance.get("constraints")
-        if isinstance(acceptance, Mapping)
-        else None
-    )
-    if isinstance(acceptance_rows, list) and acceptance_rows:
-        lines.extend(("", "## Acceptance", ""))
-        for row in acceptance_rows:
-            if isinstance(row, Mapping):
-                lines.append(
-                    f"- `{row.get('id', '')}`: "
-                    f"`{row.get('status', 'unknown')}`"
-                )
-    diagnostics = result.get("diagnostics")
-    diagnostic_rows = diagnostics if isinstance(diagnostics, list) else []
-    if diagnostic_rows:
-        lines.extend(("", "## Diagnostics", ""))
-        for row in diagnostic_rows:
-            if isinstance(row, Mapping):
-                lines.append(
-                    f"- `{row.get('code', 'error')}`: {row.get('message', '')}"
-                )
-    for change in change_rows:
-        if not isinstance(change, Mapping):
-            continue
-        lines.extend(
-            (
-                "",
-                f"## {change.get('path', '')}",
-                "",
-                "```diff",
-                str(change.get("unified_diff", "")).rstrip("\n"),
-                "```",
-            )
-        )
-    return ("\n".join(lines) + "\n").encode("utf-8")
-
-
 def _act_main(argv: Sequence[str]) -> int:
     args = act_parser().parse_args(argv)
     progress = _Progress(args.progress)
@@ -2676,9 +2433,6 @@ def _act_main(argv: Sequence[str]) -> int:
             raise ValueError(
                 f"Plan exceeds the {MAX_PLAN_BYTES}-byte input limit"
             )
-        document = json.loads(plan_bytes)
-        if not isinstance(document, dict):
-            raise ValueError("Plan must be a JSON object")
         repository = Path(args.root_override or ".").resolve()
         transient_artifacts = [
             path
@@ -2700,12 +2454,7 @@ def _act_main(argv: Sequence[str]) -> int:
         )
         before_project = _act_project(args, repository, config_json, progress)
         before_map = before_project.map_json()
-        before_map_document = json.loads(before_map)
-        if _has_error_diagnostics(before_map_document):
-            raise ValueError(
-                "Act requires a current Map without error diagnostics"
-            )
-        before_verification_json = evaluate_constraints_json(
+        before_verification = evaluate_constraints_json(
             config_json,
             before_map,
             resolution_json=before_project.resolution_json or b"",
@@ -2715,122 +2464,61 @@ def _act_main(argv: Sequence[str]) -> int:
             policy_date=policy_date,
             pretty=False,
         )
-        before_verification = json.loads(before_verification_json)
-        mismatches = _plan_source_mismatches(
-            document, before_map, before_verification
-        )
-        _acceptance_from_verification(document, before_verification)
-        preview = preview_plan(document, repository, before_map)
-        if preview["status"] == "blocked":
-            _write(
-                _act_result_bytes(
-                    preview, format=args.format, pretty=args.pretty
-                ),
-                args.output,
-            )
-            progress.finish()
-            return 2
-        if mismatches:
-            blocked = _blocked_act_result(
-                preview,
-                "Plan source context is stale: " + ", ".join(mismatches),
-            )
-            _write(
-                _act_result_bytes(
-                    blocked, format=args.format, pretty=args.pretty
-                ),
-                args.output,
-            )
-            progress.finish()
-            return 2
-        if not args.apply:
-            _write(
-                _act_result_bytes(
-                    preview, format=args.format, pretty=args.pretty
-                ),
-                args.output,
-            )
-            progress.finish()
-            return 0
-
-        def verify_acceptance(
-            plan: Mapping[str, object],
-            resolved_root: Path,
-            overlay: Mapping[str, bytes | None],
-        ) -> Mapping[str, object]:
-            after_config_json = config_json
-            if config_path is not None:
-                try:
-                    relative_config = config_path.relative_to(
-                        resolved_root
-                    ).as_posix()
-                except ValueError:
-                    relative_config = None
-                if relative_config is not None and relative_config in overlay:
-                    overlaid_config = overlay[relative_config]
-                    if overlaid_config is None:
-                        raise ValueError(
-                            "Act cannot remove the project configuration used "
-                            "for acceptance"
-                        )
-                    after_config_json = overlaid_config
-                    _validate_project_configuration(after_config_json)
-            after_project = _act_overlay_project(
-                args,
-                before_project,
-                after_config_json,
-                overlay,
-                progress,
-            )
-            after_map = after_project.map_json()
-            after_map_document = json.loads(after_map)
-            if _has_error_diagnostics(after_map_document):
-                raise ValueError(
-                    "isolated after-state Map has error diagnostics"
-                )
-            diagnostic_regressions = _map_diagnostic_regressions(
-                before_map_document, after_map_document
-            )
-            if diagnostic_regressions:
-                raise ValueError(
-                    "fresh Map evidence quality regressed: "
-                    + "; ".join(diagnostic_regressions)
-                )
-            after_verification = json.loads(
-                evaluate_constraints_json(
-                    after_config_json,
-                    after_map,
-                    resolution_json=after_project.resolution_json or b"",
-                    baseline=baseline,
-                    maps=maps,
-                    observations=observations,
-                    policy_date=policy_date,
-                    pretty=False,
-                )
-            )
-            return _acceptance_from_verification(plan, after_verification)
-
-        result = apply_plan(
-            document,
-            repository,
-            verify_acceptance,
+        source_metadata = observe_plan_sources(repository, plan_bytes)
+        materialized_patch = _native.act_materialize_patch(
+            before_project._capsule,
+            plan_bytes,
             before_map,
+            before_verification,
+            source_metadata,
+        )
+        overlay = patch_overlay(materialized_patch)
+        after_config_json = config_json
+        if config_path is not None:
+            try:
+                relative_config = config_path.relative_to(repository).as_posix()
+            except ValueError:
+                relative_config = None
+            if relative_config is not None and relative_config in overlay:
+                overlaid_config = overlay[relative_config]
+                if overlaid_config is None:
+                    raise ValueError(
+                        "Act cannot remove the project configuration used for "
+                        "acceptance"
+                    )
+                after_config_json = overlaid_config
+                _validate_project_configuration(after_config_json)
+        after_project = _act_overlay_project(
+            args, before_project, after_config_json, overlay, progress
+        )
+        after_map = after_project.map_json()
+        after_verification = evaluate_constraints_json(
+            after_config_json,
+            after_map,
+            resolution_json=after_project.resolution_json or b"",
+            baseline=baseline,
+            maps=maps,
+            observations=observations,
+            policy_date=policy_date,
+            pretty=False,
+        )
+        accepted_patch = _native.patch_accept(
+            materialized_patch,
+            before_map,
+            after_map,
+            after_verification,
         )
         _write(
-            _act_result_bytes(
-                result, format=args.format, pretty=args.pretty
+            render_patch(
+                repository,
+                accepted_patch,
+                format=args.format,
+                pretty=args.pretty,
             ),
             args.output,
         )
         progress.finish()
-        if result["status"] == "rejected":
-            return 1
-        if result["status"] != "applied":
-            return 2
-        acceptance = result.get("acceptance")
-        if not isinstance(acceptance, Mapping):
-            return 2
-        return int(acceptance.get("status") != "satisfied")
+        return 0
     except (
         ConfigError,
         json.JSONDecodeError,
@@ -2840,6 +2528,34 @@ def _act_main(argv: Sequence[str]) -> int:
         _native.Error,
     ) as error:
         progress.clear()
+        print(f"archbird: error: {error}", file=sys.stderr)
+        return 2
+
+
+def _apply_main(argv: Sequence[str]) -> int:
+    args = apply_parser().parse_args(argv)
+    try:
+        patch_path = Path(args.patch)
+        metadata = patch_path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError("Patch input must not be a symbolic link")
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("Patch input must be a regular file")
+        if metadata.st_size > MAX_PATCH_BYTES:
+            raise ValueError(
+                f"Patch exceeds the {MAX_PATCH_BYTES}-byte input limit"
+            )
+        patch_bytes = patch_path.read_bytes()
+        if len(patch_bytes) > MAX_PATCH_BYTES:
+            raise ValueError(
+                f"Patch exceeds the {MAX_PATCH_BYTES}-byte input limit"
+            )
+        transitions = apply_accepted_patch(
+            Path(args.root_override or "."), patch_bytes
+        )
+        print(f"Result: applied-transitions={transitions}")
+        return 0
+    except (json.JSONDecodeError, OSError, ValueError, _native.Error) as error:
         print(f"archbird: error: {error}", file=sys.stderr)
         return 2
 
@@ -3059,6 +2775,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _plan_main(arguments[1:])
     if arguments and arguments[0] == "act":
         return _act_main(arguments[1:])
+    if arguments and arguments[0] == "apply":
+        return _apply_main(arguments[1:])
     if arguments and arguments[0] == "export":
         return _export_main(arguments[1:])
     if arguments and arguments[0] == "okf":

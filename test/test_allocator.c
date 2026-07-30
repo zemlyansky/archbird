@@ -670,88 +670,6 @@ static ArchbirdStatus exercise_verify_authoring(TestAllocator *allocator) {
   return status;
 }
 
-static int first_fingerprint(const FixedOutput *verification,
-                             const char **out) {
-  static const char prefix[] = "\"fingerprint\":\"";
-  size_t index;
-  for (index = 0; index + sizeof(prefix) - 1 + 64 <= verification->length;
-       index++) {
-    size_t digit;
-    const char *candidate;
-    if (memcmp(verification->bytes + index, prefix, sizeof(prefix) - 1) != 0)
-      continue;
-    candidate = (const char *)verification->bytes + index + sizeof(prefix) - 1;
-    for (digit = 0; digit < 64; digit++) {
-      unsigned char byte = (unsigned char)candidate[digit];
-      if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-        break;
-    }
-    if (digit == 64 && candidate[64] == '"') {
-      *out = candidate;
-      return 1;
-    }
-  }
-  return 0;
-}
-
-static ArchbirdStatus exercise_act(TestAllocator *allocator) {
-  static const char config[] =
-      "{\"constraints\":{\"ALLOC-ACT\":{\"actual\":{\"literal\":[\"B\"]},"
-      "\"assert\":\"set_equal\",\"expected\":{\"literal\":[\"A\"]},"
-      "\"owner\":\"test\",\"rationale\":\"Exercise allocator ownership "
-      "through Act.\"}},\"layers\":[{\"globs\":[\"**/*.c\"],"
-      "\"language\":\"c\",\"name\":\"core\",\"required\":false}],"
-      "\"project\":\"allocator-test\"}";
-  static const char map[] =
-      "{\"artifact\":\"map\",\"diagnostics\":[],\"evidence\":{"
-      "\"config_sha256\":"
-      "\"07aba52df9d1c027596c7ff22c340e21734e8f5065c76161dae6859605dc309d\","
-      "\"input_sha256\":"
-      "\"2222222222222222222222222222222222222222222222222222222222222222\"},"
-      "\"project\":\"allocator-test\",\"schema_version\":7,\"tool\":{"
-      "\"implementation_sha256\":"
-      "\"3333333333333333333333333333333333333333333333333333333333333333\","
-      "\"name\":\"archbird\",\"version\":\"fixture\"}}";
-  static const char review[] =
-      "{\"objective\":\"Exercise the reviewed allocator transition.\","
-      "\"owner\":\"test\",\"rationale\":\"Allocation failures must not leak "
-      "Act state.\",\"preserve_constraints\":[],\"selected_candidates\":[]}";
-  ArchbirdStatus status;
-  ArchbirdEngine *engine = create_engine(allocator, &status);
-  FixedOutput verification = {{0}, 0};
-  FixedOutput proposal = {{0}, 0};
-  FixedOutput contract = {{0}, 0};
-  FixedOutput result = {{0}, 0};
-  const char *fingerprint = NULL;
-  if (!engine)
-    return status;
-  status = archbird_constraints_evaluate(
-      engine, (const uint8_t *)config, sizeof(config) - 1, (const uint8_t *)map,
-      sizeof(map) - 1, NULL, 0, NULL, 0, 0, fixed_write, &verification);
-  if (status == ARCHBIRD_OK && !first_fingerprint(&verification, &fingerprint))
-    status = ARCHBIRD_CONFLICT;
-  if (status == ARCHBIRD_OK)
-    status = archbird_change_proposal(engine, verification.bytes,
-                                      verification.length, fingerprint, 64, 0,
-                                      fixed_write, &proposal);
-  if (status == ARCHBIRD_OK)
-    status = archbird_change_contract(
-        engine, proposal.bytes, proposal.length, (const uint8_t *)review,
-        sizeof(review) - 1, 0, fixed_write, &contract);
-  if (status == ARCHBIRD_OK)
-    status = archbird_change_verify(
-        engine, proposal.bytes, proposal.length, contract.bytes,
-        contract.length, verification.bytes, verification.length,
-        verification.bytes, verification.length, 0, fixed_write, &result);
-  if (status == ARCHBIRD_OK && !result.length)
-    status = ARCHBIRD_CONFLICT;
-  if (status != ARCHBIRD_OK)
-    (void)snprintf(allocator->error, sizeof(allocator->error), "%s",
-                   archbird_engine_error(engine));
-  archbird_engine_destroy(engine);
-  return status;
-}
-
 typedef ArchbirdStatus (*ExerciseFn)(TestAllocator *allocator);
 
 static void run_failure_sweep(const char *name, ExerciseFn exercise) {
@@ -849,8 +767,7 @@ static void test_invalid_okf_layer_cleanup(void) {
     return;
   }
   status = archbird_okf_publish(engine, (const uint8_t *)map, sizeof(map) - 1,
-                                NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, 0,
-                                count_write, &output);
+                                NULL, 0, NULL, 0, 0, count_write, &output);
   if (status != ARCHBIRD_INVALID_SCHEMA ||
       !strstr(archbird_engine_error(engine), "invalid Map layer file row"))
     fail("invalid-okf-layer-cleanup",
@@ -951,7 +868,6 @@ int main(void) {
                     exercise_budgeted_query_report);
   run_failure_sweep("verify-every-n", exercise_verify);
   run_failure_sweep("verify-authoring-every-n", exercise_verify_authoring);
-  run_failure_sweep("act-every-n", exercise_act);
   free(report_map);
   free(report_verification);
   report_map = NULL;

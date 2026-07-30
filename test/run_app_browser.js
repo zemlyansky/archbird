@@ -405,7 +405,7 @@ async function main() {
     await page.getByText("150%", { exact: true }).waitFor();
 
     await loadArtifact(page, verification, "verification");
-    await page.waitForSelector(".contract-editor", { timeout: 10_000 });
+    await page.waitForSelector(".verification-editor", { timeout: 10_000 });
     await page.getByLabel("Owner").fill("architecture");
     await page.getByLabel("Rationale").fill("Temporary browser-test waiver.");
     await page.getByLabel("Expires on").fill("2026-08-31");
@@ -416,7 +416,7 @@ async function main() {
     }
 
     await loadArtifact(page, projectConfiguration, "project-configuration");
-    await page.waitForSelector(".contract-editor", { timeout: 10_000 });
+    await page.waitForSelector(".verification-editor", { timeout: 10_000 });
     const reviewed = path.join(path.dirname(screenshot), "reviewed-archbird.json");
     await saveDownload(page, "Save project configuration", reviewed);
     const reviewedConfiguration = JSON.parse(fs.readFileSync(reviewed, "utf8"));

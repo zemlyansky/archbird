@@ -1025,26 +1025,22 @@ AB_WASM_EXPORT int ab_wasm_okf_analyze(const uint8_t *source,
   return stateless_end(engine, status);
 }
 
-AB_WASM_EXPORT int ab_wasm_okf_publish(
-    const uint8_t *map, size_t map_length, const uint8_t *verification,
-    size_t verification_length, const uint8_t *proposal, size_t proposal_length,
-    const uint8_t *contract, size_t contract_length,
-    const uint8_t *change_result, size_t result_length,
-    const uint8_t *normalization, size_t normalization_length, uint32_t flags) {
+AB_WASM_EXPORT int ab_wasm_okf_publish(const uint8_t *map, size_t map_length,
+                                       const uint8_t *verification,
+                                       size_t verification_length,
+                                       const uint8_t *normalization,
+                                       size_t normalization_length,
+                                       uint32_t flags) {
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(larger_input(larger_input(map_length, verification_length),
-                                larger_input(proposal_length, contract_length)),
-                   larger_input(result_length, normalization_length)),
+      larger_input(larger_input(map_length, verification_length),
+                   normalization_length),
       &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_okf_publish(
         engine, map, map_length, verification_length ? verification : NULL,
-        verification_length, proposal_length ? proposal : NULL, proposal_length,
-        contract_length ? contract : NULL, contract_length,
-        result_length ? change_result : NULL, result_length,
-        normalization_length ? normalization : NULL, normalization_length,
-        flags, output_write, &wasm_output);
+        verification_length, normalization_length ? normalization : NULL,
+        normalization_length, flags, output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 
@@ -1194,72 +1190,5 @@ AB_WASM_EXPORT int ab_wasm_constraints_freeze(
         resolution_length ? resolution : NULL, resolution_length,
         request_length ? request : NULL, request_length, owner, owner_length,
         rationale, rationale_length, flags, output_write, &wasm_output);
-  return stateless_end(engine, status);
-}
-
-AB_WASM_EXPORT int
-ab_wasm_change_proposal(const uint8_t *verification, size_t verification_length,
-                        const char *fingerprint, size_t fingerprint_length,
-                        uint32_t format, int full, size_t max_candidates,
-                        uint32_t flags) {
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status =
-      stateless_begin_saved_artifact(verification_length, &engine);
-  if (format > 1)
-    status = ARCHBIRD_INVALID_ARGUMENT;
-  if (status == ARCHBIRD_OK && format == 0)
-    status = archbird_change_proposal(engine, verification, verification_length,
-                                      fingerprint, fingerprint_length, flags,
-                                      output_write, &wasm_output);
-  else if (status == ARCHBIRD_OK)
-    status = archbird_change_proposal_report(
-        engine, verification, verification_length, fingerprint,
-        fingerprint_length, full, max_candidates, output_write, &wasm_output);
-  return stateless_end(engine, status);
-}
-
-AB_WASM_EXPORT int ab_wasm_change_contract(const uint8_t *proposal,
-                                           size_t proposal_length,
-                                           const uint8_t *review,
-                                           size_t review_length,
-                                           uint32_t format, uint32_t flags) {
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(proposal_length, review_length), &engine);
-  if (format > 1)
-    status = ARCHBIRD_INVALID_ARGUMENT;
-  if (status == ARCHBIRD_OK && format == 0)
-    status = archbird_change_contract(engine, proposal, proposal_length, review,
-                                      review_length, flags, output_write,
-                                      &wasm_output);
-  else if (status == ARCHBIRD_OK)
-    status = archbird_change_contract_report(engine, proposal, proposal_length,
-                                             review, review_length,
-                                             output_write, &wasm_output);
-  return stateless_end(engine, status);
-}
-
-AB_WASM_EXPORT int
-ab_wasm_change_verify(const uint8_t *proposal, size_t proposal_length,
-                      const uint8_t *contract, size_t contract_length,
-                      const uint8_t *before, size_t before_length,
-                      const uint8_t *after, size_t after_length,
-                      uint32_t format, uint32_t flags) {
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(larger_input(proposal_length, contract_length),
-                   larger_input(before_length, after_length)),
-      &engine);
-  if (format > (uint32_t)ARCHBIRD_CHANGE_JUNIT)
-    status = ARCHBIRD_INVALID_ARGUMENT;
-  if (status == ARCHBIRD_OK && format == (uint32_t)ARCHBIRD_CHANGE_JSON)
-    status = archbird_change_verify(
-        engine, proposal, proposal_length, contract, contract_length, before,
-        before_length, after, after_length, flags, output_write, &wasm_output);
-  else if (status == ARCHBIRD_OK)
-    status = archbird_change_verify_report(
-        engine, proposal, proposal_length, contract, contract_length, before,
-        before_length, after, after_length, (ArchbirdChangeFormat)format, flags,
-        output_write, &wasm_output);
   return stateless_end(engine, status);
 }

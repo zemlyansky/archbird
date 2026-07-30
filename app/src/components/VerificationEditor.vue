@@ -104,7 +104,7 @@ function saveWaiver() {
 </script>
 
 <template>
-  <section class="contract-editor">
+  <section class="verification-editor">
     <template v-if="artifact.artifact === 'project-configuration'">
       <p class="eyebrow">Project architecture policy</p>
       <h1>{{ projectConfiguration.project }}</h1>

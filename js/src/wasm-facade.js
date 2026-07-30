@@ -715,21 +715,15 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
         boolFlags(pretty, true),
       );
     },
-    okfPublish(map, verification, proposal, contract, changeResult, normalization, pretty = false) {
+    okfPublish(map, verification, normalization, pretty = false) {
       return withInputs(
-        [map, verification, proposal, contract, changeResult, normalization],
-        ([mapInput, verificationInput, proposalInput, contractInput, resultInput, normalizationInput]) =>
+        [map, verification, normalization],
+        ([mapInput, verificationInput, normalizationInput]) =>
           result(module._ab_wasm_okf_publish(
             mapInput.pointer,
             mapInput.length,
             verificationInput.pointer,
             verificationInput.length,
-            proposalInput.pointer,
-            proposalInput.length,
-            contractInput.pointer,
-            contractInput.length,
-            resultInput.pointer,
-            resultInput.length,
             normalizationInput.pointer,
             normalizationInput.length,
             boolFlags(pretty, true),
@@ -912,48 +906,6 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
             rationaleInput.pointer,
             rationaleInput.length,
             boolFlags(pretty, true),
-          )),
-      );
-    },
-    changeProposal(verification, fingerprint, format, full, maxCandidates, pretty) {
-      return twoInputs(
-        verification,
-        fingerprint,
-        "_ab_wasm_change_proposal",
-        formatValue(format, ["json", "markdown"], "change proposal format"),
-        full ? 1 : 0,
-        sizeValue(maxCandidates, "maxCandidates"),
-        boolFlags(pretty),
-      );
-    },
-    changeContract(proposal, review, format, pretty) {
-      return twoInputs(
-        proposal,
-        review,
-        "_ab_wasm_change_contract",
-        formatValue(format, ["json", "markdown"], "change contract format"),
-        boolFlags(pretty),
-      );
-    },
-    changeVerify(proposal, contract, before, after, format, pretty) {
-      return withInputs(
-        [proposal, contract, before, after],
-        ([proposalInput, contractInput, beforeInput, afterInput]) =>
-          result(module._ab_wasm_change_verify(
-            proposalInput.pointer,
-            proposalInput.length,
-            contractInput.pointer,
-            contractInput.length,
-            beforeInput.pointer,
-            beforeInput.length,
-            afterInput.pointer,
-            afterInput.length,
-            formatValue(
-              format,
-              ["json", "markdown", "sarif", "junit"],
-              "change result format",
-            ),
-            boolFlags(pretty, format === "sarif"),
           )),
       );
     },

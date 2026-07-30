@@ -268,7 +268,7 @@ describe("artifact workspaces", () => {
       }, "verification.json"),
     });
 
-    expect(root.querySelector(".contract-editor")).not.toBeNull();
+    expect(root.querySelector(".verification-editor")).not.toBeNull();
     expect(root.querySelectorAll("select option")).toHaveLength(1);
     const inputs = root.querySelectorAll("input");
     (inputs[0] as HTMLInputElement).value = "architecture";
@@ -300,12 +300,16 @@ describe("artifact workspaces", () => {
 
     expect(root.querySelectorAll(".check-editor")).toHaveLength(1);
     expect(root.textContent).toContain("NO-CYCLES");
-    (root.querySelector(".contract-editor > button") as HTMLButtonElement).click();
+    (
+      root.querySelector(
+        ".verification-editor > button",
+      ) as HTMLButtonElement
+    ).click();
     await nextTick();
     expect(root.textContent).toContain("Saved the project configuration");
   });
 
-  it("renders Diff and Act artifacts as task-oriented summaries", () => {
+  it("renders Diff, Plan, and Patch artifacts as task-oriented summaries", () => {
     const diff = mount(DocumentPanel, {
       artifact: artifact({
         artifact: "diff",
@@ -343,23 +347,23 @@ describe("artifact workspaces", () => {
     expect(plan.textContent).toContain("Remove legacy from src/api.c");
     mounted?.unmount();
 
-    const result = mount(DocumentPanel, {
+    const patch = mount(DocumentPanel, {
       artifact: artifact({
-        artifact: "act-result",
+        artifact: "patch",
         schema_version: 1,
-        status: "applied",
+        state: "accepted",
         plan_sha256: "a".repeat(64),
-        changes: [{
+        transitions: [{
           item_ids: ["remove-legacy"],
           kind: "modify",
           path: "src/api.c",
-          unified_diff: "--- a/src/api.c\n+++ b/src/api.c\n",
+          source_path: null,
         }],
         acceptance: { status: "satisfied" },
-      }, "act-result.json"),
+      }, "patch.json"),
     });
-    expect(result.textContent).toContain("Act result");
-    expect(result.textContent).toContain("satisfied");
-    expect(result.textContent).toContain("src/api.c");
+    expect(patch.textContent).toContain("Architecture patch");
+    expect(patch.textContent).toContain("satisfied");
+    expect(patch.textContent).toContain("src/api.c");
   });
 });

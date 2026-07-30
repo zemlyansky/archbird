@@ -389,12 +389,6 @@ def check_verify(extension, mapped: dict) -> None:
     )
     failed_constraint = failed["constraints"][0]
     assert failed_constraint["status"] == "fail", failed_constraint
-    proposal = json.loads(
-        extension.change_proposal(
-            canonical(failed), failed_constraint["findings"][0]["fingerprint"]
-        )
-    )
-    assert proposal["origin"]["constraint"] == "ECMASCRIPT-NESTED-IDENTITY", proposal
 
 
 def main() -> int:

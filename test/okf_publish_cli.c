@@ -46,19 +46,16 @@ static int write_stdout(void *unused, const uint8_t *bytes, size_t length) {
 }
 
 int main(int argc, char **argv) {
-  Bytes inputs[6] = {{0}};
+  Bytes inputs[3] = {{0}};
   ArchbirdEngineOptions options;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = ARCHBIRD_OK;
   int index;
-  if (argc != 7) {
-    fprintf(stderr,
-            "usage: %s MAP VERIFY|- PROPOSAL|- CONTRACT|- RESULT|- "
-            "NORMALIZATION|-\n",
-            argv[0]);
+  if (argc != 4) {
+    fprintf(stderr, "usage: %s MAP VERIFY|- NORMALIZATION|-\n", argv[0]);
     return 2;
   }
-  for (index = 0; index < 6; index++) {
+  for (index = 0; index < 3; index++) {
     if (read_file(argv[index + 1], &inputs[index]) != 0) {
       fprintf(stderr, "cannot read %s\n", argv[index + 1]);
       status = ARCHBIRD_INVALID_ARGUMENT;
@@ -71,16 +68,15 @@ int main(int argc, char **argv) {
   if (status == ARCHBIRD_OK)
     status = archbird_okf_publish(
         engine, inputs[0].data, inputs[0].length, inputs[1].data,
-        inputs[1].length, inputs[2].data, inputs[2].length, inputs[3].data,
-        inputs[3].length, inputs[4].data, inputs[4].length, inputs[5].data,
-        inputs[5].length, ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE,
-        write_stdout, NULL);
+        inputs[1].length, inputs[2].data, inputs[2].length,
+        ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE, write_stdout,
+        NULL);
   if (status != ARCHBIRD_OK)
     fprintf(stderr, "%s\n",
             engine ? archbird_engine_error(engine)
                    : "failed to create Archbird engine");
   archbird_engine_destroy(engine);
-  for (index = 0; index < 6; index++)
+  for (index = 0; index < 3; index++)
     free(inputs[index].data);
   return status == ARCHBIRD_OK ? 0 : 1;
 }

@@ -632,6 +632,236 @@ static PyObject *py_test_symbol_observations_validate(PyObject *self,
   Py_RETURN_NONE;
 }
 
+static PyObject *py_plan_validate(PyObject *self, PyObject *args) {
+  const char *input;
+  Py_ssize_t input_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTuple(args, "y#:plan_validate", &input, &input_length))
+    return NULL;
+  status = saved_artifact_engine((size_t)input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_plan_validate(engine, (const uint8_t *)input,
+                                    (size_t)input_length);
+  if (status != ARCHBIRD_OK) {
+    PyObject *result = raise_status(engine, status);
+    archbird_engine_destroy(engine);
+    return result;
+  }
+  archbird_engine_destroy(engine);
+  Py_RETURN_NONE;
+}
+
+static PyObject *py_plan_compile(PyObject *self, PyObject *args,
+                                 PyObject *kwargs) {
+  static char *keywords[] = {"project",      "map_json", "verification_json",
+                             "request_json", "pretty",   NULL};
+  PyObject *capsule;
+  const char *map;
+  const char *verification;
+  const char *request = "";
+  Py_ssize_t map_length;
+  Py_ssize_t verification_length;
+  Py_ssize_t request_length = 0;
+  int pretty = 0;
+  PyArchbirdProject *owned;
+  PyOutput output = {0};
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Oy#y#|y#p:plan_compile",
+                                   keywords, &capsule, &map, &map_length,
+                                   &verification, &verification_length,
+                                   &request, &request_length, &pretty))
+    return NULL;
+  owned = get_project(capsule);
+  if (!owned)
+    return NULL;
+  status = archbird_plan_compile(
+      owned->engine, owned->project, (const uint8_t *)map, (size_t)map_length,
+      (const uint8_t *)verification, (size_t)verification_length,
+      request_length ? (const uint8_t *)request : NULL, (size_t)request_length,
+      pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+  return render_result(owned->engine, status, &output);
+}
+
+static PyObject *py_patch_validate(PyObject *self, PyObject *args) {
+  const char *input;
+  Py_ssize_t input_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTuple(args, "y#:patch_validate", &input, &input_length))
+    return NULL;
+  status = saved_artifact_engine((size_t)input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_patch_validate(engine, (const uint8_t *)input,
+                                     (size_t)input_length);
+  if (status != ARCHBIRD_OK) {
+    PyObject *result = raise_status(engine, status);
+    archbird_engine_destroy(engine);
+    return result;
+  }
+  archbird_engine_destroy(engine);
+  Py_RETURN_NONE;
+}
+
+static PyObject *py_act_source_requirements(PyObject *self, PyObject *args,
+                                            PyObject *kwargs) {
+  static char *keywords[] = {"plan_json", "pretty", NULL};
+  const char *plan;
+  Py_ssize_t plan_length;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  PyOutput output = {0};
+  PyObject *result;
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|p:act_source_requirements",
+                                   keywords, &plan, &plan_length, &pretty))
+    return NULL;
+  status = saved_artifact_engine((size_t)plan_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_act_source_requirements(
+        engine, (const uint8_t *)plan, (size_t)plan_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_patch_source_requirements(PyObject *self, PyObject *args,
+                                              PyObject *kwargs) {
+  static char *keywords[] = {"patch_json", "pretty", NULL};
+  const char *patch;
+  Py_ssize_t patch_length;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  PyOutput output = {0};
+  PyObject *result;
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+                                   "y#|p:patch_source_requirements", keywords,
+                                   &patch, &patch_length, &pretty))
+    return NULL;
+  status = saved_artifact_engine((size_t)patch_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_patch_source_requirements(
+        engine, (const uint8_t *)patch, (size_t)patch_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_act_materialize_patch(PyObject *self, PyObject *args,
+                                          PyObject *kwargs) {
+  static char *keywords[] = {"project",
+                             "plan_json",
+                             "map_json",
+                             "verification_json",
+                             "source_metadata_json",
+                             "pretty",
+                             NULL};
+  PyObject *capsule;
+  const char *plan;
+  const char *map;
+  const char *verification;
+  const char *metadata;
+  Py_ssize_t plan_length;
+  Py_ssize_t map_length;
+  Py_ssize_t verification_length;
+  Py_ssize_t metadata_length;
+  int pretty = 0;
+  PyArchbirdProject *owned;
+  PyOutput output = {0};
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "Oy#y#y#y#|p:act_materialize_patch", keywords, &capsule,
+          &plan, &plan_length, &map, &map_length, &verification,
+          &verification_length, &metadata, &metadata_length, &pretty))
+    return NULL;
+  owned = get_project(capsule);
+  if (!owned)
+    return NULL;
+  status = archbird_act_materialize_patch(
+      owned->engine, owned->project, (const uint8_t *)plan, (size_t)plan_length,
+      (const uint8_t *)map, (size_t)map_length, (const uint8_t *)verification,
+      (size_t)verification_length, (const uint8_t *)metadata,
+      (size_t)metadata_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
+      &output);
+  return render_result(owned->engine, status, &output);
+}
+
+static PyObject *py_patch_accept(PyObject *self, PyObject *args,
+                                 PyObject *kwargs) {
+  static char *keywords[] = {"patch_json",     "before_map_json",
+                             "after_map_json", "verification_json",
+                             "pretty",         NULL};
+  const char *patch;
+  const char *before_map;
+  const char *after_map;
+  const char *verification;
+  Py_ssize_t patch_length;
+  Py_ssize_t before_map_length;
+  Py_ssize_t after_map_length;
+  Py_ssize_t verification_length;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  PyOutput output = {0};
+  PyObject *result;
+  ArchbirdStatus status;
+  size_t budget;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#y#y#|p:patch_accept", keywords, &patch,
+          &patch_length, &before_map, &before_map_length, &after_map,
+          &after_map_length, &verification, &verification_length, &pretty))
+    return NULL;
+  budget = larger_input(
+      larger_input((size_t)patch_length, (size_t)before_map_length),
+      larger_input((size_t)after_map_length, (size_t)verification_length));
+  status = saved_artifact_engine(budget, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_patch_accept(
+        engine, (const uint8_t *)patch, (size_t)patch_length,
+        (const uint8_t *)before_map, (size_t)before_map_length,
+        (const uint8_t *)after_map, (size_t)after_map_length,
+        (const uint8_t *)verification, (size_t)verification_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_patch_preflight_apply(PyObject *self, PyObject *args) {
+  const char *patch;
+  const char *metadata;
+  Py_ssize_t patch_length;
+  Py_ssize_t metadata_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTuple(args, "y#y#:patch_preflight_apply", &patch,
+                        &patch_length, &metadata, &metadata_length))
+    return NULL;
+  status = saved_artifact_engine(
+      larger_input((size_t)patch_length, (size_t)metadata_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_patch_preflight_apply(
+        engine, (const uint8_t *)patch, (size_t)patch_length,
+        (const uint8_t *)metadata, (size_t)metadata_length);
+  if (status != ARCHBIRD_OK) {
+    PyObject *result = raise_status(engine, status);
+    archbird_engine_destroy(engine);
+    return result;
+  }
+  archbird_engine_destroy(engine);
+  Py_RETURN_NONE;
+}
+
 static PyObject *py_discovery_plan(PyObject *self, PyObject *args,
                                    PyObject *kwargs) {
   static char *keywords[] = {"config", "paths", "pretty", NULL};
@@ -1490,19 +1720,13 @@ static PyObject *py_okf_analyze(PyObject *self, PyObject *args,
 
 static PyObject *py_okf_publish(PyObject *self, PyObject *args,
                                 PyObject *kwargs) {
-  static char *keywords[] = {"map",    "verification",  "proposal", "contract",
-                             "result", "normalization", "pretty",   NULL};
+  static char *keywords[] = {"map", "verification", "normalization", "pretty",
+                             NULL};
   const char *map;
   const char *verification;
-  const char *proposal;
-  const char *contract;
-  const char *change_result;
   const char *normalization;
   Py_ssize_t map_length;
   Py_ssize_t verification_length;
-  Py_ssize_t proposal_length;
-  Py_ssize_t contract_length;
-  Py_ssize_t result_length;
   Py_ssize_t normalization_length;
   int pretty = 0;
   ArchbirdEngine *engine = NULL;
@@ -1510,30 +1734,21 @@ static PyObject *py_okf_publish(PyObject *self, PyObject *args,
   PyOutput output = {0};
   PyObject *rendered;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#y#y#y#y#y#|p:okf_publish", keywords, &map,
-          &map_length, &verification, &verification_length, &proposal,
-          &proposal_length, &contract, &contract_length, &change_result,
-          &result_length, &normalization, &normalization_length, &pretty))
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#y#|p:okf_publish",
+                                   keywords, &map, &map_length, &verification,
+                                   &verification_length, &normalization,
+                                   &normalization_length, &pretty))
     return NULL;
   status = saved_artifact_engine(
       larger_input(
-          larger_input(
-              larger_input((size_t)map_length, (size_t)verification_length),
-              larger_input((size_t)proposal_length, (size_t)contract_length)),
-          larger_input((size_t)result_length, (size_t)normalization_length)),
+          larger_input((size_t)map_length, (size_t)verification_length),
+          (size_t)normalization_length),
       &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_okf_publish(
         engine, (const uint8_t *)map, (size_t)map_length,
         verification_length ? (const uint8_t *)verification : NULL,
         (size_t)verification_length,
-        proposal_length ? (const uint8_t *)proposal : NULL,
-        (size_t)proposal_length,
-        contract_length ? (const uint8_t *)contract : NULL,
-        (size_t)contract_length,
-        result_length ? (const uint8_t *)change_result : NULL,
-        (size_t)result_length,
         normalization_length ? (const uint8_t *)normalization : NULL,
         (size_t)normalization_length,
         (pretty ? ARCHBIRD_JSON_PRETTY : 0) | ARCHBIRD_JSON_TRAILING_NEWLINE,
@@ -1938,169 +2153,7 @@ static PyObject *py_constraints_freeze(PyObject *self, PyObject *args,
   return result;
 }
 
-static PyObject *py_change_proposal(PyObject *self, PyObject *args,
-                                    PyObject *kwargs) {
-  static char *keywords[] = {"verification",   "fingerprint", "format", "full",
-                             "max_candidates", "pretty",      NULL};
-  const char *verification;
-  const char *fingerprint;
-  const char *format = "json";
-  Py_ssize_t verification_length;
-  Py_ssize_t fingerprint_length;
-  Py_ssize_t max_candidates = 100;
-  int full = 0;
-  int pretty = 0;
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
-  PyOutput output = {0};
-  PyObject *result;
-  (void)self;
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#s#|spnp:change_proposal", keywords, &verification,
-          &verification_length, &fingerprint, &fingerprint_length, &format,
-          &full, &max_candidates, &pretty))
-    return NULL;
-  if (max_candidates < 0) {
-    PyErr_SetString(PyExc_ValueError, "max_candidates must be nonnegative");
-    return NULL;
-  }
-  if (strcmp(format, "json") != 0 && strcmp(format, "markdown") != 0) {
-    PyErr_SetString(PyExc_ValueError,
-                    "change proposal format must be json or markdown");
-    return NULL;
-  }
-  status = saved_artifact_engine((size_t)verification_length, &engine);
-  if (status == ARCHBIRD_OK && strcmp(format, "json") == 0)
-    status = archbird_change_proposal(
-        engine, (const uint8_t *)verification, (size_t)verification_length,
-        fingerprint, (size_t)fingerprint_length,
-        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
-  else if (status == ARCHBIRD_OK)
-    status = archbird_change_proposal_report(
-        engine, (const uint8_t *)verification, (size_t)verification_length,
-        fingerprint, (size_t)fingerprint_length, full, (size_t)max_candidates,
-        output_write, &output);
-  result = render_result(engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
-static PyObject *py_change_contract(PyObject *self, PyObject *args,
-                                    PyObject *kwargs) {
-  static char *keywords[] = {"proposal", "review", "format", "pretty", NULL};
-  const char *proposal;
-  const char *review;
-  const char *format = "json";
-  Py_ssize_t proposal_length;
-  Py_ssize_t review_length;
-  int pretty = 0;
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
-  PyOutput output = {0};
-  PyObject *result;
-  (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|sp:change_contract",
-                                   keywords, &proposal, &proposal_length,
-                                   &review, &review_length, &format, &pretty))
-    return NULL;
-  if (strcmp(format, "json") != 0 && strcmp(format, "markdown") != 0) {
-    PyErr_SetString(PyExc_ValueError,
-                    "change contract format must be json or markdown");
-    return NULL;
-  }
-  status = saved_artifact_engine(
-      larger_input((size_t)proposal_length, (size_t)review_length), &engine);
-  if (status == ARCHBIRD_OK && strcmp(format, "json") == 0)
-    status = archbird_change_contract(
-        engine, (const uint8_t *)proposal, (size_t)proposal_length,
-        (const uint8_t *)review, (size_t)review_length,
-        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
-  else if (status == ARCHBIRD_OK)
-    status = archbird_change_contract_report(
-        engine, (const uint8_t *)proposal, (size_t)proposal_length,
-        (const uint8_t *)review, (size_t)review_length, output_write, &output);
-  result = render_result(engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
-static PyObject *py_change_verify(PyObject *self, PyObject *args,
-                                  PyObject *kwargs) {
-  static char *keywords[] = {"proposal", "contract", "before", "after",
-                             "format",   "pretty",   NULL};
-  const char *proposal;
-  const char *contract;
-  const char *before;
-  const char *after;
-  const char *format = "json";
-  Py_ssize_t proposal_length;
-  Py_ssize_t contract_length;
-  Py_ssize_t before_length;
-  Py_ssize_t after_length;
-  int pretty = 0;
-  ArchbirdChangeFormat native_format;
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
-  PyOutput output = {0};
-  PyObject *result;
-  (void)self;
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#y#y#y#|sp:change_verify", keywords, &proposal,
-          &proposal_length, &contract, &contract_length, &before,
-          &before_length, &after, &after_length, &format, &pretty))
-    return NULL;
-  if (!strcmp(format, "json"))
-    native_format = ARCHBIRD_CHANGE_JSON;
-  else if (!strcmp(format, "markdown"))
-    native_format = ARCHBIRD_CHANGE_MARKDOWN;
-  else if (!strcmp(format, "sarif"))
-    native_format = ARCHBIRD_CHANGE_SARIF;
-  else if (!strcmp(format, "junit"))
-    native_format = ARCHBIRD_CHANGE_JUNIT;
-  else {
-    PyErr_SetString(PyExc_ValueError,
-                    "change result format must be json, markdown, sarif, or "
-                    "junit");
-    return NULL;
-  }
-  status = saved_artifact_engine(
-      larger_input(
-          larger_input((size_t)proposal_length, (size_t)contract_length),
-          larger_input((size_t)before_length, (size_t)after_length)),
-      &engine);
-  if (status == ARCHBIRD_OK && native_format == ARCHBIRD_CHANGE_JSON)
-    status = archbird_change_verify(
-        engine, (const uint8_t *)proposal, (size_t)proposal_length,
-        (const uint8_t *)contract, (size_t)contract_length,
-        (const uint8_t *)before, (size_t)before_length, (const uint8_t *)after,
-        (size_t)after_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
-        &output);
-  else if (status == ARCHBIRD_OK)
-    status = archbird_change_verify_report(
-        engine, (const uint8_t *)proposal, (size_t)proposal_length,
-        (const uint8_t *)contract, (size_t)contract_length,
-        (const uint8_t *)before, (size_t)before_length, (const uint8_t *)after,
-        (size_t)after_length, native_format,
-        (pretty ? ARCHBIRD_JSON_PRETTY : 0) |
-            (native_format == ARCHBIRD_CHANGE_SARIF
-                 ? ARCHBIRD_JSON_TRAILING_NEWLINE
-                 : 0),
-        output_write, &output);
-  result = render_result(engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
 static PyMethodDef archbird_methods[] = {
-    {"change_verify", (PyCFunction)py_change_verify,
-     METH_VARARGS | METH_KEYWORDS,
-     "Judge a reviewed architecture change against before/after evidence."},
-    {"change_contract", (PyCFunction)py_change_contract,
-     METH_VARARGS | METH_KEYWORDS,
-     "Seal explicit review metadata as an asserted change contract."},
-    {"change_proposal", (PyCFunction)py_change_proposal,
-     METH_VARARGS | METH_KEYWORDS,
-     "Compile one derived change proposal from a verification finding."},
     {"constraints_freeze", (PyCFunction)py_constraints_freeze,
      METH_VARARGS | METH_KEYWORDS, "Freeze a reviewed constraint baseline."},
     {"constraints_report", (PyCFunction)py_constraints_report,
@@ -2222,6 +2275,25 @@ static PyMethodDef archbird_methods[] = {
     {"test_symbol_observations_validate", py_test_symbol_observations_validate,
      METH_VARARGS,
      "Validate strict project-owned test-to-symbol observations."},
+    {"plan_validate", py_plan_validate, METH_VARARGS,
+     "Validate one canonical editable Plan."},
+    {"plan_compile", (PyCFunction)py_plan_compile, METH_VARARGS | METH_KEYWORDS,
+     "Compile one native editable Plan from a Project, Map, and Verification."},
+    {"patch_validate", py_patch_validate, METH_VARARGS,
+     "Validate one materialized or accepted Patch."},
+    {"act_source_requirements", (PyCFunction)py_act_source_requirements,
+     METH_VARARGS | METH_KEYWORDS,
+     "Return exact source paths required to materialize a Plan."},
+    {"patch_source_requirements", (PyCFunction)py_patch_source_requirements,
+     METH_VARARGS | METH_KEYWORDS,
+     "Return exact source paths required to apply an accepted Patch."},
+    {"act_materialize_patch", (PyCFunction)py_act_materialize_patch,
+     METH_VARARGS | METH_KEYWORDS,
+     "Materialize a Plan as an exact read-only Patch."},
+    {"patch_accept", (PyCFunction)py_patch_accept, METH_VARARGS | METH_KEYWORDS,
+     "Seal a Patch after independent Map and Verification acceptance."},
+    {"patch_preflight_apply", py_patch_preflight_apply, METH_VARARGS,
+     "Revalidate an accepted Patch immediately before commit."},
     {NULL, NULL, 0, NULL},
 };
 

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Exercise the complete Verify -> Plan -> Act CLI lifecycle."""
+"""Exercise the complete Verify -> Plan -> Act -> Patch -> Apply lifecycle."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
+
+from archbird import patching
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHBIRD = ROOT / "archbird"
@@ -61,6 +65,26 @@ class PlanActCliTest(unittest.TestCase):
     def plan_path(self, name: str = "plan.json") -> Path:
         return self.artifacts / name
 
+    def accepted_patch(
+        self, plan_path: Path, name: str = "patch.json"
+    ) -> tuple[Path, dict[str, object]]:
+        patch_path = self.plan_path(name)
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            "--output",
+            str(patch_path),
+        )
+        patch = json.loads(patch_path.read_bytes())
+        self.assertEqual(patch["artifact"], "patch")
+        self.assertEqual(patch["state"], "accepted")
+        self.assertEqual(patch["acceptance"]["status"], "satisfied")
+        return patch_path, patch
+
     def test_failing_constraint_generates_previews_and_applies_delete(self) -> None:
         self.configure(
             {
@@ -100,27 +124,79 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("+++ /dev/null", preview)
         self.assertTrue(legacy.exists(), "preview mutated the repository")
 
-        result_path = self.plan_path("result.json")
-        run(
-            "act",
-            str(plan_path),
-            "--root",
-            str(self.root),
-            "--apply",
-            "--format",
-            "json",
-            "--pretty",
-            "--output",
-            str(result_path),
-        )
-        result = json.loads(result_path.read_bytes())
-        self.assertEqual(result["status"], "applied")
-        self.assertEqual(result["acceptance"]["status"], "satisfied")
+        patch_path, patch = self.accepted_patch(plan_path)
+        self.assertTrue(legacy.exists(), "Act mutated the repository")
         self.assertEqual(
-            result["acceptance"]["constraints"],
+            patch["acceptance"]["constraints"],
             [{"id": "NO-LEGACY", "status": "pass"}],
         )
+        original = legacy.read_bytes()
+        legacy.write_text("drifted = True\n")
+        drift = run(
+            "apply",
+            str(patch_path),
+            "--root",
+            str(self.root),
+            expected=2,
+        )
+        self.assertIn("legacy.py", drift.stderr.decode())
+        self.assertEqual(legacy.read_text(), "drifted = True\n")
+        legacy.write_bytes(original)
+        run("apply", str(patch_path), "--root", str(self.root))
         self.assertFalse(legacy.exists())
+        replay = run(
+            "apply",
+            str(patch_path),
+            "--root",
+            str(self.root),
+            expected=2,
+        )
+        self.assertIn("legacy.py", replay.stderr.decode())
+
+    def test_forbidden_top_level_symbol_is_removed_exactly(self) -> None:
+        self.configure(
+            {
+                "NO-OBSOLETE-SYMBOL": {
+                    "kind": "forbidden_symbols",
+                    "symbols": ["obsolete"],
+                    "paths": ["module.py"],
+                    "owner": "architecture",
+                    "rationale": "The obsolete API stays absent.",
+                }
+            }
+        )
+        source = self.root / "module.py"
+        source.write_text(
+            "def obsolete():\n"
+            "    return 1\n\n"
+            "def retained():\n"
+            "    return 2\n"
+        )
+        plan_path = self.plan_path()
+        run(
+            "plan",
+            "NO-OBSOLETE-SYMBOL",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        operation = plan["items"][0]["operation"]
+        self.assertEqual(operation["action"], "replace_range")
+        self.assertEqual(operation["path"], "module.py")
+        self.assertEqual(
+            operation["before"],
+            "def obsolete():\n    return 1",
+        )
+        self.assertEqual(operation["replacement"], "")
+
+        patch_path, _ = self.accepted_patch(plan_path)
+        self.assertIn("def obsolete", source.read_text())
+        run("apply", str(patch_path), "--root", str(self.root))
+        self.assertNotIn("def obsolete", source.read_text())
+        self.assertIn("def retained", source.read_text())
 
     def test_map_query_verify_plan_act_closes_a_multifile_rename(self) -> None:
         (self.root / "api.py").write_text(
@@ -241,15 +317,11 @@ class PlanActCliTest(unittest.TestCase):
         ).stdout.decode()
         self.assertIn("--- a/api.py", patch)
         self.assertIn("--- a/consumer.py", patch)
-        run(
-            "act",
-            str(plan_path),
-            "--root",
-            str(self.root),
-            "--apply",
-            "--format",
-            "json",
+        patch_path, _patch = self.accepted_patch(
+            plan_path, "rename-patch.json"
         )
+        self.assertIn("old_api", (self.root / "api.py").read_text())
+        run("apply", str(patch_path), "--root", str(self.root))
         self.assertNotIn("old_api", (self.root / "api.py").read_text())
         self.assertNotIn("old_api", (self.root / "consumer.py").read_text())
         run("verify", "--root", str(self.root), "--check")
@@ -292,19 +364,10 @@ class PlanActCliTest(unittest.TestCase):
         second = json.loads(plan_path.read_bytes())
         self.assertEqual(second["source"], first["source"])
 
-        result = json.loads(
-            run(
-                "act",
-                str(plan_path),
-                "--root",
-                str(self.root),
-                "--apply",
-                "--format",
-                "json",
-            ).stdout
-        )
-        self.assertEqual(result["status"], "applied")
-        self.assertEqual(result["acceptance"]["status"], "satisfied")
+        patch_path, patch = self.accepted_patch(plan_path)
+        self.assertEqual(patch["acceptance"]["status"], "satisfied")
+        self.assertTrue(legacy.exists())
+        run("apply", str(patch_path), "--root", str(self.root))
         self.assertFalse(legacy.exists())
 
     def test_unrelated_source_drift_blocks_before_any_write(self) -> None:
@@ -331,14 +394,12 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
             "--root",
             str(self.root),
-            "--apply",
             "--format",
             "json",
             expected=2,
         )
-        result = json.loads(completed.stdout)
-        self.assertEqual(result["status"], "blocked")
-        self.assertIn("source context is stale", result["diagnostics"][0]["message"])
+        self.assertFalse(completed.stdout)
+        self.assertIn("Plan source", completed.stderr.decode())
         self.assertTrue(legacy.exists())
 
     def test_missing_required_code_is_an_honest_non_executable_plan(self) -> None:
@@ -360,18 +421,17 @@ class PlanActCliTest(unittest.TestCase):
         self.assertFalse(plan["items"][0]["executable"])
         before = (self.root / "module.py").read_bytes()
 
-        result = json.loads(
-            run(
-                "act",
-                str(plan_path),
-                "--root",
-                str(self.root),
-                "--format",
-                "json",
-                expected=2,
-            ).stdout
+        completed = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
         )
-        self.assertEqual(result["status"], "blocked")
+        self.assertFalse(completed.stdout)
+        self.assertIn("manual or blocked item", completed.stderr.decode())
         self.assertEqual((self.root / "module.py").read_bytes(), before)
 
     def test_passing_policy_produces_and_applies_no_op(self) -> None:
@@ -391,19 +451,13 @@ class PlanActCliTest(unittest.TestCase):
         plan = json.loads(plan_path.read_bytes())
         self.assertEqual(plan["items"], [])
 
-        result = json.loads(
-            run(
-                "act",
-                str(plan_path),
-                "--root",
-                str(self.root),
-                "--apply",
-                "--format",
-                "json",
-            ).stdout
-        )
-        self.assertEqual(result["changes"], [])
-        self.assertEqual(result["acceptance"]["status"], "satisfied")
+        patch_path, patch = self.accepted_patch(plan_path)
+        self.assertEqual(patch["transitions"], [])
+        self.assertEqual(patch["acceptance"]["status"], "satisfied")
+        applied = run(
+            "apply", str(patch_path), "--root", str(self.root)
+        ).stdout.decode()
+        self.assertEqual(applied, "Result: applied-transitions=0\n")
 
     def test_selected_fix_that_breaks_passing_policy_is_rolled_back(self) -> None:
         self.configure(
@@ -444,28 +498,13 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
             "--root",
             str(self.root),
-            "--apply",
             "--format",
             "json",
-            expected=1,
+            expected=2,
         )
-        result = json.loads(completed.stdout)
-        self.assertEqual(result["status"], "rejected")
-        self.assertEqual(result["acceptance"]["status"], "not_satisfied")
+        self.assertFalse(completed.stdout)
+        self.assertIn("failing constraint", completed.stderr.decode())
         self.assertEqual(legacy.read_text(), original)
-
-        markdown = run(
-            "act",
-            str(plan_path),
-            "--root",
-            str(self.root),
-            "--apply",
-            "--format",
-            "markdown",
-            expected=1,
-        ).stdout.decode()
-        self.assertIn("- `NO-LEGACY`: `pass`", markdown)
-        self.assertIn("- `KEEP-API`: `fail`", markdown)
 
     def test_act_rejects_a_symlink_plan_locator(self) -> None:
         self.configure(
@@ -495,6 +534,112 @@ class PlanActCliTest(unittest.TestCase):
             "must not be a symbolic link",
             completed.stderr.decode(),
         )
+
+    def test_asserted_create_and_move_apply_as_one_accepted_patch(self) -> None:
+        self.configure(
+            {
+                "CREATE": {
+                    "kind": "required_paths",
+                    "paths": ["created.py"],
+                    "owner": "architecture",
+                    "rationale": "The generated entry exists.",
+                },
+                "MOVE": {
+                    "kind": "required_paths",
+                    "paths": ["new/name.py"],
+                    "owner": "architecture",
+                    "rationale": "The source has its reviewed location.",
+                },
+                "NO-OLD": {
+                    "kind": "forbidden_paths",
+                    "paths": ["old/name.py"],
+                    "owner": "architecture",
+                    "rationale": "The old location stays absent.",
+                },
+            }
+        )
+        old = self.root / "old/name.py"
+        old.parent.mkdir()
+        old.write_text("value = 1\n")
+        plan_path = self.plan_path()
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan = json.loads(plan_path.read_bytes())
+        by_constraint = {
+            item["origins"][0]["constraint_id"]: item for item in plan["items"]
+        }
+        create = by_constraint["CREATE"]
+        create.update(
+            provenance="asserted",
+            executable=True,
+            non_executable_reasons=[],
+            unknowns=[],
+            operation={
+                "action": "create_file",
+                "path": "created.py",
+                "content": "created = True\n",
+            },
+        )
+        move = by_constraint["MOVE"]
+        move.update(
+            provenance="asserted",
+            executable=True,
+            non_executable_reasons=[],
+            unknowns=[],
+            operation={
+                "action": "move_file",
+                "source_path": "old/name.py",
+                "destination_path": "new/name.py",
+                "source_sha256": hashlib.sha256(old.read_bytes()).hexdigest(),
+            },
+            acceptance={"constraints": ["MOVE", "NO-OLD"]},
+        )
+        plan["items"] = [create, move]
+        plan["unknowns"] = []
+        plan_path.write_text(json.dumps(plan, sort_keys=True))
+
+        patch_path, patch = self.accepted_patch(plan_path)
+        self.assertEqual(
+            {transition["kind"] for transition in patch["transitions"]},
+            {"create", "move"},
+        )
+        self.assertTrue(old.exists())
+        run("apply", str(patch_path), "--root", str(self.root))
+        self.assertFalse(old.exists())
+        self.assertEqual((self.root / "new/name.py").read_text(), "value = 1\n")
+        self.assertEqual(
+            (self.root / "created.py").read_text(), "created = True\n"
+        )
+
+    def test_commit_failure_restores_already_removed_files(self) -> None:
+        self.configure(
+            {
+                "NO-LEGACY": {
+                    "kind": "forbidden_paths",
+                    "paths": ["a.py", "b.py"],
+                    "owner": "architecture",
+                    "rationale": "Both legacy files stay absent.",
+                }
+            }
+        )
+        first = self.root / "a.py"
+        second = self.root / "b.py"
+        first.write_text("a = 1\n")
+        second.write_text("b = 1\n")
+        plan_path = self.plan_path()
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        patch_path, _patch = self.accepted_patch(plan_path)
+        original_unlink = Path.unlink
+
+        def fail_second(path: Path, *args: object, **kwargs: object) -> None:
+            if path == second:
+                raise OSError("injected second delete failure")
+            original_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "unlink", fail_second):
+            with self.assertRaisesRegex(OSError, "injected second delete failure"):
+                patching._commit_patch(self.root, patch_path.read_bytes())
+        self.assertEqual(first.read_text(), "a = 1\n")
+        self.assertEqual(second.read_text(), "b = 1\n")
 
 
 if __name__ == "__main__":

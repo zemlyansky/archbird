@@ -546,7 +546,7 @@ pre {
   white-space: pre-wrap;
 }
 
-.error-card, .contract-editor, .document-workspace {
+.error-card, .verification-editor, .document-workspace {
   grid-column: 2 / -1;
   align-self: start;
   width: min(1040px, calc(100% - 48px));
@@ -573,21 +573,21 @@ pre {
 .error-banner strong, .error-banner span { display: block; }
 .error-banner span { margin-top: 2px; color: var(--danger); }
 
-.contract-editor { display: grid; gap: 12px; }
-.contract-editor h1, .document-workspace h1 {
+.verification-editor { display: grid; gap: 12px; }
+.verification-editor h1, .document-workspace h1 {
   margin: 0;
   font-size: 1.55rem;
   line-height: 1.2;
   letter-spacing: 0;
 }
-.contract-editor > p { margin: 0; color: var(--muted); line-height: 1.5; }
-.contract-editor label {
+.verification-editor > p { margin: 0; color: var(--muted); line-height: 1.5; }
+.verification-editor label {
   display: grid;
   gap: 4px;
   color: var(--muted);
   font-size: 0.74rem;
 }
-.contract-editor > button { justify-self: start; border-color: var(--accent); }
+.verification-editor > button { justify-self: start; border-color: var(--accent); }
 .check-editor {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -698,7 +698,7 @@ pre {
     box-shadow: none;
   }
   .inspector-close { display: block; }
-  .error-card, .contract-editor, .document-workspace {
+  .error-card, .verification-editor, .document-workspace {
     grid-column: 1;
     width: auto;
     margin: 0;

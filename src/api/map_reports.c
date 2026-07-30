@@ -1,11 +1,11 @@
 #include <archbird/archbird.h>
 
-#include "act_internal.h"
 #include "archbird_internal.h"
 #include "json_value.h"
 #include "map_reports.h"
 #include "query_internal.h"
 #include "render_internal.h"
+#include "verification_artifact.h"
 
 #include <string.h>
 
@@ -111,7 +111,7 @@ ArchbirdStatus archbird_map_query_markdown_view_with_verification(
   AbValue resolution = {0};
   AbValue request = {0};
   AbValue query = {0};
-  AbActVerification verification = {0};
+  AbVerificationArtifact verification = {0};
   AbBuffer query_json_buffer;
   AbBuffer report;
   ArchbirdStatus status;
@@ -143,8 +143,8 @@ ArchbirdStatus archbird_map_query_markdown_view_with_verification(
     status = ab_json_value_decode(engine, query_json_buffer.data,
                                   query_json_buffer.length, &query);
   if (status == ARCHBIRD_OK && verification_length)
-    status = ab_act_verification_load(engine, verification_json,
-                                      verification_length, &verification);
+    status = ab_verification_artifact_load(engine, verification_json,
+                                           verification_length, &verification);
   if (status == ARCHBIRD_OK)
     status = ab_query_report_markdown_view_with_verification(
         engine, &map, &query, verification_length ? &verification.root : NULL,
@@ -153,7 +153,7 @@ ArchbirdStatus archbird_map_query_markdown_view_with_verification(
     status = map_report_write(engine, &report, write_fn, user_data);
   ab_value_free(engine, &query);
   ab_value_free(engine, &request);
-  ab_act_verification_free(&verification);
+  ab_verification_artifact_free(&verification);
   ab_value_free(engine, &resolution);
   ab_value_free(engine, &map);
   ab_buffer_free(&report);

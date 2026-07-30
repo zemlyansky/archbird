@@ -4,7 +4,7 @@ libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
 includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 
 Name: Archbird
-Description: Deterministic architecture evidence, verification, and change contracts
+Description: Deterministic architecture evidence, verification, planning, and patches
 Version: @PROJECT_VERSION@
 Libs: -L${libdir} -larchbird
 Cflags: -I${includedir}

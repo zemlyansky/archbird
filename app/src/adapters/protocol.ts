@@ -12,9 +12,6 @@ export type HostMethod =
   | "diff"
   | "source"
   | "verification"
-  | "act-proposal"
-  | "act-contract"
-  | "act-result"
   | "snapshots"
   | "open-snapshot"
   | "dispose";

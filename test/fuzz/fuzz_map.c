@@ -60,8 +60,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                                       fuzz_discard, NULL);
     }
   }
-  (void)archbird_okf_publish(engine, data, size, NULL, 0, NULL, 0, NULL, 0,
-                             NULL, 0, NULL, 0, 0, fuzz_discard, NULL);
+  (void)archbird_okf_publish(engine, data, size, NULL, 0, NULL, 0, 0,
+                             fuzz_discard, NULL);
 #endif
   archbird_engine_destroy(engine);
   return 0;

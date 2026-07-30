@@ -1085,6 +1085,197 @@ def test_symbol_observations_validate(input: bytes) -> None:
     )
 
 
+def plan_validate(input: bytes) -> None:
+    data = _bytes(input, "Plan")
+    function = _declare(
+        "archbird_plan_validate",
+        [_POINTER, ctypes.c_char_p, ctypes.c_size_t],
+    )
+    _one_shot(
+        lambda engine, _write: function(engine, data, len(data)),
+        input_budget=len(data),
+        saved_artifact=True,
+    )
+
+
+def plan_compile(
+    project: _Project,
+    map_json: bytes,
+    verification_json: bytes,
+    request_json: bytes = b"",
+    *,
+    pretty: bool = False,
+) -> bytes:
+    map_document = _bytes(map_json, "Map")
+    verification = _bytes(verification_json, "Verification")
+    request = _bytes(request_json, "Plan request")
+    function = _declare(
+        "archbird_plan_compile",
+        [
+            _POINTER,
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _render(
+        project.engine,
+        lambda write: function(
+            project.engine,
+            project.project,
+            map_document,
+            len(map_document),
+            verification,
+            len(verification),
+            request if request else None,
+            len(request),
+            _JSON_PRETTY if pretty else 0,
+            write,
+            None,
+        ),
+    )
+
+
+def patch_validate(input: bytes) -> None:
+    data = _bytes(input, "Patch")
+    function = _declare(
+        "archbird_patch_validate",
+        [_POINTER, ctypes.c_char_p, ctypes.c_size_t],
+    )
+    _one_shot(
+        lambda engine, _write: function(engine, data, len(data)),
+        input_budget=len(data),
+        saved_artifact=True,
+    )
+
+
+def act_source_requirements(
+    plan_json: bytes, *, pretty: bool = False
+) -> bytes:
+    plan = _bytes(plan_json, "Plan")
+    return _simple_render(
+        "archbird_act_source_requirements",
+        [plan],
+        flags=_JSON_PRETTY if pretty else 0,
+        saved_artifact=True,
+    )
+
+
+def patch_source_requirements(
+    patch_json: bytes, *, pretty: bool = False
+) -> bytes:
+    patch = _bytes(patch_json, "Patch")
+    return _simple_render(
+        "archbird_patch_source_requirements",
+        [patch],
+        flags=_JSON_PRETTY if pretty else 0,
+        saved_artifact=True,
+    )
+
+
+def act_materialize_patch(
+    project: _Project,
+    plan_json: bytes,
+    map_json: bytes,
+    verification_json: bytes,
+    source_metadata_json: bytes,
+    *,
+    pretty: bool = False,
+) -> bytes:
+    plan = _bytes(plan_json, "Plan")
+    map_document = _bytes(map_json, "Map")
+    verification = _bytes(verification_json, "Verification")
+    metadata = _bytes(source_metadata_json, "source metadata")
+    function = _declare(
+        "archbird_act_materialize_patch",
+        [
+            _POINTER,
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _render(
+        project.engine,
+        lambda write: function(
+            project.engine,
+            project.project,
+            plan,
+            len(plan),
+            map_document,
+            len(map_document),
+            verification,
+            len(verification),
+            metadata,
+            len(metadata),
+            _JSON_PRETTY if pretty else 0,
+            write,
+            None,
+        ),
+    )
+
+
+def patch_accept(
+    patch_json: bytes,
+    before_map_json: bytes,
+    after_map_json: bytes,
+    verification_json: bytes,
+    *,
+    pretty: bool = False,
+) -> bytes:
+    return _simple_render(
+        "archbird_patch_accept",
+        [
+            _bytes(patch_json, "Patch"),
+            _bytes(before_map_json, "before Map"),
+            _bytes(after_map_json, "after Map"),
+            _bytes(verification_json, "Verification"),
+        ],
+        flags=_JSON_PRETTY if pretty else 0,
+        saved_artifact=True,
+    )
+
+
+def patch_preflight_apply(
+    patch_json: bytes, source_metadata_json: bytes
+) -> None:
+    patch = _bytes(patch_json, "Patch")
+    metadata = _bytes(source_metadata_json, "source metadata")
+    function = _declare(
+        "archbird_patch_preflight_apply",
+        [
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ],
+    )
+    _one_shot(
+        lambda engine, _write: function(
+            engine, patch, len(patch), metadata, len(metadata)
+        ),
+        input_budget=max(len(patch), len(metadata)),
+        saved_artifact=True,
+    )
+
+
 def discovery_plan(config: bytes, paths: Sequence[str], pretty=False) -> bytes:
     data = _bytes(config, "config")
     create = _declare(
@@ -1729,21 +1920,15 @@ def okf_analyze(
 def okf_publish(
     map: bytes,
     verification: bytes,
-    proposal: bytes,
-    contract: bytes,
-    result: bytes,
     normalization: bytes,
     pretty=False,
 ) -> bytes:
-    values = [
-        _bytes(value)
-        for value in (map, verification, proposal, contract, result, normalization)
-    ]
+    values = [_bytes(value) for value in (map, verification, normalization)]
     return _simple_render(
         "archbird_okf_publish",
         values,
         flags=_json_flags(pretty, True),
-        nullable_empty_indices=(1, 2, 3, 4, 5),
+        nullable_empty_indices=(1, 2),
         saved_artifact=True,
     )
 
@@ -1759,128 +1944,5 @@ def workspace_analyze(config: bytes, maps: bytes, pretty=False) -> bytes:
         "archbird_workspace_analyze",
         [_bytes(config), _bytes(maps)],
         flags=_json_flags(pretty),
-        saved_artifact=True,
-    )
-
-
-def change_proposal(
-    verification: bytes,
-    fingerprint: str,
-    format="json",
-    full=False,
-    max_candidates=100,
-    pretty=False,
-) -> bytes:
-    if max_candidates < 0:
-        raise ValueError("max_candidates must be nonnegative")
-    fingerprint_data = _text(fingerprint, "finding fingerprint")
-    document = _bytes(verification)
-    if format == "json":
-        function = _declare(
-            "archbird_change_proposal",
-            [
-                _POINTER,
-                ctypes.c_char_p,
-                ctypes.c_size_t,
-                ctypes.c_char_p,
-                ctypes.c_size_t,
-                ctypes.c_uint32,
-                _WRITE,
-                _POINTER,
-            ],
-        )
-        return _one_shot(
-            lambda engine, write: function(
-                engine,
-                document,
-                len(document),
-                fingerprint_data,
-                len(fingerprint_data),
-                _json_flags(pretty),
-                write,
-                None,
-            ),
-            input_budget=len(document),
-            saved_artifact=True,
-        )
-    if format != "markdown":
-        raise ValueError("change proposal format must be json or markdown")
-    function = _declare(
-        "archbird_change_proposal_report",
-        [
-            _POINTER,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_int,
-            ctypes.c_size_t,
-            _WRITE,
-            _POINTER,
-        ],
-    )
-    return _one_shot(
-        lambda engine, write: function(
-            engine,
-            document,
-            len(document),
-            fingerprint_data,
-            len(fingerprint_data),
-            int(bool(full)),
-            max_candidates,
-            write,
-            None,
-        ),
-        input_budget=len(document),
-        saved_artifact=True,
-    )
-
-
-def change_contract(proposal: bytes, review: bytes, format="json", pretty=False):
-    if format == "json":
-        return _simple_render(
-            "archbird_change_contract",
-            [_bytes(proposal), _bytes(review)],
-            flags=_json_flags(pretty),
-            saved_artifact=True,
-        )
-    if format == "markdown":
-        return _simple_render(
-            "archbird_change_contract_report",
-            [_bytes(proposal), _bytes(review)],
-            include_flags=False,
-            saved_artifact=True,
-        )
-    raise ValueError("change contract format must be json or markdown")
-
-
-def change_verify(
-    proposal: bytes,
-    contract: bytes,
-    before: bytes,
-    after: bytes,
-    format="json",
-    pretty=False,
-):
-    values = [_bytes(value) for value in (proposal, contract, before, after)]
-    if format == "json":
-        return _simple_render(
-            "archbird_change_verify",
-            values,
-            flags=_json_flags(pretty),
-            saved_artifact=True,
-        )
-    try:
-        native_format = {"markdown": 1, "sarif": 2, "junit": 3}[format]
-    except KeyError as error:
-        raise ValueError(
-            "change result format must be json, markdown, sarif, or junit"
-        ) from error
-    return _simple_render(
-        "archbird_change_verify_report",
-        values,
-        suffix_types=(ctypes.c_int,),
-        suffix_values=(native_format,),
-        flags=_json_flags(pretty, native_format == 2),
         saved_artifact=True,
     )

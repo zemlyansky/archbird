@@ -134,7 +134,7 @@ test("Plan schema bounds metadata, operation text, and collections", () => {
   assert.equal(validate(candidates), false);
 });
 
-test("Plan and ActResult schemas publish the host byte budgets", () => {
+test("Plan and Patch schemas publish the host byte budgets", () => {
   const planSchema = loadSchema("plan") as {
     $comment: string;
     properties: {
@@ -150,13 +150,20 @@ test("Plan and ActResult schemas publish the host byte budgets", () => {
       };
     };
   };
-  const resultSchema = loadSchema("act-result") as {
+  const patchSchema = loadSchema("patch") as {
     $comment: string;
     properties: {
-      changes: { maxItems: number };
-      diagnostics: { maxItems: number };
+      transitions: { maxItems: number };
+      executors: { maxItems: number };
     };
-    $defs: { unifiedDiff: { maxLength: number } };
+    $defs: {
+      afterFile: {
+        properties: {
+          byte_length: { maximum: number };
+          content_base64: { maxLength: number };
+        };
+      };
+    };
   };
 
   assert.match(planSchema.$comment, /67108864 bytes/);
@@ -171,8 +178,15 @@ test("Plan and ActResult schemas publish the host byte budgets", () => {
     planSchema.$defs.replaceRange.properties.replacement.maxLength,
     MAX_OPERATION_TEXT_LENGTH,
   );
-  assert.match(resultSchema.$comment, /268435456 UTF-8 bytes/);
-  assert.equal(resultSchema.properties.changes.maxItems, MAX_ARRAY_ITEMS);
-  assert.equal(resultSchema.properties.diagnostics.maxItems, MAX_ARRAY_ITEMS);
-  assert.equal(resultSchema.$defs.unifiedDiff.maxLength, 67_108_864);
+  assert.match(patchSchema.$comment, /268435456 bytes/);
+  assert.equal(patchSchema.properties.transitions.maxItems, MAX_ARRAY_ITEMS);
+  assert.equal(patchSchema.properties.executors.maxItems, MAX_ARRAY_ITEMS);
+  assert.equal(
+    patchSchema.$defs.afterFile.properties.byte_length.maximum,
+    67_108_864,
+  );
+  assert.equal(
+    patchSchema.$defs.afterFile.properties.content_base64.maxLength,
+    89_478_488,
+  );
 });

@@ -46,14 +46,7 @@ def main() -> int:
     query_json = required_bytes(root / "query" / "request.json")
     workspace_json = required_bytes(root / "workspace" / "config.json")
     workspace_maps = required_bytes(root / "workspace-maps" / "maps.json")
-    verification = required_bytes(
-        root / "act-verification" / "verification.json"
-    )
-    proposal = required_bytes(root / "act-proposal" / "proposal.json")
-    review = required_bytes(root / "act-review" / "review.json")
-    contract = required_bytes(root / "act-contract" / "contract.json")
-    after = required_bytes(root / "act-after" / "verification.json")
-    result = required_bytes(root / "act-result" / "result.json")
+    verification = required_bytes(root / "verification" / "verification.json")
 
     artifact(native.map_query(map_json, query_json), "query")
     artifact(native.map_diff(map_json, map_json), "diff")
@@ -76,72 +69,19 @@ def main() -> int:
         raise AssertionError("workspace seed did not reach a valid plan")
     artifact(native.workspace_analyze(workspace_json, workspace_maps), "workspace")
 
-    verification_document = artifact(verification, "verification")
-    fingerprint = verification_document["constraints"][0]["findings"][0][
-        "fingerprint"
-    ]
-    artifact(
-        native.change_proposal(
-            verification,
-            fingerprint,
-            format="json",
-            full=False,
-            max_candidates=100,
-            pretty=False,
-        ),
-        "change-proposal",
-    )
-    if not native.change_proposal(
-        verification,
-        fingerprint,
-        format="markdown",
-        full=False,
-        max_candidates=100,
-        pretty=False,
-    ):
-        raise AssertionError("proposal Markdown seed path was empty")
-    artifact(
-        native.change_contract(proposal, review, format="json", pretty=False),
-        "change-contract",
-    )
-    if not native.change_contract(
-        proposal, review, format="markdown", pretty=False
-    ):
-        raise AssertionError("contract Markdown seed path was empty")
-    for format_name in ("json", "markdown", "sarif", "junit"):
-        rendered = native.change_verify(
-            proposal,
-            contract,
-            verification,
-            after,
-            format=format_name,
-            pretty=False,
-        )
-        if not rendered:
-            raise AssertionError(f"empty change-result {format_name} projection")
-
-    okf_stages = (
-        (b"", b"", b"", b""),
-        (verification, b"", b"", b""),
-        (verification, proposal, b"", b""),
-        (verification, proposal, contract, b""),
-        (verification, proposal, contract, result),
-    )
-    for verification_value, proposal_value, contract_value, result_value in okf_stages:
+    artifact(verification, "verification")
+    for verification_value in (b"", verification):
         artifact(
             native.okf_publish(
                 act_map_json,
                 verification_value,
-                proposal_value,
-                contract_value,
-                result_value,
                 b"",
                 pretty=False,
             ),
             "okf-output-bundle",
         )
 
-    print("structured Map, workspace, Act, report, graph, and OKF seeds passed")
+    print("structured Map, workspace, report, graph, and OKF seeds passed")
     return 0
 
 

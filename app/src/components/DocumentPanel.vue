@@ -40,8 +40,8 @@ const preservedConstraints = computed(() =>
   Array.isArray(props.artifact.document.preserved_constraints)
     ? props.artifact.document.preserved_constraints.length
     : 0);
-const actChanges = computed(() => rows(props.artifact.document.changes));
-const actAcceptance = computed(() => {
+const patchTransitions = computed(() => rows(props.artifact.document.transitions));
+const patchAcceptance = computed(() => {
   const value = props.artifact.document.acceptance;
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -62,7 +62,7 @@ function label(value: unknown): string {
       <p class="eyebrow">{{ artifact.artifact }}</p>
       <h1 v-if="artifact.artifact === 'diff'">Structural comparison</h1>
       <h1 v-else-if="artifact.artifact === 'plan'">Structural change plan</h1>
-      <h1 v-else-if="artifact.artifact === 'act-result'">Act result</h1>
+      <h1 v-else-if="artifact.artifact === 'patch'">Architecture patch</h1>
       <h1 v-else>Structured evidence</h1>
     </header>
 
@@ -122,23 +122,20 @@ function label(value: unknown): string {
       </article>
     </template>
 
-    <template v-else-if="artifact.artifact === 'act-result'">
-      <div class="result-status" :data-status="artifact.document.status">
-        <span>Act</span><strong>{{ artifact.document.status }}</strong>
+    <template v-else-if="artifact.artifact === 'patch'">
+      <div class="result-status" :data-status="artifact.document.state">
+        <span>Patch</span><strong>{{ artifact.document.state }}</strong>
       </div>
       <dl class="definition-list">
-        <dt>Acceptance</dt><dd>{{ actAcceptance.status || 'not evaluated' }}</dd>
+        <dt>Acceptance</dt><dd>{{ patchAcceptance.status || 'not evaluated' }}</dd>
         <dt>Plan</dt><dd>{{ artifact.document.plan_sha256 }}</dd>
-        <dt>Files changed</dt><dd>{{ actChanges.length }}</dd>
+        <dt>File transitions</dt><dd>{{ patchTransitions.length }}</dd>
       </dl>
-      <article v-for="change in actChanges" :key="String(change.path)" class="document-row">
-        <p class="eyebrow">{{ change.kind }}</p>
-        <h2>{{ change.path }}</h2>
-        <p>{{ (change.item_ids as unknown[])?.length || 0 }} Plan item(s)</p>
-        <details>
-          <summary>Patch</summary>
-          <pre>{{ change.unified_diff }}</pre>
-        </details>
+      <article v-for="transition in patchTransitions" :key="String(transition.path)" class="document-row">
+        <p class="eyebrow">{{ transition.kind }}</p>
+        <h2>{{ transition.path }}</h2>
+        <p>{{ (transition.item_ids as unknown[])?.length || 0 }} Plan item(s)</p>
+        <p v-if="transition.source_path">Moved from {{ transition.source_path }}</p>
       </article>
     </template>
 

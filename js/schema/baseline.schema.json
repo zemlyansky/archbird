@@ -62,7 +62,16 @@
         "fingerprint": {"$ref": "#/$defs/sha256"},
         "constraint": {"type": "string", "minLength": 1},
         "comparison": {
-          "enum": ["equal", "missing", "extra", "different"]
+          "enum": [
+            "ambiguous",
+            "different",
+            "equal",
+            "extra",
+            "missing",
+            "overlap",
+            "unregistered",
+            "unresolved"
+          ]
         },
         "key": {"type": "string", "minLength": 1}
       }

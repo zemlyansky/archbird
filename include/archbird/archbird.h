@@ -135,13 +135,6 @@ typedef enum ArchbirdVerificationFormat {
   ARCHBIRD_VERIFICATION_JUNIT = 3
 } ArchbirdVerificationFormat;
 
-typedef enum ArchbirdChangeFormat {
-  ARCHBIRD_CHANGE_JSON = 0,
-  ARCHBIRD_CHANGE_MARKDOWN = 1,
-  ARCHBIRD_CHANGE_SARIF = 2,
-  ARCHBIRD_CHANGE_JUNIT = 3
-} ArchbirdChangeFormat;
-
 typedef enum ArchbirdGraphFormat {
   ARCHBIRD_GRAPH_GRAPHML = 0,
   ARCHBIRD_GRAPH_MERMAID = 1,
@@ -410,6 +403,93 @@ ARCHBIRD_API ArchbirdStatus archbird_query_plan_compile(
     const char *query_id, size_t query_id_length, const uint8_t *overrides_json,
     size_t overrides_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
     void *user_data);
+
+/*
+ * Validate one canonical editable Plan. Plan semantics are owned by the native
+ * core; hosts must not implement an independent accepted-input contract.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_plan_validate(ArchbirdEngine *engine,
+                                                   const uint8_t *plan_json,
+                                                   size_t plan_length);
+
+/*
+ * Compile one editable Plan from a complete Verification and its exact Map.
+ * The project supplies the source bytes already represented by the Map; the
+ * core performs no filesystem I/O. request_json is empty or an object with
+ * optional constraint_ids, objective, and asserted renames.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_plan_compile(
+    ArchbirdEngine *engine, const ArchbirdProject *project,
+    const uint8_t *map_json, size_t map_length,
+    const uint8_t *verification_json, size_t verification_length,
+    const uint8_t *request_json, size_t request_length, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Validate one exact Patch. A materialized Patch is a read-only Act preview;
+ * only an accepted Patch carries a verified after-state and content seal.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_patch_validate(ArchbirdEngine *engine,
+                                                    const uint8_t *patch_json,
+                                                    size_t patch_length);
+
+/*
+ * Return the exact sorted present/absent repository paths that a host must
+ * observe before materializing this Plan. This keeps Plan interpretation in
+ * the core while filesystem access remains a host responsibility.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_act_source_requirements(
+    ArchbirdEngine *engine, const uint8_t *plan_json, size_t plan_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Return the exact sorted present/absent repository paths that a host must
+ * re-observe immediately before applying an accepted Patch.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_patch_source_requirements(
+    ArchbirdEngine *engine, const uint8_t *patch_json, size_t patch_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Materialize source-locked Plan operators against exact project bytes as a
+ * binary-safe, read-only Patch. map_json must be the Map named by the Plan.
+ * source_metadata_json is a host observation with sorted existing file rows
+ * (path, SHA-256, executable bit) and sorted paths proven absent for creates
+ * or moves. The core performs no filesystem I/O.
+ *
+ * A materialized Patch is not applicable until after-state Map/Verification
+ * acceptance seals it through the Patch acceptance API.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_act_materialize_patch(
+    ArchbirdEngine *engine, const ArchbirdProject *project,
+    const uint8_t *plan_json, size_t plan_length, const uint8_t *map_json,
+    size_t map_length, const uint8_t *verification_json,
+    size_t verification_length, const uint8_t *source_metadata_json,
+    size_t source_metadata_length, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Accept a materialized Patch only after exact before/after Maps and fresh
+ * Verification prove its complete constraint contract without new Map
+ * diagnostics. The result is an immutable content-sealed Patch; this function
+ * performs no filesystem I/O.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_patch_accept(
+    ArchbirdEngine *engine, const uint8_t *patch_json, size_t patch_length,
+    const uint8_t *before_map_json, size_t before_map_length,
+    const uint8_t *after_map_json, size_t after_map_length,
+    const uint8_t *verification_json, size_t verification_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Revalidate an accepted Patch against source metadata observed immediately
+ * before filesystem commit. This checks exact source preimages, executable
+ * bits, and destination absence. Hosts may then replay only the Patch's
+ * already-materialized bytes; they must not reevaluate the Plan.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_patch_preflight_apply(
+    ArchbirdEngine *engine, const uint8_t *patch_json, size_t patch_length,
+    const uint8_t *source_metadata_json, size_t source_metadata_length);
 
 /*
  * Evaluate project constraints directly over one canonical Map and
@@ -716,18 +796,15 @@ ARCHBIRD_API ArchbirdStatus archbird_okf_analyze(
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*
- * Project canonical Map/Verify/Act artifacts into one content-addressed OKF
- * output bundle. Optional artifacts must form the complete ordered chain.
- * normalization_json is an optional schema-1 okf-text-normalization artifact
- * supplying host Unicode NFKD/case-fold evidence; ASCII-only inputs need none.
- * The core performs no filesystem writes.
+ * Project a canonical Map and optional matching Verification into one
+ * content-addressed OKF output bundle. normalization_json is an optional
+ * schema-1 okf-text-normalization artifact supplying host Unicode
+ * NFKD/case-fold evidence; ASCII-only inputs need none. The core performs no
+ * filesystem writes.
  */
 ARCHBIRD_API ArchbirdStatus archbird_okf_publish(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
     const uint8_t *verification_json, size_t verification_length,
-    const uint8_t *proposal_json, size_t proposal_length,
-    const uint8_t *contract_json, size_t contract_length,
-    const uint8_t *result_json, size_t result_length,
     const uint8_t *normalization_json, size_t normalization_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
@@ -751,51 +828,6 @@ ARCHBIRD_API ArchbirdStatus archbird_workspace_analyze(
     ArchbirdEngine *engine, const uint8_t *workspace_json,
     size_t workspace_length, const uint8_t *maps_json, size_t maps_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
-
-/*
- * Compile one immutable derived architecture-change proposal from one exact
- * finding in a canonical verification artifact.  The core performs no
- * repository I/O and does not authorize or apply edits.
- */
-ARCHBIRD_API ArchbirdStatus archbird_change_proposal(
-    ArchbirdEngine *engine, const uint8_t *verification_json,
-    size_t verification_length, const char *finding_fingerprint,
-    size_t fingerprint_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
-    void *user_data);
-
-/* Seal explicit human review metadata as an asserted change contract. */
-ARCHBIRD_API ArchbirdStatus archbird_change_contract(
-    ArchbirdEngine *engine, const uint8_t *proposal_json,
-    size_t proposal_length, const uint8_t *review_json, size_t review_length,
-    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
-
-/* Judge an asserted change contract against supplied before/after evidence. */
-ARCHBIRD_API ArchbirdStatus archbird_change_verify(
-    ArchbirdEngine *engine, const uint8_t *proposal_json,
-    size_t proposal_length, const uint8_t *contract_json,
-    size_t contract_length, const uint8_t *before_verification_json,
-    size_t before_length, const uint8_t *after_verification_json,
-    size_t after_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
-    void *user_data);
-
-ARCHBIRD_API ArchbirdStatus archbird_change_proposal_report(
-    ArchbirdEngine *engine, const uint8_t *verification_json,
-    size_t verification_length, const char *finding_fingerprint,
-    size_t fingerprint_length, int full, size_t max_candidates,
-    ArchbirdWriteFn write_fn, void *user_data);
-
-ARCHBIRD_API ArchbirdStatus archbird_change_contract_report(
-    ArchbirdEngine *engine, const uint8_t *proposal_json,
-    size_t proposal_length, const uint8_t *review_json, size_t review_length,
-    ArchbirdWriteFn write_fn, void *user_data);
-
-ARCHBIRD_API ArchbirdStatus archbird_change_verify_report(
-    ArchbirdEngine *engine, const uint8_t *proposal_json,
-    size_t proposal_length, const uint8_t *contract_json,
-    size_t contract_length, const uint8_t *before_verification_json,
-    size_t before_length, const uint8_t *after_verification_json,
-    size_t after_length, ArchbirdChangeFormat format, uint32_t json_flags,
-    ArchbirdWriteFn write_fn, void *user_data);
 
 ARCHBIRD_API ArchbirdStatus archbird_project_finalize_providers(
     ArchbirdEngine *engine, ArchbirdProject *project);

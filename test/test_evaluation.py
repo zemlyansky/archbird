@@ -175,9 +175,9 @@ elif command == 'plan':
   }]}
 elif command == 'act':
   value = {
-    'artifact':'act-result',
+    'artifact':'patch',
     'schema_version':1,
-    'status':'blocked',
+    'state':'accepted',
   }
 else:
   raise SystemExit(f'unsupported fake command: {command}')

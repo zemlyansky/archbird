@@ -2663,31 +2663,6 @@ def main() -> int:
     missing_constraint = constraints["MISSING-ROUTE"]
     if missing_constraint["status"] != "fail":
         raise AssertionError(missing_constraint)
-    proposal = json.loads(
-        extension.change_proposal(
-            canonical(verified),
-            missing_constraint["findings"][0]["fingerprint"],
-        )
-    )
-    proposal_evidence = [
-        evidence
-        for candidate in proposal["candidates"]
-        for evidence in candidate["evidence"]
-    ] + [
-        evidence
-        for postcondition in proposal["postconditions"]
-        for evidence in postcondition["evidence"]
-    ]
-    if not any(
-        row["provenance"] == "asserted"
-        and row["detail"].startswith("configured structural test route")
-        for row in proposal_evidence
-    ) or any(
-        row["provenance"] == "derived"
-        and "(configured)" in row["detail"]
-        for row in proposal_evidence
-    ):
-        raise AssertionError(proposal_evidence)
     check_c_test_function_candidates(extension)
     check_stable_duplicate_reference_witness(extension)
     check_external_call_namespace(extension)
