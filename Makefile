@@ -177,6 +177,7 @@ test-py: build-py
 		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_project_configuration.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_generation.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_act_surface_closure.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_act_execution.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_resource_limits.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ast_grep_adapter.py
