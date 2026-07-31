@@ -743,25 +743,6 @@
               "provenance": {"const": "asserted"}
             }
           }
-        },
-        {
-          "if": {
-            "properties": {
-              "executable": {"const": true},
-              "operation": {
-                "properties": {
-                  "action": {"const": "insert_make_variable_token"}
-                },
-                "required": ["action"]
-              }
-            },
-            "required": ["executable", "operation"]
-          },
-          "then": {
-            "properties": {
-              "provenance": {"const": "asserted"}
-            }
-          }
         }
       ]
     }

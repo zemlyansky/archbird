@@ -232,7 +232,7 @@ static ArchbirdStatus source_lock(AbPlanCompile *context, const AbString *path,
                                   ArchbirdSourceView *out_source) {
   AbPlanSourceLock lock;
   ArchbirdStatus status = ab_plan_source_lock(context->engine, context->project,
-                                              context->map_files, path, &lock);
+                                              &context->map, path, &lock);
   if (status == ARCHBIRD_OK) {
     *out_sha = lock.sha256->as.text.data;
     *out_source = lock.source;
@@ -692,6 +692,11 @@ static ArchbirdStatus compile_constraint(AbPlanCompile *context,
   status = ab_plan_compile_edge_constraint(
       context->engine, context->project, &context->map, &context->builder,
       constraint, definition, actual, &handled);
+  if (status != ARCHBIRD_OK || handled)
+    return status;
+  status = ab_plan_compile_surface_constraint(
+      context->engine, context->project, &context->map, &context->builder,
+      constraint, definition, context->renames, context->rename_used, &handled);
   if (status != ARCHBIRD_OK || handled)
     return status;
   if (strcmp(form, "forbidden_paths") == 0)

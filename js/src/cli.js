@@ -75,7 +75,7 @@ function usage(command = "map") {
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
     verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
-    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--objective TEXT] [--output PLAN.json]",
+    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--output PLAN.json]",
     act: "archbird act PLAN.json [--root PROJECT] [--format markdown|json|patch] [--output PATCH.json]",
     apply: "archbird apply PATCH.json [--root PROJECT]",
     export: "archbird export graphml|json|mermaid --map MAP_OR_QUERY.json [--output FILE]",

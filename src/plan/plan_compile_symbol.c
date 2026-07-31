@@ -189,8 +189,8 @@ static int strings_valid(const AbValue *values) {
 }
 
 static ArchbirdStatus render_rename_operation(
-    ArchbirdEngine *engine, const ArchbirdProject *project,
-    const AbValue *map_files, const AbString *symbol, const AbString *new_name,
+    ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
+    const AbString *symbol, const AbString *new_name,
     const AbProjectionResult *occurrences, AbBuffer *operation,
     AbPlanReasons *reasons, size_t *out_site_count) {
   const AbProjectionData *fact = &occurrences->data;
@@ -223,8 +223,7 @@ static ArchbirdStatus render_rename_operation(
       invalid_count++;
       continue;
     }
-    status =
-        ab_plan_source_lock(engine, project, map_files, &path->as.text, &lock);
+    status = ab_plan_source_lock(engine, project, map, &path->as.text, &lock);
     if (status != ARCHBIRD_OK)
       break;
     if (!ab_value_equal(sha, lock.sha256) || end > lock.source.byte_length ||
@@ -499,8 +498,8 @@ append_removal(ArchbirdEngine *engine, const ArchbirdProject *project,
   }
   if (status == ARCHBIRD_OK && candidate_path &&
       candidate_path->kind == AB_VALUE_STRING) {
-    status = ab_plan_source_lock(engine, project, map_files,
-                                 &candidate_path->as.text, &lock);
+    status = ab_plan_source_lock(engine, project, map, &candidate_path->as.text,
+                                 &lock);
     if (status == ARCHBIRD_OK)
       lock_ready = 1;
   }
@@ -623,9 +622,9 @@ append_rename(ArchbirdEngine *engine, const ArchbirdProject *project,
         "rename directives require distinct portable identifier leaves");
   status = evaluate_occurrences(engine, map, symbol, &plan, &result);
   if (status == ARCHBIRD_OK)
-    status = render_rename_operation(engine, project, field(map, "files"),
-                                     symbol, new_name, &result, &operation,
-                                     &reasons, &site_count);
+    status =
+        render_rename_operation(engine, project, map, symbol, new_name, &result,
+                                &operation, &reasons, &site_count);
   else
     ab_buffer_init(&operation, engine);
   if (status == ARCHBIRD_OK && !asserted)

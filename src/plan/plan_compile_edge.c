@@ -143,7 +143,7 @@ static ArchbirdStatus render_candidate_paths(AbBuffer *operation,
 
 static ArchbirdStatus
 render_candidate_sites(ArchbirdEngine *engine, const ArchbirdProject *project,
-                       const AbValue *map_files, const AbValue *sites,
+                       const AbValue *map, const AbValue *sites,
                        AbBuffer *output, size_t *out_count,
                        size_t *out_zero_width) {
   size_t index;
@@ -180,8 +180,7 @@ render_candidate_sites(ArchbirdEngine *engine, const ArchbirdProject *project,
       zero_width++;
       continue;
     }
-    status =
-        ab_plan_source_lock(engine, project, map_files, &path->as.text, &lock);
+    status = ab_plan_source_lock(engine, project, map, &path->as.text, &lock);
     if (status != ARCHBIRD_OK)
       break;
     if (end > lock.source.byte_length || end - start != name->as.text.length ||
@@ -237,7 +236,7 @@ render_candidate_sites(ArchbirdEngine *engine, const ArchbirdProject *project,
 
 static ArchbirdStatus
 append_edge_item(ArchbirdEngine *engine, const ArchbirdProject *project,
-                 const AbValue *map_files, AbPlanItemBuilder *builder,
+                 const AbValue *map, AbPlanItemBuilder *builder,
                  const AbValue *constraint, const AbPlanFindingGroup *group,
                  const AbProjectionData *actual) {
   const AbValue *finding = group->representative;
@@ -268,7 +267,7 @@ append_edge_item(ArchbirdEngine *engine, const ArchbirdProject *project,
         "The edge ProjectionResult is not complete, current, and exhaustive.";
     status = literal(&candidate_sites, "[]");
   } else {
-    status = render_candidate_sites(engine, project, map_files, sites,
+    status = render_candidate_sites(engine, project, map, sites,
                                     &candidate_sites, &site_count, &zero_width);
     if (status == ARCHBIRD_OK && !site_count)
       reasons[reason_count++] =
@@ -329,7 +328,6 @@ ArchbirdStatus ab_plan_compile_edge_constraint(
     int *out_handled) {
   const AbValue *select = field(definition, "select");
   const AbValue *findings = field(constraint, "findings");
-  const AbValue *map_files = field(map, "files");
   AbPlanFindingGroups groups = {0};
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -345,7 +343,7 @@ ArchbirdStatus ab_plan_compile_edge_constraint(
         "plan compilation: failing edge constraint has no issue evidence");
   status = ab_plan_finding_groups_collect(engine, findings, &groups);
   for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++)
-    status = append_edge_item(engine, project, map_files, builder, constraint,
+    status = append_edge_item(engine, project, map, builder, constraint,
                               &groups.groups[index], actual);
   ab_plan_finding_groups_free(engine, &groups);
   return status;

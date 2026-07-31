@@ -6,7 +6,9 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -15,6 +17,8 @@ from archbird import patching
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHBIRD = ROOT / "archbird"
+SURFACE_FIXTURE = ROOT / "test/fixtures/plan_act/surface_closure"
+REGISTRATION_FIXTURE = ROOT / "test/fixtures/plan_act/surface_registration"
 
 
 def run(*arguments: str, expected: int = 0) -> subprocess.CompletedProcess[bytes]:
@@ -84,6 +88,27 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(patch["state"], "accepted")
         self.assertEqual(patch["acceptance"]["status"], "satisfied")
         return patch_path, patch
+
+    def run_surface_gates(self) -> None:
+        compiler = shutil.which("cc")
+        node = shutil.which("node")
+        make = shutil.which("make")
+        if compiler is None or node is None or make is None:
+            self.skipTest("surface closure requires make, cc, and node")
+        completed = subprocess.run(
+            [
+                make,
+                "check",
+                f"CC={compiler}",
+                f"PYTHON={sys.executable}",
+                f"NODE={node}",
+            ],
+            cwd=self.root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout.decode())
 
     def test_failing_constraint_generates_previews_and_applies_delete(self) -> None:
         self.configure(
@@ -197,6 +222,188 @@ class PlanActCliTest(unittest.TestCase):
         run("apply", str(patch_path), "--root", str(self.root))
         self.assertNotIn("def obsolete", source.read_text())
         self.assertIn("def retained", source.read_text())
+
+    def test_reviewed_provider_surface_rename_closes_exact_make_input(self) -> None:
+        shutil.copytree(SURFACE_FIXTURE, self.root, dirs_exist_ok=True)
+        self.run_surface_gates()
+        failed = run(
+            "verify",
+            "--root",
+            str(self.root),
+            "--check",
+            expected=1,
+        )
+        self.assertIn("FFI-SURFACE", failed.stdout.decode())
+
+        manual_path = self.plan_path("manual-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(manual_path),
+        )
+        manual = json.loads(manual_path.read_bytes())
+        self.assertFalse(manual["items"][0]["executable"])
+        self.assertEqual(manual["items"][0]["operation"]["action"], "manual")
+
+        unknown_target = run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--rename",
+            "core_add=core_missing",
+            "--output",
+            str(self.plan_path("unknown-target.json")),
+            expected=2,
+        )
+        self.assertIn(
+            "asserted rename does not match",
+            unknown_target.stderr.decode(),
+        )
+
+        makefile = self.root / "Makefile"
+        original = makefile.read_bytes()
+        makefile.write_bytes(original.replace(b"_core_add", b"_core_add _core_add"))
+        duplicate = run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--rename",
+            "core_add=core_sum",
+            "--output",
+            str(self.plan_path("duplicate-token.json")),
+            expected=2,
+        )
+        self.assertIn(
+            "Make variable token edit expected one match but found 2",
+            duplicate.stderr.decode(),
+        )
+        makefile.write_bytes(original)
+
+        plan_path = self.plan_path("surface-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--rename",
+            "core_add=core_sum",
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertTrue(item["executable"])
+        self.assertEqual(item["provenance"], "asserted")
+        self.assertEqual(
+            item["operation"],
+            {
+                "action": "edit_make_variable_token",
+                "expected_token": "_core_add",
+                "path": "Makefile",
+                "replacement_token": "_core_sum",
+                "source_sha256": hashlib.sha256(original).hexdigest(),
+                "variable": "WASM_EXPORTS",
+            },
+        )
+        preview = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn("-WASM_EXPORTS = _core_add", preview)
+        self.assertIn("+WASM_EXPORTS = _core_sum", preview)
+        self.assertEqual(makefile.read_bytes(), original)
+
+        patch_path, patch = self.accepted_patch(
+            plan_path, "surface-patch.json"
+        )
+        self.assertEqual(
+            patch["acceptance"]["constraints"],
+            [{"id": "FFI-SURFACE", "status": "pass"}],
+        )
+        run("apply", str(patch_path), "--root", str(self.root))
+        self.assertIn("WASM_EXPORTS = _core_sum", makefile.read_text())
+        run("verify", "--root", str(self.root), "--check")
+        self.run_surface_gates()
+
+    def test_required_provider_surface_derives_exact_make_insertion(self) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        self.run_surface_gates()
+        failed = run(
+            "verify",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--check",
+            expected=1,
+        )
+        self.assertIn("provider does not declare core_sum", failed.stdout.decode())
+        self.assertIn(
+            "used provider capability is not declared: core_sum",
+            failed.stdout.decode(),
+        )
+
+        makefile = self.root / "Makefile"
+        original = makefile.read_bytes()
+        plan_path = self.plan_path("registration-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertTrue(item["executable"])
+        self.assertEqual(item["provenance"], "derived")
+        self.assertEqual(len(item["origins"]), 2)
+        self.assertEqual(
+            item["operation"],
+            {
+                "action": "insert_make_variable_token",
+                "anchor_token": "_core_peer",
+                "path": "Makefile",
+                "position": "after",
+                "source_sha256": hashlib.sha256(original).hexdigest(),
+                "token": "_core_sum",
+                "variable": "WASM_EXPORTS",
+            },
+        )
+        preview = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn("-WASM_EXPORTS = _core_peer", preview)
+        self.assertIn("+WASM_EXPORTS = _core_peer _core_sum", preview)
+        self.assertEqual(makefile.read_bytes(), original)
+
+        patch_path, patch = self.accepted_patch(
+            plan_path, "registration-patch.json"
+        )
+        self.assertEqual(
+            patch["acceptance"]["constraints"],
+            [{"id": "FFI-SURFACE", "status": "pass"}],
+        )
+        run("apply", str(patch_path), "--root", str(self.root))
+        self.assertIn("WASM_EXPORTS = _core_peer _core_sum", makefile.read_text())
+        run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
+        self.run_surface_gates()
 
     def test_map_query_verify_plan_act_closes_a_multifile_rename(self) -> None:
         (self.root / "api.py").write_text(

@@ -413,7 +413,6 @@ static int validate_operation(const AbValue *value, int *out_manual,
                                          "variable", "token", "anchor_token",
                                          "position"};
     const AbValue *position;
-    *out_requires_asserted = 1;
     if (!object_exact(value, fields, 7))
       return 0;
     position = ab_value_member(value, "position");

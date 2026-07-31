@@ -505,6 +505,21 @@ calls. Candidate or unresolved calls, duplicate targets, unsupported inputs,
 and lexical-only C/C++ call binding block execution instead of producing a
 partial rename.
 
+For a `provider_surface` issue, the same reviewed rename can replace one stale
+registration with a uniquely resolved surface member when the declaration
+comes from one Make provider recorded in the canonical Map. The native compiler
+proves one exact source-locked token match before emitting
+`edit_make_variable_token`; it does not reopen project configuration.
+Ambiguous, missing, duplicate, or non-Make cases remain manual.
+
+If the constraint itself requires an implemented and used surface member that
+is not registered, Plan can derive `insert_make_variable_token` without an
+extra flag. This requires exactly one configured Make provider and one unique
+editable anchor token. Plan uses the direct or leading-underscore convention
+proven by that declaration, and the longest canonical-name prefix preserves
+locality. The item is `derived`; incomplete, ambiguous, or multi-provider
+evidence stays manual.
+
 Existing sources use SHA-256 locks; ranges use UTF-8 byte offsets and include
 expected text. Manual items expose missing transformation inputs and block Act
 instead of inventing code. Act evaluates the complete prepared file set

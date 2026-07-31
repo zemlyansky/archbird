@@ -13,16 +13,18 @@ static const AbValue *field(const AbValue *object, const char *name) {
 
 ArchbirdStatus ab_plan_source_lock(ArchbirdEngine *engine,
                                    const ArchbirdProject *project,
-                                   const AbValue *map_files,
-                                   const AbString *path,
+                                   const AbValue *map, const AbString *path,
                                    AbPlanSourceLock *out) {
+  const AbValue *map_files = field(map, "files");
+  const AbValue *map_inputs = field(map, "inputs");
   const AbValue *map_file = NULL;
   size_t index;
   uint8_t digest[32];
   char actual[65];
   ArchbirdStatus status;
-  if (!engine || !project || !map_files || map_files->kind != AB_VALUE_ARRAY ||
-      !path || !out)
+  if (!engine || !project || !map || map->kind != AB_VALUE_OBJECT ||
+      !map_files || map_files->kind != AB_VALUE_ARRAY || !map_inputs ||
+      map_inputs->kind != AB_VALUE_ARRAY || !path || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(out, 0, sizeof(*out));
   for (index = 0; index < map_files->as.array.count; index++) {
@@ -37,6 +39,21 @@ ArchbirdStatus ab_plan_source_lock(ArchbirdEngine *engine,
           "plan compilation: Map has duplicate source rows for %.*s",
           (int)path->length, path->data);
     map_file = row;
+  }
+  if (!map_file) {
+    for (index = 0; index < map_inputs->as.array.count; index++) {
+      const AbValue *row = &map_inputs->as.array.items[index];
+      const AbValue *candidate = field(row, "path");
+      if (!candidate || candidate->kind != AB_VALUE_STRING ||
+          !ab_string_equal(&candidate->as.text, path))
+        continue;
+      if (map_file)
+        return archbird_error_set(
+            engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+            "plan compilation: Map has duplicate input rows for %.*s",
+            (int)path->length, path->data);
+      map_file = row;
+    }
   }
   out->sha256 = field(map_file, "sha256");
   if (!map_file || !ab_artifact_sha256(out->sha256))

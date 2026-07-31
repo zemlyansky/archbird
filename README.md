@@ -719,6 +719,26 @@ definition, import origin, export, and proven reference span. Act reevaluates
 the same ProjectionPlan and requires an identical result digest, completeness
 ledger, and site set before producing a patch.
 
+The same reviewed `--rename OLD=NEW` intent can close an exact stale
+`provider_surface` registration when `NEW` already resolves uniquely on that
+surface. The native Plan compiler follows the canonical Map's surface
+declaration to one `make-variable:VARIABLE` source, proves one direct token
+match in the source-locked Make input, and emits
+`edit_make_variable_token`. It does not reopen project configuration.
+Ambiguous providers, zero or multiple matches, active uses of the old entry,
+unresolved replacement entries, and non-Make provider kinds remain manual.
+
+When a constraint itself requires a missing surface member, that reviewed
+policy supplies the intent: if the member has one implementation candidate and
+current uses, and the surface has exactly one configured `make_variable`
+provider, Plan derives `insert_make_variable_token` without another flag. It
+uses the direct or leading-underscore convention proven by an existing
+declaration and anchors before or after the unique editable registration with
+the longest canonical-name prefix. Both the `missing` and `unregistered`
+findings remain origins, and the generated item is explicitly `derived`.
+Missing anchors, duplicate tokens, multiple providers, incomplete evidence,
+and ambiguous implementations remain manual.
+
 An asserted `edit_json_pointer` operation handles reviewed manifest and export
 table changes without replacing or reformatting the whole file. It names one
 source-locked file, one RFC 6901 pointer, the exact expected old JSON value (or

@@ -916,8 +916,8 @@ def plan_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="OLD=NEW",
         help=(
-            "review one symbol rename that closes matching extra and missing "
-            "issues in a selected constraint"
+            "review one identity migration that closes matching symbol or "
+            "provider-surface issues in a selected constraint"
         ),
     )
     result.add_argument("--pretty", action="store_true", help="pretty JSON")

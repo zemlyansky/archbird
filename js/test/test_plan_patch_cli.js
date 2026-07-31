@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -14,6 +15,12 @@ const repository = path.resolve(process.argv[3]);
 const root = fs.mkdtempSync(path.join(repository, "build/node-plan-patch-"));
 const artifacts = fs.mkdtempSync(
   path.join(repository, "build/node-plan-patch-artifacts-"),
+);
+const surfaceRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-patch-surface-"),
+);
+const registrationRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-patch-registration-"),
 );
 const cli = path.join(repository, "js/src/cli.js");
 
@@ -150,8 +157,96 @@ try {
   );
   run(["verify", "--root", root, "--check"]);
 
+  fs.cpSync(
+    path.join(repository, "test/fixtures/plan_act/surface_closure"),
+    surfaceRoot,
+    { recursive: true },
+  );
+  const surfacePlan = path.join(artifacts, "surface-plan.json");
+  const surfacePatch = path.join(artifacts, "surface-patch.json");
+  const surfaceMakefile = fs.readFileSync(path.join(surfaceRoot, "Makefile"));
+  run([
+    "plan", "FFI-SURFACE", "--root", surfaceRoot,
+    "--rename", "core_add=core_sum", "--output", surfacePlan,
+  ]);
+  const surfaceDocument = JSON.parse(fs.readFileSync(surfacePlan, "utf8"));
+  assert.equal(surfaceDocument.items.length, 1);
+  assert.equal(surfaceDocument.items[0].executable, true);
+  assert.deepEqual(surfaceDocument.items[0].operation, {
+    action: "edit_make_variable_token",
+    expected_token: "_core_add",
+    path: "Makefile",
+    replacement_token: "_core_sum",
+    source_sha256: createHash("sha256").update(surfaceMakefile).digest("hex"),
+    variable: "WASM_EXPORTS",
+  });
+  run([
+    "act", surfacePlan, "--root", surfaceRoot, "--format", "json",
+    "--output", surfacePatch,
+  ]);
+  const acceptedSurface = JSON.parse(fs.readFileSync(surfacePatch, "utf8"));
+  assert.equal(acceptedSurface.state, "accepted");
+  assert.deepEqual(acceptedSurface.acceptance.constraints, [
+    { id: "FFI-SURFACE", status: "pass" },
+  ]);
+  run(["apply", surfacePatch, "--root", surfaceRoot]);
+  assert.match(
+    fs.readFileSync(path.join(surfaceRoot, "Makefile"), "utf8"),
+    /WASM_EXPORTS = _core_sum/,
+  );
+  run(["verify", "--root", surfaceRoot, "--check"]);
+
+  fs.cpSync(
+    path.join(repository, "test/fixtures/plan_act/surface_registration"),
+    registrationRoot,
+    { recursive: true },
+  );
+  const registrationPlan = path.join(artifacts, "registration-plan.json");
+  const registrationPatch = path.join(artifacts, "registration-patch.json");
+  const registrationMakefile = fs.readFileSync(
+    path.join(registrationRoot, "Makefile"),
+  );
+  run([
+    "plan", "FFI-SURFACE", "--root", registrationRoot,
+    "--output", registrationPlan,
+  ]);
+  const registrationDocument = JSON.parse(
+    fs.readFileSync(registrationPlan, "utf8"),
+  );
+  assert.equal(registrationDocument.items.length, 1);
+  assert.equal(registrationDocument.items[0].executable, true);
+  assert.equal(registrationDocument.items[0].provenance, "derived");
+  assert.equal(registrationDocument.items[0].origins.length, 2);
+  assert.deepEqual(registrationDocument.items[0].operation, {
+    action: "insert_make_variable_token",
+    anchor_token: "_core_peer",
+    path: "Makefile",
+    position: "after",
+    source_sha256: createHash("sha256")
+      .update(registrationMakefile)
+      .digest("hex"),
+    token: "_core_sum",
+    variable: "WASM_EXPORTS",
+  });
+  run([
+    "act", registrationPlan, "--root", registrationRoot, "--format", "json",
+    "--output", registrationPatch,
+  ]);
+  const acceptedRegistration = JSON.parse(
+    fs.readFileSync(registrationPatch, "utf8"),
+  );
+  assert.equal(acceptedRegistration.state, "accepted");
+  run(["apply", registrationPatch, "--root", registrationRoot]);
+  assert.match(
+    fs.readFileSync(path.join(registrationRoot, "Makefile"), "utf8"),
+    /WASM_EXPORTS = _core_peer _core_sum/,
+  );
+  run(["verify", "FFI-SURFACE", "--root", registrationRoot, "--check"]);
+
   process.stdout.write("node Plan/Patch CLI lifecycle passed\n");
 } finally {
   fs.rmSync(root, { force: true, recursive: true });
   fs.rmSync(artifacts, { force: true, recursive: true });
+  fs.rmSync(surfaceRoot, { force: true, recursive: true });
+  fs.rmSync(registrationRoot, { force: true, recursive: true });
 }

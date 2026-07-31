@@ -128,6 +128,8 @@ int main(void) {
                                   "WASM_EXPORTS := _core_first \\\n"
                                   "\t_core_add \\\n"
                                   "\t_core_last # preserve this comment\n";
+  static const char comma_list[] =
+      "WASM_EXPORTS = _core_first,_core_add,_core_last\n";
   static const char duplicate[] = "WASM_EXPORTS = _core_add\n"
                                   "WASM_EXPORTS += _core_add\n";
   ArchbirdEngineOptions engine_options;
@@ -208,6 +210,28 @@ int main(void) {
     failures++;
   }
 
+  source_sha(comma_list, sha256);
+  status = edit(engine, comma_list, sha256, "WASM_EXPORTS", "_core_add",
+                "_core_sum", &result, &buffer);
+  if (status != ARCHBIRD_OK || result.matched_tokens != 1) {
+    fprintf(stderr, "FAIL comma replacement: %s\n",
+            archbird_engine_error(engine));
+    failures++;
+  } else {
+    expect_applied("comma replacement", comma_list, &result, &buffer,
+                   "WASM_EXPORTS = _core_first,_core_sum,_core_last\n");
+  }
+
+  status = edit(engine, comma_list, sha256, "WASM_EXPORTS", "_core_add", "",
+                &result, &buffer);
+  if (status != ARCHBIRD_OK || result.matched_tokens != 1) {
+    fprintf(stderr, "FAIL comma removal: %s\n", archbird_engine_error(engine));
+    failures++;
+  } else {
+    expect_applied("comma removal", comma_list, &result, &buffer,
+                   "WASM_EXPORTS = _core_first,_core_last\n");
+  }
+
   source_sha(multiline, sha256);
   status =
       insert(engine, multiline, sha256, "WASM_EXPORTS", "_core_sum",
@@ -229,6 +253,26 @@ int main(void) {
                    "\t_core_last # preserve this comment\n");
   }
 
+  source_sha(comma_list, sha256);
+  status =
+      insert(engine, comma_list, sha256, "WASM_EXPORTS", "_core_sum",
+             "_core_add", ARCHBIRD_MAKE_TOKEN_AFTER, &insert_result, &buffer);
+  if (status != ARCHBIRD_OK || insert_result.matched_tokens != 0 ||
+      insert_result.matched_anchors != 1) {
+    fprintf(stderr, "FAIL comma insertion: %s\n",
+            archbird_engine_error(engine));
+    failures++;
+  } else {
+    ArchbirdMakeVariableTokenEditResult applied_range;
+    archbird_make_variable_token_edit_result_init(&applied_range);
+    applied_range.start_byte = insert_result.start_byte;
+    applied_range.end_byte = insert_result.end_byte;
+    expect_applied("comma insertion", comma_list, &applied_range, &buffer,
+                   "WASM_EXPORTS = "
+                   "_core_first,_core_add,_core_sum,_core_last\n");
+  }
+
+  source_sha(multiline, sha256);
   status = insert(engine, multiline, sha256, "WASM_EXPORTS", "_core_sum",
                   "_core_missing", ARCHBIRD_MAKE_TOKEN_BEFORE, &insert_result,
                   &buffer);

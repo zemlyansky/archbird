@@ -61,8 +61,8 @@ int ab_plan_item_builder_targeted(const AbPlanItemBuilder *builder,
 
 ArchbirdStatus ab_plan_source_lock(ArchbirdEngine *engine,
                                    const ArchbirdProject *project,
-                                   const AbValue *map_files,
-                                   const AbString *path, AbPlanSourceLock *out);
+                                   const AbValue *map, const AbString *path,
+                                   AbPlanSourceLock *out);
 
 int ab_plan_finding_current(const AbValue *finding);
 ArchbirdStatus ab_plan_finding_groups_collect(ArchbirdEngine *engine,
@@ -82,6 +82,12 @@ ArchbirdStatus ab_plan_compile_edge_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
     AbPlanItemBuilder *builder, const AbValue *constraint,
     const AbValue *definition, const AbProjectionData *actual,
+    int *out_handled);
+
+ArchbirdStatus ab_plan_compile_surface_constraint(
+    ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
+    AbPlanItemBuilder *builder, const AbValue *constraint,
+    const AbValue *definition, const AbValue *renames, uint8_t *rename_used,
     int *out_handled);
 
 #endif

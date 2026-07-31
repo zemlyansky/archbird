@@ -110,6 +110,9 @@ static void scan_tokens(const uint8_t *input, size_t start, size_t end,
   size_t index = start;
   while (index < end) {
     size_t token_start;
+    size_t item_start;
+    size_t item_index;
+    int has_comma = 0;
     while (index < end && isspace((unsigned char)input[index]))
       index++;
     if (index == end)
@@ -123,6 +126,24 @@ static void scan_tokens(const uint8_t *input, size_t start, size_t end,
     }
     match_token(input, token_start, index, first);
     match_token(input, token_start, index, second);
+    item_start = token_start;
+    item_index = token_start;
+    while (item_index < index) {
+      if (input[item_index] == '\\' && item_index + 1 < index) {
+        item_index += 2;
+      } else if (input[item_index] == ',') {
+        match_token(input, item_start, item_index, first);
+        match_token(input, item_start, item_index, second);
+        has_comma = 1;
+        item_start = ++item_index;
+      } else {
+        item_index++;
+      }
+    }
+    if (has_comma) {
+      match_token(input, item_start, index, first);
+      match_token(input, item_start, index, second);
+    }
   }
 }
 
@@ -277,9 +298,16 @@ ArchbirdStatus archbird_make_variable_token_edit(
   out_result->start_byte = expected.start;
   out_result->end_byte = expected.end;
   if (options->replacement_token_length == 0 &&
-      out_result->end_byte < input_length &&
-      (input[out_result->end_byte] == ' ' ||
-       input[out_result->end_byte] == '\t'))
+      out_result->end_byte < input_length && input[out_result->end_byte] == ',')
+    out_result->end_byte++;
+  else if (options->replacement_token_length == 0 &&
+           out_result->start_byte > 0 &&
+           input[out_result->start_byte - 1] == ',')
+    out_result->start_byte--;
+  else if (options->replacement_token_length == 0 &&
+           out_result->end_byte < input_length &&
+           (input[out_result->end_byte] == ' ' ||
+            input[out_result->end_byte] == '\t'))
     out_result->end_byte++;
   else if (options->replacement_token_length == 0 &&
            out_result->start_byte > 0 &&
@@ -379,15 +407,23 @@ ArchbirdStatus archbird_make_variable_token_insert(
                                : anchor.end;
   out_result->end_byte = out_result->start_byte;
   ab_buffer_init(&replacement, engine);
-  if (options->position == ARCHBIRD_MAKE_TOKEN_AFTER)
-    status = ab_buffer_literal(&replacement, " ");
-  else
+  if (options->position == ARCHBIRD_MAKE_TOKEN_AFTER) {
+    int comma_separated =
+        (anchor.start > 0 && input[anchor.start - 1] == ',') ||
+        (anchor.end < input_length && input[anchor.end] == ',');
+    status = ab_buffer_literal(&replacement, comma_separated ? "," : " ");
+  } else
     status = ARCHBIRD_OK;
   if (status == ARCHBIRD_OK)
     status =
         ab_buffer_append(&replacement, options->token, options->token_length);
-  if (status == ARCHBIRD_OK && options->position == ARCHBIRD_MAKE_TOKEN_BEFORE)
-    status = ab_buffer_literal(&replacement, " ");
+  if (status == ARCHBIRD_OK &&
+      options->position == ARCHBIRD_MAKE_TOKEN_BEFORE) {
+    int comma_separated =
+        (anchor.start > 0 && input[anchor.start - 1] == ',') ||
+        (anchor.end < input_length && input[anchor.end] == ',');
+    status = ab_buffer_literal(&replacement, comma_separated ? "," : " ");
+  }
   if (status == ARCHBIRD_OK &&
       write_fn(user_data, replacement.data, replacement.length) != 0)
     status =

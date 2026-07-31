@@ -1,0 +1,81 @@
+{
+  "project": "plan-act-surface-registration",
+  "description": "Mixed-language missing registration used to test automatic architecture completion.",
+  "layers": [
+    {
+      "name": "core",
+      "role": "core",
+      "language": "c",
+      "globs": ["src/*.c", "src/*.h"],
+      "public_headers": ["src/core.h"],
+      "import_roots": ["src"]
+    },
+    {
+      "name": "python",
+      "role": "frontend",
+      "language": "python",
+      "globs": ["py/*.py"],
+      "import_roots": ["py"]
+    },
+    {
+      "name": "javascript",
+      "role": "frontend",
+      "language": "javascript",
+      "globs": ["js/*.js"],
+      "import_roots": ["js"]
+    }
+  ],
+  "bridges": [
+    {
+      "name": "ffi",
+      "kind": "abi",
+      "from": ["python", "javascript"],
+      "to": "core",
+      "prefixes": ["core_"],
+      "providers": [
+        {
+          "kind": "make_variable",
+          "path": "Makefile",
+          "variable": "WASM_EXPORTS",
+          "pattern": "_?(core_[A-Za-z0-9_]+)"
+        }
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "name": "core",
+      "language": "c",
+      "globs": ["src/test_*.c"],
+      "route_to": ["core"]
+    },
+    {
+      "name": "python",
+      "language": "python",
+      "globs": ["py/test_*.py"],
+      "route_to": ["python", "core"]
+    },
+    {
+      "name": "javascript",
+      "language": "javascript",
+      "globs": ["js/test_*.js"],
+      "route_to": ["javascript", "core"]
+    }
+  ],
+  "components": [
+    {"name": "core", "paths": ["src/**"]},
+    {"name": "frontends", "paths": ["py/**", "js/**"]}
+  ],
+  "constraints": {
+    "FFI-SURFACE": {
+      "kind": "provider_surface",
+      "surface": "ffi",
+      "declared": ["core_sum"],
+      "forbid_unregistered": true,
+      "forbid_unresolved": true,
+      "severity": "error",
+      "owner": "architecture",
+      "rationale": "Every frontend-visible core API remains declared, implemented, and registered."
+    }
+  }
+}
