@@ -739,6 +739,12 @@ findings remain origins, and the generated item is explicitly `derived`.
 Missing anchors, duplicate tokens, multiple providers, incomplete evidence,
 and ambiguous implementations remain manual.
 
+When several reviewed surface members are missing from the same Make
+provider, Plan emits one item per obligation and Act composes their distinct
+insertions into one source-locked file transition. Composition is limited to
+the same variable, anchor, and side; tokens are ordered canonically.
+Duplicate or otherwise coincident edits remain conflicts.
+
 An unresolved, unused registration can likewise become a derived removal when
 the Map proves zero implementation candidates, zero uses, one exact Make
 declaration, and at least one other uniquely resolved declaration from the

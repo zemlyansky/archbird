@@ -425,6 +425,92 @@ class PlanActCliTest(unittest.TestCase):
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
 
+    def test_multiple_required_registrations_compose_one_file_transition(
+        self,
+    ) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        core = self.root / "src/core.c"
+        core.write_text(
+            core.read_text().replace(
+                "int core_peer",
+                "int core_product(int left, int right) { return left * right; }\n\n"
+                "int core_peer",
+            )
+        )
+        header = self.root / "src/core.h"
+        header.write_text(
+            header.read_text().replace(
+                "int core_peer",
+                "int core_product(int left, int right);\nint core_peer",
+            )
+        )
+        runtime = self.root / "js/runtime.js"
+        runtime.write_text(
+            runtime.read_text().replace(
+                "module.exports = { add };",
+                "function multiply(wasm, left, right) {\n"
+                "  return wasm._core_product(left, right);\n"
+                "}\n\n"
+                "module.exports = { add, multiply };",
+            )
+        )
+        config_path = self.root / "archbird.json"
+        config = json.loads(config_path.read_bytes())
+        config["constraints"]["FFI-SURFACE"]["declared"] = [
+            "core_product",
+            "core_sum",
+        ]
+        config_path.write_text(json.dumps(config, sort_keys=True))
+        self.run_surface_gates()
+
+        failed = run(
+            "verify",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--check",
+            expected=1,
+        )
+        output = failed.stdout.decode()
+        self.assertIn("provider does not declare core_product", output)
+        self.assertIn("provider does not declare core_sum", output)
+
+        plan_path = self.plan_path("multiple-registration-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 2)
+        self.assertTrue(all(item["executable"] for item in plan["items"]))
+        self.assertEqual(
+            {
+                item["operation"]["token"]
+                for item in plan["items"]
+            },
+            {"_core_product", "_core_sum"},
+        )
+
+        patch_path, patch = self.accepted_patch(
+            plan_path, "multiple-registration-patch.json"
+        )
+        self.assertEqual(len(patch["transitions"]), 1)
+        self.assertEqual(
+            set(patch["transitions"][0]["item_ids"]),
+            {item["id"] for item in plan["items"]},
+        )
+        run("apply", str(patch_path), "--root", str(self.root))
+        self.assertIn(
+            "WASM_EXPORTS = _core_peer _core_product _core_sum",
+            (self.root / "Makefile").read_text(),
+        )
+        run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
+        self.run_surface_gates()
+
     def test_unused_provider_registration_derives_exact_make_removal(self) -> None:
         shutil.copytree(SURFACE_FIXTURE, self.root, dirs_exist_ok=True)
         makefile = self.root / "Makefile"

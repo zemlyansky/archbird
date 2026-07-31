@@ -28,6 +28,10 @@ typedef struct AbActEdit {
   const uint8_t *replacement;
   size_t replacement_length;
   uint8_t *owned_replacement;
+  const AbString *make_variable;
+  const AbString *make_anchor;
+  const AbString *make_token;
+  ArchbirdMakeVariableTokenPosition make_position;
 } AbActEdit;
 
 typedef struct AbActWork {
@@ -228,19 +232,46 @@ static ArchbirdStatus add_edit(AbActContext *context, size_t work_index,
 static int edit_compare(const void *left, const void *right) {
   const AbActEdit *a = (const AbActEdit *)left;
   const AbActEdit *b = (const AbActEdit *)right;
+  int compared;
   if (a->work_index != b->work_index)
     return (a->work_index > b->work_index) - (a->work_index < b->work_index);
   if (a->start != b->start)
     return (a->start > b->start) - (a->start < b->start);
   if (a->end != b->end)
     return (a->end > b->end) - (a->end < b->end);
+  if (a->make_variable && b->make_variable) {
+    compared = ab_string_compare(a->make_variable, b->make_variable);
+    if (compared)
+      return compared;
+    compared = ab_string_compare(a->make_anchor, b->make_anchor);
+    if (compared)
+      return compared;
+    if (a->make_position != b->make_position)
+      return (a->make_position > b->make_position) -
+             (a->make_position < b->make_position);
+    compared = ab_string_compare(a->make_token, b->make_token);
+    if (compared)
+      return compared;
+  } else if (a->make_variable || b->make_variable) {
+    return a->make_variable ? 1 : -1;
+  }
   return ab_string_compare(a->item_id, b->item_id);
+}
+
+static int make_insertions_compose(const AbActEdit *left,
+                                   const AbActEdit *right) {
+  return left->make_variable && right->make_variable &&
+         ab_string_equal(left->make_variable, right->make_variable) &&
+         ab_string_equal(left->make_anchor, right->make_anchor) &&
+         left->make_position == right->make_position &&
+         !ab_string_equal(left->make_token, right->make_token);
 }
 
 static int edits_overlap(const AbActEdit *left, const AbActEdit *right) {
   if (left->start == left->end) {
     if (right->start == right->end)
-      return left->start == right->start;
+      return left->start == right->start &&
+             !make_insertions_compose(left, right);
     return right->start < left->start && left->start < right->end;
   }
   if (right->start == right->end)
@@ -316,6 +347,28 @@ static ArchbirdStatus take_edit_buffer(AbActContext *context, size_t work_index,
     replacement->capacity = 0;
   }
   return status;
+}
+
+static ArchbirdStatus
+classify_make_insertion(AbActContext *context, size_t work_index,
+                        const AbValue *variable, const AbValue *anchor,
+                        const AbValue *token,
+                        ArchbirdMakeVariableTokenPosition position) {
+  AbActEdit *edit = &context->edits[context->edit_count - 1];
+  size_t index;
+  for (index = 0; index + 1 < context->edit_count; index++) {
+    const AbActEdit *prior = &context->edits[index];
+    if (prior->work_index == work_index && prior->make_variable &&
+        ab_string_equal(prior->make_variable, &variable->as.text) &&
+        ab_string_equal(prior->make_token, &token->as.text))
+      return act_error(context->engine, ARCHBIRD_CONFLICT,
+                       "Plan inserts one Make variable token more than once");
+  }
+  edit->make_variable = &variable->as.text;
+  edit->make_anchor = &anchor->as.text;
+  edit->make_token = &token->as.text;
+  edit->make_position = position;
+  return ARCHBIRD_OK;
 }
 
 static ArchbirdStatus add_json_pointer_edit(AbActContext *context,
@@ -433,6 +486,9 @@ static ArchbirdStatus add_make_token_insert(AbActContext *context,
   if (status == ARCHBIRD_OK)
     status = take_edit_buffer(context, work_index, item_id, result.start_byte,
                               result.end_byte, &replacement);
+  if (status == ARCHBIRD_OK)
+    status = classify_make_insertion(context, work_index, variable, anchor,
+                                     token, options.position);
   ab_buffer_free(&replacement);
   return status;
 }

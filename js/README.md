@@ -500,6 +500,11 @@ proven by that declaration, and the longest canonical-name prefix preserves
 locality. The item is `derived`; incomplete, ambiguous, or multi-provider
 evidence stays manual.
 
+Several missing members in the same Make provider remain separate Plan
+obligations but materialize as one source-locked file transition. Only
+distinct insertions sharing the same variable, anchor, and side compose;
+tokens are ordered canonically and duplicate edits remain conflicts.
+
 Plan can also derive removal of one unresolved, unused Make registration when
 the Map proves zero candidates, zero uses, one exact declaration, and another
 uniquely resolved declaration from the same provider. It will not empty a

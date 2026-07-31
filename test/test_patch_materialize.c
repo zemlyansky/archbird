@@ -216,7 +216,19 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
         "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
         "\"provenance\":\"asserted\",\"statement\":\"Insert new export.\","
         "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
-        "[\"C-MAKE\"]},\"depends_on\":[\"item:make-insert\"],"
+        "[\"C-MAKE\"]},\"depends_on\":[],\"evidence\":[],"
+        "\"executable\":true,\"id\":\"item:make-insert-other\","
+        "\"non_executable_reasons\":[],\"operation\":{\"action\":"
+        "\"insert_make_variable_token\",\"anchor_token\":\"_old\","
+        "\"path\":\"Makefile\",\"position\":\"after\","
+        "\"source_sha256\":\"%s\",\"token\":\"_other\","
+        "\"variable\":\"WASM_EXPORTS\"},\"origins\":[{\"constraint_id\":"
+        "\"C-MAKE\",\"constraint_result_sha256\":\"" VERIFY_SHA
+        "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
+        "\"provenance\":\"asserted\",\"statement\":\"Insert other export.\","
+        "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
+        "[\"C-MAKE\"]},\"depends_on\":[\"item:make-insert\","
+        "\"item:make-insert-other\"],"
         "\"evidence\":[],\"executable\":true,\"id\":\"item:make-remove\","
         "\"non_executable_reasons\":[],\"operation\":{\"action\":"
         "\"edit_make_variable_token\",\"expected_token\":\"_old\","
@@ -227,7 +239,7 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
         "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
         "\"provenance\":\"asserted\",\"statement\":\"Remove old export.\","
         "\"unknowns\":[]}]",
-        a_sha, b_sha, json_sha, make_sha, make_sha);
+        a_sha, b_sha, json_sha, make_sha, make_sha, make_sha);
   }
   if (items_length < 0 || (size_t)items_length >= sizeof(items)) {
     ab_value_free(engine, &document);
@@ -302,6 +314,7 @@ int main(void) {
   AbBuffer patch_requirements;
   AbBuffer failing_plan;
   AbBuffer failing_patch;
+  AbBuffer duplicate_plan;
   AbBuffer drift_map;
   char a_sha[65];
   char b_sha[65];
@@ -324,6 +337,7 @@ int main(void) {
   ab_buffer_init(&patch_requirements, engine);
   ab_buffer_init(&failing_plan, engine);
   ab_buffer_init(&failing_patch, engine);
+  ab_buffer_init(&duplicate_plan, engine);
   ab_buffer_init(&drift_map, engine);
   if (!render_project(engine, &project, &map, a_sha, b_sha, json_sha,
                       make_sha)) {
@@ -382,12 +396,37 @@ int main(void) {
       !find_bytes(&patch, "\"kind\":\"move\",\"path\":\"src/z.c\","
                           "\"source_path\":\"src/b.c\"") ||
       !find_bytes(&patch, "\"content_base64\":\"eyJuYW1lIjoibmV3In0K\"") ||
-      !find_bytes(&patch,
-                  "\"content_base64\":\"V0FTTV9FWFBPUlRTID0gX25ldwo=\"") ||
+      !find_bytes(&patch, "\"content_base64\":\""
+                          "V0FTTV9FWFBPUlRTID0gX25ldyBfb3RoZXIK\"") ||
       find_bytes(&patch, "\"path\":\"src/z.c\"") <
           find_bytes(&patch, "\"path\":\"src/c.c\"")) {
     fprintf(stderr, "FAIL materialized Patch content/order\n");
     failures++;
+  }
+  {
+    static const char other_token[] = "\"token\":\"_other\"";
+    static const char duplicate_token[] = "\"token\":\"_new\"";
+    const uint8_t *position = find_bytes(&plan, other_token);
+    size_t offset = position ? (size_t)(position - plan.data) : 0;
+    if (!position ||
+        ab_buffer_append(&duplicate_plan, plan.data, offset) != ARCHBIRD_OK ||
+        ab_buffer_append(&duplicate_plan, (const uint8_t *)duplicate_token,
+                         sizeof(duplicate_token) - 1) != ARCHBIRD_OK ||
+        ab_buffer_append(&duplicate_plan, position + sizeof(other_token) - 1,
+                         plan.length - offset - (sizeof(other_token) - 1)) !=
+            ARCHBIRD_OK) {
+      fprintf(stderr, "FAIL construct duplicate Make insertion Plan\n");
+      failures++;
+    } else {
+      empty_patch.length = 0;
+      expect_status("reject duplicate Make insertion",
+                    archbird_act_materialize_patch(
+                        engine, project, duplicate_plan.data,
+                        duplicate_plan.length, map.data, map.length,
+                        verification.data, verification.length, metadata.data,
+                        metadata.length, 0, collect, &empty_patch),
+                    ARCHBIRD_CONFLICT, engine);
+    }
   }
   status = archbird_constraints_evaluate(
       engine, (const uint8_t *)FAILING_CONFIG, sizeof(FAILING_CONFIG) - 1,
@@ -519,6 +558,7 @@ cleanup:
   ab_buffer_free(&drift_map);
   ab_buffer_free(&failing_patch);
   ab_buffer_free(&failing_plan);
+  ab_buffer_free(&duplicate_plan);
   ab_buffer_free(&patch_requirements);
   ab_buffer_free(&accepted_patch);
   ab_buffer_free(&empty_patch);
