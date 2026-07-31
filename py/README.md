@@ -580,7 +580,9 @@ duplicate, multi-file, or anchorless evidence stays manual or blocks Act.
 Several missing members in the same Make provider remain separate Plan
 obligations but materialize as one source-locked file transition. Only
 distinct insertions sharing the same variable, anchor, and side compose;
-tokens are ordered canonically and duplicate edits remain conflicts.
+tokens are ordered canonically. Byte-identical edits from separate Plan
+obligations compose once and retain every item ID; incompatible overlaps
+remain conflicts.
 
 Plan can also derive removal of one unresolved, unused Make registration when
 the Map proves zero candidates, zero uses, one exact declaration, and another

@@ -1249,6 +1249,81 @@ class PlanActCliTest(unittest.TestCase):
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
 
+    def test_cross_constraint_plan_composes_shared_declaration_effect(
+        self,
+    ) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        configuration_path = self.root / "archbird.json"
+        configuration = json.loads(configuration_path.read_text())
+        configuration["bridges"][0]["providers"].append(
+            {
+                "kind": "file_pattern",
+                "path": "src/core.h",
+                "pattern": r"\b(core_[A-Za-z0-9_]+)\s*\(",
+            }
+        )
+        configuration["constraints"]["FFI-SURFACE"][
+            "require_all_providers"
+        ] = True
+        configuration_path.write_text(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+        )
+        header = self.root / "src/core.h"
+        header.write_text(
+            header.read_text().replace(
+                "int core_sum(int left, int right);\n", ""
+            )
+        )
+
+        plan_path = self.plan_path("cross-constraint-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 3)
+        declaration = next(
+            item
+            for item in plan["items"]
+            if item["operation"]["action"] == "declare_symbol"
+        )
+        provider_items = [
+            item
+            for item in plan["items"]
+            if item["operation"]["action"] == "add_provider_capability"
+        ]
+        file_provider = next(
+            item
+            for item in provider_items
+            if item["operation"]["provider"]["kind"] == "file_pattern"
+        )
+        make_provider = next(
+            item
+            for item in provider_items
+            if item["operation"]["provider"]["kind"] == "make_variable"
+        )
+        self.assertEqual(file_provider["depends_on"], [declaration["id"]])
+        self.assertEqual(
+            make_provider["depends_on"],
+            sorted([declaration["id"], file_provider["id"]]),
+        )
+
+        act_path, act = self.accepted_act(
+            plan_path, "cross-constraint-act.json"
+        )
+        header_transition = next(
+            row for row in act["transitions"] if row["path"] == "src/core.h"
+        )
+        self.assertEqual(
+            header_transition["item_ids"],
+            sorted([declaration["id"], file_provider["id"]]),
+        )
+        self.assertEqual(len(act["transitions"]), 2)
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertEqual(
+            header.read_text().count("int core_sum(int left, int right);"),
+            1,
+        )
+        run("verify", "--root", str(self.root), "--check")
+        self.run_surface_gates()
+
     def test_distinct_providers_sharing_one_edit_target_remain_manual(
         self,
     ) -> None:

@@ -833,7 +833,9 @@ When several reviewed surface members are missing from the same Make
 provider, Plan emits one item per obligation and Act composes their distinct
 insertions into one source-locked file transition. Composition is limited to
 the same variable, anchor, and side; tokens are ordered canonically.
-Duplicate or otherwise coincident edits remain conflicts.
+Byte-identical edits produced by separate Plan obligations also compose once
+while the transition retains every originating item ID. Coincident edits with
+different effects remain conflicts.
 
 For a `required_symbols` constraint scoped to one exact C header, Plan can
 derive the neutral `declare_symbol` objective when one same-language mapped

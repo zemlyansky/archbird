@@ -474,6 +474,16 @@ static int edits_overlap(const AbActEdit *left, const AbActEdit *right) {
   return left->start < right->end && right->start < left->end;
 }
 
+static int edits_have_same_effect(const AbActEdit *left,
+                                  const AbActEdit *right) {
+  return left->work_index == right->work_index && left->start == right->start &&
+         left->end == right->end &&
+         left->replacement_length == right->replacement_length &&
+         (!left->replacement_length ||
+          memcmp(left->replacement, right->replacement,
+                 left->replacement_length) == 0);
+}
+
 static ArchbirdStatus add_replace_range(AbActContext *context,
                                         const AbValue *operation,
                                         const AbString *item_id) {
@@ -550,15 +560,7 @@ classify_make_insertion(AbActContext *context, size_t work_index,
                         const AbString *token,
                         ArchbirdMakeVariableTokenPosition position) {
   AbActEdit *edit = &context->edits[context->edit_count - 1];
-  size_t index;
-  for (index = 0; index + 1 < context->edit_count; index++) {
-    const AbActEdit *prior = &context->edits[index];
-    if (prior->work_index == work_index && prior->owned_make_variable.length &&
-        ab_string_equal(&prior->owned_make_variable, variable) &&
-        ab_string_equal(&prior->owned_make_token, token))
-      return act_error(context->engine, ARCHBIRD_CONFLICT,
-                       "Plan inserts one Make variable token more than once");
-  }
+  (void)work_index;
   if (ab_string_copy(context->engine, &edit->owned_make_variable,
                      variable->data, variable->length) != ARCHBIRD_OK ||
       ab_string_copy(context->engine, &edit->owned_make_anchor, anchor->data,
@@ -832,6 +834,9 @@ static ArchbirdStatus materialize_work(AbActContext *context,
   after_length = work->before_length;
   for (index = first; index < last; index++) {
     const AbActEdit *edit = &context->edits[index];
+    if (index > first &&
+        edits_have_same_effect(&context->edits[index - 1], edit))
+      continue;
     if (index > first && edits_overlap(&context->edits[index - 1], edit))
       return act_error(context->engine, ARCHBIRD_CONFLICT,
                        "Plan contains overlapping exact edits");
@@ -854,6 +859,9 @@ static ArchbirdStatus materialize_work(AbActContext *context,
   }
   for (index = first; index < last; index++) {
     const AbActEdit *edit = &context->edits[index];
+    if (index > first &&
+        edits_have_same_effect(&context->edits[index - 1], edit))
+      continue;
     size_t unchanged = edit->start - source_cursor;
     if (unchanged)
       memcpy(work->after + output_cursor, work->before + source_cursor,
