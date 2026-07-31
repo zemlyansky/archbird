@@ -109,6 +109,8 @@ static ArchbirdStatus render_item(AbBuffer *out, const AbValue *item,
   REPORT_TRY(render_operation_field(out, operation, "path", "Path"));
   REPORT_TRY(
       render_operation_field(out, operation, "source_path", "Source path"));
+  REPORT_TRY(
+      render_operation_field(out, operation, "target_path", "Target path"));
   REPORT_TRY(render_operation_field(out, operation, "destination_path",
                                     "Destination path"));
   REPORT_TRY(render_operation_field(out, operation, "target", "Target"));
@@ -118,6 +120,8 @@ static ArchbirdStatus render_item(AbBuffer *out, const AbValue *item,
   REPORT_TRY(render_operation_field(out, operation, "surface", "Surface"));
   REPORT_TRY(render_operation_field(out, operation, "package", "Package"));
   REPORT_TRY(render_operation_field(out, operation, "route", "Route"));
+  REPORT_TRY(render_operation_field(out, operation, "relation", "Relation"));
+  REPORT_TRY(render_operation_field(out, operation, "name", "Relation name"));
   REPORT_TRY(render_operation_field(out, operation, "from", "From"));
   REPORT_TRY(render_operation_field(out, operation, "to", "To"));
   REPORT_TRY(

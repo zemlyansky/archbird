@@ -61,6 +61,20 @@ static void sort_unique(PathRequirement *paths, size_t *count) {
   *count = output;
 }
 
+static void remove_refined(PathRequirement *observe, size_t *observe_count,
+                           const PathRequirement *present, size_t present_count,
+                           const PathRequirement *absent, size_t absent_count) {
+  size_t input;
+  size_t output = 0;
+  for (input = 0; input < *observe_count; input++)
+    if (!bsearch(&observe[input], present, present_count, sizeof(*present),
+                 path_compare) &&
+        !bsearch(&observe[input], absent, absent_count, sizeof(*absent),
+                 path_compare))
+      observe[output++] = observe[input];
+  *observe_count = output;
+}
+
 static ArchbirdStatus collect_item(
     ArchbirdEngine *engine, const AbValue *item, AbActSubmissions *submissions,
     PathRequirement *present, size_t *present_count, PathRequirement *absent,
@@ -77,6 +91,8 @@ static ArchbirdStatus collect_item(
     if (path && submission)
       return ab_artifact_text_is(action, "create_file")
                  ? add_path(engine, absent, absent_count, path)
+             : ab_artifact_text_is(action, "add_dependency")
+                 ? add_path(engine, present, present_count, path)
                  : add_path(engine, observe, observe_count, path);
     return reject(engine, ARCHBIRD_POLICY_REJECTED,
                   "Plan contains a manual or blocked item");
@@ -201,20 +217,14 @@ ArchbirdStatus archbird_plan_source_requirements(
     sort_unique(observe, &observe_count);
     for (index = 0; index < present_count; index++)
       if (bsearch(&present[index], absent, absent_count, sizeof(*absent),
-                  path_compare) ||
-          bsearch(&present[index], observe, observe_count, sizeof(*observe),
                   path_compare)) {
         status = reject(engine, ARCHBIRD_CONFLICT,
                         "one path has incompatible source requirements");
         break;
       }
-    for (index = 0; status == ARCHBIRD_OK && index < absent_count; index++)
-      if (bsearch(&absent[index], observe, observe_count, sizeof(*observe),
-                  path_compare)) {
-        status = reject(engine, ARCHBIRD_CONFLICT,
-                        "one path has incompatible source requirements");
-        break;
-      }
+    if (status == ARCHBIRD_OK)
+      remove_refined(observe, &observe_count, present, present_count, absent,
+                     absent_count);
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&document, "{\"absent\":");

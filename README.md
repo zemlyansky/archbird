@@ -759,6 +759,11 @@ An exact missing path from `required_paths` similarly becomes a path-only
 reviewed content with `act --submit ITEM=FILE`; native Act requires the
 destination to remain absent, previews one exact creation, and accepts it only
 when the isolated after-Map closes the constraint.
+An exact missing `required_file_edge` similarly becomes an input-required
+`add_dependency` objective containing only the source path, target path,
+relation kind, and optional relation name. A reviewed source-file submission
+must produce that edge in the fresh Map; an unchanged or unrelated edit is
+rejected with zero worktree writes.
 `redirect_dependency` and `declare_symbol` currently follow this boundary end
 to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores the exhaustive
 edge ProjectionPlan, exact relation, affected source paths, and symbol
@@ -781,8 +786,9 @@ edits.
 Low-level asserted operations currently include `replace_range`,
 `delete_file`, `move_file`, and `edit_json_pointer`. They are useful for
 bounded edits supplied by a developer or agent, but are not the model for
-derived Plan operations. `create_file` is a language-neutral, input-required
-Plan objective; exact content belongs to Act submission.
+derived Plan operations. `create_file` and `add_dependency` are
+language-neutral, input-required Plan objectives; exact content belongs to Act
+submission.
 
 A one-extra/one-missing symbol constraint may suggest a rename, but that does
 not establish intent: the derived candidate stays non-executable until a

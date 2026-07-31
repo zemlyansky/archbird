@@ -42,6 +42,16 @@ static int bounded_text(const AbValue *value, size_t maximum, int nonempty) {
   return ab_artifact_bounded_text(value, maximum, nonempty);
 }
 
+static int literal_selector(const AbValue *value) {
+  size_t index;
+  if (!bounded_text(value, AB_PLAN_MAX_METADATA, 1))
+    return 0;
+  for (index = 0; index < value->as.text.length; index++)
+    if (strchr("*?[]{}", value->as.text.data[index]))
+      return 0;
+  return 1;
+}
+
 static int lowercase_sha256(const AbValue *value) {
   return ab_artifact_sha256(value);
 }
@@ -350,6 +360,23 @@ static int validate_operation(const AbValue *value, int *out_manual,
     *out_manual = 1;
     return object_exact(value, fields, 2) &&
            ab_artifact_repository_literal_path(ab_value_member(value, "path"));
+  }
+  if (text_is(action, "add_dependency")) {
+    static const char *const fields[] = {"action", "relation", "source_path",
+                                         "target_path"};
+    static const char *const named_fields[] = {"action", "name", "relation",
+                                               "source_path", "target_path"};
+    const AbValue *name = ab_value_member(value, "name");
+    *out_manual = 1;
+    return object_exact(value, name ? named_fields : fields, name ? 5 : 4) &&
+           literal_selector(ab_value_member(value, "relation")) &&
+           (!name || literal_selector(name)) &&
+           ab_artifact_repository_literal_path(
+               ab_value_member(value, "source_path")) &&
+           ab_artifact_repository_literal_path(
+               ab_value_member(value, "target_path")) &&
+           !ab_value_equal(ab_value_member(value, "source_path"),
+                           ab_value_member(value, "target_path"));
   }
   if (text_is(action, "delete_file")) {
     static const char *const fields[] = {"action", "path", "source_sha256"};
@@ -768,7 +795,7 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
     return ARCHBIRD_OK;
   schema = ab_value_member(&plan->document, "schema_version");
   provenance = ab_value_member(&plan->document, "provenance");
-  if (!safe_integer(schema, &schema_number) || schema_number != 5 ||
+  if (!safe_integer(schema, &schema_number) || schema_number != 6 ||
       !text_is(ab_value_member(&plan->document, "artifact"), "plan") ||
       (!text_is(provenance, "derived") && !text_is(provenance, "asserted")) ||
       !validate_tool(ab_value_member(&plan->document, "tool")) ||

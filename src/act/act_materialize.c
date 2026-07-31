@@ -531,7 +531,7 @@ add_asserted_file_submission(AbActContext *context, const AbValue *operation,
                              const AbString *item_id,
                              const AbActSubmission *submission) {
   const AbValue *action = object_field(operation, "action");
-  const AbValue *path = object_field(operation, "path");
+  const AbValue *path = ab_act_submission_path(operation);
   size_t work_index = 0;
   ArchbirdStatus status;
   if (ab_act_source_file(context->metadata, &path->as.text)) {

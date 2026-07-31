@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 const sha = (character: string): string => character.repeat(64);
 
 const plan = {
-  schema_version: 5,
+  schema_version: 6,
   artifact: "plan",
   provenance: "derived",
   tool: {
@@ -232,6 +232,38 @@ test("Plan create_file is a path-only input-required objective", () => {
   delete create.items[0].operation.content;
   create.items[0].operation.path = "generated/*.py";
   assert.equal(validate(create), false);
+});
+
+test("Plan add_dependency is an exact input-required objective", () => {
+  const validate = validator("plan");
+  const dependency = structuredClone(plan);
+  dependency.items[0].executable = false;
+  dependency.items[0].non_executable_reasons = [
+    "The required dependency does not define its source edit.",
+  ];
+  dependency.items[0].operation = {
+    action: "add_dependency",
+    name: "provider",
+    relation: "import",
+    source_path: "src/consumer.py",
+    target_path: "src/provider.py",
+  };
+  assert.equal(
+    validate(dependency),
+    true,
+    JSON.stringify(validate.errors),
+  );
+
+  dependency.items[0].executable = true;
+  dependency.items[0].non_executable_reasons = [];
+  assert.equal(validate(dependency), false);
+  dependency.items[0].executable = false;
+  dependency.items[0].non_executable_reasons = ["review"];
+  dependency.items[0].operation.relation = "imp*";
+  assert.equal(validate(dependency), false);
+  dependency.items[0].operation.relation = "import";
+  dependency.items[0].operation.source_path = "src/*.py";
+  assert.equal(validate(dependency), false);
 });
 
 test("Act state cannot claim acceptance before evaluation", () => {

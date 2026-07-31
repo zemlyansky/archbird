@@ -492,6 +492,10 @@ ledger, builds one isolated after-Map, and accepts only when fresh Verify
 closes every item constraint and preserves the rest of the policy.
 `plan --format markdown` renders the canonical Plan as a review packet.
 Absent or ambiguous test locations remain manual.
+An exact missing `required_file_edge` becomes a neutral `add_dependency`
+objective over its source, target, relation, and optional name. Submit reviewed
+source-file content with the same `--submit` interface; fresh Map and Verify
+must observe the requested edge before Act is accepted.
 
 ```bash
 archbird plan --format markdown
@@ -535,8 +539,9 @@ Older exact `replace_range`, `delete_file`, `move_file`,
 available for bounded developer- or agent-authored edits. They are not the
 model for derived Plan operators. An exact `required_paths` issue becomes a
 path-only, input-required `create_file` objective; pass reviewed bytes through
-`act --submit ITEM=FILE`, not through Plan. An asserted `edit_json_pointer`
-operation changes one reviewed
+`act --submit ITEM=FILE`, not through Plan. `add_dependency` follows the same
+input-required boundary for one exact existing source file. An asserted
+`edit_json_pointer` operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
 expected old JSON value without reformatting the complete file. A derived
 one-extra/one-missing rename candidate is review evidence, not intent; it
@@ -755,10 +760,11 @@ performs no Map comparison or action inference.
 packet; it does not create or modify an artifact.
 `materialize_act_json()` produces exact binary-safe transitions from a Plan.
 Its optional `executor_submissions_json` input supplies reviewed full-file
-content for exact unresolved symbol or test-route items; the corresponding
-`plan_source_requirements()` input asks the host to observe an exact
-destination without presuming that it exists. Native Act then chooses create
-or replace. Submissions are ephemeral executor input and never mutate Plan.
+content for exact unresolved symbol, test-route, required-path, or dependency
+items; the corresponding `plan_source_requirements()` input asks the host for
+the exact state required by each objective. Native Act then chooses create or
+replace where the objective permits either. Submissions are ephemeral executor
+input and never mutate Plan.
 `accept_act_json()` seals them only after callers supply the fresh isolated
 after-Map and Verification. `preflight_act_apply()` returns `ready` or
 `already_satisfied` after comparing newly observed sources with the complete

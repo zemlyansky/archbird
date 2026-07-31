@@ -18,7 +18,7 @@
     "unknowns"
   ],
   "properties": {
-    "schema_version": {"const": 5},
+    "schema_version": {"const": 6},
     "artifact": {"const": "plan"},
     "provenance": {"$ref": "#/$defs/provenance"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -693,6 +693,29 @@
         "target": {"$ref": "#/$defs/repositoryPath"}
       }
     },
+    "addDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "A language-independent required file-edge objective. Reviewed source bytes are executor input to Act; fresh Verification proves that the requested relation was created.",
+      "required": ["action", "relation", "source_path", "target_path"],
+      "properties": {
+        "action": {"const": "add_dependency"},
+        "relation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[^*?\\[\\]{}]+$"
+        },
+        "source_path": {"$ref": "#/$defs/repositoryLiteralPath"},
+        "target_path": {"$ref": "#/$defs/repositoryLiteralPath"},
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[^*?\\[\\]{}]+$"
+        }
+      }
+    },
     "candidateSite": {
       "type": "object",
       "additionalProperties": false,
@@ -754,6 +777,7 @@
         {"$ref": "#/$defs/declareSymbol"},
         {"$ref": "#/$defs/addSymbol"},
         {"$ref": "#/$defs/addTestRoute"},
+        {"$ref": "#/$defs/addDependency"},
         {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/redirectDependency"},
         {"$ref": "#/$defs/manual"}
@@ -816,7 +840,13 @@
                 "not": {
                   "properties": {
                     "action": {
-                      "enum": ["add_symbol", "add_test_route", "manual"]
+                      "enum": [
+                        "add_dependency",
+                        "add_symbol",
+                        "add_test_route",
+                        "create_file",
+                        "manual"
+                      ]
                     }
                   },
                   "required": ["action"]
@@ -836,7 +866,13 @@
               "operation": {
                 "properties": {
                   "action": {
-                    "enum": ["add_symbol", "add_test_route", "manual"]
+                    "enum": [
+                      "add_dependency",
+                      "add_symbol",
+                      "add_test_route",
+                      "create_file",
+                      "manual"
+                    ]
                   }
                 },
                 "required": ["action"]

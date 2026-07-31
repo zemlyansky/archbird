@@ -702,7 +702,7 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
         )
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 5)
+        self.assertEqual(plan["schema_version"], 6)
         canonical_before_map = json.dumps(
             json.loads(before_map),
             allow_nan=False,
@@ -2687,7 +2687,7 @@ class PlanActCliTest(unittest.TestCase):
         plan_path = self.plan_path("neutral-api-plan.json")
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 5)
+        self.assertEqual(plan["schema_version"], 6)
         self.assertEqual(len(plan["items"]), 3)
         self.assertTrue(all(not item["executable"] for item in plan["items"]))
 
@@ -3214,7 +3214,7 @@ class PlanActCliTest(unittest.TestCase):
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan_bytes = plan_path.read_bytes()
         plan = json.loads(plan_bytes)
-        self.assertEqual(plan["schema_version"], 5)
+        self.assertEqual(plan["schema_version"], 6)
         self.assertEqual(len(plan["items"]), 1)
         item = plan["items"][0]
         self.assertEqual(
@@ -3266,6 +3266,274 @@ class PlanActCliTest(unittest.TestCase):
             ).stdout
         )
         self.assertEqual(verification["summary"]["constraints"]["pass"], 1)
+
+    def test_required_file_edge_compiles_to_reviewed_dependency_edit(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "REQUIRED-IMPORT": {
+                    "kind": "required_file_edge",
+                    "edge_kind": "import",
+                    "source": "consumer.py",
+                    "target": "provider.py",
+                    "name": "provider",
+                    "owner": "architecture",
+                    "rationale": "The consumer imports the reviewed provider.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+        )
+        consumer = self.root / "consumer.py"
+        provider = self.root / "provider.py"
+        consumer.write_text("def consume():\n    return 1\n")
+        provider.write_text("VALUE = 1\n")
+        plan_path = self.plan_path("required-edge-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan_bytes = plan_path.read_bytes()
+        plan = json.loads(plan_bytes)
+        item = plan["items"][0]
+        self.assertEqual(
+            item["operation"],
+            {
+                "action": "add_dependency",
+                "name": "provider",
+                "relation": "import",
+                "source_path": "consumer.py",
+                "target_path": "provider.py",
+            },
+        )
+        self.assertFalse(item["executable"])
+        report = run(
+            "plan",
+            "--root",
+            str(self.root),
+            "--format",
+            "markdown",
+        ).stdout.decode()
+        self.assertIn("- Target path: `provider.py`", report)
+        self.assertIn("- Relation: `import`", report)
+        self.assertIn("- Relation name: `provider`", report)
+        invalid_plan = json.loads(plan_bytes)
+        invalid_plan["items"][0]["operation"]["relation"] = "imp*"
+        invalid_plan_path = self.plan_path("invalid-required-edge-plan.json")
+        invalid_plan_path.write_text(json.dumps(invalid_plan, sort_keys=True))
+        invalid_contract = run(
+            "act",
+            str(invalid_plan_path),
+            "--root",
+            str(self.root),
+            expected=2,
+        )
+        self.assertIn(b"Plan contract", invalid_contract.stderr)
+        blocked = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            expected=2,
+        )
+        self.assertIn(b"manual or blocked item", blocked.stderr)
+
+        invalid = self.plan_path("invalid-consumer.py")
+        invalid.write_text("def consume():\n    return 2\n")
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={invalid}",
+            expected=2,
+        )
+        self.assertIn(
+            b"fresh Verification has a failing constraint", rejected.stderr
+        )
+        self.assertEqual(consumer.read_text(), "def consume():\n    return 1\n")
+
+        submitted = self.plan_path("consumer-after.py")
+        submitted.write_text(
+            "import provider\n\n\ndef consume():\n    return provider.VALUE\n"
+        )
+        act_path = self.plan_path("required-edge-act.json")
+        patch = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={submitted}",
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn("+import provider", patch)
+        self.assertEqual(consumer.read_text(), "def consume():\n    return 1\n")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={submitted}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        self.assertEqual(plan_path.read_bytes(), plan_bytes)
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(act["executors"][0]["reads"], ["consumer.py"])
+        self.assertEqual(act["executors"][0]["writes"], ["consumer.py"])
+        self.assertEqual(act["transitions"][0]["kind"], "modify")
+
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertEqual(consumer.read_text(), submitted.read_text())
+        self.assertEqual(provider.read_text(), "VALUE = 1\n")
+        verification = json.loads(
+            run(
+                "verify",
+                "--root",
+                str(self.root),
+                "--format",
+                "json",
+                "--check",
+            ).stdout
+        )
+        self.assertEqual(verification["summary"]["constraints"]["pass"], 1)
+
+    def test_required_symbol_and_dependency_share_one_reviewed_transition(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "REQUIRED-CONSUMER": {
+                    "kind": "required_symbols",
+                    "symbols": ["consume_provider"],
+                    "paths": ["consumer.py"],
+                    "kinds": ["function"],
+                    "owner": "architecture",
+                    "rationale": "The reviewed consumer entrypoint exists.",
+                },
+                "REQUIRED-IMPORT": {
+                    "kind": "required_file_edge",
+                    "edge_kind": "import",
+                    "source": "consumer.py",
+                    "target": "provider.py",
+                    "name": "provider",
+                    "owner": "architecture",
+                    "rationale": "The consumer imports the reviewed provider.",
+                },
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+        )
+        consumer = self.root / "consumer.py"
+        consumer.write_text("def existing():\n    return 1\n")
+        (self.root / "provider.py").write_text("VALUE = 2\n")
+        plan_path = self.plan_path("coordinated-required-edge-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 2)
+        items = {
+            item["operation"]["action"]: item for item in plan["items"]
+        }
+        symbol_item = items["add_symbol"]
+        dependency_item = items["add_dependency"]
+        self.assertEqual(
+            dependency_item["depends_on"],
+            [symbol_item["id"]],
+        )
+
+        submitted = self.plan_path("coordinated-consumer.py")
+        submitted.write_text(
+            "import provider\n\n\ndef consume_provider():\n"
+            "    return provider.VALUE\n"
+        )
+        conflicting_plan = json.loads(json.dumps(plan))
+        for item in conflicting_plan["items"]:
+            if item["id"] == symbol_item["id"]:
+                item["operation"] = {
+                    "action": "create_file",
+                    "path": "consumer.py",
+                }
+        conflicting_plan_path = self.plan_path(
+            "conflicting-required-edge-plan.json"
+        )
+        conflicting_plan_path.write_text(json.dumps(conflicting_plan))
+        conflicting = run(
+            "act",
+            str(conflicting_plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{symbol_item['id']}={submitted}",
+            "--submit",
+            f"{dependency_item['id']}={submitted}",
+            expected=2,
+        )
+        self.assertIn(
+            b"one path has incompatible source requirements",
+            conflicting.stderr,
+        )
+
+        act_path = self.plan_path("coordinated-required-edge-act.json")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{symbol_item['id']}={submitted}",
+            "--submit",
+            f"{dependency_item['id']}={submitted}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(len(act["transitions"]), 1)
+        self.assertEqual(act["transitions"][0]["path"], "consumer.py")
+        self.assertEqual(
+            act["transitions"][0]["item_ids"],
+            sorted([symbol_item["id"], dependency_item["id"]]),
+        )
+        self.assertEqual(
+            sorted(
+                item_id
+                for executor in act["executors"]
+                for item_id in executor["item_ids"]
+            ),
+            sorted([symbol_item["id"], dependency_item["id"]]),
+        )
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertEqual(consumer.read_text(), submitted.read_text())
+        verification = json.loads(
+            run(
+                "verify",
+                "--root",
+                str(self.root),
+                "--format",
+                "json",
+                "--check",
+            ).stdout
+        )
+        self.assertEqual(verification["summary"]["constraints"]["pass"], 2)
 
     def test_asserted_test_submission_uses_one_exact_mapped_test_file(
         self,

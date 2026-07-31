@@ -42,6 +42,9 @@ const assertedRoot = fs.mkdtempSync(
 const assertedCreateRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-asserted-create-"),
 );
+const requiredEdgeRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-required-edge-"),
+);
 const redirectRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-redirect-"),
 );
@@ -409,6 +412,119 @@ try {
     ]).stdout.toString("utf8"),
     "Result: applied-transitions=0; state=already-satisfied\n",
   );
+
+  fs.writeFileSync(
+    path.join(requiredEdgeRoot, "archbird.json"),
+    JSON.stringify({
+      project: "node-plan-act-required-edge",
+      layers: [{
+        name: "python",
+        language: "python",
+        globs: ["*.py"],
+        import_roots: ["."],
+      }],
+      constraints: {
+        "REQUIRED-IMPORT": {
+          kind: "required_file_edge",
+          edge_kind: "import",
+          source: "consumer.py",
+          target: "provider.py",
+          name: "provider",
+          owner: "architecture",
+          rationale: "The consumer imports the reviewed provider.",
+        },
+      },
+    }),
+  );
+  const requiredEdgeConsumer = path.join(requiredEdgeRoot, "consumer.py");
+  fs.writeFileSync(requiredEdgeConsumer, "def consume():\n    return 1\n");
+  fs.writeFileSync(path.join(requiredEdgeRoot, "provider.py"), "VALUE = 1\n");
+  const requiredEdgePlan = path.join(
+    artifacts,
+    "required-edge-plan.json",
+  );
+  const requiredEdgeAct = path.join(artifacts, "required-edge-act.json");
+  const requiredEdgeInvalid = path.join(
+    artifacts,
+    "required-edge-invalid.py",
+  );
+  const requiredEdgeSubmitted = path.join(
+    artifacts,
+    "required-edge-consumer.py",
+  );
+  run(["plan", "--root", requiredEdgeRoot, "--output", requiredEdgePlan]);
+  const requiredEdgePlanBytes = fs.readFileSync(requiredEdgePlan);
+  const requiredEdgeDocument = JSON.parse(requiredEdgePlanBytes);
+  const requiredEdgeItem = requiredEdgeDocument.items[0];
+  assert.deepEqual(requiredEdgeItem.operation, {
+    action: "add_dependency",
+    name: "provider",
+    relation: "import",
+    source_path: "consumer.py",
+    target_path: "provider.py",
+  });
+  assert.equal(requiredEdgeItem.executable, false);
+  assert.match(
+    run([
+      "act", requiredEdgePlan, "--root", requiredEdgeRoot,
+    ], 2).stderr.toString("utf8"),
+    /manual or blocked item/,
+  );
+  fs.writeFileSync(requiredEdgeInvalid, "def consume():\n    return 2\n");
+  assert.match(
+    run([
+      "act", requiredEdgePlan, "--root", requiredEdgeRoot,
+      "--submit", `${requiredEdgeItem.id}=${requiredEdgeInvalid}`,
+    ], 2).stderr.toString("utf8"),
+    /fresh Verification has a failing constraint/,
+  );
+  assert.equal(
+    fs.readFileSync(requiredEdgeConsumer, "utf8"),
+    "def consume():\n    return 1\n",
+  );
+  fs.writeFileSync(
+    requiredEdgeSubmitted,
+    "import provider\n\n\ndef consume():\n    return provider.VALUE\n",
+  );
+  const requiredEdgePatch = run([
+    "act", requiredEdgePlan, "--root", requiredEdgeRoot,
+    "--submit", `${requiredEdgeItem.id}=${requiredEdgeSubmitted}`,
+    "--format", "patch",
+  ]).stdout.toString("utf8");
+  assert.match(requiredEdgePatch, /\+import provider/);
+  assert.equal(
+    fs.readFileSync(requiredEdgeConsumer, "utf8"),
+    "def consume():\n    return 1\n",
+  );
+  run([
+    "act", requiredEdgePlan, "--root", requiredEdgeRoot,
+    "--submit", `${requiredEdgeItem.id}=${requiredEdgeSubmitted}`,
+    "--format", "json", "--output", requiredEdgeAct,
+  ]);
+  assert.deepEqual(fs.readFileSync(requiredEdgePlan), requiredEdgePlanBytes);
+  const acceptedRequiredEdge = JSON.parse(
+    fs.readFileSync(requiredEdgeAct, "utf8"),
+  );
+  assert.equal(acceptedRequiredEdge.acceptance.status, "satisfied");
+  assert.deepEqual(
+    acceptedRequiredEdge.executors[0].reads,
+    ["consumer.py"],
+  );
+  assert.deepEqual(
+    acceptedRequiredEdge.executors[0].writes,
+    ["consumer.py"],
+  );
+  assert.equal(acceptedRequiredEdge.transitions[0].kind, "modify");
+  run(["apply", requiredEdgeAct, "--root", requiredEdgeRoot]);
+  assert.equal(
+    fs.readFileSync(requiredEdgeConsumer, "utf8"),
+    fs.readFileSync(requiredEdgeSubmitted, "utf8"),
+  );
+  assert.equal(
+    fs.readFileSync(path.join(requiredEdgeRoot, "provider.py"), "utf8"),
+    "VALUE = 1\n",
+  );
+  run(["verify", "--root", requiredEdgeRoot, "--check"]);
 
   fs.writeFileSync(
     path.join(root, "api.js"),
@@ -928,7 +1044,7 @@ try {
     "Git-derived planning mutated the working tree",
   );
   const observedDocument = JSON.parse(fs.readFileSync(observedPlan, "utf8"));
-  assert.equal(observedDocument.schema_version, 5);
+  assert.equal(observedDocument.schema_version, 6);
   assert.equal(observedDocument.items.length, 1);
   assert.equal(observedDocument.items[0].provenance, "derived");
   assert.equal(observedDocument.items[0].executable, true);
@@ -1124,6 +1240,7 @@ try {
   fs.rmSync(observedRoot, { force: true, recursive: true });
   fs.rmSync(assertedRoot, { force: true, recursive: true });
   fs.rmSync(assertedCreateRoot, { force: true, recursive: true });
+  fs.rmSync(requiredEdgeRoot, { force: true, recursive: true });
   fs.rmSync(redirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptRedirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptUnobservedRoot, { force: true, recursive: true });

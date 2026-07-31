@@ -58,6 +58,39 @@ static int portable_identifier(const AbString *value) {
   return 1;
 }
 
+static int literal_selector(const AbValue *value) {
+  size_t index;
+  if (!ab_artifact_bounded_text(value, 64u * 1024u, 1))
+    return 0;
+  for (index = 0; index < value->as.text.length; index++)
+    if (strchr("*?[]{}", value->as.text.data[index]))
+      return 0;
+  return 1;
+}
+
+static const AbValue *exact_single_string(const AbValue *object,
+                                          const char *name) {
+  const AbValue *values = field(object, name);
+  return values && values->kind == AB_VALUE_ARRAY &&
+                 values->as.array.count == 1 &&
+                 values->as.array.items[0].kind == AB_VALUE_STRING
+             ? &values->as.array.items[0]
+             : NULL;
+}
+
+static int map_has_file(const AbValue *map, const AbValue *path) {
+  const AbValue *files = field(map, "files");
+  size_t index;
+  for (index = 0;
+       files && files->kind == AB_VALUE_ARRAY && index < files->as.array.count;
+       index++) {
+    const AbValue *candidate = field(&files->as.array.items[index], "path");
+    if (candidate && ab_value_equal(candidate, path))
+      return 1;
+  }
+  return 0;
+}
+
 static const AbProjectionItem *relation_item(const AbProjectionData *actual,
                                              const AbValue *finding) {
   const AbValue *key = field(finding, "key");
@@ -482,6 +515,96 @@ append_edge_item(ArchbirdEngine *engine, const ArchbirdProject *project,
   return status;
 }
 
+static ArchbirdStatus append_missing_edge_item(
+    ArchbirdEngine *engine, const AbValue *map, AbPlanItemBuilder *builder,
+    const AbValue *constraint, const AbValue *definition,
+    const AbProjectionData *actual, const AbPlanFindingGroups *groups,
+    int *out_supported) {
+  const AbValue *assertion = field(constraint, "assert");
+  const AbValue *operands = field(constraint, "operands");
+  const AbValue *minimum = field(operands, "min");
+  const AbValue *source = exact_single_string(definition, "from_paths");
+  const AbValue *target = exact_single_string(definition, "to_paths");
+  const AbValue *relation = exact_single_string(definition, "kind_patterns");
+  const AbValue *name = exact_single_string(definition, "name_patterns");
+  const AbPlanFindingGroup *group =
+      groups && groups->count == 1 ? &groups->groups[0] : NULL;
+  const AbValue *finding = group ? group->representative : NULL;
+  uint64_t min_count = 0;
+  AbBuffer operation;
+  AbPlanItemSpec spec;
+  const char *reasons[] = {
+      "The required dependency does not define its source edit."};
+  char statement[1024];
+  int length;
+  ArchbirdStatus status;
+  *out_supported = 0;
+  if (!ab_artifact_text_is(assertion, "cardinality") ||
+      !ab_artifact_safe_integer(minimum, &min_count) || min_count != 1 ||
+      !projection_complete(actual) || actual->item_count != 0 || !group ||
+      !ab_plan_finding_current(finding) ||
+      !ab_artifact_repository_literal_path(source) ||
+      !ab_artifact_repository_literal_path(target) ||
+      ab_value_equal(source, target) || !literal_selector(relation) ||
+      (field(definition, "name_patterns") && !literal_selector(name)) ||
+      !map_has_file(map, source) || !map_has_file(map, target))
+    return ARCHBIRD_OK;
+  ab_buffer_init(&operation, engine);
+  status = literal(&operation, "{\"action\":\"add_dependency\",\"relation\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&operation, relation);
+  if (status == ARCHBIRD_OK && name)
+    status = literal(&operation, ",\"name\":");
+  if (status == ARCHBIRD_OK && name)
+    status = ab_value_render(&operation, name);
+  if (status == ARCHBIRD_OK)
+    status = literal(&operation, ",\"source_path\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&operation, source);
+  if (status == ARCHBIRD_OK)
+    status = literal(&operation, ",\"target_path\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&operation, target);
+  if (status == ARCHBIRD_OK)
+    status = literal(&operation, "}");
+  if (name)
+    length = snprintf(statement, sizeof(statement),
+                      "Add required %.*s dependency from %.*s to %.*s "
+                      "(%.*s).",
+                      (int)relation->as.text.length, relation->as.text.data,
+                      (int)source->as.text.length, source->as.text.data,
+                      (int)target->as.text.length, target->as.text.data,
+                      (int)name->as.text.length, name->as.text.data);
+  else
+    length = snprintf(statement, sizeof(statement),
+                      "Add required %.*s dependency from %.*s to %.*s.",
+                      (int)relation->as.text.length, relation->as.text.data,
+                      (int)source->as.text.length, source->as.text.data,
+                      (int)target->as.text.length, target->as.text.data);
+  if (status == ARCHBIRD_OK &&
+      (length < 0 || (size_t)length >= sizeof(statement)))
+    status = archbird_error_set(
+        engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+        "plan compilation: required-edge statement is too long");
+  if (status == ARCHBIRD_OK) {
+    memset(&spec, 0, sizeof(spec));
+    spec.constraint = constraint;
+    spec.findings = group->rows;
+    spec.finding_count = group->count;
+    spec.statement = statement;
+    spec.provenance = "derived";
+    spec.operation = &operation;
+    spec.executable = 0;
+    spec.reasons = reasons;
+    spec.reason_count = 1;
+    status = ab_plan_item_builder_append(builder, &spec);
+  }
+  ab_buffer_free(&operation);
+  if (status == ARCHBIRD_OK)
+    *out_supported = 1;
+  return status;
+}
+
 ArchbirdStatus ab_plan_compile_edge_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
     AbPlanItemBuilder *builder, const AbValue *constraint,
@@ -503,6 +626,15 @@ ArchbirdStatus ab_plan_compile_edge_constraint(
         engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
         "plan compilation: failing edge constraint has no issue evidence");
   status = ab_plan_finding_groups_collect(engine, findings, &groups);
+  if (status == ARCHBIRD_OK && ab_artifact_text_is(select, "file_edges")) {
+    int supported = 0;
+    status = append_missing_edge_item(engine, map, builder, constraint,
+                                      definition, actual, &groups, &supported);
+    if (status != ARCHBIRD_OK || supported) {
+      ab_plan_finding_groups_free(engine, &groups);
+      return status;
+    }
+  }
   for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++)
     status = append_edge_item(engine, project, map, builder, constraint,
                               &groups.groups[index], definition, actual,

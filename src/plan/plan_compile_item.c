@@ -614,6 +614,10 @@ static int operation_dependency(const AbValue *prerequisite,
   if (string_is(&prerequisite_action->as.text, "add_symbol") &&
       string_is(&dependent_action->as.text, "add_test_route"))
     return same_text_fields(prerequisite, "path", dependent, "target");
+  if (string_is(&prerequisite_action->as.text, "add_symbol") &&
+      string_is(&dependent_action->as.text, "add_dependency"))
+    return same_text_fields(prerequisite, "path", dependent, "source_path") ||
+           same_text_fields(prerequisite, "path", dependent, "target_path");
   if (string_is(&prerequisite_action->as.text, "add_provider_capability") &&
       string_is(&dependent_action->as.text, "add_provider_capability") &&
       provider_kind_is(prerequisite, "file_pattern") &&
