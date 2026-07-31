@@ -251,17 +251,6 @@ static int validate_candidate_site(const AbValue *value) {
          bounded_text(ab_value_member(value, "name"), AB_PLAN_MAX_METADATA, 1);
 }
 
-static int token_value(const AbValue *value, int nonempty) {
-  size_t index;
-  if (!bounded_text(value, AB_PLAN_MAX_METADATA, nonempty))
-    return 0;
-  for (index = 0; index < value->as.text.length; index++)
-    if (isspace((unsigned char)value->as.text.data[index]) ||
-        value->as.text.data[index] == '#')
-      return 0;
-  return 1;
-}
-
 static int validate_edge_projection(const AbValue *value) {
   static const char *const fields[] = {
       "id",    "select",        "from_paths",   "to_paths",
@@ -401,31 +390,31 @@ static int validate_operation(const AbValue *value, int *out_manual,
            bounded_text(ab_value_member(value, "pointer"), AB_PLAN_MAX_METADATA,
                         0);
   }
-  if (text_is(action, "edit_make_variable_token")) {
-    static const char *const fields[] = {"action",         "path",
-                                         "source_sha256",  "variable",
-                                         "expected_token", "replacement_token"};
-    return object_exact(value, fields, 6) &&
-           repository_path(ab_value_member(value, "path")) &&
-           lowercase_sha256(ab_value_member(value, "source_sha256")) &&
-           portable_identifier(ab_value_member(value, "variable")) &&
-           token_value(ab_value_member(value, "expected_token"), 1) &&
-           token_value(ab_value_member(value, "replacement_token"), 0);
-  }
-  if (text_is(action, "insert_make_variable_token")) {
-    static const char *const fields[] = {"action",   "path",  "source_sha256",
-                                         "variable", "token", "anchor_token",
-                                         "position"};
-    const AbValue *position;
-    if (!object_exact(value, fields, 7))
+  if (text_is(action, "add_provider_capability") ||
+      text_is(action, "remove_provider_capability") ||
+      text_is(action, "rename_provider_capability")) {
+    static const char *const capability_fields[] = {"action", "capability",
+                                                    "provider", "surface"};
+    static const char *const rename_fields[] = {"action", "from", "provider",
+                                                "surface", "to"};
+    static const char *const provider_fields[] = {"kind", "path", "variable"};
+    const AbValue *provider = ab_value_member(value, "provider");
+    int rename = text_is(action, "rename_provider_capability");
+    if (!object_exact(value, rename ? rename_fields : capability_fields,
+                      rename ? 5 : 4) ||
+        !provider || !object_exact(provider, provider_fields, 3) ||
+        !text_is(ab_value_member(provider, "kind"), "make_variable") ||
+        !repository_path(ab_value_member(provider, "path")) ||
+        !portable_identifier(ab_value_member(provider, "variable")) ||
+        !bounded_text(ab_value_member(value, "surface"), AB_PLAN_MAX_METADATA,
+                      1))
       return 0;
-    position = ab_value_member(value, "position");
-    return repository_path(ab_value_member(value, "path")) &&
-           lowercase_sha256(ab_value_member(value, "source_sha256")) &&
-           portable_identifier(ab_value_member(value, "variable")) &&
-           token_value(ab_value_member(value, "token"), 1) &&
-           token_value(ab_value_member(value, "anchor_token"), 1) &&
-           (text_is(position, "before") || text_is(position, "after"));
+    if (rename)
+      return portable_identifier(ab_value_member(value, "from")) &&
+             portable_identifier(ab_value_member(value, "to")) &&
+             !ab_value_equal(ab_value_member(value, "from"),
+                             ab_value_member(value, "to"));
+    return portable_identifier(ab_value_member(value, "capability"));
   }
   if (text_is(action, "declare_symbol")) {
     static const char *const fields[] = {"action", "path", "symbol",

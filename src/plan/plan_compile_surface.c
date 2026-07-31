@@ -14,23 +14,19 @@ typedef struct SurfaceMakeProvider {
 typedef struct SurfaceRewrite {
   const AbValue *finding;
   const AbValue *replacement_name;
+  const AbValue *surface_name;
   SurfaceMakeProvider provider;
-  AbPlanSourceLock source;
-  AbString expected_token;
-  AbString replacement_token;
   size_t rename_index;
   int asserted;
+  int remove_only;
 } SurfaceRewrite;
 
 typedef struct SurfaceInsertion {
   const AbValue *key;
   const AbValue **findings;
   size_t finding_count;
+  const AbValue *surface_name;
   SurfaceMakeProvider provider;
-  AbPlanSourceLock source;
-  AbString token;
-  AbString anchor_token;
-  ArchbirdMakeVariableTokenPosition position;
 } SurfaceInsertion;
 
 static const AbValue *field(const AbValue *object, const char *name) {
@@ -41,35 +37,6 @@ static const AbValue *field(const AbValue *object, const char *name) {
 
 static int text_is(const AbValue *value, const char *literal) {
   return ab_artifact_text_is(value, literal);
-}
-
-static int buffer_write(void *user_data, const uint8_t *bytes, size_t length) {
-  return ab_buffer_append((AbBuffer *)user_data, bytes, length) == ARCHBIRD_OK
-             ? 0
-             : 1;
-}
-
-static size_t common_prefix(const AbString *left, const AbString *right) {
-  size_t common = left->length < right->length ? left->length : right->length;
-  size_t index = 0;
-  while (index < common && left->data[index] == right->data[index])
-    index++;
-  return index;
-}
-
-static int string_compare(const AbString *left, const AbString *right) {
-  size_t common = left->length < right->length ? left->length : right->length;
-  int compared = common ? memcmp(left->data, right->data, common) : 0;
-  if (compared)
-    return compared;
-  return left->length < right->length   ? -1
-         : left->length > right->length ? 1
-                                        : 0;
-}
-
-static size_t length_distance(const AbString *left, const AbString *right) {
-  return left->length > right->length ? left->length - right->length
-                                      : right->length - left->length;
 }
 
 static int find_rename(const AbValue *renames, const AbString *old_name,
@@ -285,268 +252,11 @@ static int old_is_inactive_make_declaration(const AbValue *row,
   return parse_make_provider(&declarations->as.array.items[0], out_provider);
 }
 
-static ArchbirdStatus make_token(ArchbirdEngine *engine, const AbString *name,
-                                 int underscored, AbString *out) {
-  AbBuffer buffer;
-  ArchbirdStatus status;
-  ab_buffer_init(&buffer, engine);
-  status = underscored ? ab_buffer_literal(&buffer, "_") : ARCHBIRD_OK;
-  if (status == ARCHBIRD_OK)
-    status =
-        ab_buffer_append(&buffer, (const uint8_t *)name->data, name->length);
-  if (status == ARCHBIRD_OK)
-    status =
-        ab_string_copy(engine, out, (const char *)buffer.data, buffer.length);
-  ab_buffer_free(&buffer);
-  return status;
-}
-
-static ArchbirdStatus try_make_replacement(ArchbirdEngine *engine,
-                                           const SurfaceMakeProvider *provider,
-                                           const AbPlanSourceLock *source,
-                                           const AbString *expected,
-                                           const AbString *replacement,
-                                           int *out_matched) {
-  ArchbirdMakeVariableTokenEditOptions options;
-  ArchbirdMakeVariableTokenEditResult result;
-  AbBuffer ignored;
-  ArchbirdStatus status;
-  *out_matched = 0;
-  archbird_make_variable_token_edit_options_init(&options);
-  options.source_sha256 = source->sha256->as.text.data;
-  options.source_sha256_length = source->sha256->as.text.length;
-  options.variable = (const uint8_t *)provider->variable.data;
-  options.variable_length = provider->variable.length;
-  options.expected_token = (const uint8_t *)expected->data;
-  options.expected_token_length = expected->length;
-  options.replacement_token = (const uint8_t *)replacement->data;
-  options.replacement_token_length = replacement->length;
-  archbird_make_variable_token_edit_result_init(&result);
-  ab_buffer_init(&ignored, engine);
-  status = archbird_make_variable_token_edit(
-      engine, source->source.bytes, source->source.byte_length, &options,
-      &result, buffer_write, &ignored);
-  ab_buffer_free(&ignored);
-  if (status == ARCHBIRD_OK) {
-    *out_matched = 1;
-  } else if (status == ARCHBIRD_POLICY_REJECTED && result.matched_tokens == 0) {
-    archbird_error_clear(engine);
-    status = ARCHBIRD_OK;
-  }
-  return status;
-}
-
-static ArchbirdStatus
-resolve_make_replacement(ArchbirdEngine *engine,
-                         const SurfaceMakeProvider *provider,
-                         const AbString *old_name, const AbString *new_name,
-                         const AbPlanSourceLock *source, AbString *out_expected,
-                         AbString *out_replacement, int *out_supported) {
-  size_t form;
-  size_t matches = 0;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  *out_supported = 0;
-  for (form = 0; status == ARCHBIRD_OK && form < 2; form++) {
-    AbString expected = {0};
-    AbString replacement = {0};
-    int matched = 0;
-    status = make_token(engine, old_name, (int)form, &expected);
-    if (status == ARCHBIRD_OK)
-      status = make_token(engine, new_name, (int)form, &replacement);
-    if (status == ARCHBIRD_OK)
-      status = try_make_replacement(engine, provider, source, &expected,
-                                    &replacement, &matched);
-    if (status == ARCHBIRD_OK && matched) {
-      if (matches) {
-        status = archbird_error_set(
-            engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-            "plan compilation: provider registration has multiple direct "
-            "spellings for %.*s",
-            (int)old_name->length, old_name->data);
-      } else {
-        *out_expected = expected;
-        *out_replacement = replacement;
-        memset(&expected, 0, sizeof(expected));
-        memset(&replacement, 0, sizeof(replacement));
-        matches++;
-      }
-    }
-    ab_string_free(engine, &expected);
-    ab_string_free(engine, &replacement);
-  }
-  if (status == ARCHBIRD_OK && matches == 1)
-    *out_supported = 1;
-  else if (status == ARCHBIRD_OK) {
-    ab_string_free(engine, out_expected);
-    ab_string_free(engine, out_replacement);
-  }
-  return status;
-}
-
-static ArchbirdStatus resolve_make_removal(ArchbirdEngine *engine,
-                                           const SurfaceMakeProvider *provider,
-                                           const AbString *old_name,
-                                           const AbPlanSourceLock *source,
-                                           AbString *out_expected,
-                                           int *out_supported) {
-  AbString empty = {0};
-  size_t form;
-  size_t matches = 0;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  *out_supported = 0;
-  for (form = 0; status == ARCHBIRD_OK && form < 2; form++) {
-    AbString expected = {0};
-    int matched = 0;
-    status = make_token(engine, old_name, (int)form, &expected);
-    if (status == ARCHBIRD_OK)
-      status = try_make_replacement(engine, provider, source, &expected, &empty,
-                                    &matched);
-    if (status == ARCHBIRD_OK && matched) {
-      if (matches) {
-        status = archbird_error_set(
-            engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-            "plan compilation: provider registration has multiple direct "
-            "spellings for %.*s",
-            (int)old_name->length, old_name->data);
-      } else {
-        *out_expected = expected;
-        memset(&expected, 0, sizeof(expected));
-        matches++;
-      }
-    }
-    ab_string_free(engine, &expected);
-  }
-  if (status == ARCHBIRD_OK && matches == 1)
-    *out_supported = 1;
-  else if (status == ARCHBIRD_OK)
-    ab_string_free(engine, out_expected);
-  return status;
-}
-
-static ArchbirdStatus
-try_make_insertion(ArchbirdEngine *engine, const SurfaceMakeProvider *provider,
-                   const AbPlanSourceLock *source, const AbString *token,
-                   const AbString *anchor,
-                   ArchbirdMakeVariableTokenPosition position,
-                   int *out_matched) {
-  ArchbirdMakeVariableTokenInsertOptions options;
-  ArchbirdMakeVariableTokenInsertResult result;
-  AbBuffer ignored;
-  ArchbirdStatus status;
-  *out_matched = 0;
-  archbird_make_variable_token_insert_options_init(&options);
-  options.source_sha256 = source->sha256->as.text.data;
-  options.source_sha256_length = source->sha256->as.text.length;
-  options.variable = (const uint8_t *)provider->variable.data;
-  options.variable_length = provider->variable.length;
-  options.token = (const uint8_t *)token->data;
-  options.token_length = token->length;
-  options.anchor_token = (const uint8_t *)anchor->data;
-  options.anchor_token_length = anchor->length;
-  options.position = position;
-  archbird_make_variable_token_insert_result_init(&result);
-  ab_buffer_init(&ignored, engine);
-  status = archbird_make_variable_token_insert(
-      engine, source->source.bytes, source->source.byte_length, &options,
-      &result, buffer_write, &ignored);
-  ab_buffer_free(&ignored);
-  if (status == ARCHBIRD_OK) {
-    *out_matched = 1;
-  } else if (status == ARCHBIRD_POLICY_REJECTED && result.matched_tokens == 0) {
-    archbird_error_clear(engine);
-    status = ARCHBIRD_OK;
-  }
-  return status;
-}
-
-static int better_anchor(const AbString *target, const AbString *candidate,
-                         const AbString *candidate_token, size_t best_prefix,
-                         size_t best_distance, const AbString *best_name,
-                         const AbString *best_token, int has_best) {
-  size_t prefix = common_prefix(target, candidate);
-  size_t distance = length_distance(target, candidate);
-  int compared;
-  if (!has_best || prefix != best_prefix)
-    return !has_best || prefix > best_prefix;
-  if (distance != best_distance)
-    return distance < best_distance;
-  compared = string_compare(candidate, best_name);
-  if (compared)
-    return compared < 0;
-  return string_compare(candidate_token, best_token) < 0;
-}
-
-static ArchbirdStatus resolve_make_insertion(
-    ArchbirdEngine *engine, const SurfaceMakeProvider *provider,
-    const AbString *name, const AbValue *surface,
-    const AbPlanSourceLock *source, AbString *out_token, AbString *out_anchor,
-    ArchbirdMakeVariableTokenPosition *out_position, int *out_supported) {
-  const AbValue *names = field(surface, "names");
-  const AbString *best_name = NULL;
-  size_t best_prefix = 0;
-  size_t best_distance = 0;
-  size_t index;
-  int has_best = 0;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  *out_supported = 0;
-  if (!names || names->kind != AB_VALUE_ARRAY)
-    return ARCHBIRD_OK;
-  for (index = 0; status == ARCHBIRD_OK && index < names->as.array.count;
-       index++) {
-    const AbValue *row = &names->as.array.items[index];
-    const AbValue *candidate = field(row, "name");
-    size_t form;
-    if (!candidate || candidate->kind != AB_VALUE_STRING ||
-        !row_has_provider(row, provider) ||
-        ab_string_equal(&candidate->as.text, name))
-      continue;
-    for (form = 0; status == ARCHBIRD_OK && form < 2; form++) {
-      AbString token = {0};
-      AbString anchor = {0};
-      ArchbirdMakeVariableTokenPosition position =
-          string_compare(name, &candidate->as.text) < 0
-              ? ARCHBIRD_MAKE_TOKEN_BEFORE
-              : ARCHBIRD_MAKE_TOKEN_AFTER;
-      int matched = 0;
-      status = make_token(engine, name, (int)form, &token);
-      if (status == ARCHBIRD_OK)
-        status = make_token(engine, &candidate->as.text, (int)form, &anchor);
-      if (status == ARCHBIRD_OK)
-        status = try_make_insertion(engine, provider, source, &token, &anchor,
-                                    position, &matched);
-      if (status == ARCHBIRD_OK && matched &&
-          better_anchor(name, &candidate->as.text, &anchor, best_prefix,
-                        best_distance, best_name, out_anchor, has_best)) {
-        ab_string_free(engine, out_token);
-        ab_string_free(engine, out_anchor);
-        *out_token = token;
-        *out_anchor = anchor;
-        *out_position = position;
-        best_name = &candidate->as.text;
-        best_prefix = common_prefix(name, best_name);
-        best_distance = length_distance(name, best_name);
-        has_best = 1;
-        memset(&token, 0, sizeof(token));
-        memset(&anchor, 0, sizeof(anchor));
-      }
-      ab_string_free(engine, &token);
-      ab_string_free(engine, &anchor);
-    }
-  }
-  if (status == ARCHBIRD_OK && has_best)
-    *out_supported = 1;
-  else if (status != ARCHBIRD_OK) {
-    ab_string_free(engine, out_token);
-    ab_string_free(engine, out_anchor);
-  }
-  return status;
-}
-
-static ArchbirdStatus
-analyze_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
-                const AbValue *map, const AbValue *definition,
-                const AbValue *renames, const AbPlanFindingGroup *group,
-                SurfaceRewrite *out, int *out_supported) {
+static ArchbirdStatus analyze_rewrite(const AbValue *map,
+                                      const AbValue *definition,
+                                      const AbValue *renames,
+                                      const AbPlanFindingGroup *group,
+                                      SurfaceRewrite *out, int *out_supported) {
   const AbValue *finding = group->representative;
   const AbValue *old_value = field(finding, "key");
   const AbValue *new_value = NULL;
@@ -555,7 +265,6 @@ analyze_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
   const AbValue *old_row;
   const AbValue *new_row;
   size_t rename_index = 0;
-  ArchbirdStatus status;
   *out_supported = 0;
   memset(out, 0, sizeof(*out));
   if (!ab_plan_finding_current(finding) ||
@@ -571,20 +280,14 @@ analyze_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
   if (!old_is_inactive_make_declaration(old_row, &out->provider) ||
       !target_is_resolved(new_row))
     return ARCHBIRD_OK;
-  status = ab_plan_source_lock(engine, project, map,
-                               &out->provider.path->as.text, &out->source);
-  if (status == ARCHBIRD_OK)
-    status = resolve_make_replacement(engine, &out->provider,
-                                      &old_value->as.text, &new_value->as.text,
-                                      &out->source, &out->expected_token,
-                                      &out->replacement_token, out_supported);
-  if (status == ARCHBIRD_OK && *out_supported) {
-    out->finding = finding;
-    out->replacement_name = new_value;
-    out->rename_index = rename_index;
-    out->asserted = 1;
-  }
-  return status;
+  out->finding = finding;
+  out->replacement_name = new_value;
+  out->surface_name = surface_value;
+  out->rename_index = rename_index;
+  out->asserted = 1;
+  out->remove_only = row_has_provider(new_row, &out->provider);
+  *out_supported = 1;
+  return ARCHBIRD_OK;
 }
 
 static int observed_target_matches(const AbValue *before_old,
@@ -640,8 +343,7 @@ static const AbValue *find_observed_target(const AbValue *before_surface,
 }
 
 static ArchbirdStatus
-analyze_observed_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
-                         const AbValue *map, const AbValue *before_map,
+analyze_observed_rewrite(const AbValue *map, const AbValue *before_map,
                          const AbValue *definition,
                          const AbPlanFindingGroup *group, SurfaceRewrite *out,
                          int *out_supported, int *out_ambiguous) {
@@ -654,7 +356,6 @@ analyze_observed_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
   const AbValue *current_old;
   const AbValue *target;
   const AbValue *target_name;
-  ArchbirdStatus status;
   *out_supported = 0;
   *out_ambiguous = 0;
   memset(out, 0, sizeof(*out));
@@ -679,23 +380,14 @@ analyze_observed_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
   target_name = field(target, "name");
   if (!target_name)
     return ARCHBIRD_OK;
-  status = ab_plan_source_lock(engine, project, map,
-                               &out->provider.path->as.text, &out->source);
-  if (status == ARCHBIRD_OK)
-    status = resolve_make_replacement(
-        engine, &out->provider, &old_value->as.text, &target_name->as.text,
-        &out->source, &out->expected_token, &out->replacement_token,
-        out_supported);
-  if (status == ARCHBIRD_OK && *out_supported) {
-    out->finding = finding;
-    out->replacement_name = target_name;
-  }
-  return status;
+  out->finding = finding;
+  out->replacement_name = target_name;
+  out->surface_name = surface_value;
+  *out_supported = 1;
+  return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus analyze_removal(ArchbirdEngine *engine,
-                                      const ArchbirdProject *project,
-                                      const AbValue *map,
+static ArchbirdStatus analyze_removal(const AbValue *map,
                                       const AbValue *definition,
                                       const AbPlanFindingGroup *group,
                                       SurfaceRewrite *out, int *out_supported) {
@@ -704,7 +396,6 @@ static ArchbirdStatus analyze_removal(ArchbirdEngine *engine,
   const AbValue *surface_value = field(definition, "name");
   const AbValue *surface;
   const AbValue *old_row;
-  ArchbirdStatus status;
   *out_supported = 0;
   memset(out, 0, sizeof(*out));
   if (!ab_plan_finding_current(finding) ||
@@ -718,66 +409,67 @@ static ArchbirdStatus analyze_removal(ArchbirdEngine *engine,
       !provider_has_resolved_declaration(surface, &out->provider,
                                          &old_value->as.text))
     return ARCHBIRD_OK;
-  status = ab_plan_source_lock(engine, project, map,
-                               &out->provider.path->as.text, &out->source);
-  if (status == ARCHBIRD_OK)
-    status =
-        resolve_make_removal(engine, &out->provider, &old_value->as.text,
-                             &out->source, &out->expected_token, out_supported);
-  if (status == ARCHBIRD_OK && *out_supported)
-    out->finding = finding;
-  return status;
+  out->finding = finding;
+  out->surface_name = surface_value;
+  *out_supported = 1;
+  return ARCHBIRD_OK;
 }
 
-static void rewrites_free(ArchbirdEngine *engine, SurfaceRewrite *rewrites,
-                          size_t count) {
-  size_t index;
-  for (index = 0; index < count; index++) {
-    ab_string_free(engine, &rewrites[index].expected_token);
-    ab_string_free(engine, &rewrites[index].replacement_token);
-  }
+static void rewrites_free(ArchbirdEngine *engine, SurfaceRewrite *rewrites) {
   ab_free(engine, rewrites);
 }
 
 static void insertions_free(ArchbirdEngine *engine,
                             SurfaceInsertion *insertions, size_t count) {
   size_t index;
-  for (index = 0; index < count; index++) {
+  for (index = 0; index < count; index++)
     ab_free(engine, insertions[index].findings);
-    ab_string_free(engine, &insertions[index].token);
-    ab_string_free(engine, &insertions[index].anchor_token);
-  }
   ab_free(engine, insertions);
+}
+
+static ArchbirdStatus render_provider(AbBuffer *out,
+                                      const SurfaceMakeProvider *provider) {
+  ArchbirdStatus status =
+      ab_buffer_literal(out, "{\"kind\":\"make_variable\",\"path\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(out, provider->path);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, ",\"variable\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(out, provider->variable.data,
+                                   provider->variable.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, "}");
+  return status;
 }
 
 static ArchbirdStatus render_rewrite_operation(ArchbirdEngine *engine,
                                                const SurfaceRewrite *rewrite,
+                                               const char *action,
                                                AbBuffer *out) {
   ArchbirdStatus status;
+  const AbValue *key = field(rewrite->finding, "key");
+  int rename = strcmp(action, "rename_provider_capability") == 0;
   ab_buffer_init(out, engine);
-  status = ab_buffer_literal(out, "{\"action\":\"edit_make_variable_token\","
-                                  "\"expected_token\":");
+  status = ab_buffer_literal(out, "{\"action\":");
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(out, rewrite->expected_token.data,
-                                   rewrite->expected_token.length);
+    status = ab_buffer_json_string(out, action, strlen(action));
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(out, ",\"path\":");
+    status = ab_buffer_literal(out, rename ? ",\"from\":" : ",\"capability\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(out, rewrite->provider.path);
+    status = ab_value_render(out, key);
+  if (status == ARCHBIRD_OK && rename)
+    status = ab_buffer_literal(out, ",\"to\":");
+  if (status == ARCHBIRD_OK && rename)
+    status = ab_value_render(out, rewrite->replacement_name);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(out, ",\"replacement_token\":");
+    status = ab_buffer_literal(out, ",\"provider\":");
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(out, rewrite->replacement_token.data,
-                                   rewrite->replacement_token.length);
+    status = render_provider(out, &rewrite->provider);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(out, ",\"source_sha256\":");
+    status = ab_buffer_literal(out, ",\"surface\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(out, rewrite->source.sha256);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(out, ",\"variable\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(out, rewrite->provider.variable.data,
-                                   rewrite->provider.variable.length);
+    status = ab_value_render(out, rewrite->surface_name);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(out, "}");
   return status;
@@ -788,32 +480,18 @@ render_insertion_operation(ArchbirdEngine *engine,
                            const SurfaceInsertion *insertion, AbBuffer *out) {
   ArchbirdStatus status;
   ab_buffer_init(out, engine);
-  status = ab_buffer_literal(out, "{\"action\":\"insert_make_variable_token\","
-                                  "\"anchor_token\":");
+  status = ab_buffer_literal(out, "{\"action\":\"add_provider_capability\","
+                                  "\"capability\":");
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(out, insertion->anchor_token.data,
-                                   insertion->anchor_token.length);
+    status = ab_value_render(out, insertion->key);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(out, ",\"path\":");
+    status = ab_buffer_literal(out, ",\"provider\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(out, insertion->provider.path);
+    status = render_provider(out, &insertion->provider);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(
-        out, insertion->position == ARCHBIRD_MAKE_TOKEN_BEFORE
-                 ? ",\"position\":\"before\",\"source_sha256\":"
-                 : ",\"position\":\"after\",\"source_sha256\":");
+    status = ab_buffer_literal(out, ",\"surface\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(out, insertion->source.sha256);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(out, ",\"token\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(out, insertion->token.data,
-                                   insertion->token.length);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(out, ",\"variable\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(out, insertion->provider.variable.data,
-                                   insertion->provider.variable.length);
+    status = ab_value_render(out, insertion->surface_name);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(out, "}");
   return status;
@@ -824,10 +502,11 @@ static int insertion_comparison(const AbValue *finding) {
   return text_is(comparison, "missing") || text_is(comparison, "unregistered");
 }
 
-static ArchbirdStatus analyze_insertions(
-    ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
-    const AbValue *definition, const AbPlanFindingGroups *groups,
-    SurfaceInsertion *insertions, size_t *out_count, int *out_supported) {
+static ArchbirdStatus
+analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
+                   const AbValue *definition, const AbPlanFindingGroups *groups,
+                   SurfaceInsertion *insertions, size_t *out_count,
+                   int *out_supported) {
   const AbValue *surface_value = field(definition, "name");
   const AbValue *surface;
   SurfaceMakeProvider provider;
@@ -857,7 +536,6 @@ static ArchbirdStatus analyze_insertions(
     size_t finding_count = 0;
     size_t finding_index = 0;
     int has_missing = 0;
-    int supported = 0;
     if (consumed[index])
       continue;
     finding = groups->groups[index].representative;
@@ -892,6 +570,7 @@ static ArchbirdStatus analyze_insertions(
     }
     insertion->key = key;
     insertion->finding_count = finding_count;
+    insertion->surface_name = surface_value;
     insertion->provider = provider;
     for (group_index = index; group_index < groups->count; group_index++) {
       const AbPlanFindingGroup *group = &groups->groups[group_index];
@@ -906,15 +585,6 @@ static ArchbirdStatus analyze_insertions(
     }
     target = find_named_row(field(surface, "names"), &key->as.text);
     if (!target_is_implemented(target))
-      break;
-    status = ab_plan_source_lock(engine, project, map, &provider.path->as.text,
-                                 &insertion->source);
-    if (status == ARCHBIRD_OK)
-      status = resolve_make_insertion(engine, &provider, &key->as.text, surface,
-                                      &insertion->source, &insertion->token,
-                                      &insertion->anchor_token,
-                                      &insertion->position, &supported);
-    if (status != ARCHBIRD_OK || !supported)
       break;
     insertion_count++;
   }
@@ -986,7 +656,8 @@ static ArchbirdStatus append_removals(ArchbirdEngine *engine,
       return archbird_error_set(
           engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
           "plan compilation: provider-surface statement is too long");
-    status = render_rewrite_operation(engine, &removals[index], &operation);
+    status = render_rewrite_operation(engine, &removals[index],
+                                      "remove_provider_capability", &operation);
     if (status == ARCHBIRD_OK) {
       memset(&spec, 0, sizeof(spec));
       spec.constraint = constraint;
@@ -1012,21 +683,36 @@ append_rewrites(ArchbirdEngine *engine, AbPlanItemBuilder *builder,
   for (index = 0; status == ARCHBIRD_OK && index < groups->count; index++) {
     const AbValue *key = field(rewrites[index].finding, "key");
     const AbValue *new_name = rewrites[index].replacement_name;
+    const char *action = rewrites[index].remove_only
+                             ? "remove_provider_capability"
+                             : "rename_provider_capability";
     AbBuffer operation;
     char statement[1024];
     AbPlanItemSpec spec;
-    int length =
-        snprintf(statement, sizeof(statement),
-                 "Replace stale provider registration %.*s with %.*s in %.*s.",
-                 (int)key->as.text.length, key->as.text.data,
-                 (int)new_name->as.text.length, new_name->as.text.data,
-                 (int)rewrites[index].provider.path->as.text.length,
-                 rewrites[index].provider.path->as.text.data);
+    int length;
+    if (rewrites[index].remove_only)
+      length = snprintf(
+          statement, sizeof(statement),
+          "Remove stale provider registration %.*s from %.*s; replacement "
+          "%.*s is already registered.",
+          (int)key->as.text.length, key->as.text.data,
+          (int)rewrites[index].provider.path->as.text.length,
+          rewrites[index].provider.path->as.text.data,
+          (int)new_name->as.text.length, new_name->as.text.data);
+    else
+      length = snprintf(
+          statement, sizeof(statement),
+          "Replace stale provider registration %.*s with %.*s in %.*s.",
+          (int)key->as.text.length, key->as.text.data,
+          (int)new_name->as.text.length, new_name->as.text.data,
+          (int)rewrites[index].provider.path->as.text.length,
+          rewrites[index].provider.path->as.text.data);
     if (length < 0 || (size_t)length >= sizeof(statement))
       return archbird_error_set(
           engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
           "plan compilation: provider-surface statement is too long");
-    status = render_rewrite_operation(engine, &rewrites[index], &operation);
+    status =
+        render_rewrite_operation(engine, &rewrites[index], action, &operation);
     if (status == ARCHBIRD_OK) {
       memset(&spec, 0, sizeof(spec));
       spec.constraint = constraint;
@@ -1055,6 +741,7 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
   SurfaceRewrite *rewrites = NULL;
   size_t index;
   ArchbirdStatus status;
+  (void)project;
   *out_handled = 0;
   if (!definition ||
       !text_is(field(definition, "select"), "provider_surface") || !findings ||
@@ -1076,8 +763,8 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
           "plan compilation: out of memory deriving provider-surface "
           "insertions");
     }
-    status = analyze_insertions(engine, project, map, definition, &groups,
-                                insertions, &insertion_count, &supported);
+    status = analyze_insertions(engine, map, definition, &groups, insertions,
+                                &insertion_count, &supported);
     if (status == ARCHBIRD_OK && supported) {
       status = append_insertions(engine, builder, constraint, insertions,
                                  insertion_count);
@@ -1100,7 +787,7 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
         int rewrite_supported = 0;
         int rewrite_ambiguous = 0;
         status = analyze_observed_rewrite(
-            engine, project, map, before_map, definition, &groups.groups[index],
+            map, before_map, definition, &groups.groups[index],
             &observed[index], &rewrite_supported, &rewrite_ambiguous);
         if (rewrite_ambiguous)
           observed_ambiguous = 1;
@@ -1115,7 +802,7 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
           supported = 1;
         }
       }
-      rewrites_free(engine, observed, groups.count);
+      rewrites_free(engine, observed);
       if (observed_ambiguous)
         supported = 1;
     }
@@ -1131,9 +818,8 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
       }
       for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++) {
         int removal_supported = 0;
-        status = analyze_removal(engine, project, map, definition,
-                                 &groups.groups[index], &removals[index],
-                                 &removal_supported);
+        status = analyze_removal(map, definition, &groups.groups[index],
+                                 &removals[index], &removal_supported);
         if (status == ARCHBIRD_OK && !removal_supported)
           break;
       }
@@ -1143,7 +829,7 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
         if (status == ARCHBIRD_OK)
           *out_handled = 1;
       }
-      rewrites_free(engine, removals, groups.count);
+      rewrites_free(engine, removals);
     }
     ab_plan_finding_groups_free(engine, &groups);
     return status;
@@ -1159,9 +845,8 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
   }
   for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++) {
     int supported = 0;
-    status =
-        analyze_rewrite(engine, project, map, definition, renames,
-                        &groups.groups[index], &rewrites[index], &supported);
+    status = analyze_rewrite(map, definition, renames, &groups.groups[index],
+                             &rewrites[index], &supported);
     if (status == ARCHBIRD_OK && !supported)
       break;
   }
@@ -1171,7 +856,7 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
     if (status == ARCHBIRD_OK)
       *out_handled = 1;
   }
-  rewrites_free(engine, rewrites, groups.count);
+  rewrites_free(engine, rewrites);
   ab_plan_finding_groups_free(engine, &groups);
   return status;
 }

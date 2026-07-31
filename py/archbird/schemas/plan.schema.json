@@ -314,75 +314,69 @@
         }
       ]
     },
-    "makeVariableTokenEdit": {
+    "providerIdentity": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Act requires exactly one direct token match across assignments and appends for the named Make variable. Empty replacement removes the token; insertion is a separate operation.",
-      "required": [
-        "action",
-        "path",
-        "source_sha256",
-        "variable",
-        "expected_token",
-        "replacement_token"
-      ],
+      "$comment": "Configuration-derived provider identity. Language-specific token spelling, source anchors, byte ranges, and replacement text are grounded by Act.",
+      "required": ["kind", "path", "variable"],
       "properties": {
-        "action": {"const": "edit_make_variable_token"},
+        "kind": {"const": "make_variable"},
         "path": {"$ref": "#/$defs/repositoryPath"},
-        "source_sha256": {"$ref": "#/$defs/sha256"},
         "variable": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
           "maxLength": 256
-        },
-        "expected_token": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 65536,
-          "pattern": "^[^\\s#]+$"
-        },
-        "replacement_token": {
-          "type": "string",
-          "maxLength": 65536,
-          "pattern": "^[^\\s#]*$"
         }
       }
     },
-    "makeVariableTokenInsert": {
+    "providerCapability": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Act requires the inserted direct token to be absent and the named anchor token to occur exactly once across assignments and appends for the Make variable.",
-      "required": [
-        "action",
-        "path",
-        "source_sha256",
-        "variable",
-        "token",
-        "anchor_token",
-        "position"
-      ],
+      "$comment": "Language-neutral provider-surface objective. Act selects the configured provider executor and grounds exact source edits.",
+      "required": ["action", "capability", "provider", "surface"],
       "properties": {
-        "action": {"const": "insert_make_variable_token"},
-        "path": {"$ref": "#/$defs/repositoryPath"},
-        "source_sha256": {"$ref": "#/$defs/sha256"},
-        "variable": {
+        "action": {
+          "enum": [
+            "add_provider_capability",
+            "remove_provider_capability"
+          ]
+        },
+        "capability": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
           "maxLength": 256
         },
-        "token": {
+        "provider": {"$ref": "#/$defs/providerIdentity"},
+        "surface": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 65536,
-          "pattern": "^[^\\s#]+$"
+          "maxLength": 65536
+        }
+      }
+    },
+    "providerCapabilityRename": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Language-neutral provider-surface rename objective. Act proves the old and replacement capabilities against the current Map before grounding.",
+      "required": ["action", "from", "provider", "surface", "to"],
+      "properties": {
+        "action": {"const": "rename_provider_capability"},
+        "from": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 256
         },
-        "anchor_token": {
+        "provider": {"$ref": "#/$defs/providerIdentity"},
+        "surface": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 65536,
-          "pattern": "^[^\\s#]+$"
+          "maxLength": 65536
         },
-        "position": {"enum": ["before", "after"]}
+        "to": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 256
+        }
       }
     },
     "declareSymbol": {
@@ -614,8 +608,8 @@
         {"$ref": "#/$defs/deleteFile"},
         {"$ref": "#/$defs/moveFile"},
         {"$ref": "#/$defs/jsonPointerEdit"},
-        {"$ref": "#/$defs/makeVariableTokenEdit"},
-        {"$ref": "#/$defs/makeVariableTokenInsert"},
+        {"$ref": "#/$defs/providerCapability"},
+        {"$ref": "#/$defs/providerCapabilityRename"},
         {"$ref": "#/$defs/declareSymbol"},
         {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/redirectDependency"},

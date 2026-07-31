@@ -508,18 +508,11 @@ missing observed include/import routes, multi-name imports, and non-unique
 calls block execution.
 
 Older exact `replace_range`, `create_file`, `delete_file`, `move_file`,
-`edit_json_pointer`, `edit_make_variable_token`,
-`insert_make_variable_token`, and source-bound file deletion operations remain
-executable while their grounded details are migrated behind Act executors.
-They are compatibility operations, not the model for new Plan operators. An
-asserted `edit_json_pointer` operation changes one reviewed
+`edit_json_pointer`, and source-bound file deletion operations remain
+available for bounded developer- or agent-authored edits. They are not the
+model for derived Plan operators. An asserted `edit_json_pointer` operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
-expected old JSON value without reformatting the complete file. An asserted
-`edit_make_variable_token` operation replaces or removes one exact direct
-token in a named Make variable while preserving its surrounding layout; stale,
-missing, or duplicate matches block execution. An asserted
-`insert_make_variable_token` adds a proven-absent direct token before or after
-one unique anchor without guessing between assignments. A derived
+expected old JSON value without reformatting the complete file. A derived
 one-extra/one-missing rename candidate is review evidence, not intent; it
 remains non-executable until `--rename OLD=NEW` is supplied. The reviewed Plan
 stores only the language-independent symbol objective, exhaustive
@@ -533,10 +526,13 @@ block Act instead of producing a partial rename.
 
 For a `provider_surface` issue, the same reviewed rename can replace one stale
 registration with a uniquely resolved surface member when the declaration
-comes from one Make provider recorded in the canonical Map. The native compiler
-proves one exact source-locked token match before emitting
-`edit_make_variable_token`; it does not reopen project configuration.
-Ambiguous, missing, duplicate, or non-Make cases remain manual.
+comes from one Make provider recorded in the canonical Map. Plan emits the
+neutral `rename_provider_capability` objective and configured provider
+identity. Act/Make validates the current configuration and Map, derives the
+source spelling and exact source lock, and requires one direct token match.
+Ambiguous, missing, duplicate, or non-Make cases remain manual or block Act.
+If the replacement capability is already registered, Plan emits removal of
+the stale old capability rather than a duplicate registration.
 
 Supplying `--before-map` allows the native compiler to finish one exact
 observed provider-surface rename without a separate `--rename`. The old member
@@ -565,12 +561,12 @@ declaration and a derived Make registration can be accepted and applied
 together.
 
 If the constraint itself requires an implemented and used surface member that
-is not registered, Plan can derive `insert_make_variable_token` without an
-extra flag. This requires exactly one configured Make provider and one unique
-editable anchor token. Plan uses the direct or leading-underscore convention
-proven by that declaration, and the longest canonical-name prefix preserves
-locality. The item is `derived`; incomplete, ambiguous, or multi-provider
-evidence stays manual.
+is not registered, Plan can derive `add_provider_capability` without an extra
+flag. This requires exactly one configured Make provider. Act/Make derives
+the direct or leading-underscore convention from current source and selects
+one unique editable anchor by canonical-name locality. The item is `derived`;
+incomplete, ambiguous, multi-provider, duplicate, or anchorless evidence
+stays manual or blocks Act.
 
 Several missing members in the same Make provider remain separate Plan
 obligations but materialize as one source-locked file transition. Only
@@ -582,6 +578,14 @@ the Map proves zero candidates, zero uses, one exact declaration, and another
 uniquely resolved declaration from the same provider. It will not empty a
 configured provider, treat two stale entries as proof for each other, or turn
 a mixed replacement into an inferred deletion.
+
+The Plan operations are `add_provider_capability`,
+`remove_provider_capability`, and `rename_provider_capability`; they contain
+no Make token, anchor, byte range, replacement text, or source hash. The
+native Act/Make executor owns those details and preserves assignments,
+comments, continuations, whitespace, and unrelated variables.
+`--format patch` renders the accepted Act as a unified diff; it does not
+create another artifact.
 
 Existing sources use SHA-256 locks; ranges use UTF-8 byte offsets and include
 expected text. Manual items expose missing transformation inputs and block Act

@@ -77,7 +77,7 @@ or stale information prevents a reliable answer.
 
 **Plan and Act handle coordinated change.** A structural fix may need
 synchronized updates to an implementation, public interface, language binding,
-package entrypoint, tests, and build artifacts. Plan derives source-locked
+package entrypoint, tests, and build artifacts. Plan derives evidence-bound
 operators only where current Map and Verify evidence establish sufficient
 applicability. Underdetermined work remains a visible manual item rather than
 guessed code. A developer or agent may edit the Plan. Act selects the
@@ -742,12 +742,10 @@ missing observed include/import routes, multi-name imports, non-call
 references, and non-unique call sites block Act instead of producing partial
 edits.
 
-Older operators currently include `replace_range`, `create_file`,
-`delete_file`, `move_file`, `edit_json_pointer`,
-`edit_make_variable_token`, `insert_make_variable_token`,
-and source-bound file deletion. They predate the neutral Plan boundary and
-still carry some grounded source details. They remain supported while they are
-migrated behind Act executors; they are not the model for new Plan operators.
+Low-level asserted operations currently include `replace_range`,
+`create_file`, `delete_file`, `move_file`, and `edit_json_pointer`. They are
+useful for bounded edits supplied by a developer or agent, but are not the
+model for derived Plan operations.
 
 A one-extra/one-missing symbol constraint may suggest a rename, but that does
 not establish intent: the derived candidate stays non-executable until a
@@ -762,12 +760,17 @@ same-name declarations outside the selected scope are not renamed.
 
 The same reviewed `--rename OLD=NEW` intent can close an exact stale
 `provider_surface` registration when `NEW` already resolves uniquely on that
-surface. The native Plan compiler follows the canonical Map's surface
-declaration to one `make-variable:VARIABLE` source, proves one direct token
-match in the source-locked Make input, and emits
-`edit_make_variable_token`. It does not reopen project configuration.
-Ambiguous providers, zero or multiple matches, active uses of the old entry,
-unresolved replacement entries, and non-Make provider kinds remain manual.
+surface. Plan records the neutral `rename_provider_capability` objective and
+the configured provider identity; it stores no Make token, anchor, source
+hash, byte range, or replacement text. Act/Make validates that identity
+against the current configuration and Map, derives the direct or
+leading-underscore spelling from the locked source, and requires exactly one
+token match before producing an edit. Ambiguous providers, zero or multiple
+matches, active uses of the old entry, unresolved replacement entries, and
+non-Make provider kinds remain manual or are rejected by Act.
+If the replacement is already registered by that provider, Plan normalizes
+the target state to removal of the stale old registration instead of
+proposing a duplicate.
 
 `--before-map OLD.json` can derive the same provider registration replacement
 without asserted rename intent when an observed partial migration proves it.
@@ -792,13 +795,13 @@ the normal content-addressed cache.
 When a constraint itself requires a missing surface member, that reviewed
 policy supplies the intent: if the member has one implementation candidate and
 current uses, and the surface has exactly one configured `make_variable`
-provider, Plan derives `insert_make_variable_token` without another flag. It
-uses the direct or leading-underscore convention proven by an existing
-declaration and anchors before or after the unique editable registration with
-the longest canonical-name prefix. Both the `missing` and `unregistered`
-findings remain origins, and the generated item is explicitly `derived`.
-Missing anchors, duplicate tokens, multiple providers, incomplete evidence,
-and ambiguous implementations remain manual.
+provider, Plan derives `add_provider_capability` without another flag. Both
+the `missing` and `unregistered` findings remain origins, and the generated
+item is explicitly `derived`. Act/Make then proves the current token
+convention, selects a unique editable registration by canonical-name locality,
+and materializes the insertion. Missing anchors, duplicate tokens, multiple
+providers, incomplete evidence, and ambiguous implementations remain manual
+or block Act.
 
 When several reviewed surface members are missing from the same Make
 provider, Plan emits one item per obligation and Act composes their distinct
@@ -835,15 +838,13 @@ hashes, duplicate keys, missing parents, ambiguous expectations, and invalid
 JSON, then returns one exact byte edit. Archbird does not derive this
 representation-level intent from a generic architecture finding.
 
-An asserted `edit_make_variable_token` operation replaces or removes one exact
-direct token across assignments and appends for a named Make variable. It
-preserves assignment operators, comments, continuations, whitespace, and
-unrelated variables. A stale source lock or zero/multiple token matches blocks
-the edit. Variable expansion is not inferred.
-An asserted `insert_make_variable_token` operation adds one proven-absent
-direct token immediately before or after one uniquely matched anchor token.
-The explicit anchor avoids guessing among assignments, appends, or
-continuation lines.
+The native Act/Make executor grounds `add_provider_capability`,
+`remove_provider_capability`, and `rename_provider_capability`. It preserves
+assignment operators, comments, continuations, whitespace, and unrelated
+variables. It handles direct tokens only; variable expansion is not inferred.
+Zero, duplicate, ambiguous, or stale matches block the Act. Unified-diff text
+is selected with `archbird act PLAN --format patch`; it is only an Act
+rendering, not another artifact or lifecycle stage.
 
 The CPython provider establishes Python declaration, binding, and reference
 sites. Tree-sitter establishes ECMAScript declarations and import/export

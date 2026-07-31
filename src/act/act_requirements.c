@@ -101,6 +101,16 @@ static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
                         &paths->as.array.items[index]);
     return status;
   }
+  if (ab_artifact_text_is(action, "add_provider_capability") ||
+      ab_artifact_text_is(action, "remove_provider_capability") ||
+      ab_artifact_text_is(action, "rename_provider_capability")) {
+    const AbValue *provider = field(operation, "provider");
+    path = field(provider, "path");
+    if (!path)
+      return reject(engine, ARCHBIRD_INVALID_SCHEMA,
+                    "Plan provider operator has no source path");
+    return add_path(engine, present, present_count, path);
+  }
   path = field(operation, "path");
   if (!path)
     return reject(engine, ARCHBIRD_INVALID_SCHEMA,

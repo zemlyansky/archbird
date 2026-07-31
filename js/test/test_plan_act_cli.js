@@ -1,7 +1,6 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -44,6 +43,11 @@ const ecmascriptReferenceRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-ecmascript-reference-"),
 );
 const cli = path.join(repository, "js/src/cli.js");
+const makeProvider = {
+  kind: "make_variable",
+  path: "Makefile",
+  variable: "WASM_EXPORTS",
+};
 
 function run(arguments_, expected = 0) {
   const completed = spawnSync(process.execPath, [cli, ...arguments_], {
@@ -318,7 +322,6 @@ try {
   );
   const surfacePlan = path.join(artifacts, "surface-plan.json");
   const surfaceAct = path.join(artifacts, "surface-act.json");
-  const surfaceMakefile = fs.readFileSync(path.join(surfaceRoot, "Makefile"));
   run([
     "plan", "FFI-SURFACE", "--root", surfaceRoot,
     "--rename", "core_add=core_sum", "--output", surfacePlan,
@@ -327,12 +330,11 @@ try {
   assert.equal(surfaceDocument.items.length, 1);
   assert.equal(surfaceDocument.items[0].executable, true);
   assert.deepEqual(surfaceDocument.items[0].operation, {
-    action: "edit_make_variable_token",
-    expected_token: "_core_add",
-    path: "Makefile",
-    replacement_token: "_core_sum",
-    source_sha256: createHash("sha256").update(surfaceMakefile).digest("hex"),
-    variable: "WASM_EXPORTS",
+    action: "rename_provider_capability",
+    from: "core_add",
+    provider: makeProvider,
+    surface: "ffi",
+    to: "core_sum",
   });
   run([
     "act", surfacePlan, "--root", surfaceRoot, "--format", "json",
@@ -369,7 +371,12 @@ try {
     removalDocument.items[0].statement,
     "Remove stale provider registration core_add from Makefile.",
   );
-  assert.equal(removalDocument.items[0].operation.replacement_token, "");
+  assert.deepEqual(removalDocument.items[0].operation, {
+    action: "remove_provider_capability",
+    capability: "core_add",
+    provider: makeProvider,
+    surface: "ffi",
+  });
   run([
     "act", removalPlan, "--root", surfaceRoot, "--format", "json",
     "--output", removalAct,
@@ -388,9 +395,6 @@ try {
   );
   const registrationPlan = path.join(artifacts, "registration-plan.json");
   const registrationAct = path.join(artifacts, "registration-act.json");
-  const registrationMakefile = fs.readFileSync(
-    path.join(registrationRoot, "Makefile"),
-  );
   run([
     "plan", "FFI-SURFACE", "--root", registrationRoot,
     "--output", registrationPlan,
@@ -403,15 +407,10 @@ try {
   assert.equal(registrationDocument.items[0].provenance, "derived");
   assert.equal(registrationDocument.items[0].origins.length, 2);
   assert.deepEqual(registrationDocument.items[0].operation, {
-    action: "insert_make_variable_token",
-    anchor_token: "_core_peer",
-    path: "Makefile",
-    position: "after",
-    source_sha256: createHash("sha256")
-      .update(registrationMakefile)
-      .digest("hex"),
-    token: "_core_sum",
-    variable: "WASM_EXPORTS",
+    action: "add_provider_capability",
+    capability: "core_sum",
+    provider: makeProvider,
+    surface: "ffi",
   });
   run([
     "act", registrationPlan, "--root", registrationRoot, "--format", "json",
@@ -455,7 +454,7 @@ try {
     coordinatedDocument.items
       .map((item) => item.operation.action)
       .sort(),
-    ["declare_symbol", "insert_make_variable_token"],
+    ["add_provider_capability", "declare_symbol"],
   );
   assert.deepEqual(
     coordinatedDocument.items.find(
@@ -534,10 +533,13 @@ try {
   assert.equal(observedDocument.items.length, 1);
   assert.equal(observedDocument.items[0].provenance, "derived");
   assert.equal(observedDocument.items[0].executable, true);
-  assert.equal(
-    observedDocument.items[0].operation.replacement_token,
-    "_core_sum",
-  );
+  assert.deepEqual(observedDocument.items[0].operation, {
+    action: "rename_provider_capability",
+    from: "core_add",
+    provider: makeProvider,
+    surface: "ffi",
+    to: "core_sum",
+  });
   assert.ok(observedDocument.source.before_map);
   run([
     "act", observedPlan, "--root", observedProject, "--format", "json",

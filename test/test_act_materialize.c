@@ -61,24 +61,20 @@ static const uint8_t *find_bytes(const AbBuffer *buffer, const char *needle) {
 
 static int render_project(ArchbirdEngine *engine, ArchbirdProject **out_project,
                           AbBuffer *map, char a_sha[65], char b_sha[65],
-                          char json_sha[65], char make_sha[65]) {
+                          char json_sha[65]) {
   static const uint8_t a_bytes[] = "alpha\n";
   static const uint8_t b_bytes[] = "beta\n";
   static const uint8_t json_bytes[] = "{\"name\":\"old\"}\n";
-  static const uint8_t make_bytes[] = "WASM_EXPORTS = _old\n";
   char manifest[4096];
   int length;
   ArchbirdStatus status;
   digest(a_bytes, sizeof(a_bytes) - 1, a_sha);
   digest(b_bytes, sizeof(b_bytes) - 1, b_sha);
   digest(json_bytes, sizeof(json_bytes) - 1, json_sha);
-  digest(make_bytes, sizeof(make_bytes) - 1, make_sha);
   length = snprintf(
       manifest, sizeof(manifest),
       "{\"artifact\":\"archbird-source-manifest\",\"files\":[{"
       "\"bytes\":%zu,\"language\":\"c\",\"layer\":\"core\","
-      "\"path\":\"Makefile\",\"roles\":[\"source\"],\"sha256\":\"%s\"},"
-      "{\"bytes\":%zu,\"language\":\"c\",\"layer\":\"core\","
       "\"path\":\"config.json\",\"roles\":[\"source\"],\"sha256\":\"%s\"},{"
       "\"bytes\":%zu,\"language\":\"c\",\"layer\":\"core\","
       "\"path\":\"src/a.c\",\"roles\":[\"source\"],\"sha256\":\"%s\"},"
@@ -87,16 +83,12 @@ static int render_project(ArchbirdEngine *engine, ArchbirdProject **out_project,
       "\"producer\":{\"implementation_sha256\":\"%s\",\"name\":"
       "\"act-test\",\"version\":\"1\"},\"project\":\"demo\","
       "\"schema_version\":1}",
-      sizeof(make_bytes) - 1, make_sha, sizeof(json_bytes) - 1, json_sha,
-      sizeof(a_bytes) - 1, a_sha, sizeof(b_bytes) - 1, b_sha,
-      archbird_implementation_sha256());
+      sizeof(json_bytes) - 1, json_sha, sizeof(a_bytes) - 1, a_sha,
+      sizeof(b_bytes) - 1, b_sha, archbird_implementation_sha256());
   if (length < 0 || (size_t)length >= sizeof(manifest))
     return 0;
   status = archbird_project_create(engine, (const uint8_t *)manifest,
                                    (size_t)length, out_project);
-  if (status == ARCHBIRD_OK)
-    status = archbird_project_add_source(engine, *out_project, "Makefile", 8,
-                                         make_bytes, sizeof(make_bytes) - 1);
   if (status == ARCHBIRD_OK)
     status =
         archbird_project_add_source(engine, *out_project, "config.json", 11,
@@ -126,8 +118,7 @@ static int render_project(ArchbirdEngine *engine, ArchbirdProject **out_project,
 
 static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
                      const AbBuffer *verification, const char *a_sha,
-                     const char *b_sha, const char *json_sha,
-                     const char *make_sha, int empty,
+                     const char *b_sha, const char *json_sha, int empty,
                      const char *preserved_constraint, AbBuffer *out) {
   AbValue document = {0};
   AbValue verification_document = {0};
@@ -204,42 +195,8 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
         "\"C-JSON\",\"constraint_result_sha256\":\"" VERIFY_SHA
         "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
         "\"provenance\":\"asserted\",\"statement\":\"Edit JSON value.\","
-        "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
-        "[\"C-MAKE\"]},\"depends_on\":[],\"evidence\":[],"
-        "\"executable\":true,\"id\":\"item:make-insert\","
-        "\"non_executable_reasons\":[],\"operation\":{\"action\":"
-        "\"insert_make_variable_token\",\"anchor_token\":\"_old\","
-        "\"path\":\"Makefile\",\"position\":\"after\","
-        "\"source_sha256\":\"%s\",\"token\":\"_new\","
-        "\"variable\":\"WASM_EXPORTS\"},\"origins\":[{\"constraint_id\":"
-        "\"C-MAKE\",\"constraint_result_sha256\":\"" VERIFY_SHA
-        "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
-        "\"provenance\":\"asserted\",\"statement\":\"Insert new export.\","
-        "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
-        "[\"C-MAKE\"]},\"depends_on\":[],\"evidence\":[],"
-        "\"executable\":true,\"id\":\"item:make-insert-other\","
-        "\"non_executable_reasons\":[],\"operation\":{\"action\":"
-        "\"insert_make_variable_token\",\"anchor_token\":\"_old\","
-        "\"path\":\"Makefile\",\"position\":\"after\","
-        "\"source_sha256\":\"%s\",\"token\":\"_other\","
-        "\"variable\":\"WASM_EXPORTS\"},\"origins\":[{\"constraint_id\":"
-        "\"C-MAKE\",\"constraint_result_sha256\":\"" VERIFY_SHA
-        "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
-        "\"provenance\":\"asserted\",\"statement\":\"Insert other export.\","
-        "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
-        "[\"C-MAKE\"]},\"depends_on\":[\"item:make-insert\","
-        "\"item:make-insert-other\"],"
-        "\"evidence\":[],\"executable\":true,\"id\":\"item:make-remove\","
-        "\"non_executable_reasons\":[],\"operation\":{\"action\":"
-        "\"edit_make_variable_token\",\"expected_token\":\"_old\","
-        "\"path\":\"Makefile\",\"replacement_token\":\"\","
-        "\"source_sha256\":\"%s\",\"variable\":\"WASM_EXPORTS\"},"
-        "\"origins\":[{\"constraint_id\":\"C-MAKE\","
-        "\"constraint_result_sha256\":\"" VERIFY_SHA
-        "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
-        "\"provenance\":\"asserted\",\"statement\":\"Remove old export.\","
         "\"unknowns\":[]}]",
-        a_sha, b_sha, json_sha, make_sha, make_sha, make_sha);
+        a_sha, b_sha, json_sha);
   }
   if (items_length < 0 || (size_t)items_length >= sizeof(items)) {
     ab_value_free(engine, &document);
@@ -273,16 +230,15 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
 }
 
 static int make_metadata(AbBuffer *out, const char *a_sha, const char *b_sha,
-                         const char *json_sha, const char *make_sha) {
+                         const char *json_sha) {
   char body[2048];
   int length = snprintf(
       body, sizeof(body),
       "{\"absent\":[\"src/c.c\",\"src/z.c\"],\"files\":[{"
-      "\"executable\":false,\"path\":\"Makefile\",\"sha256\":\"%s\"},{"
       "\"executable\":false,\"path\":\"config.json\",\"sha256\":\"%s\"},{"
       "\"executable\":false,\"path\":\"src/a.c\",\"sha256\":\"%s\"},{"
       "\"executable\":false,\"path\":\"src/b.c\",\"sha256\":\"%s\"}]}",
-      make_sha, json_sha, a_sha, b_sha);
+      json_sha, a_sha, b_sha);
   return length > 0 && (size_t)length < sizeof(body) &&
          ab_buffer_append(out, (const uint8_t *)body, (size_t)length) ==
              ARCHBIRD_OK;
@@ -314,12 +270,10 @@ int main(void) {
   AbBuffer act_requirements;
   AbBuffer failing_plan;
   AbBuffer failing_act;
-  AbBuffer duplicate_plan;
   AbBuffer drift_map;
   char a_sha[65];
   char b_sha[65];
   char json_sha[65];
-  char make_sha[65];
   ArchbirdStatus status;
   if (archbird_engine_create(NULL, &engine) != ARCHBIRD_OK)
     return 2;
@@ -337,10 +291,8 @@ int main(void) {
   ab_buffer_init(&act_requirements, engine);
   ab_buffer_init(&failing_plan, engine);
   ab_buffer_init(&failing_act, engine);
-  ab_buffer_init(&duplicate_plan, engine);
   ab_buffer_init(&drift_map, engine);
-  if (!render_project(engine, &project, &map, a_sha, b_sha, json_sha,
-                      make_sha)) {
+  if (!render_project(engine, &project, &map, a_sha, b_sha, json_sha)) {
     fprintf(stderr, "FAIL fixture construction\n");
     failures++;
     goto cleanup;
@@ -350,11 +302,11 @@ int main(void) {
       map.data, map.length, NULL, 0, NULL, 0, 0, collect, &verification);
   expect_status("evaluate empty policy", status, ARCHBIRD_OK, engine);
   if (status != ARCHBIRD_OK ||
-      !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, make_sha,
-                 0, "UNCHANGED", &plan) ||
-      !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, make_sha,
-                 1, "UNCHANGED", &empty_plan) ||
-      !make_metadata(&metadata, a_sha, b_sha, json_sha, make_sha)) {
+      !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 0,
+                 "UNCHANGED", &plan) ||
+      !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 1,
+                 "UNCHANGED", &empty_plan) ||
+      !make_metadata(&metadata, a_sha, b_sha, json_sha)) {
     fprintf(stderr, "FAIL fixture construction\n");
     failures++;
     goto cleanup;
@@ -366,8 +318,7 @@ int main(void) {
       (!find_bytes(&source_requirements,
                    "\"absent\":[\"src/c.c\",\"src/z.c\"]") ||
        !find_bytes(&source_requirements,
-                   "\"files\":[\"Makefile\",\"config.json\",\"src/a.c\","
-                   "\"src/b.c\"]"))) {
+                   "\"files\":[\"config.json\",\"src/a.c\",\"src/b.c\"]"))) {
     fprintf(stderr, "FAIL source requirements content/order\n");
     failures++;
   }
@@ -396,37 +347,10 @@ int main(void) {
       !find_bytes(&act, "\"kind\":\"move\",\"path\":\"src/z.c\","
                         "\"source_path\":\"src/b.c\"") ||
       !find_bytes(&act, "\"content_base64\":\"eyJuYW1lIjoibmV3In0K\"") ||
-      !find_bytes(&act, "\"content_base64\":\""
-                        "V0FTTV9FWFBPUlRTID0gX25ldyBfb3RoZXIK\"") ||
       find_bytes(&act, "\"path\":\"src/z.c\"") <
           find_bytes(&act, "\"path\":\"src/c.c\"")) {
     fprintf(stderr, "FAIL materialized Act content/order\n");
     failures++;
-  }
-  {
-    static const char other_token[] = "\"token\":\"_other\"";
-    static const char duplicate_token[] = "\"token\":\"_new\"";
-    const uint8_t *position = find_bytes(&plan, other_token);
-    size_t offset = position ? (size_t)(position - plan.data) : 0;
-    if (!position ||
-        ab_buffer_append(&duplicate_plan, plan.data, offset) != ARCHBIRD_OK ||
-        ab_buffer_append(&duplicate_plan, (const uint8_t *)duplicate_token,
-                         sizeof(duplicate_token) - 1) != ARCHBIRD_OK ||
-        ab_buffer_append(&duplicate_plan, position + sizeof(other_token) - 1,
-                         plan.length - offset - (sizeof(other_token) - 1)) !=
-            ARCHBIRD_OK) {
-      fprintf(stderr, "FAIL construct duplicate Make insertion Plan\n");
-      failures++;
-    } else {
-      empty_act.length = 0;
-      expect_status("reject duplicate Make insertion",
-                    archbird_act_materialize(
-                        engine, project, duplicate_plan.data,
-                        duplicate_plan.length, map.data, map.length,
-                        verification.data, verification.length, metadata.data,
-                        metadata.length, 0, collect, &empty_act),
-                    ARCHBIRD_CONFLICT, engine);
-    }
   }
   status = archbird_constraints_evaluate(
       engine, (const uint8_t *)FAILING_CONFIG, sizeof(FAILING_CONFIG) - 1,
@@ -434,8 +358,8 @@ int main(void) {
       &failing_verification);
   expect_status("evaluate failing policy", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK &&
-      make_plan(engine, &map, &failing_verification, a_sha, b_sha, json_sha,
-                make_sha, 1, "BROKEN", &failing_plan)) {
+      make_plan(engine, &map, &failing_verification, a_sha, b_sha, json_sha, 1,
+                "BROKEN", &failing_plan)) {
     status = archbird_act_materialize(
         engine, project, failing_plan.data, failing_plan.length, map.data,
         map.length, failing_verification.data, failing_verification.length,
@@ -558,7 +482,6 @@ cleanup:
   ab_buffer_free(&drift_map);
   ab_buffer_free(&failing_act);
   ab_buffer_free(&failing_plan);
-  ab_buffer_free(&duplicate_plan);
   ab_buffer_free(&act_requirements);
   ab_buffer_free(&accepted_act);
   ab_buffer_free(&empty_act);

@@ -7,6 +7,7 @@
 #include "c/declaration.h"
 #include "dependency_redirect.h"
 #include "json_value.h"
+#include "make/provider_capability.h"
 #include "model.h"
 #include "plan_internal.h"
 #include "project_internal.h"
@@ -31,9 +32,9 @@ typedef struct AbActEdit {
   const uint8_t *replacement;
   size_t replacement_length;
   uint8_t *owned_replacement;
-  const AbString *make_variable;
-  const AbString *make_anchor;
-  const AbString *make_token;
+  AbString owned_make_variable;
+  AbString owned_make_anchor;
+  AbString owned_make_token;
   ArchbirdMakeVariableTokenPosition make_position;
 } AbActEdit;
 
@@ -323,33 +324,36 @@ static int edit_compare(const void *left, const void *right) {
     return (a->start > b->start) - (a->start < b->start);
   if (a->end != b->end)
     return (a->end > b->end) - (a->end < b->end);
-  if (a->make_variable && b->make_variable) {
+  if (a->owned_make_variable.length && b->owned_make_variable.length) {
     int compared;
-    compared = ab_string_compare(a->make_variable, b->make_variable);
+    compared =
+        ab_string_compare(&a->owned_make_variable, &b->owned_make_variable);
     if (compared)
       return compared;
-    compared = ab_string_compare(a->make_anchor, b->make_anchor);
+    compared = ab_string_compare(&a->owned_make_anchor, &b->owned_make_anchor);
     if (compared)
       return compared;
     if (a->make_position != b->make_position)
       return (a->make_position > b->make_position) -
              (a->make_position < b->make_position);
-    compared = ab_string_compare(a->make_token, b->make_token);
+    compared = ab_string_compare(&a->owned_make_token, &b->owned_make_token);
     if (compared)
       return compared;
-  } else if (a->make_variable || b->make_variable) {
-    return a->make_variable ? 1 : -1;
+  } else if (a->owned_make_variable.length || b->owned_make_variable.length) {
+    return a->owned_make_variable.length ? 1 : -1;
   }
   return ab_string_compare(a->item_id, b->item_id);
 }
 
 static int make_insertions_compose(const AbActEdit *left,
                                    const AbActEdit *right) {
-  return left->make_variable && right->make_variable &&
-         ab_string_equal(left->make_variable, right->make_variable) &&
-         ab_string_equal(left->make_anchor, right->make_anchor) &&
+  return left->owned_make_variable.length &&
+         right->owned_make_variable.length &&
+         ab_string_equal(&left->owned_make_variable,
+                         &right->owned_make_variable) &&
+         ab_string_equal(&left->owned_make_anchor, &right->owned_make_anchor) &&
          left->make_position == right->make_position &&
-         !ab_string_equal(left->make_token, right->make_token);
+         !ab_string_equal(&left->owned_make_token, &right->owned_make_token);
 }
 
 static int edits_overlap(const AbActEdit *left, const AbActEdit *right) {
@@ -436,24 +440,54 @@ static ArchbirdStatus take_edit_buffer(AbActContext *context, size_t work_index,
 
 static ArchbirdStatus
 classify_make_insertion(AbActContext *context, size_t work_index,
-                        const AbValue *variable, const AbValue *anchor,
-                        const AbValue *token,
+                        const AbString *variable, const AbString *anchor,
+                        const AbString *token,
                         ArchbirdMakeVariableTokenPosition position) {
   AbActEdit *edit = &context->edits[context->edit_count - 1];
   size_t index;
   for (index = 0; index + 1 < context->edit_count; index++) {
     const AbActEdit *prior = &context->edits[index];
-    if (prior->work_index == work_index && prior->make_variable &&
-        ab_string_equal(prior->make_variable, &variable->as.text) &&
-        ab_string_equal(prior->make_token, &token->as.text))
+    if (prior->work_index == work_index && prior->owned_make_variable.length &&
+        ab_string_equal(&prior->owned_make_variable, variable) &&
+        ab_string_equal(&prior->owned_make_token, token))
       return act_error(context->engine, ARCHBIRD_CONFLICT,
                        "Plan inserts one Make variable token more than once");
   }
-  edit->make_variable = &variable->as.text;
-  edit->make_anchor = &anchor->as.text;
-  edit->make_token = &token->as.text;
+  if (ab_string_copy(context->engine, &edit->owned_make_variable,
+                     variable->data, variable->length) != ARCHBIRD_OK ||
+      ab_string_copy(context->engine, &edit->owned_make_anchor, anchor->data,
+                     anchor->length) != ARCHBIRD_OK ||
+      ab_string_copy(context->engine, &edit->owned_make_token, token->data,
+                     token->length) != ARCHBIRD_OK) {
+    ab_string_free(context->engine, &edit->owned_make_variable);
+    ab_string_free(context->engine, &edit->owned_make_anchor);
+    ab_string_free(context->engine, &edit->owned_make_token);
+    return ARCHBIRD_OUT_OF_MEMORY;
+  }
   edit->make_position = position;
   return ARCHBIRD_OK;
+}
+
+ArchbirdStatus ab_act_executor_insert_make_token(
+    AbActContext *context, const AbString *item_id, const AbString *path,
+    size_t start, const uint8_t *replacement, size_t replacement_length,
+    const AbString *variable, const AbString *anchor, const AbString *token,
+    ArchbirdMakeVariableTokenPosition position) {
+  size_t work_index;
+  ArchbirdStatus status;
+  if (!context || !item_id || !path || !replacement || !replacement_length ||
+      !variable || !anchor || !token)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_act_executor_replace_exact(context, item_id, path, start, start,
+                                         replacement, 0, replacement,
+                                         replacement_length);
+  if (status != ARCHBIRD_OK)
+    return status;
+  status = source_work(context, path, &work_index);
+  if (status == ARCHBIRD_OK)
+    status = classify_make_insertion(context, work_index, variable, anchor,
+                                     token, position);
+  return status;
 }
 
 static ArchbirdStatus add_json_pointer_edit(AbActContext *context,
@@ -502,82 +536,6 @@ static ArchbirdStatus add_json_pointer_edit(AbActContext *context,
   return status;
 }
 
-static ArchbirdStatus add_make_token_edit(AbActContext *context,
-                                          const AbValue *operation,
-                                          const AbString *item_id) {
-  ArchbirdMakeVariableTokenEditOptions options;
-  ArchbirdMakeVariableTokenEditResult result;
-  const AbValue *variable = object_field(operation, "variable");
-  const AbValue *expected = object_field(operation, "expected_token");
-  const AbValue *replacement_token =
-      object_field(operation, "replacement_token");
-  AbBuffer replacement;
-  size_t work_index = 0;
-  ArchbirdStatus status = locked_source_work(context, operation, &work_index);
-  ab_buffer_init(&replacement, context->engine);
-  archbird_make_variable_token_edit_options_init(&options);
-  options.source_sha256 = context->works[work_index].before_sha256;
-  options.source_sha256_length = 64;
-  options.variable = (const uint8_t *)variable->as.text.data;
-  options.variable_length = variable->as.text.length;
-  options.expected_token = (const uint8_t *)expected->as.text.data;
-  options.expected_token_length = expected->as.text.length;
-  options.replacement_token = (const uint8_t *)replacement_token->as.text.data;
-  options.replacement_token_length = replacement_token->as.text.length;
-  archbird_make_variable_token_edit_result_init(&result);
-  if (status == ARCHBIRD_OK)
-    status = archbird_make_variable_token_edit(
-        context->engine, context->works[work_index].before,
-        context->works[work_index].before_length, &options, &result,
-        buffer_write, &replacement);
-  if (status == ARCHBIRD_OK)
-    status = take_edit_buffer(context, work_index, item_id, result.start_byte,
-                              result.end_byte, &replacement);
-  ab_buffer_free(&replacement);
-  return status;
-}
-
-static ArchbirdStatus add_make_token_insert(AbActContext *context,
-                                            const AbValue *operation,
-                                            const AbString *item_id) {
-  ArchbirdMakeVariableTokenInsertOptions options;
-  ArchbirdMakeVariableTokenInsertResult result;
-  const AbValue *variable = object_field(operation, "variable");
-  const AbValue *token = object_field(operation, "token");
-  const AbValue *anchor = object_field(operation, "anchor_token");
-  const AbValue *position = object_field(operation, "position");
-  AbBuffer replacement;
-  size_t work_index = 0;
-  ArchbirdStatus status = locked_source_work(context, operation, &work_index);
-  ab_buffer_init(&replacement, context->engine);
-  archbird_make_variable_token_insert_options_init(&options);
-  options.source_sha256 = context->works[work_index].before_sha256;
-  options.source_sha256_length = 64;
-  options.variable = (const uint8_t *)variable->as.text.data;
-  options.variable_length = variable->as.text.length;
-  options.token = (const uint8_t *)token->as.text.data;
-  options.token_length = token->as.text.length;
-  options.anchor_token = (const uint8_t *)anchor->as.text.data;
-  options.anchor_token_length = anchor->as.text.length;
-  options.position = ab_artifact_text_is(position, "before")
-                         ? ARCHBIRD_MAKE_TOKEN_BEFORE
-                         : ARCHBIRD_MAKE_TOKEN_AFTER;
-  archbird_make_variable_token_insert_result_init(&result);
-  if (status == ARCHBIRD_OK)
-    status = archbird_make_variable_token_insert(
-        context->engine, context->works[work_index].before,
-        context->works[work_index].before_length, &options, &result,
-        buffer_write, &replacement);
-  if (status == ARCHBIRD_OK)
-    status = take_edit_buffer(context, work_index, item_id, result.start_byte,
-                              result.end_byte, &replacement);
-  if (status == ARCHBIRD_OK)
-    status = classify_make_insertion(context, work_index, variable, anchor,
-                                     token, options.position);
-  ab_buffer_free(&replacement);
-  return status;
-}
-
 static ArchbirdStatus collect_operation(AbActContext *context,
                                         const AbValue *item) {
   const AbValue *item_id = object_field(item, "id");
@@ -595,10 +553,11 @@ static ArchbirdStatus collect_operation(AbActContext *context,
     return add_replace_range(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "edit_json_pointer"))
     return add_json_pointer_edit(context, operation, &item_id->as.text);
-  if (ab_artifact_text_is(action, "edit_make_variable_token"))
-    return add_make_token_edit(context, operation, &item_id->as.text);
-  if (ab_artifact_text_is(action, "insert_make_variable_token"))
-    return add_make_token_insert(context, operation, &item_id->as.text);
+  if (ab_artifact_text_is(action, "add_provider_capability") ||
+      ab_artifact_text_is(action, "remove_provider_capability") ||
+      ab_artifact_text_is(action, "rename_provider_capability"))
+    return ab_act_make_provider_capability(context, operation,
+                                           &item_id->as.text);
   if (ab_artifact_text_is(action, "declare_symbol"))
     return ab_act_c_declare_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "rename_symbol"))
@@ -1230,8 +1189,12 @@ ArchbirdStatus archbird_act_materialize(
   if (status == ARCHBIRD_OK)
     status =
         render_act(&context, &plan, order, json_flags, write_fn, user_data);
-  for (index = 0; index < context.edit_count; index++)
+  for (index = 0; index < context.edit_count; index++) {
     ab_free(engine, context.edits[index].owned_replacement);
+    ab_string_free(engine, &context.edits[index].owned_make_variable);
+    ab_string_free(engine, &context.edits[index].owned_make_anchor);
+    ab_string_free(engine, &context.edits[index].owned_make_token);
+  }
   for (index = 0; index < context.work_count; index++)
     ab_free(engine, context.works[index].after);
   ab_free(engine, context.edits);

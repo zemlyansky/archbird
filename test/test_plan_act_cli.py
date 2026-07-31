@@ -20,6 +20,11 @@ ARCHBIRD = ROOT / "archbird"
 SURFACE_FIXTURE = ROOT / "test/fixtures/plan_act/surface_closure"
 REGISTRATION_FIXTURE = ROOT / "test/fixtures/plan_act/surface_registration"
 REDIRECT_FIXTURE = ROOT / "test/fixtures/plan_act/dependency_redirect"
+MAKE_PROVIDER = {
+    "kind": "make_variable",
+    "path": "Makefile",
+    "variable": "WASM_EXPORTS",
+}
 
 
 def run(*arguments: str, expected: int = 0) -> subprocess.CompletedProcess[bytes]:
@@ -294,7 +299,8 @@ class PlanActCliTest(unittest.TestCase):
         )
 
         makefile.write_bytes(original.replace(b"_core_add", b"_core_add _core_add"))
-        duplicate = run(
+        duplicate_path = self.plan_path("duplicate-token.json")
+        run(
             "plan",
             "FFI-SURFACE",
             "--root",
@@ -302,13 +308,59 @@ class PlanActCliTest(unittest.TestCase):
             "--rename",
             "core_add=core_sum",
             "--output",
-            str(self.plan_path("duplicate-token.json")),
+            str(duplicate_path),
+        )
+        duplicate_plan = json.loads(duplicate_path.read_bytes())
+        self.assertNotIn("source_sha256", duplicate_plan["items"][0]["operation"])
+        duplicate = run(
+            "act",
+            str(duplicate_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
             expected=2,
         )
         self.assertIn(
             "Make variable token edit expected one match but found 2",
             duplicate.stderr.decode(),
         )
+        makefile.write_bytes(original)
+
+        makefile.write_bytes(
+            original.replace(b"_core_add", b"_core_add _core_sum")
+        )
+        already_present_path = self.plan_path("target-already-present.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--rename",
+            "core_add=core_sum",
+            "--output",
+            str(already_present_path),
+        )
+        already_present = json.loads(already_present_path.read_bytes())
+        self.assertEqual(
+            already_present["items"][0]["operation"],
+            {
+                "action": "remove_provider_capability",
+                "capability": "core_add",
+                "provider": MAKE_PROVIDER,
+                "surface": "ffi",
+            },
+        )
+        already_patch = run(
+            "act",
+            str(already_present_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn("-WASM_EXPORTS = _core_add _core_sum", already_patch)
+        self.assertIn("+WASM_EXPORTS = _core_sum", already_patch)
         makefile.write_bytes(original)
 
         plan_path = self.plan_path("surface-plan.json")
@@ -330,13 +382,31 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(
             item["operation"],
             {
-                "action": "edit_make_variable_token",
-                "expected_token": "_core_add",
-                "path": "Makefile",
-                "replacement_token": "_core_sum",
-                "source_sha256": hashlib.sha256(original).hexdigest(),
-                "variable": "WASM_EXPORTS",
+                "action": "rename_provider_capability",
+                "from": "core_add",
+                "provider": MAKE_PROVIDER,
+                "surface": "ffi",
+                "to": "core_sum",
             },
+        )
+        tampered = json.loads(json.dumps(plan))
+        tampered["items"][0]["operation"]["provider"]["variable"] = (
+            "OTHER_EXPORTS"
+        )
+        tampered_path = self.plan_path("tampered-provider-plan.json")
+        tampered_path.write_text(json.dumps(tampered, sort_keys=True))
+        rejected = run(
+            "act",
+            str(tampered_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn(
+            "configured provider differs from the current Map",
+            rejected.stderr.decode(),
         )
         preview = run(
             "act",
@@ -534,10 +604,15 @@ class PlanActCliTest(unittest.TestCase):
             "Makefile.",
         )
         self.assertEqual(
-            item["operation"]["action"], "edit_make_variable_token"
+            item["operation"],
+            {
+                "action": "rename_provider_capability",
+                "from": "core_add",
+                "provider": MAKE_PROVIDER,
+                "surface": "ffi",
+                "to": "core_sum",
+            },
         )
-        self.assertEqual(item["operation"]["expected_token"], "_core_add")
-        self.assertEqual(item["operation"]["replacement_token"], "_core_sum")
 
         act_path, patch = self.accepted_act(
             plan_path, "observed-act.json"
@@ -620,12 +695,14 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(len(plan["items"]), 1)
         self.assertEqual(plan["items"][0]["provenance"], "derived")
         self.assertEqual(
-            plan["items"][0]["operation"]["expected_token"],
-            "_core_add",
-        )
-        self.assertEqual(
-            plan["items"][0]["operation"]["replacement_token"],
-            "_core_sum",
+            plan["items"][0]["operation"],
+            {
+                "action": "rename_provider_capability",
+                "from": "core_add",
+                "provider": MAKE_PROVIDER,
+                "surface": "ffi",
+                "to": "core_sum",
+            },
         )
 
         act_path, _ = self.accepted_act(
@@ -672,13 +749,10 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(
             item["operation"],
             {
-                "action": "insert_make_variable_token",
-                "anchor_token": "_core_peer",
-                "path": "Makefile",
-                "position": "after",
-                "source_sha256": hashlib.sha256(original).hexdigest(),
-                "token": "_core_sum",
-                "variable": "WASM_EXPORTS",
+                "action": "add_provider_capability",
+                "capability": "core_sum",
+                "provider": MAKE_PROVIDER,
+                "surface": "ffi",
             },
         )
         preview = run(
@@ -727,7 +801,6 @@ class PlanActCliTest(unittest.TestCase):
             )
         )
         original_header = header.read_bytes()
-        original_makefile = (self.root / "Makefile").read_bytes()
         failed = run(
             "verify",
             "--root",
@@ -781,11 +854,15 @@ class PlanActCliTest(unittest.TestCase):
             "declared source closure differs from the Map proof",
             rejected.stderr.decode(),
         )
-        registration = operations["insert_make_variable_token"]
-        self.assertEqual(registration["token"], "_core_sum")
+        registration = operations["add_provider_capability"]
         self.assertEqual(
-            registration["source_sha256"],
-            hashlib.sha256(original_makefile).hexdigest(),
+            registration,
+            {
+                "action": "add_provider_capability",
+                "capability": "core_sum",
+                "provider": MAKE_PROVIDER,
+                "surface": "ffi",
+            },
         )
 
         act_path, patch = self.accepted_act(
@@ -981,10 +1058,14 @@ class PlanActCliTest(unittest.TestCase):
         self.assertTrue(all(item["executable"] for item in plan["items"]))
         self.assertEqual(
             {
-                item["operation"]["token"]
+                item["operation"]["capability"]
                 for item in plan["items"]
             },
-            {"_core_product", "_core_sum"},
+            {"core_product", "core_sum"},
+        )
+        self.assertEqual(
+            {item["operation"]["action"] for item in plan["items"]},
+            {"add_provider_capability"},
         )
 
         act_path, patch = self.accepted_act(
@@ -1046,12 +1127,10 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(
             item["operation"],
             {
-                "action": "edit_make_variable_token",
-                "expected_token": "_core_add",
-                "path": "Makefile",
-                "replacement_token": "",
-                "source_sha256": hashlib.sha256(original).hexdigest(),
-                "variable": "WASM_EXPORTS",
+                "action": "remove_provider_capability",
+                "capability": "core_add",
+                "provider": MAKE_PROVIDER,
+                "surface": "ffi",
             },
         )
         preview = run(
