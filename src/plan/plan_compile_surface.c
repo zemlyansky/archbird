@@ -121,6 +121,10 @@ static int parse_provider(const AbValue *declaration, SurfaceProvider *out) {
     out->kind = "file_pattern";
     return 1;
   }
+  if (text_is(source, "exports")) {
+    out->kind = "exports";
+    return 1;
+  }
   if (source->as.text.length <= sizeof(make_prefix) - 1 ||
       memcmp(source->as.text.data, make_prefix, sizeof(make_prefix) - 1) != 0)
     return 0;
@@ -164,14 +168,69 @@ static int path_has_suffix(const AbString *path, const char *suffix) {
          memcmp(path->data + path->length - length, suffix, length) == 0;
 }
 
-static int provider_has_executor(const AbValue *map,
-                                 const SurfaceProvider *provider) {
+static int file_has_napi_wrapper(const AbValue *file,
+                                 const AbString *capability) {
+  const AbValue *symbols = field(file, "symbols");
+  char wrapper[262];
+  size_t index;
+  size_t matches = 0;
+  if (!capability || capability->length > sizeof(wrapper) - 6)
+    return 0;
+  memcpy(wrapper, "napi_", 5);
+  memcpy(wrapper + 5, capability->data, capability->length);
+  wrapper[5 + capability->length] = '\0';
+  for (index = 0; symbols && symbols->kind == AB_VALUE_ARRAY &&
+                  index < symbols->as.array.count;
+       index++) {
+    const AbValue *symbol = &symbols->as.array.items[index];
+    const AbValue *name = field(symbol, "name");
+    if (name && name->kind == AB_VALUE_STRING &&
+        name->as.text.length == 5 + capability->length &&
+        memcmp(name->as.text.data, wrapper, 5 + capability->length) == 0 &&
+        text_is(field(symbol, "kind"), "function") &&
+        !field(symbol, "syntax_recovery"))
+      matches++;
+  }
+  return matches == 1;
+}
+
+static int same_provider_definition(const SurfaceProvider *left,
+                                    const SurfaceProvider *right) {
+  return strcmp(left->kind, right->kind) == 0 &&
+         ab_value_equal(left->definition_sha256, right->definition_sha256);
+}
+
+static int provider_definition_is_unique(const AbValue *providers,
+                                         const SurfaceProvider *provider) {
+  size_t index;
+  size_t matches = 0;
+  for (index = 0; providers && providers->kind == AB_VALUE_ARRAY &&
+                  index < providers->as.array.count;
+       index++) {
+    SurfaceProvider candidate;
+    if (parse_provider(&providers->as.array.items[index], &candidate) &&
+        same_provider_definition(&candidate, provider))
+      matches++;
+  }
+  return matches == 1;
+}
+
+static int provider_has_executor(const AbValue *map, const AbValue *providers,
+                                 const SurfaceProvider *provider,
+                                 const AbString *capability) {
   const AbValue *file;
+  if (!provider_definition_is_unique(providers, provider))
+    return 0;
   if (strcmp(provider->kind, "make_variable") == 0)
     return 1;
   file = find_file(map, &provider->path->as.text);
-  return file && text_is(field(file, "language"), "c") &&
-         path_has_suffix(&provider->path->as.text, ".h");
+  if (!file || !text_is(field(file, "language"), "c"))
+    return 0;
+  if (strcmp(provider->kind, "file_pattern") == 0)
+    return path_has_suffix(&provider->path->as.text, ".h");
+  return strcmp(provider->kind, "exports") == 0 &&
+         path_has_suffix(&provider->path->as.text, ".c") &&
+         file_has_napi_wrapper(file, capability);
 }
 
 static int same_grounding_target(const SurfaceProvider *left,
@@ -186,7 +245,8 @@ static int same_grounding_target(const SurfaceProvider *left,
 
 static int missing_providers_have_distinct_targets(const AbValue *map,
                                                    const AbValue *providers,
-                                                   const AbValue *target) {
+                                                   const AbValue *target,
+                                                   const AbString *capability) {
   size_t index;
   for (index = 0; index < providers->as.array.count; index++) {
     const AbValue *row = &providers->as.array.items[index];
@@ -195,7 +255,7 @@ static int missing_providers_have_distinct_targets(const AbValue *map,
     if (row_has_declaring_provider(target, row))
       continue;
     if (!parse_provider(row, &provider) ||
-        !provider_has_executor(map, &provider))
+        !provider_has_executor(map, providers, &provider, capability))
       return 0;
     for (previous = 0; previous < index; previous++) {
       const AbValue *candidate = &providers->as.array.items[previous];
@@ -203,7 +263,7 @@ static int missing_providers_have_distinct_targets(const AbValue *map,
       if (row_has_declaring_provider(target, candidate))
         continue;
       if (!parse_provider(candidate, &parsed) ||
-          !provider_has_executor(map, &parsed) ||
+          !provider_has_executor(map, providers, &parsed, capability) ||
           same_grounding_target(&provider, &parsed))
         return 0;
     }
@@ -271,6 +331,30 @@ static int target_is_implemented(const AbValue *row) {
          candidates->kind == AB_VALUE_ARRAY &&
          candidates->as.array.count == 1 && uses &&
          uses->kind == AB_VALUE_ARRAY && uses->as.array.count;
+}
+
+static int target_is_used(const AbValue *row) {
+  const AbValue *uses = field(row, "uses");
+  return row && uses && uses->kind == AB_VALUE_ARRAY && uses->as.array.count;
+}
+
+static int missing_providers_are_exports(const AbValue *providers,
+                                         const AbValue *target) {
+  size_t index;
+  int missing = 0;
+  for (index = 0; providers && providers->kind == AB_VALUE_ARRAY &&
+                  index < providers->as.array.count;
+       index++) {
+    SurfaceProvider provider;
+    const AbValue *row = &providers->as.array.items[index];
+    if (row_has_declaring_provider(target, row))
+      continue;
+    if (!parse_provider(row, &provider) ||
+        strcmp(provider.kind, "exports") != 0)
+      return 0;
+    missing = 1;
+  }
+  return missing;
 }
 
 static int identifier_byte(uint8_t byte) {
@@ -651,6 +735,14 @@ render_insertion_operation(ArchbirdEngine *engine,
       if (status == ARCHBIRD_OK)
         status = ab_buffer_literal(out, "]");
     }
+  if (status == ARCHBIRD_OK &&
+      strcmp(insertion->provider.kind, "exports") == 0) {
+    status = ab_buffer_literal(out, ",\"source_paths\":[");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(out, insertion->provider.path);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(out, "]");
+  }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(out, ",\"surface\":");
   if (status == ARCHBIRD_OK)
@@ -740,9 +832,12 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
     if (group_index != groups->count || !has_missing)
       break;
     target = find_named_row(field(surface, "names"), &key->as.text);
-    if (!target_is_resolved(target) && !target_is_implemented(target))
+    if (!target_is_resolved(target) && !target_is_implemented(target) &&
+        !(target_is_used(target) &&
+          missing_providers_are_exports(providers, target)))
       break;
-    if (!missing_providers_have_distinct_targets(map, providers, target))
+    if (!missing_providers_have_distinct_targets(map, providers, target,
+                                                 &key->as.text))
       break;
     insertion_start = insertion_count;
     for (provider_index = 0; provider_index < providers->as.array.count;
@@ -768,8 +863,15 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
       }
       insertion->key = key;
       insertion->finding_count = finding_count;
-      insertion->implementation_path =
-          &field(target, "candidates")->as.array.items[0];
+      if (strcmp(parsed.kind, "file_pattern") == 0) {
+        const AbValue *candidates = field(target, "candidates");
+        if (!candidates || candidates->kind != AB_VALUE_ARRAY ||
+            candidates->as.array.count != 1) {
+          status = ARCHBIRD_OK;
+          break;
+        }
+        insertion->implementation_path = &candidates->as.array.items[0];
+      }
       insertion->surface_name = surface_value;
       insertion->provider = parsed;
       insertion_count++;

@@ -20,6 +20,7 @@ ARCHBIRD = ROOT / "archbird"
 SURFACE_FIXTURE = ROOT / "test/fixtures/plan_act/surface_closure"
 REGISTRATION_FIXTURE = ROOT / "test/fixtures/plan_act/surface_registration"
 REDIRECT_FIXTURE = ROOT / "test/fixtures/plan_act/dependency_redirect"
+SAMPLE_FIXTURE = ROOT / "test/fixtures/sample"
 MAKE_PROVIDER = {
     "definition_sha256": (
         "a9d5a1c18d33c5c63cd34ced178608b7"
@@ -800,6 +801,246 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("WASM_EXPORTS = _core_peer _core_sum", makefile.read_text())
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
+
+    def test_missing_napi_export_is_grounded_only_from_exact_c_evidence(
+        self,
+    ) -> None:
+        shutil.copytree(SAMPLE_FIXTURE, self.root, dirs_exist_ok=True)
+        addon = self.root / "native/addon.c"
+        missing_registration = addon.read_bytes().replace(
+            b'  {"core_mul", NULL, napi_core_mul},\n', b""
+        )
+        self.assertNotEqual(missing_registration, addon.read_bytes())
+        addon.write_bytes(missing_registration)
+        failed = run(
+            "verify",
+            "PROVIDER-SURFACE-JS-BINDING",
+            "--root",
+            str(self.root),
+            "--check",
+            expected=1,
+        )
+        self.assertIn("core_mul", failed.stdout.decode())
+
+        configuration_path = self.root / "archbird.json"
+        configuration = json.loads(configuration_path.read_text())
+        bridge = next(
+            row for row in configuration["bridges"]
+            if row["name"] == "js-binding"
+        )
+        bridge["providers"][0]["path"] = "native/**"
+        (self.root / "native/extra.c").write_text(
+            "static int unrelated(void) { return 0; }\n"
+        )
+        configuration_path.write_text(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+        )
+        glob_plan_path = self.plan_path("napi-glob-plan.json")
+        run(
+            "plan",
+            "PROVIDER-SURFACE-JS-BINDING",
+            "--root",
+            str(self.root),
+            "--output",
+            str(glob_plan_path),
+        )
+        glob_plan = json.loads(glob_plan_path.read_bytes())
+        self.assertTrue(glob_plan["items"])
+        self.assertTrue(
+            all(not item["executable"] for item in glob_plan["items"])
+        )
+        self.assertNotIn(
+            "add_provider_capability",
+            {item["operation"]["action"] for item in glob_plan["items"]},
+        )
+
+        bridge["providers"][0]["path"] = "native/addon.c"
+        configuration_path.write_text(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+        )
+        wrapper = b"static napi_value napi_core_mul(void) { return 0; }\n"
+        self.assertIn(wrapper, missing_registration)
+        addon.write_bytes(missing_registration.replace(wrapper, b""))
+        wrapper_plan_path = self.plan_path("napi-missing-wrapper-plan.json")
+        run(
+            "plan",
+            "PROVIDER-SURFACE-JS-BINDING",
+            "--root",
+            str(self.root),
+            "--output",
+            str(wrapper_plan_path),
+        )
+        wrapper_plan = json.loads(wrapper_plan_path.read_bytes())
+        self.assertTrue(wrapper_plan["items"])
+        self.assertTrue(
+            all(not item["executable"] for item in wrapper_plan["items"])
+        )
+        self.assertNotIn(
+            "add_provider_capability",
+            {item["operation"]["action"] for item in wrapper_plan["items"]},
+        )
+
+        addon.write_bytes(missing_registration)
+        plan_path = self.plan_path("napi-export-plan.json")
+        run(
+            "plan",
+            "PROVIDER-SURFACE-JS-BINDING",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertTrue(item["executable"])
+        self.assertEqual(item["provenance"], "derived")
+        operation = item["operation"]
+        self.assertEqual(
+            {
+                key: value
+                for key, value in operation.items()
+                if key != "provider"
+            },
+            {
+                "action": "add_provider_capability",
+                "capability": "core_mul",
+                "source_paths": ["native/addon.c"],
+                "surface": "js-binding",
+            },
+        )
+        self.assertEqual(operation["provider"]["kind"], "exports")
+        self.assertEqual(operation["provider"]["path"], "native/addon.c")
+        self.assertRegex(
+            operation["provider"]["definition_sha256"], r"^[0-9a-f]{64}$"
+        )
+
+        preview = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn(
+            '+  {"core_mul", NULL, napi_core_mul},',
+            preview,
+        )
+        self.assertEqual(addon.read_bytes(), missing_registration)
+
+        act_path, act = self.accepted_act(plan_path, "napi-export-act.json")
+        self.assertEqual(
+            act["executors"],
+            [
+                {
+                    "capability": "archbird.native.c.napi-export@1",
+                    "deterministic": True,
+                    "implementation_sha256": (
+                        act["tool"]["implementation_sha256"]
+                    ),
+                    "item_ids": [item["id"]],
+                    "matches": 1,
+                    "reads": ["native/addon.c"],
+                    "skipped": 0,
+                    "unsupported": 0,
+                    "writes": ["native/addon.c"],
+                }
+            ],
+        )
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertIn(
+            b'  {"core_mul", NULL, napi_core_mul},\n',
+            addon.read_bytes(),
+        )
+        run(
+            "verify",
+            "PROVIDER-SURFACE-JS-BINDING",
+            "--root",
+            str(self.root),
+            "--check",
+        )
+        compiler = shutil.which("cc")
+        if compiler is not None:
+            compiled = subprocess.run(
+                [
+                    compiler,
+                    "-std=c11",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-fsyntax-only",
+                    str(addon),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+            self.assertEqual(
+                compiled.returncode, 0, compiled.stdout.decode()
+            )
+
+    def test_napi_macro_export_preserves_multiline_crlf_layout(self) -> None:
+        shutil.copytree(SAMPLE_FIXTURE, self.root, dirs_exist_ok=True)
+        addon = self.root / "native/addon.c"
+        addon.write_bytes(
+            (
+                "#include <stddef.h>\r\n"
+                "\r\n"
+                "typedef int napi_value;\r\n"
+                "typedef napi_value (*napi_callback)(void);\r\n"
+                "typedef struct {\r\n"
+                "  const char *name;\r\n"
+                "  void *data;\r\n"
+                "  napi_callback method;\r\n"
+                "} napi_property_descriptor;\r\n"
+                "\r\n"
+                "#define DECLARE_NAPI_METHOD(name, method) "
+                "{name, NULL, method}\r\n"
+                "\r\n"
+                "static napi_value napi_core_add(void) { return 0; }\r\n"
+                "static napi_value napi_core_mul(void) { return 0; }\r\n"
+                "\r\n"
+                "static const napi_property_descriptor props[] = {\r\n"
+                "  DECLARE_NAPI_METHOD(\r\n"
+                '    "core_add",\r\n'
+                "    napi_core_add\r\n"
+                "  ),\r\n"
+                "};\r\n"
+            ).encode()
+        )
+        plan_path = self.plan_path("napi-macro-plan.json")
+        run(
+            "plan",
+            "PROVIDER-SURFACE-JS-BINDING",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        self.assertTrue(plan["items"][0]["executable"])
+        act_path, _ = self.accepted_act(plan_path, "napi-macro-act.json")
+        run("apply", str(act_path), "--root", str(self.root))
+        changed = addon.read_bytes()
+        self.assertNotIn(b"\n", changed.replace(b"\r\n", b""))
+        self.assertIn(
+            (
+                "  DECLARE_NAPI_METHOD(\r\n"
+                '    "core_mul",\r\n'
+                "    napi_core_mul\r\n"
+                "  ),\r\n"
+            ).encode(),
+            changed,
+        )
+        run(
+            "verify",
+            "PROVIDER-SURFACE-JS-BINDING",
+            "--root",
+            str(self.root),
+            "--check",
+        )
 
     def test_provider_surface_union_remains_default(self) -> None:
         shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)

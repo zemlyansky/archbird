@@ -589,7 +589,8 @@ static int operation_dependency(const AbValue *prerequisite,
   if (string_is(&prerequisite_action->as.text, "add_provider_capability") &&
       string_is(&dependent_action->as.text, "add_provider_capability") &&
       provider_kind_is(prerequisite, "file_pattern") &&
-      provider_kind_is(dependent, "make_variable"))
+      (provider_kind_is(dependent, "make_variable") ||
+       provider_kind_is(dependent, "exports")))
     return same_text_fields(prerequisite, "capability", dependent,
                             "capability") &&
            same_text_fields(prerequisite, "surface", dependent, "surface");

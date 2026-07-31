@@ -341,6 +341,16 @@
             "kind": {"const": "file_pattern"},
             "path": {"$ref": "#/$defs/repositoryPath"}
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["definition_sha256", "kind", "path"],
+          "properties": {
+            "definition_sha256": {"$ref": "#/$defs/sha256"},
+            "kind": {"const": "exports"},
+            "path": {"$ref": "#/$defs/repositoryPath"}
+          }
         }
       ]
     },
@@ -364,7 +374,7 @@
         "provider": {"$ref": "#/$defs/providerIdentity"},
         "source_paths": {
           "type": "array",
-          "minItems": 2,
+          "minItems": 1,
           "maxItems": 2,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/repositoryPath"}
@@ -388,9 +398,30 @@
           },
           "then": {
             "required": ["source_paths"],
-            "properties": {"action": {"const": "add_provider_capability"}}
+            "properties": {
+              "action": {"const": "add_provider_capability"},
+              "source_paths": {"minItems": 2, "maxItems": 2}
+            }
           },
-          "else": {"not": {"required": ["source_paths"]}}
+          "else": {
+            "if": {
+              "properties": {
+                "provider": {
+                  "properties": {"kind": {"const": "exports"}},
+                  "required": ["kind"]
+                }
+              },
+              "required": ["provider"]
+            },
+            "then": {
+              "required": ["source_paths"],
+              "properties": {
+                "action": {"const": "add_provider_capability"},
+                "source_paths": {"minItems": 1, "maxItems": 1}
+              }
+            },
+            "else": {"not": {"required": ["source_paths"]}}
+          }
         }
       ]
     },

@@ -765,16 +765,21 @@ exact declaration, import, export, binding, and reference edits. Unrelated
 same-name declarations outside the selected scope are not renamed.
 
 For an exact `provider_surface` issue, Plan can add a missing configured Make
-registration or C header `file_pattern` declaration, or use reviewed
-`--rename OLD=NEW` intent to replace a stale Make entry when the target
-resolves uniquely. Each provider definition has a canonical digest in Map and
-Plan, so distinct patterns over one path do not collapse into one identity.
-Plan records the neutral provider objective and bounded source scope; it
-stores no Make token, C signature, anchor, source hash, byte range, or
-replacement text. Act validates the provider digest against the current
-configuration and Map. Act/Make derives the token spelling and requires one
-registration anchor. Act/C rederives a single-line declaration from the exact
-implementation and an existing declaration peer. Active uses of stale
+registration, C header `file_pattern` declaration, or bounded C/N-API
+`exports` registration. It can also use reviewed `--rename OLD=NEW` intent to
+replace a stale Make entry when the target resolves uniquely. Each provider
+definition has a canonical digest in Map and Plan, so distinct definitions
+over one path do not collapse into one identity. Plan records the neutral
+provider objective and bounded source scope; it stores no Make token, C
+signature, export-table syntax, anchor, source hash, byte range, or replacement
+text. Act validates the provider digest against the current configuration and
+Map. Act/Make derives the token spelling and requires one registration anchor.
+Act/C rederives a single-line declaration from the exact implementation and an
+existing declaration peer. For an `exports` addition it requires one effective
+mapped C file, one mapped `napi_<capability>` wrapper, syntax-clean source,
+and an existing mapped `DECLARE_NAPI_METHOD` or N-API descriptor peer; it
+clones that peer while preserving multiline layout and line endings.
+Selectors that map the provider to multiple files, active uses of stale
 entries, unresolved targets, ambiguous implementations, missing anchors,
 multiple token matches, and distinct provider definitions that would require
 one coincident source edit remain manual or are rejected by Act.
@@ -806,11 +811,13 @@ When a constraint itself requires a missing surface member, that reviewed
 policy supplies the intent. If the member has one implementation candidate
 and is already declared by another provider or has current uses, Plan derives
 one `add_provider_capability` item per missing supported provider without
-another flag. A C declaration item precedes its Make registration for the same
-surface member. Both the `missing` and `unregistered` findings remain origins,
-and every generated item is explicitly `derived`. Incomplete evidence,
-ambiguous implementations, unsupported provider kinds, or colliding edit
-targets remain manual.
+another flag. An exact C/N-API export may instead use the current bridge use
+plus the uniquely mapped wrapper in its configured provider file. A C
+declaration item precedes its Make or export registration for the same surface
+member. Both the `missing` and `unregistered` findings remain origins, and
+every generated item is explicitly `derived`. Incomplete evidence, ambiguous
+implementations, unsupported provider kinds, or colliding edit targets remain
+manual.
 
 When several reviewed surface members are missing from the same Make
 provider, Plan emits one item per obligation and Act composes their distinct
@@ -847,13 +854,15 @@ hashes, duplicate keys, missing parents, ambiguous expectations, and invalid
 JSON, then returns one exact byte edit. Archbird does not derive this
 representation-level intent from a generic architecture finding.
 
-The native Act/Make executor grounds `add_provider_capability`,
-`remove_provider_capability`, and `rename_provider_capability`. It preserves
-assignment operators, comments, continuations, whitespace, and unrelated
-variables. It handles direct tokens only; variable expansion is not inferred.
-Zero, duplicate, ambiguous, or stale matches block the Act. Unified-diff text
-is selected with `archbird act PLAN --format patch`; it is only an Act
-rendering, not another artifact or lifecycle stage.
+The native provider executors ground `add_provider_capability`,
+`remove_provider_capability`, and `rename_provider_capability`. Act/Make
+preserves assignment operators, comments, continuations, whitespace, and
+unrelated variables. It handles direct tokens only; variable expansion is not
+inferred. Act/C supports the bounded header and N-API forms above. Zero,
+duplicate, ambiguous, stale, multi-file, or syntax-recovered matches block the
+Act. Unified-diff text is selected with
+`archbird act PLAN --format patch`; it is only an Act rendering, not another
+artifact or lifecycle stage.
 
 The CPython provider establishes Python declaration, binding, and reference
 sites. Tree-sitter establishes ECMAScript declarations and import/export

@@ -27,6 +27,9 @@ const providerParityRoot = fs.mkdtempSync(
 const coordinatedRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-coordinated-"),
 );
+const napiRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-napi-"),
+);
 const observedRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-observed-"),
 );
@@ -635,6 +638,71 @@ try {
   run(["apply", coordinatedAct, "--root", coordinatedRoot]);
   run(["verify", "--root", coordinatedRoot, "--check"]);
 
+  fs.cpSync(
+    path.join(repository, "test/fixtures/sample"),
+    napiRoot,
+    { recursive: true },
+  );
+  const napiSource = path.join(napiRoot, "native/addon.c");
+  const missingNapiRegistration = fs.readFileSync(napiSource, "utf8").replace(
+    '  {"core_mul", NULL, napi_core_mul},\n',
+    "",
+  );
+  fs.writeFileSync(napiSource, missingNapiRegistration);
+  const napiPlan = path.join(artifacts, "napi-plan.json");
+  const napiAct = path.join(artifacts, "napi-act.json");
+  run([
+    "verify", "PROVIDER-SURFACE-JS-BINDING", "--root", napiRoot, "--check",
+  ], 1);
+  run([
+    "plan", "PROVIDER-SURFACE-JS-BINDING", "--root", napiRoot,
+    "--output", napiPlan,
+  ]);
+  const napiPlanDocument = JSON.parse(fs.readFileSync(napiPlan, "utf8"));
+  assert.equal(napiPlanDocument.items.length, 1);
+  assert.equal(napiPlanDocument.items[0].executable, true);
+  assert.deepEqual(
+    {
+      action: napiPlanDocument.items[0].operation.action,
+      capability: napiPlanDocument.items[0].operation.capability,
+      kind: napiPlanDocument.items[0].operation.provider.kind,
+      path: napiPlanDocument.items[0].operation.provider.path,
+      source_paths: napiPlanDocument.items[0].operation.source_paths,
+      surface: napiPlanDocument.items[0].operation.surface,
+    },
+    {
+      action: "add_provider_capability",
+      capability: "core_mul",
+      kind: "exports",
+      path: "native/addon.c",
+      source_paths: ["native/addon.c"],
+      surface: "js-binding",
+    },
+  );
+  run([
+    "act", napiPlan, "--root", napiRoot, "--format", "json",
+    "--output", napiAct,
+  ]);
+  const napiActDocument = JSON.parse(fs.readFileSync(napiAct, "utf8"));
+  assert.equal(napiActDocument.state, "accepted");
+  assert.deepEqual(
+    napiActDocument.executors.map((row) => row.capability),
+    ["archbird.native.c.napi-export@1"],
+  );
+  assert.equal(
+    fs.readFileSync(napiSource, "utf8"),
+    missingNapiRegistration,
+    "Node Act preview mutated the repository",
+  );
+  run(["apply", napiAct, "--root", napiRoot]);
+  assert.match(
+    fs.readFileSync(napiSource, "utf8"),
+    /\{"core_mul", NULL, napi_core_mul\}/,
+  );
+  run([
+    "verify", "PROVIDER-SURFACE-JS-BINDING", "--root", napiRoot, "--check",
+  ]);
+
   const observedProject = path.join(observedRoot, "packages", "surface");
   fs.cpSync(surfaceFixture, observedProject, { recursive: true });
   for (const relative of [
@@ -882,6 +950,7 @@ try {
   fs.rmSync(registrationRoot, { force: true, recursive: true });
   fs.rmSync(providerParityRoot, { force: true, recursive: true });
   fs.rmSync(coordinatedRoot, { force: true, recursive: true });
+  fs.rmSync(napiRoot, { force: true, recursive: true });
   fs.rmSync(observedRoot, { force: true, recursive: true });
   fs.rmSync(redirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptRedirectRoot, { force: true, recursive: true });

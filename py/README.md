@@ -530,12 +530,16 @@ duplicate targets, unsupported inputs, and lexical-only C/C++ call binding
 block Act instead of producing a partial rename.
 
 For a `provider_surface` issue, Plan can add a uniquely missing Make
-registration or use a reviewed rename to replace one stale registration with
-a uniquely resolved surface member. Plan emits a neutral provider objective
-and configured provider identity. Act/Make validates the current configuration
-and Map, derives the source spelling and exact source lock, and requires one
-direct token match. Ambiguous, duplicate, unresolved, or missing non-Make
-provider cases remain manual or block Act.
+registration, C header declaration, or bounded C/N-API export registration,
+or use a reviewed rename to replace one stale Make registration with a
+uniquely resolved surface member. Plan emits a neutral provider objective and
+configured provider identity. Act validates the current configuration and Map.
+Act/Make derives the source spelling and requires one direct token match.
+Act/C requires one effective mapped C file, one mapped
+`napi_<capability>` wrapper, syntax-clean source, and a mapped
+`DECLARE_NAPI_METHOD` or descriptor peer. Multi-file, ambiguous, duplicate,
+unresolved, or structurally unsupported provider cases remain manual or block
+Act.
 If the replacement capability is already registered, Plan emits removal of
 the stale old capability rather than a duplicate registration.
 
@@ -567,11 +571,11 @@ together.
 
 If the constraint itself requires an implemented and used surface member that
 is not registered, Plan can derive `add_provider_capability` without an extra
-flag. This requires exactly one configured Make provider. Act/Make derives
-the direct or leading-underscore convention from current source and selects
-one unique editable anchor by canonical-name locality. The item is `derived`;
-incomplete, ambiguous, multi-provider, duplicate, or anchorless evidence
-stays manual or blocks Act.
+flag for each supported exact provider. Act/Make derives the direct or
+leading-underscore convention from current source. Act/C can clone one mapped
+C-header or N-API peer. Each executor selects one unique editable anchor by
+canonical-name locality. The item is `derived`; incomplete, ambiguous,
+duplicate, multi-file, or anchorless evidence stays manual or blocks Act.
 
 Several missing members in the same Make provider remain separate Plan
 obligations but materialize as one source-locked file transition. Only
@@ -587,8 +591,8 @@ a mixed replacement into an inferred deletion.
 The Plan operations are `add_provider_capability`,
 `remove_provider_capability`, and `rename_provider_capability`; they contain
 no Make token, anchor, byte range, replacement text, or source hash. The
-native Act/Make executor owns those details and preserves assignments,
-comments, continuations, whitespace, and unrelated variables.
+native Act/Make and Act/C executors own those details and preserve assignments,
+comments, continuations, whitespace, line endings, and unrelated source.
 `--format patch` renders the accepted Act as a unified diff; it does not
 create another artifact.
 

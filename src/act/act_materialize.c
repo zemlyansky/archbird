@@ -5,6 +5,7 @@
 #include "artifact_validation.h"
 #include "base64.h"
 #include "c/declaration.h"
+#include "c/provider_capability.h"
 #include "dependency_redirect.h"
 #include "json_value.h"
 #include "make/provider_capability.h"
@@ -675,7 +676,8 @@ static ArchbirdStatus collect_operation(AbActContext *context,
     if (ab_artifact_text_is(kind, "make_variable"))
       return ab_act_make_provider_capability(context, operation,
                                              &item_id->as.text);
-    if (ab_artifact_text_is(kind, "file_pattern"))
+    if (ab_artifact_text_is(kind, "file_pattern") ||
+        ab_artifact_text_is(kind, "exports"))
       return ab_act_c_provider_capability(context, operation,
                                           &item_id->as.text);
     return act_error(context->engine, ARCHBIRD_INVALID_SCHEMA,

@@ -408,16 +408,18 @@ static int validate_operation(const AbValue *value, int *out_manual,
     const AbValue *source_paths = ab_value_member(value, "source_paths");
     int rename = text_is(action, "rename_provider_capability");
     int file_provider = text_is(provider_kind, "file_pattern");
+    int export_provider = text_is(provider_kind, "exports");
     if (!object_exact(value,
-                      rename          ? rename_fields
-                      : file_provider ? file_capability_fields
-                                      : capability_fields,
-                      rename || file_provider ? 5 : 4) ||
+                      rename ? rename_fields
+                      : file_provider || export_provider
+                          ? file_capability_fields
+                          : capability_fields,
+                      rename || file_provider || export_provider ? 5 : 4) ||
         !provider ||
         ((!text_is(provider_kind, "make_variable") ||
           !object_exact(provider, make_provider_fields, 4) ||
           !portable_identifier(ab_value_member(provider, "variable"))) &&
-         (!text_is(provider_kind, "file_pattern") ||
+         ((!file_provider && !export_provider) ||
           !object_exact(provider, file_provider_fields, 3))) ||
         !lowercase_sha256(ab_value_member(provider, "definition_sha256")) ||
         !repository_path(ab_value_member(provider, "path")) ||
@@ -427,9 +429,11 @@ static int validate_operation(const AbValue *value, int *out_manual,
     if (!text_is(provider_kind, "make_variable") &&
         (rename || text_is(action, "remove_provider_capability")))
       return 0;
-    if (file_provider) {
+    if (file_provider || export_provider) {
       size_t index;
-      if (!unique_rows(source_paths) || source_paths->as.array.count != 2)
+      size_t required_count = file_provider ? 2 : 1;
+      if (!unique_rows(source_paths) ||
+          source_paths->as.array.count != required_count)
         return 0;
       for (index = 0; index < source_paths->as.array.count; index++)
         if (!repository_path(&source_paths->as.array.items[index]))
