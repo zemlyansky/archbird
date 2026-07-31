@@ -530,11 +530,15 @@ static ArchbirdStatus
 add_asserted_file_submission(AbActContext *context, const AbValue *operation,
                              const AbString *item_id,
                              const AbActSubmission *submission) {
+  const AbValue *action = object_field(operation, "action");
   const AbValue *path = object_field(operation, "path");
-  size_t work_index;
+  size_t work_index = 0;
   ArchbirdStatus status;
   if (ab_act_source_file(context->metadata, &path->as.text)) {
     const AbActWork *work;
+    if (ab_artifact_text_is(action, "create_file"))
+      return act_error(context->engine, ARCHBIRD_CONFLICT,
+                       "create_file destination is not absent");
     status = ab_act_executor_begin(context, item_id,
                                    "archbird.asserted.source.replace-file@1");
     if (status == ARCHBIRD_OK)
@@ -783,31 +787,6 @@ static ArchbirdStatus collect_operation(AbActContext *context,
     return ab_act_rename_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "redirect_dependency"))
     return ab_act_dependency_redirect(context, operation, &item_id->as.text);
-  if (ab_artifact_text_is(action, "create_file")) {
-    const AbValue *content = object_field(operation, "content");
-    status = ab_act_executor_begin(context, &item_id->as.text,
-                                   "archbird.native.filesystem.create-file@1");
-    if (status != ARCHBIRD_OK)
-      return status;
-    path = object_field(operation, "path");
-    status = absent_work(context, &path->as.text, &work_index);
-    if (status != ARCHBIRD_OK)
-      return status;
-    if (context->works[work_index].create ||
-        context->works[work_index].before_exists)
-      return act_error(context->engine, ARCHBIRD_CONFLICT,
-                       "create_file destination is claimed more than once");
-    context->works[work_index].create = 1;
-    context->works[work_index].action_item_id = &item_id->as.text;
-    context->works[work_index].created_bytes =
-        (const uint8_t *)content->as.text.data;
-    context->works[work_index].created_length = content->as.text.length;
-    context->works[work_index].executable = 0;
-    status = executor_write(context, &context->works[work_index].path);
-    if (status == ARCHBIRD_OK)
-      context->active_executor->matches++;
-    return status;
-  }
   if (ab_artifact_text_is(action, "delete_file")) {
     status = ab_act_executor_begin(context, &item_id->as.text,
                                    "archbird.native.filesystem.delete-file@1");

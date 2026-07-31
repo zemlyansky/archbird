@@ -702,7 +702,7 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
         )
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 4)
+        self.assertEqual(plan["schema_version"], 5)
         canonical_before_map = json.dumps(
             json.loads(before_map),
             allow_nan=False,
@@ -2687,7 +2687,7 @@ class PlanActCliTest(unittest.TestCase):
         plan_path = self.plan_path("neutral-api-plan.json")
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 4)
+        self.assertEqual(plan["schema_version"], 5)
         self.assertEqual(len(plan["items"]), 3)
         self.assertTrue(all(not item["executable"] for item in plan["items"]))
 
@@ -3188,6 +3188,85 @@ class PlanActCliTest(unittest.TestCase):
             "Result: applied-transitions=0; state=already-satisfied\n",
         )
 
+    def test_required_path_compiles_to_reviewed_create_without_plan_rewrite(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "REQUIRED-GENERATED-ENTRY": {
+                    "kind": "required_paths",
+                    "paths": ["generated/entry.py"],
+                    "owner": "architecture",
+                    "rationale": "The reviewed generated entry exists.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["**/*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+        )
+        (self.root / "current.py").write_text("CURRENT = True\n")
+        plan_path = self.plan_path("required-path-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan_bytes = plan_path.read_bytes()
+        plan = json.loads(plan_bytes)
+        self.assertEqual(plan["schema_version"], 5)
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertEqual(
+            item["operation"],
+            {"action": "create_file", "path": "generated/entry.py"},
+        )
+        self.assertFalse(item["executable"])
+
+        submitted = self.plan_path("generated-entry.py")
+        submitted.write_text("ENTRY = True\n")
+        act_path = self.plan_path("required-path-act.json")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={submitted}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        self.assertEqual(plan_path.read_bytes(), plan_bytes)
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(
+            act["executors"][0]["capability"],
+            "archbird.asserted.source.create-file@1",
+        )
+        self.assertEqual(act["executors"][0]["reads"], [])
+        self.assertEqual(
+            act["executors"][0]["writes"], ["generated/entry.py"]
+        )
+        self.assertEqual(act["transitions"][0]["kind"], "create")
+        destination = self.root / "generated/entry.py"
+        self.assertFalse(destination.exists())
+
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertEqual(destination.read_text(), "ENTRY = True\n")
+        verification = json.loads(
+            run(
+                "verify",
+                "--root",
+                str(self.root),
+                "--format",
+                "json",
+                "--check",
+            ).stdout
+        )
+        self.assertEqual(verification["summary"]["constraints"]["pass"], 1)
+
     def test_asserted_test_submission_uses_one_exact_mapped_test_file(
         self,
     ) -> None:
@@ -3562,17 +3641,11 @@ class PlanActCliTest(unittest.TestCase):
             item["origins"][0]["constraint_id"]: item for item in plan["items"]
         }
         create = by_constraint["CREATE"]
-        create.update(
-            provenance="asserted",
-            executable=True,
-            non_executable_reasons=[],
-            unknowns=[],
-            operation={
-                "action": "create_file",
-                "path": "created.py",
-                "content": "created = True\n",
-            },
+        self.assertEqual(
+            create["operation"],
+            {"action": "create_file", "path": "created.py"},
         )
+        self.assertFalse(create["executable"])
         move = by_constraint["MOVE"]
         move.update(
             provenance="asserted",
@@ -3588,10 +3661,31 @@ class PlanActCliTest(unittest.TestCase):
             acceptance={"constraints": ["MOVE", "NO-OLD"]},
         )
         plan["items"] = [create, move]
-        plan["unknowns"] = []
+        plan["unknowns"] = [
+            unknown
+            for unknown in plan["unknowns"]
+            if unknown["item_id"] == create["id"]
+        ]
         plan_path.write_text(json.dumps(plan, sort_keys=True))
 
-        act_path, patch = self.accepted_act(plan_path)
+        create_input = self.plan_path("created.py")
+        create_input.write_text("created = True\n")
+        act_path = self.plan_path("act.json")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{create['id']}={create_input}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        patch = json.loads(act_path.read_bytes())
+        self.assertEqual(patch["state"], "accepted")
+        self.assertEqual(patch["acceptance"]["status"], "satisfied")
         self.assertEqual(
             {transition["kind"] for transition in patch["transitions"]},
             {"create", "move"},

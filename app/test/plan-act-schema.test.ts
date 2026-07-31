@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 const sha = (character: string): string => character.repeat(64);
 
 const plan = {
-  schema_version: 4,
+  schema_version: 5,
   artifact: "plan",
   provenance: "derived",
   tool: {
@@ -212,6 +212,26 @@ test("Plan schema represents neutral missing-symbol and test-route work", () => 
   neutral.items[0].executable = true;
   neutral.items[0].non_executable_reasons = [];
   assert.equal(validate(neutral), false);
+});
+
+test("Plan create_file is a path-only input-required objective", () => {
+  const validate = validator("plan");
+  const create = structuredClone(plan);
+  create.items[0].executable = false;
+  create.items[0].non_executable_reasons = [
+    "Verification does not define file content.",
+  ];
+  create.items[0].operation = {
+    action: "create_file",
+    path: "generated/entry.py",
+  };
+  assert.equal(validate(create), true, JSON.stringify(validate.errors));
+
+  create.items[0].operation.content = "ENTRY = True\n";
+  assert.equal(validate(create), false);
+  delete create.items[0].operation.content;
+  create.items[0].operation.path = "generated/*.py";
+  assert.equal(validate(create), false);
 });
 
 test("Act state cannot claim acceptance before evaluation", () => {

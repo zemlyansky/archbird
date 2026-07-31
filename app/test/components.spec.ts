@@ -330,7 +330,7 @@ describe("artifact workspaces", () => {
     const plan = mount(DocumentPanel, {
       artifact: artifact({
         artifact: "plan",
-        schema_version: 4,
+        schema_version: 5,
         objective: "Remove the forbidden declaration.",
         items: [{
           id: "remove-legacy",

@@ -754,6 +754,11 @@ agent/developer task DAG without Archbird inventing a signature, body, or
 test. `plan --format markdown` renders that same canonical Plan as a review
 packet; it does not create another artifact. Absent or ambiguous test
 locations remain manual.
+An exact missing path from `required_paths` similarly becomes a path-only
+`create_file` objective. Plan does not embed the future file bytes. Supply
+reviewed content with `act --submit ITEM=FILE`; native Act requires the
+destination to remain absent, previews one exact creation, and accepts it only
+when the isolated after-Map closes the constraint.
 `redirect_dependency` and `declare_symbol` currently follow this boundary end
 to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores the exhaustive
 edge ProjectionPlan, exact relation, affected source paths, and symbol
@@ -774,9 +779,10 @@ references, and non-unique call sites block Act instead of producing partial
 edits.
 
 Low-level asserted operations currently include `replace_range`,
-`create_file`, `delete_file`, `move_file`, and `edit_json_pointer`. They are
-useful for bounded edits supplied by a developer or agent, but are not the
-model for derived Plan operations.
+`delete_file`, `move_file`, and `edit_json_pointer`. They are useful for
+bounded edits supplied by a developer or agent, but are not the model for
+derived Plan operations. `create_file` is a language-neutral, input-required
+Plan objective; exact content belongs to Act submission.
 
 A one-extra/one-missing symbol constraint may suggest a rename, but that does
 not establish intent: the derived candidate stays non-executable until a

@@ -722,6 +722,71 @@ cleanup:
   return status;
 }
 
+static ArchbirdStatus append_required_paths(AbPlanCompile *context,
+                                            const AbValue *constraint,
+                                            const AbValue *findings) {
+  AbPlanFindingGroups groups = {0};
+  size_t index;
+  ArchbirdStatus status =
+      ab_plan_finding_groups_collect(context->engine, findings, &groups);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (!groups.count) {
+    status = append_manual(context, constraint, NULL, "required_paths", NULL);
+    goto cleanup;
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++) {
+    const AbPlanFindingGroup *group = &groups.groups[index];
+    const AbValue *finding = group->representative;
+    const AbValue *key = field(finding, "key");
+    AbBuffer operation;
+    char statement[1024];
+    int length;
+    if (!ab_plan_finding_current(finding) ||
+        !ab_artifact_repository_literal_path(key)) {
+      status = append_manual(
+          context, constraint, group, "required_paths",
+          !ab_plan_finding_current(finding)
+              ? "Finding evidence is not current executable evidence."
+              : "The required path is not one exact repository path.");
+      continue;
+    }
+    ab_buffer_init(&operation, context->engine);
+    status = literal(&operation, "{\"action\":\"create_file\",\"path\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&operation, key);
+    if (status == ARCHBIRD_OK)
+      status = literal(&operation, "}");
+    length =
+        snprintf(statement, sizeof(statement), "Create required path %.*s.",
+                 (int)key->as.text.length, key->as.text.data);
+    if (status == ARCHBIRD_OK &&
+        (length < 0 || (size_t)length >= sizeof(statement)))
+      status = fail(context, ARCHBIRD_LIMIT_EXCEEDED,
+                    "generated required-path statement is too long");
+    if (status == ARCHBIRD_OK) {
+      static const char *const reasons[] = {
+          "Verification requires this path but does not define its content."};
+      const AbPlanItemSpec spec = {
+          .constraint = constraint,
+          .findings = group->rows,
+          .finding_count = group->count,
+          .statement = statement,
+          .provenance = "derived",
+          .operation = &operation,
+          .executable = 0,
+          .reasons = reasons,
+          .reason_count = 1,
+      };
+      status = ab_plan_item_builder_append(&context->builder, &spec);
+    }
+    ab_buffer_free(&operation);
+  }
+cleanup:
+  ab_plan_finding_groups_free(context->engine, &groups);
+  return status;
+}
+
 static ArchbirdStatus compile_constraint(AbPlanCompile *context,
                                          const AbValue *constraint) {
   const AbValue *id = field(constraint, "id");
@@ -772,6 +837,8 @@ static ArchbirdStatus compile_constraint(AbPlanCompile *context,
     return status;
   if (strcmp(form, "forbidden_paths") == 0)
     return append_forbidden_paths(context, constraint, actual);
+  if (strcmp(form, "required_paths") == 0)
+    return append_required_paths(context, constraint, findings);
   if (!findings || findings->kind != AB_VALUE_ARRAY ||
       !findings->as.array.count)
     return append_manual(context, constraint, NULL, form, NULL);
@@ -926,7 +993,7 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
             ? "\"asserted\""
             : "\"derived\"");
   if (status == ARCHBIRD_OK)
-    status = literal(&rendered, ",\"schema_version\":4,\"source\":");
+    status = literal(&rendered, ",\"schema_version\":5,\"source\":");
   if (status == ARCHBIRD_OK)
     status = render_source_identity(context, &rendered, map_json, map_length,
                                     before_map_json, before_map_length);

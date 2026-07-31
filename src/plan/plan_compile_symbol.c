@@ -66,18 +66,6 @@ static int portable_identifier(const AbString *value) {
   return 1;
 }
 
-static int repository_path_without_pattern(const AbValue *value) {
-  static const char pattern_bytes[] = "*?[]{}";
-  size_t index;
-  if (!ab_artifact_repository_path(value))
-    return 0;
-  for (index = 0; index < value->as.text.length; index++)
-    if (memchr(pattern_bytes, value->as.text.data[index],
-               sizeof(pattern_bytes) - 1))
-      return 0;
-  return 1;
-}
-
 static const AbValue *map_file(const AbValue *map, const AbString *path) {
   const AbValue *files = field(map, "files");
   const AbValue *match = NULL;
@@ -112,7 +100,7 @@ static const AbValue *unique_definition_file(const AbValue *map,
     const AbValue *file_language = field(file, "language");
     const AbValue *symbols = field(file, "symbols");
     size_t symbol_index;
-    if (!repository_path_without_pattern(path) || !file_language ||
+    if (!ab_artifact_repository_literal_path(path) || !file_language ||
         file_language->kind != AB_VALUE_STRING ||
         !ab_string_equal(&file_language->as.text, language) ||
         (excluded_path && ab_string_equal(&path->as.text, excluded_path)) ||
@@ -773,21 +761,21 @@ static ArchbirdStatus append_required_symbol(ArchbirdEngine *engine,
   if (!key || key->kind != AB_VALUE_STRING ||
       !portable_identifier(&key->as.text))
     reason = "The required symbol is not one portable identifier.";
-  else if (!repository_path_without_pattern(path))
+  else if (!ab_artifact_repository_literal_path(path))
     reason = "The required symbol projection does not name one exact file.";
   else
     supported = declaration_objective_scope(map, &path->as.text, &key->as.text,
                                             &implementation_file, &reason);
   if (supported) {
     implementation_path = field(implementation_file, "path");
-    if (!repository_path_without_pattern(implementation_path)) {
+    if (!ab_artifact_repository_literal_path(implementation_path)) {
       supported = 0;
       reason = "The required declaration has no exact mapped definition path.";
     }
   }
   structured = !supported && key && key->kind == AB_VALUE_STRING &&
                portable_identifier(&key->as.text) &&
-               repository_path_without_pattern(path);
+               ab_artifact_repository_literal_path(path);
   ab_buffer_init(&operation, engine);
   if (supported) {
     const AbValue *first = path;

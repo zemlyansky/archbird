@@ -13,6 +13,7 @@ int ab_artifact_bounded_text(const AbValue *value, size_t maximum,
 int ab_artifact_sha256(const AbValue *value);
 int ab_artifact_stable_id(const AbValue *value);
 int ab_artifact_repository_path(const AbValue *value);
+int ab_artifact_repository_literal_path(const AbValue *value);
 int ab_artifact_safe_integer(const AbValue *value, uint64_t *out);
 int ab_artifact_boolean(const AbValue *value);
 int ab_artifact_object_exact(const AbValue *value, const char *const *fields,

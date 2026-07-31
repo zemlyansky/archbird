@@ -70,18 +70,20 @@ static ArchbirdStatus collect_item(
   const AbValue *path;
   size_t index;
   if (!field(item, "executable")->as.boolean) {
+    AbActSubmission *submission;
     path = ab_act_submission_path(operation);
-    if (path &&
-        ab_act_submission_take(submissions, &field(item, "id")->as.text))
-      return add_path(engine, observe, observe_count, path);
+    submission =
+        ab_act_submission_take(submissions, &field(item, "id")->as.text);
+    if (path && submission)
+      return ab_artifact_text_is(action, "create_file")
+                 ? add_path(engine, absent, absent_count, path)
+                 : add_path(engine, observe, observe_count, path);
     return reject(engine, ARCHBIRD_POLICY_REJECTED,
                   "Plan contains a manual or blocked item");
   }
   if (ab_artifact_text_is(action, "manual"))
     return reject(engine, ARCHBIRD_POLICY_REJECTED,
                   "Plan contains a manual or blocked item");
-  if (ab_artifact_text_is(action, "create_file"))
-    return add_path(engine, absent, absent_count, field(operation, "path"));
   if (ab_artifact_text_is(action, "move_file")) {
     ArchbirdStatus status = add_path(engine, present, present_count,
                                      field(operation, "source_path"));

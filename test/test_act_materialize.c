@@ -152,23 +152,33 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
   if (empty == 1) {
     memcpy(items, "[]", 3);
     items_length = 2;
-  } else if (empty == 2 || empty == 3) {
-    const char *item_id = empty == 2 ? "item:add-symbol" : "item:create-symbol";
-    const char *path = empty == 2 ? "src/a.c" : "src/new.c";
+  } else if (empty == 2) {
     items_length = snprintf(
         items, sizeof(items),
         "[{\"acceptance\":{\"constraints\":[\"UNCHANGED\"]},"
         "\"depends_on\":[],\"evidence\":[],\"executable\":false,"
-        "\"id\":\"%s\",\"non_executable_reasons\":"
+        "\"id\":\"item:add-symbol\",\"non_executable_reasons\":"
         "[\"Implementation semantics require review.\"],\"operation\":{"
         "\"action\":\"add_symbol\",\"kinds\":[\"function\"],"
-        "\"path\":\"%s\",\"symbol\":\"future_api\"},"
+        "\"path\":\"src/a.c\",\"symbol\":\"future_api\"},"
         "\"origins\":[{\"constraint_id\":\"UNCHANGED\","
         "\"constraint_result_sha256\":\"" VERIFY_SHA
         "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
         "\"provenance\":\"derived\",\"statement\":\"Implement future_api.\","
-        "\"unknowns\":[]}]",
-        item_id, path);
+        "\"unknowns\":[]}]");
+  } else if (empty == 3) {
+    items_length = snprintf(
+        items, sizeof(items),
+        "[{\"acceptance\":{\"constraints\":[\"UNCHANGED\"]},"
+        "\"depends_on\":[],\"evidence\":[],\"executable\":false,"
+        "\"id\":\"item:create-file\",\"non_executable_reasons\":"
+        "[\"File content requires review.\"],\"operation\":{"
+        "\"action\":\"create_file\",\"path\":\"src/new.c\"},"
+        "\"origins\":[{\"constraint_id\":\"UNCHANGED\","
+        "\"constraint_result_sha256\":\"" VERIFY_SHA
+        "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
+        "\"provenance\":\"derived\",\"statement\":\"Create src/new.c.\","
+        "\"unknowns\":[]}]");
   } else {
     items_length = snprintf(
         items, sizeof(items),
@@ -193,15 +203,6 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
         "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
         "\"provenance\":\"derived\",\"statement\":\"Move beta.\","
         "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
-        "[\"C-CREATE\"]},\"depends_on\":[],\"evidence\":[],"
-        "\"executable\":true,\"id\":\"item:create\","
-        "\"non_executable_reasons\":[],\"operation\":{\"action\":"
-        "\"create_file\",\"content\":\"new\\n\",\"path\":\"src/c.c\"},"
-        "\"origins\":[{\"constraint_id\":\"C-CREATE\","
-        "\"constraint_result_sha256\":\"" VERIFY_SHA
-        "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
-        "\"provenance\":\"derived\",\"statement\":\"Create new file.\","
-        "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
         "[\"C-JSON\"]},\"depends_on\":[],\"evidence\":[],"
         "\"executable\":true,\"id\":\"item:json\","
         "\"non_executable_reasons\":[],\"operation\":{\"action\":"
@@ -223,7 +224,7 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
       body, sizeof(body),
       "{\"artifact\":\"plan\",\"items\":%s,\"objective\":\"Exercise native "
       "Plan materialization.\",\"preserved_constraints\":[\"%s\"],"
-      "\"provenance\":\"derived\",\"schema_version\":4,\"source\":{"
+      "\"provenance\":\"derived\",\"schema_version\":5,\"source\":{"
       "\"map\":{\"configuration_sha256\":\"%.*s\",\"input_sha256\":\"%.*s\","
       "\"producer_implementation_sha256\":\"%.*s\",\"sha256\":\"%s\"},"
       "\"project\":\"demo\",\"verification\":{\"policy_sha256\":\""
@@ -350,8 +351,7 @@ int main(void) {
                                         0, collect, &source_requirements);
   expect_status("collect source requirements", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK &&
-      (!find_bytes(&source_requirements,
-                   "\"absent\":[\"src/c.c\",\"src/z.c\"]") ||
+      (!find_bytes(&source_requirements, "\"absent\":[\"src/z.c\"]") ||
        !find_bytes(&source_requirements,
                    "\"files\":[\"config.json\",\"src/a.c\",\"src/b.c\"]") ||
        !find_bytes(&source_requirements, "\"observe\":[]"))) {
@@ -387,7 +387,7 @@ int main(void) {
     static const uint8_t create_submission[] =
         "{\"items\":[{\"content_base64\":\""
         "aW50IGZ1dHVyZV9hcGkodm9pZCkgeyByZXR1cm4gMTsgfQo=\","
-        "\"item_id\":\"item:create-symbol\",\"kind\":\"write_file\"}]}";
+        "\"item_id\":\"item:create-file\",\"kind\":\"write_file\"}]}";
     expect_status("reject missing executor submission",
                   archbird_plan_source_requirements(
                       engine, submitted_plan.data, submitted_plan.length, NULL,
@@ -446,7 +446,8 @@ int main(void) {
     expect_status("collect submitted create requirement", status, ARCHBIRD_OK,
                   engine);
     if (!find_bytes(&submitted_create_requirements,
-                    "\"observe\":[\"src/new.c\"]")) {
+                    "\"absent\":[\"src/new.c\"]") ||
+        !find_bytes(&submitted_create_requirements, "\"observe\":[]")) {
       fprintf(stderr, "FAIL submitted create requirement content\n");
       failures++;
     }
@@ -477,12 +478,9 @@ int main(void) {
                   archbird_act_validate(engine, act.data, act.length),
                   ARCHBIRD_OK, engine);
   if (!find_bytes(&act, "\"content_base64\":\"QUxQSEEK\"") ||
-      !find_bytes(&act, "\"kind\":\"create\",\"path\":\"src/c.c\"") ||
       !find_bytes(&act, "\"kind\":\"move\",\"path\":\"src/z.c\","
                         "\"source_path\":\"src/b.c\"") ||
-      !find_bytes(&act, "\"content_base64\":\"eyJuYW1lIjoibmV3In0K\"") ||
-      find_bytes(&act, "\"path\":\"src/z.c\"") <
-          find_bytes(&act, "\"path\":\"src/c.c\"")) {
+      !find_bytes(&act, "\"content_base64\":\"eyJuYW1lIjoibmV3In0K\"")) {
     fprintf(stderr, "FAIL materialized Act content/order\n");
     failures++;
   }

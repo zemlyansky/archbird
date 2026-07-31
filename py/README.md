@@ -530,10 +530,13 @@ required semantic evidence. Incomplete evidence, ambiguous definitions,
 missing observed include/import routes, multi-name imports, and non-unique
 calls block execution.
 
-Older exact `replace_range`, `create_file`, `delete_file`, `move_file`,
+Older exact `replace_range`, `delete_file`, `move_file`,
 `edit_json_pointer`, and source-bound file deletion operations remain
 available for bounded developer- or agent-authored edits. They are not the
-model for derived Plan operators. An asserted `edit_json_pointer` operation changes one reviewed
+model for derived Plan operators. An exact `required_paths` issue becomes a
+path-only, input-required `create_file` objective; pass reviewed bytes through
+`act --submit ITEM=FILE`, not through Plan. An asserted `edit_json_pointer`
+operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
 expected old JSON value without reformatting the complete file. A derived
 one-extra/one-missing rename candidate is review evidence, not intent; it

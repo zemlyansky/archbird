@@ -40,7 +40,7 @@ int main(void) {
   const char *empty =
       "{\"artifact\":\"plan\",\"items\":[],\"objective\":\"No work.\","
       "\"preserved_constraints\":[],\"provenance\":\"derived\","
-      "\"schema_version\":4,\"source\":{\"map\":{\"configuration_sha256\":"
+      "\"schema_version\":5,\"source\":{\"map\":{\"configuration_sha256\":"
       "\"" SHA_A "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A
       "\"},\"project\":\"demo\",\"verification\":{"
@@ -59,7 +59,7 @@ int main(void) {
       "\"}],\"provenance\":\"derived\",\"statement\":\"Redirect edge.\","
       "\"unknowns\":[\"unknown:manual\"]}],\"objective\":\"Repair edge.\","
       "\"preserved_constraints\":[],\"provenance\":\"derived\","
-      "\"schema_version\":4,\"source\":{\"map\":{\"configuration_sha256\":"
+      "\"schema_version\":5,\"source\":{\"map\":{\"configuration_sha256\":"
       "\"" SHA_A "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A
       "\"},\"project\":\"demo\",\"verification\":{"
@@ -82,7 +82,7 @@ int main(void) {
       "\"}],\"provenance\":\"derived\",\"statement\":\"Redirect edge.\","
       "\"unknowns\":[]}],\"objective\":\"Repair edge.\","
       "\"preserved_constraints\":[],\"provenance\":\"derived\","
-      "\"schema_version\":4,\"source\":{\"map\":{\"configuration_sha256\":"
+      "\"schema_version\":5,\"source\":{\"map\":{\"configuration_sha256\":"
       "\"" SHA_A "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A
       "\"},\"project\":\"demo\",\"verification\":{"

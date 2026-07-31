@@ -87,6 +87,18 @@ int ab_artifact_repository_path(const AbValue *value) {
   return 1;
 }
 
+int ab_artifact_repository_literal_path(const AbValue *value) {
+  static const char pattern_bytes[] = "*?[]{}";
+  size_t index;
+  if (!ab_artifact_repository_path(value))
+    return 0;
+  for (index = 0; index < value->as.text.length; index++)
+    if (memchr(pattern_bytes, value->as.text.data[index],
+               sizeof(pattern_bytes) - 1))
+      return 0;
+  return 1;
+}
+
 int ab_artifact_safe_integer(const AbValue *value, uint64_t *out) {
   uint64_t number;
   if (!ab_value_u64(value, &number) || number > AB_ARTIFACT_MAX_SAFE_INTEGER)

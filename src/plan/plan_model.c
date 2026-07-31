@@ -346,11 +346,10 @@ static int validate_operation(const AbValue *value, int *out_manual,
                         AB_PLAN_MAX_OPERATION_TEXT, 0);
   }
   if (text_is(action, "create_file")) {
-    static const char *const fields[] = {"action", "path", "content"};
-    return object_exact(value, fields, 3) &&
-           repository_path(ab_value_member(value, "path")) &&
-           bounded_text(ab_value_member(value, "content"),
-                        AB_PLAN_MAX_OPERATION_TEXT, 0);
+    static const char *const fields[] = {"action", "path"};
+    *out_manual = 1;
+    return object_exact(value, fields, 2) &&
+           ab_artifact_repository_literal_path(ab_value_member(value, "path"));
   }
   if (text_is(action, "delete_file")) {
     static const char *const fields[] = {"action", "path", "source_sha256"};
@@ -769,7 +768,7 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
     return ARCHBIRD_OK;
   schema = ab_value_member(&plan->document, "schema_version");
   provenance = ab_value_member(&plan->document, "provenance");
-  if (!safe_integer(schema, &schema_number) || schema_number != 4 ||
+  if (!safe_integer(schema, &schema_number) || schema_number != 5 ||
       !text_is(ab_value_member(&plan->document, "artifact"), "plan") ||
       (!text_is(provenance, "derived") && !text_is(provenance, "asserted")) ||
       !validate_tool(ab_value_member(&plan->document, "tool")) ||

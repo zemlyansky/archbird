@@ -117,7 +117,8 @@ cleanup:
 const AbValue *ab_act_submission_path(const AbValue *operation) {
   const AbValue *action = field(operation, "action");
   const AbValue *path = field(operation, "path");
-  if (path && (ab_artifact_text_is(action, "add_symbol") ||
+  if (path && (ab_artifact_text_is(action, "create_file") ||
+               ab_artifact_text_is(action, "add_symbol") ||
                ab_artifact_text_is(action, "add_test_route")))
     return path;
   return NULL;

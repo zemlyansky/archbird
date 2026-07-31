@@ -18,7 +18,7 @@
     "unknowns"
   ],
   "properties": {
-    "schema_version": {"const": 4},
+    "schema_version": {"const": 5},
     "artifact": {"const": "plan"},
     "provenance": {"$ref": "#/$defs/provenance"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -78,6 +78,12 @@
       "minLength": 1,
       "maxLength": 4096,
       "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+$"
+    },
+    "repositoryLiteralPath": {
+      "allOf": [
+        {"$ref": "#/$defs/repositoryPath"},
+        {"pattern": "^[^*?\\[\\]{}]+$"}
+      ]
     },
     "optionalRepositoryPath": {
       "oneOf": [
@@ -245,11 +251,11 @@
     "createFile": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "path", "content"],
+      "$comment": "Language-neutral required-path objective. Reviewed source bytes are executor input to Act, not Plan content.",
+      "required": ["action", "path"],
       "properties": {
         "action": {"const": "create_file"},
-        "path": {"$ref": "#/$defs/repositoryPath"},
-        "content": {"type": "string", "maxLength": 16777216}
+        "path": {"$ref": "#/$defs/repositoryLiteralPath"}
       }
     },
     "deleteFile": {
