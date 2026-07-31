@@ -92,4 +92,9 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
     const AbValue *constraint, const AbValue *definition,
     const AbValue *renames, uint8_t *rename_used, int *out_handled);
 
+ArchbirdStatus ab_plan_compile_package_constraint(
+    ArchbirdEngine *engine, const AbValue *map, AbPlanItemBuilder *builder,
+    const AbValue *constraint, const AbValue *definition,
+    const AbProjectionData *actual, int *out_handled);
+
 #endif

@@ -787,6 +787,16 @@ If the replacement is already registered by that provider, Plan normalizes
 the target state to removal of the stale old registration instead of
 proposing a duplicate.
 
+For an exact `required_package_entrypoint` failure with one npm package and
+one mapped target, Plan emits the language-neutral `set_package_entrypoint`
+objective. Act's native JSON executor grounds `main`, direct `exports`, and
+existing-object `bin` routes through the lossless JSON Pointer editor, then
+requires the fresh after-Map to close the original constraint. Conditional or
+nested exports, ambiguous package selectors, non-mapped targets, and route
+shapes that would require replacing an existing object remain manual. Plan
+contains the package route and target, not JSON syntax, byte offsets, or
+replacement text.
+
 `--before-map OLD.json` can derive the same provider registration replacement
 without asserted rename intent when an observed partial migration proves it.
 The old surface member must have been uniquely resolved in the before Map; the

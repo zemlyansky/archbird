@@ -760,6 +760,11 @@ static ArchbirdStatus compile_constraint(AbPlanCompile *context,
       constraint, definition, context->renames, context->rename_used, &handled);
   if (status != ARCHBIRD_OK || handled)
     return status;
+  status = ab_plan_compile_package_constraint(context->engine, &context->map,
+                                              &context->builder, constraint,
+                                              definition, actual, &handled);
+  if (status != ARCHBIRD_OK || handled)
+    return status;
   if (strcmp(form, "forbidden_paths") == 0)
     return append_forbidden_paths(context, constraint, actual);
   if (!findings || findings->kind != AB_VALUE_ARRAY ||

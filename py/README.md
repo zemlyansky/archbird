@@ -596,6 +596,12 @@ comments, continuations, whitespace, line endings, and unrelated source.
 `--format patch` renders the accepted Act as a unified diff; it does not
 create another artifact.
 
+An exact missing npm package entrypoint becomes a neutral
+`set_package_entrypoint` Plan operation when one package and mapped target are
+proven. Native Act grounds direct `main`, `exports`, and existing-object `bin`
+routes through the lossless JSON editor. Conditional or nested exports,
+ambiguous packages, and non-mapped targets remain manual.
+
 Existing sources use SHA-256 locks; ranges use UTF-8 byte offsets and include
 expected text. Manual items expose missing transformation inputs and block Act
 instead of inventing code. Act evaluates the complete prepared file set

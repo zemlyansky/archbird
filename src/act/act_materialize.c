@@ -17,6 +17,7 @@
 #include "sha256.h"
 #include "utf8.h"
 #include "verification_artifact.h"
+#include "json/package_entrypoint.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -595,20 +596,22 @@ ArchbirdStatus ab_act_executor_insert_make_token(
   return status;
 }
 
-static ArchbirdStatus add_json_pointer_edit(AbActContext *context,
-                                            const AbValue *operation,
-                                            const AbString *item_id) {
-  const AbValue *expected_absent = object_field(operation, "expected_absent");
-  const AbValue *expected = object_field(operation, "expected");
-  const AbValue *replacement_value = object_field(operation, "replacement");
-  const AbValue *pointer = object_field(operation, "pointer");
+ArchbirdStatus ab_act_executor_json_pointer_edit(
+    AbActContext *context, const AbString *item_id, const AbString *path,
+    const AbString *pointer, int expected_absent, const AbValue *expected,
+    const AbValue *replacement_value) {
   ArchbirdJsonPointerEditOptions options;
   ArchbirdJsonPointerEditResult result;
   AbBuffer expected_json;
   AbBuffer replacement_json;
   AbBuffer replacement;
   size_t work_index = 0;
-  ArchbirdStatus status = locked_source_work(context, operation, &work_index);
+  ArchbirdStatus status;
+  if (!context || !item_id || !path || !pointer || !replacement_value ||
+      (expected_absent != 0 && expected_absent != 1) ||
+      (expected_absent && expected) || (!expected_absent && !expected))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = source_work(context, path, &work_index);
   ab_buffer_init(&expected_json, context->engine);
   ab_buffer_init(&replacement_json, context->engine);
   ab_buffer_init(&replacement, context->engine);
@@ -619,9 +622,9 @@ static ArchbirdStatus add_json_pointer_edit(AbActContext *context,
   archbird_json_pointer_edit_options_init(&options);
   options.source_sha256 = context->works[work_index].before_sha256;
   options.source_sha256_length = 64;
-  options.pointer = (const uint8_t *)pointer->as.text.data;
-  options.pointer_length = pointer->as.text.length;
-  options.expected_absent = expected_absent->as.boolean != 0;
+  options.pointer = (const uint8_t *)pointer->data;
+  options.pointer_length = pointer->length;
+  options.expected_absent = expected_absent;
   options.expected_json = expected ? expected_json.data : NULL;
   options.expected_json_length = expected ? expected_json.length : 0;
   options.replacement_json = replacement_json.data;
@@ -639,6 +642,24 @@ static ArchbirdStatus add_json_pointer_edit(AbActContext *context,
   ab_buffer_free(&replacement_json);
   ab_buffer_free(&expected_json);
   return status;
+}
+
+static ArchbirdStatus add_json_pointer_edit(AbActContext *context,
+                                            const AbValue *operation,
+                                            const AbString *item_id) {
+  const AbValue *expected_absent = object_field(operation, "expected_absent");
+  const AbValue *expected = object_field(operation, "expected");
+  const AbValue *replacement = object_field(operation, "replacement");
+  const AbValue *path = object_field(operation, "path");
+  const AbValue *pointer = object_field(operation, "pointer");
+  size_t work_index;
+  ArchbirdStatus status = locked_source_work(context, operation, &work_index);
+  (void)work_index;
+  if (status != ARCHBIRD_OK)
+    return status;
+  return ab_act_executor_json_pointer_edit(
+      context, item_id, &path->as.text, &pointer->as.text,
+      expected_absent->as.boolean != 0, expected, replacement);
 }
 
 static ArchbirdStatus collect_operation(AbActContext *context,
@@ -668,6 +689,9 @@ static ArchbirdStatus collect_operation(AbActContext *context,
       return status;
     return add_json_pointer_edit(context, operation, &item_id->as.text);
   }
+  if (ab_artifact_text_is(action, "set_package_entrypoint"))
+    return ab_act_json_package_entrypoint(context, operation,
+                                          &item_id->as.text);
   if (ab_artifact_text_is(action, "add_provider_capability") ||
       ab_artifact_text_is(action, "remove_provider_capability") ||
       ab_artifact_text_is(action, "rename_provider_capability")) {

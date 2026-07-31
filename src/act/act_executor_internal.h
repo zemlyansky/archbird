@@ -24,5 +24,9 @@ ArchbirdStatus ab_act_executor_insert_make_token(
     size_t start, const uint8_t *replacement, size_t replacement_length,
     const AbString *variable, const AbString *anchor, const AbString *token,
     ArchbirdMakeVariableTokenPosition position);
+ArchbirdStatus ab_act_executor_json_pointer_edit(
+    AbActContext *context, const AbString *item_id, const AbString *path,
+    const AbString *pointer, int expected_absent, const AbValue *expected,
+    const AbValue *replacement);
 
 #endif

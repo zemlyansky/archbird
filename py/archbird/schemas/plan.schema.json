@@ -425,6 +425,26 @@
         }
       ]
     },
+    "setPackageEntrypoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "package", "path", "route", "target"],
+      "properties": {
+        "action": {"const": "set_package_entrypoint"},
+        "package": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "route": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "target": {"$ref": "#/$defs/repositoryPath"}
+      }
+    },
     "providerCapabilityRename": {
       "type": "object",
       "additionalProperties": false,
@@ -689,6 +709,7 @@
         {"$ref": "#/$defs/deleteFile"},
         {"$ref": "#/$defs/moveFile"},
         {"$ref": "#/$defs/jsonPointerEdit"},
+        {"$ref": "#/$defs/setPackageEntrypoint"},
         {"$ref": "#/$defs/providerCapability"},
         {"$ref": "#/$defs/providerCapabilityRename"},
         {"$ref": "#/$defs/declareSymbol"},

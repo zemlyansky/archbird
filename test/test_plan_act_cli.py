@@ -195,6 +195,109 @@ class PlanActCliTest(unittest.TestCase):
         )
         self.assertIn("legacy.py", replay.stderr.decode())
 
+    def test_package_entrypoint_plan_uses_lossless_native_json_edits(self) -> None:
+        cases = (
+            ("main", None, "main", "js/index.js"),
+            ("exports", "js/runtime.js", "exports:.", "./js/index.js"),
+        )
+        for name, existing, route, expected in cases:
+            with self.subTest(route=route):
+                project = self.root / name
+                shutil.copytree(SAMPLE_FIXTURE, project)
+                package_path = project / "package.json"
+                package = json.loads(package_path.read_bytes())
+                if route == "main":
+                    package.pop("main")
+                else:
+                    package["exports"]["."] = existing
+                    configuration_path = project / "archbird.json"
+                    configuration = json.loads(configuration_path.read_bytes())
+                    configuration["constraints"]["REQUIRED-ENTRYPOINT-001"][
+                        "route"
+                    ] = route
+                    configuration_path.write_text(
+                        json.dumps(configuration, indent=2) + "\n"
+                    )
+                package_path.write_text(json.dumps(package, indent=2) + "\n")
+                plan_path = self.plan_path(f"{name}-entrypoint-plan.json")
+                run(
+                    "plan",
+                    "REQUIRED-ENTRYPOINT-001",
+                    "--root",
+                    str(project),
+                    "--pretty",
+                    "--output",
+                    str(plan_path),
+                )
+                plan = json.loads(plan_path.read_bytes())
+                self.assertEqual(len(plan["items"]), 1)
+                self.assertEqual(
+                    plan["items"][0]["operation"],
+                    {
+                        "action": "set_package_entrypoint",
+                        "package": "npm",
+                        "path": "package.json",
+                        "route": route,
+                        "target": "js/index.js",
+                    },
+                )
+                self.assertTrue(plan["items"][0]["executable"])
+                act_path, act = self.accepted_act(
+                    plan_path, f"{name}-entrypoint-act.json", root=project
+                )
+                self.assertEqual(len(act["executors"]), 1)
+                executor = act["executors"][0]
+                self.assertEqual(
+                    executor["capability"],
+                    "archbird.native.json.package-entrypoint@1",
+                )
+                self.assertEqual(executor["item_ids"], [plan["items"][0]["id"]])
+                self.assertTrue(executor["deterministic"])
+                self.assertEqual(executor["matches"], 1)
+                self.assertEqual(executor["reads"], ["package.json"])
+                self.assertEqual(executor["writes"], ["package.json"])
+                run("apply", str(act_path), "--root", str(project))
+                changed = json.loads(package_path.read_bytes())
+                if route == "main":
+                    self.assertEqual(changed["main"], expected)
+                else:
+                    self.assertEqual(changed["exports"]["."], expected)
+                run("verify", "--root", str(project), "--check")
+
+    def test_conditional_package_export_remains_manual(self) -> None:
+        project = self.root / "conditional-export"
+        shutil.copytree(SAMPLE_FIXTURE, project)
+        package_path = project / "package.json"
+        package = json.loads(package_path.read_bytes())
+        package["exports"]["."] = {
+            "import": "./js/runtime.js",
+            "require": "./js/runtime.js",
+        }
+        package_path.write_text(json.dumps(package, indent=2) + "\n")
+        configuration_path = project / "archbird.json"
+        configuration = json.loads(configuration_path.read_bytes())
+        configuration["constraints"]["REQUIRED-ENTRYPOINT-001"][
+            "route"
+        ] = "exports:."
+        configuration_path.write_text(json.dumps(configuration, indent=2) + "\n")
+        plan_path = self.plan_path("conditional-entrypoint-plan.json")
+        run(
+            "plan",
+            "REQUIRED-ENTRYPOINT-001",
+            "--root",
+            str(project),
+            "--pretty",
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(plan["items"][0]["operation"]["action"], "manual")
+        self.assertFalse(plan["items"][0]["executable"])
+        self.assertIn(
+            "nested or conditional",
+            plan["items"][0]["non_executable_reasons"][0],
+        )
+
     def test_forbidden_top_level_symbol_is_removed_exactly(self) -> None:
         self.configure(
             {

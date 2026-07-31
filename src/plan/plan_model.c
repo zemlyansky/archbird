@@ -390,6 +390,17 @@ static int validate_operation(const AbValue *value, int *out_manual,
            bounded_text(ab_value_member(value, "pointer"), AB_PLAN_MAX_METADATA,
                         0);
   }
+  if (text_is(action, "set_package_entrypoint")) {
+    static const char *const fields[] = {"action", "package", "path", "route",
+                                         "target"};
+    return object_exact(value, fields, 5) &&
+           bounded_text(ab_value_member(value, "package"), AB_PLAN_MAX_METADATA,
+                        1) &&
+           repository_path(ab_value_member(value, "path")) &&
+           bounded_text(ab_value_member(value, "route"), AB_PLAN_MAX_METADATA,
+                        1) &&
+           repository_path(ab_value_member(value, "target"));
+  }
   if (text_is(action, "add_provider_capability") ||
       text_is(action, "remove_provider_capability") ||
       text_is(action, "rename_provider_capability")) {
