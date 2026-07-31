@@ -1155,6 +1155,40 @@ static int boolean_option(const AbValue *check, const char *name) {
   return value && value->kind == AB_VALUE_BOOL && value->as.boolean;
 }
 
+static size_t missing_provider_count(const AbProjectionItem *item,
+                                     size_t *out_provider_count) {
+  const AbValue *providers = item->value.kind == AB_VALUE_OBJECT
+                                 ? ab_value_member(&item->value, "providers")
+                                 : NULL;
+  const AbValue *declarations =
+      item->value.kind == AB_VALUE_OBJECT
+          ? ab_value_member(&item->value, "declarations")
+          : NULL;
+  size_t missing = 0;
+  size_t provider_index;
+  *out_provider_count = 0;
+  if (!providers || providers->kind != AB_VALUE_ARRAY || !declarations ||
+      declarations->kind != AB_VALUE_ARRAY)
+    return 0;
+  *out_provider_count = providers->as.array.count;
+  for (provider_index = 0; provider_index < providers->as.array.count;
+       provider_index++) {
+    const AbValue *provider = &providers->as.array.items[provider_index];
+    size_t declaration_index;
+    int present = 0;
+    for (declaration_index = 0;
+         declaration_index < declarations->as.array.count; declaration_index++)
+      if (ab_value_equal(provider,
+                         &declarations->as.array.items[declaration_index])) {
+        present = 1;
+        break;
+      }
+    if (!present)
+      missing++;
+  }
+  return missing;
+}
+
 static ArchbirdStatus provider_surface_check(ArchbirdEngine *engine,
                                              const AbValue *check,
                                              const AbProjectionData *actual,
@@ -1228,6 +1262,9 @@ static ArchbirdStatus provider_surface_check(ArchbirdEngine *engine,
     const AbString *used = item_attribute(item, "used");
     const char *comparison = NULL;
     const char *prefix = NULL;
+    char provider_prefix[192];
+    size_t provider_count = 0;
+    size_t providers_missing = 0;
     if (!string_literal(&item->state, "current")) {
       AbVerifyFinding finding = {0};
       status = item_unknown_finding(engine, check, item, &finding);
@@ -1249,6 +1286,20 @@ static ArchbirdStatus provider_surface_check(ArchbirdEngine *engine,
                string_literal(resolution, ambiguous_text)) {
       comparison = "ambiguous";
       prefix = "provider capability is ambiguous: ";
+    } else if (boolean_option(check, "require_all_providers") &&
+               (providers_missing =
+                    missing_provider_count(item, &provider_count)) != 0) {
+      int length =
+          snprintf(provider_prefix, sizeof(provider_prefix),
+                   "provider capability is absent from %zu of %zu configured "
+                   "providers: ",
+                   providers_missing, provider_count);
+      if (length < 0 || (size_t)length >= sizeof(provider_prefix))
+        return archbird_error_set(
+            engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+            "provider-surface coverage message is too long");
+      comparison = "missing";
+      prefix = provider_prefix;
     }
     if (comparison) {
       AbVerifyFinding finding = {0};

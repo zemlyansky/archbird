@@ -956,9 +956,9 @@ static ArchbirdStatus compile_typed(ConstraintExecution *execution,
       status = object_add_copy(execution->engine, &projection, "name", surface);
     assertion = "provider_surface";
     if (status == ARCHBIRD_OK) {
-      static const char *const options[] = {"declared", "forbid_ambiguous",
-                                            "forbid_unregistered",
-                                            "forbid_unresolved"};
+      static const char *const options[] = {
+          "declared", "forbid_ambiguous", "forbid_unregistered",
+          "forbid_unresolved", "require_all_providers"};
       size_t option;
       for (option = 0; status == ARCHBIRD_OK &&
                        option < sizeof(options) / sizeof(options[0]);

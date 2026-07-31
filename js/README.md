@@ -386,6 +386,11 @@ cover set/value equality, mapped equality, directional subsets, cardinality,
 numeric bounds, graph edges, acyclicity, minimum test routes, and observation
 equality.
 
+`provider_surface` normally treats configured providers as one combined
+declaration surface. Set `require_all_providers: true` when every capability
+must appear in every configured provider. Verify then reports the exact
+missing provider witnesses.
+
 A projection result is exhaustive for its declared Map domain. If discovery,
 provider, resource, freshness, or source-lock evidence prevents a complete
 answer, the operand is partial or unknown and cannot make a constraint pass.
@@ -505,13 +510,13 @@ Unrelated same-name declarations outside the selected projection scope are not
 renamed. Candidate or unresolved calls, duplicate targets, and unsupported
 inputs block Act instead of producing a partial rename.
 
-For a `provider_surface` issue, the same reviewed rename can replace one stale
-registration with a uniquely resolved surface member when the declaration
-comes from one Make provider recorded in the canonical Map. Plan emits the
-neutral `rename_provider_capability` objective and configured provider
-identity. Act/Make validates the current configuration and Map, derives the
-source spelling and exact source lock, and requires one direct token match.
-Ambiguous, missing, duplicate, or non-Make cases remain manual or block Act.
+For a `provider_surface` issue, Plan can add a uniquely missing Make
+registration or use a reviewed rename to replace one stale registration with
+a uniquely resolved surface member. Plan emits a neutral provider objective
+and configured provider identity. Act/Make validates the current configuration
+and Map, derives the source spelling and exact source lock, and requires one
+direct token match. Ambiguous, duplicate, unresolved, or missing non-Make
+provider cases remain manual or block Act.
 If the replacement capability is already registered, Plan emits removal of
 the stale old capability rather than a duplicate registration.
 

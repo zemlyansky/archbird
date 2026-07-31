@@ -714,6 +714,21 @@ class PlanActCliTest(unittest.TestCase):
 
     def test_required_provider_surface_derives_exact_make_insertion(self) -> None:
         shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        configuration_path = self.root / "archbird.json"
+        configuration = json.loads(configuration_path.read_text())
+        configuration["bridges"][0]["providers"].append(
+            {
+                "kind": "file_pattern",
+                "path": "src/core.h",
+                "pattern": r"\b(core_[A-Za-z0-9_]+)\s*\(",
+            }
+        )
+        configuration["constraints"]["FFI-SURFACE"][
+            "require_all_providers"
+        ] = True
+        configuration_path.write_text(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+        )
         self.run_surface_gates()
         failed = run(
             "verify",
@@ -723,9 +738,9 @@ class PlanActCliTest(unittest.TestCase):
             "--check",
             expected=1,
         )
-        self.assertIn("provider does not declare core_sum", failed.stdout.decode())
         self.assertIn(
-            "used provider capability is not declared: core_sum",
+            "provider capability is absent from 1 of 2 configured providers: "
+            "core_sum",
             failed.stdout.decode(),
         )
 
@@ -745,7 +760,7 @@ class PlanActCliTest(unittest.TestCase):
         item = plan["items"][0]
         self.assertTrue(item["executable"])
         self.assertEqual(item["provenance"], "derived")
-        self.assertEqual(len(item["origins"]), 2)
+        self.assertEqual(len(item["origins"]), 1)
         self.assertEqual(
             item["operation"],
             {
@@ -781,6 +796,23 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("WASM_EXPORTS = _core_peer _core_sum", makefile.read_text())
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
+
+    def test_provider_surface_union_remains_default(self) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        configuration_path = self.root / "archbird.json"
+        configuration = json.loads(configuration_path.read_text())
+        configuration["bridges"][0]["providers"].append(
+            {
+                "kind": "file_pattern",
+                "path": "src/core.h",
+                "pattern": r"\b(core_[A-Za-z0-9_]+)\s*\(",
+            }
+        )
+        configuration_path.write_text(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+        )
+
+        run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
 
     def test_required_c_declaration_and_registration_form_one_plan(self) -> None:
         shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)

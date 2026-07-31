@@ -393,8 +393,33 @@ try {
     registrationRoot,
     { recursive: true },
   );
+  const registrationConfigurationPath = path.join(
+    registrationRoot,
+    "archbird.json",
+  );
+  const registrationConfiguration = JSON.parse(
+    fs.readFileSync(registrationConfigurationPath, "utf8"),
+  );
+  registrationConfiguration.bridges[0].providers.push({
+    kind: "file_pattern",
+    path: "src/core.h",
+    pattern: "\\b(core_[A-Za-z0-9_]+)\\s*\\(",
+  });
+  registrationConfiguration.constraints["FFI-SURFACE"]
+    .require_all_providers = true;
+  fs.writeFileSync(
+    registrationConfigurationPath,
+    JSON.stringify(registrationConfiguration),
+  );
   const registrationPlan = path.join(artifacts, "registration-plan.json");
   const registrationAct = path.join(artifacts, "registration-act.json");
+  const incompleteRegistration = run([
+    "verify", "FFI-SURFACE", "--root", registrationRoot, "--check",
+  ], 1);
+  assert.match(
+    Buffer.from(incompleteRegistration.stdout).toString("utf8"),
+    /provider capability is absent from 1 of 2 configured providers: core_sum/,
+  );
   run([
     "plan", "FFI-SURFACE", "--root", registrationRoot,
     "--output", registrationPlan,
@@ -405,7 +430,7 @@ try {
   assert.equal(registrationDocument.items.length, 1);
   assert.equal(registrationDocument.items[0].executable, true);
   assert.equal(registrationDocument.items[0].provenance, "derived");
-  assert.equal(registrationDocument.items[0].origins.length, 2);
+  assert.equal(registrationDocument.items[0].origins.length, 1);
   assert.deepEqual(registrationDocument.items[0].operation, {
     action: "add_provider_capability",
     capability: "core_sum",

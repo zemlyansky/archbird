@@ -515,7 +515,8 @@ ArchbirdStatus ab_act_make_provider_capability(AbActContext *context,
   if (text_is(action, "add_provider_capability")) {
     row = find_named_row(field(provider.mapped_surface, "names"),
                          &capability->as.text);
-    if (!target_is_implemented(row) || row_has_provider(row, &provider))
+    if ((!target_is_resolved(row) && !target_is_implemented(row)) ||
+        row_has_provider(row, &provider))
       return reject(context, ARCHBIRD_CONFLICT,
                     "current Map does not require this provider capability");
     return ground_insertion(context, &provider, &capability->as.text, item_id);

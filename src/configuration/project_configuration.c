@@ -634,6 +634,7 @@ static int constraint_fields_allowed(const AbValue *definition,
                                                  "forbid_unregistered",
                                                  "forbid_unresolved",
                                                  "include",
+                                                 "require_all_providers",
                                                  "strip_prefix",
                                                  "strip_suffix",
                                                  "surface"};
@@ -767,8 +768,9 @@ validate_constraint_definitions(ArchbirdEngine *engine,
       "selectors", "symbols",       "tags",    "target_paths",
       "to_paths"};
   static const char *const booleans[] = {
-      "allow_empty",         "configured_only",   "forbid_ambiguous",
-      "forbid_unregistered", "forbid_unresolved", "public_only"};
+      "allow_empty",          "configured_only",   "forbid_ambiguous",
+      "forbid_unregistered",  "forbid_unresolved", "public_only",
+      "require_all_providers"};
   size_t index;
   for (index = 0; index < constraints->as.object.count; index++) {
     const AbObjectField *constraint = &constraints->as.object.fields[index];

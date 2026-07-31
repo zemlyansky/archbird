@@ -472,6 +472,7 @@
         "forbid_unregistered": {"type": "boolean"},
         "forbid_unresolved": {"type": "boolean"},
         "forbid_ambiguous": {"type": "boolean"},
+        "require_all_providers": {"type": "boolean"},
         "waivers": {
           "type": "array",
           "minItems": 1,
@@ -529,7 +530,7 @@
         },
         {
           "if": {"properties": {"kind": {"const": "provider_surface"}}, "required": ["kind"]},
-          "then": {"propertyNames": {"enum": ["id", "kind", "owner", "rationale", "requirement", "severity", "tags", "waivers", "declared", "exclude", "forbid_ambiguous", "forbid_unregistered", "forbid_unresolved", "include", "strip_prefix", "strip_suffix", "surface"]}}
+          "then": {"propertyNames": {"enum": ["id", "kind", "owner", "rationale", "requirement", "severity", "tags", "waivers", "declared", "exclude", "forbid_ambiguous", "forbid_unregistered", "forbid_unresolved", "include", "require_all_providers", "strip_prefix", "strip_suffix", "surface"]}}
         },
         {
           "if": {"properties": {"kind": {"enum": ["allowed_component_edges", "forbidden_component_edges", "required_component_edges"]}}, "required": ["kind"]},

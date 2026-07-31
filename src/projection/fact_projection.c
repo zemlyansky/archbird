@@ -1022,12 +1022,21 @@ static int valid_test_row(const AbValue *test) {
 
 static int valid_surface_row(const AbValue *surface) {
   const AbValue *names = ab_value_member(surface, "names");
+  const AbValue *providers = ab_value_member(surface, "providers");
   size_t name_index;
   if (!surface || surface->kind != AB_VALUE_OBJECT ||
       !ab_projection_nonblank(ab_value_member(surface, "name")) ||
       !ab_projection_nonblank(ab_value_member(surface, "kind")) || !names ||
-      names->kind != AB_VALUE_ARRAY)
+      names->kind != AB_VALUE_ARRAY || !providers ||
+      providers->kind != AB_VALUE_ARRAY)
     return 0;
+  for (name_index = 0; name_index < providers->as.array.count; name_index++) {
+    const AbValue *provider = &providers->as.array.items[name_index];
+    if (!provider || provider->kind != AB_VALUE_OBJECT ||
+        !ab_projection_path_is_repository(ab_value_member(provider, "path")) ||
+        !ab_projection_nonblank(ab_value_member(provider, "source")))
+      return 0;
+  }
   for (name_index = 0; name_index < names->as.array.count; name_index++) {
     const AbValue *row = &names->as.array.items[name_index];
     const AbValue *ignored = ab_value_member(row, "ignored");
@@ -4361,7 +4370,7 @@ static ArchbirdStatus object_field_name(ArchbirdEngine *engine,
 }
 
 static ArchbirdStatus surface_value(ArchbirdEngine *engine, const AbValue *row,
-                                    AbValue *out) {
+                                    const AbValue *providers, AbValue *out) {
   const AbValue *name = ab_value_member(row, "name");
   const AbValue *declaration = ab_value_member(row, "declaration");
   const AbValue *resolution = ab_value_member(row, "resolution");
@@ -4370,13 +4379,16 @@ static ArchbirdStatus surface_value(ArchbirdEngine *engine, const AbValue *row,
   const AbValue *implementation_signatures =
       ab_value_member(row, "implementation_signatures");
   const AbValue *uses = ab_value_member(row, "uses");
+  const AbValue *declarations = ab_value_member(row, "declarations");
   int declared = ab_projection_value_is(declaration, "declared");
   int used = uses && uses->kind == AB_VALUE_ARRAY && uses->as.array.count != 0;
   static const char *const names[] = {
       "declaration",
       "declaration_signatures",
+      "declarations",
       "implementation_signatures",
       "name",
+      "providers",
       "registered",
       "resolution",
       "unregistered_use",
@@ -4384,18 +4396,16 @@ static ArchbirdStatus surface_value(ArchbirdEngine *engine, const AbValue *row,
       "used",
   };
   const AbValue *copies[] = {
-      declaration,
-      declaration_signatures,
-      implementation_signatures,
-      name,
-      NULL,
-      resolution,
-      NULL,
-      NULL,
+      declaration,  declaration_signatures,
+      declarations, implementation_signatures,
+      name,         providers,
+      NULL,         resolution,
+      NULL,         NULL,
       NULL,
   };
   int booleans[] = {
-      0, 0, 0, 0, declared, 0, !declared && used, declared && !used, used};
+      0,   0, 0, 0, 0, 0, declared, 0, !declared && used, declared && !used,
+      used};
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   memset(out, 0, sizeof(*out));
@@ -4500,6 +4510,7 @@ static ArchbirdStatus extract_provider_surface(AbProjectionContext *context,
   const AbValue *surface_name;
   const AbValue *surface_kind;
   const AbValue *names;
+  const AbValue *providers;
   size_t index;
   ArchbirdStatus status;
   if (!surfaces || surfaces->kind != AB_VALUE_ARRAY)
@@ -4514,7 +4525,9 @@ static ArchbirdStatus extract_provider_surface(AbProjectionContext *context,
   surface_name = surface ? ab_value_member(surface, "name") : NULL;
   surface_kind = surface ? ab_value_member(surface, "kind") : NULL;
   names = surface ? ab_value_member(surface, "names") : NULL;
-  if (!surface || !names || names->kind != AB_VALUE_ARRAY) {
+  providers = surface ? ab_value_member(surface, "providers") : NULL;
+  if (!surface || !names || names->kind != AB_VALUE_ARRAY || !providers ||
+      providers->kind != AB_VALUE_ARRAY) {
     char message[512];
     (void)snprintf(message, sizeof(message),
                    "project %.*s: provider surface '%.*s' is absent",
@@ -4554,6 +4567,16 @@ static ArchbirdStatus extract_provider_surface(AbProjectionContext *context,
       ab_string_free(context->engine, &normalized);
       continue;
     }
+    for (path_index = 0;
+         status == ARCHBIRD_OK && path_index < providers->as.array.count;
+         path_index++) {
+      const AbValue *entry = &providers->as.array.items[path_index];
+      const AbValue *path = ab_value_member(entry, "path");
+      const AbValue *source = ab_value_member(entry, "source");
+      status = surface_path_add(context->engine, &paths, &path_count,
+                                &path->as.text, "provider",
+                                source->as.text.data, source->as.text.length);
+    }
     for (path_index = 0; status == ARCHBIRD_OK && declarations &&
                          path_index < declarations->as.array.count;
          path_index++) {
@@ -4589,7 +4612,7 @@ static ArchbirdStatus extract_provider_surface(AbProjectionContext *context,
                                 &candidates->as.array.items[path_index].as.text,
                                 "implementation", "", 0);
     if (status == ARCHBIRD_OK)
-      status = surface_value(context->engine, row, &value);
+      status = surface_value(context->engine, row, providers, &value);
     if (status == ARCHBIRD_OK)
       status = ab_projection_item_init(context->engine, &item, &normalized,
                                        &normalized, &value);

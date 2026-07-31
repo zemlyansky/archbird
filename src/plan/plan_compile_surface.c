@@ -99,12 +99,37 @@ static int same_provider(const SurfaceMakeProvider *provider,
          ab_string_equal(&provider->variable, &candidate.variable);
 }
 
-static int only_make_provider(const AbValue *surface,
-                              SurfaceMakeProvider *out) {
+static int row_has_declaring_provider(const AbValue *row,
+                                      const AbValue *provider) {
+  const AbValue *declarations = field(row, "declarations");
+  size_t index;
+  if (!declarations || declarations->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < declarations->as.array.count; index++)
+    if (ab_value_equal(&declarations->as.array.items[index], provider))
+      return 1;
+  return 0;
+}
+
+static int unique_missing_make_provider(const AbValue *surface,
+                                        const AbValue *row,
+                                        SurfaceMakeProvider *out) {
   const AbValue *providers = field(surface, "providers");
-  return providers && providers->kind == AB_VALUE_ARRAY &&
-         providers->as.array.count == 1 &&
-         parse_make_provider(&providers->as.array.items[0], out);
+  size_t index;
+  int found = 0;
+  if (!providers || providers->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < providers->as.array.count; index++) {
+    const AbValue *provider = &providers->as.array.items[index];
+    SurfaceMakeProvider candidate;
+    if (row_has_declaring_provider(row, provider))
+      continue;
+    if (!parse_make_provider(provider, &candidate) || found)
+      return 0;
+    *out = candidate;
+    found = 1;
+  }
+  return found;
 }
 
 static int row_has_provider(const AbValue *row,
@@ -509,7 +534,6 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
                    int *out_supported) {
   const AbValue *surface_value = field(definition, "name");
   const AbValue *surface;
-  SurfaceMakeProvider provider;
   uint8_t *consumed = NULL;
   size_t insertion_count = 0;
   size_t index;
@@ -520,8 +544,6 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
       !groups->count)
     return ARCHBIRD_OK;
   surface = find_surface(map, &surface_value->as.text);
-  if (!only_make_provider(surface, &provider))
-    return ARCHBIRD_OK;
   consumed = (uint8_t *)ab_calloc(engine, groups->count, sizeof(*consumed));
   if (!consumed)
     return archbird_error_set(
@@ -532,6 +554,7 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
     const AbValue *finding;
     const AbValue *key;
     const AbValue *target;
+    SurfaceMakeProvider provider;
     size_t group_index;
     size_t finding_count = 0;
     size_t finding_index = 0;
@@ -559,6 +582,10 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
     }
     if (group_index != groups->count || !has_missing)
       break;
+    target = find_named_row(field(surface, "names"), &key->as.text);
+    if ((!target_is_resolved(target) && !target_is_implemented(target)) ||
+        !unique_missing_make_provider(surface, target, &provider))
+      break;
     insertion = &insertions[insertion_count];
     insertion->findings = (const AbValue **)ab_calloc(
         engine, finding_count, sizeof(*insertion->findings));
@@ -583,9 +610,6 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
       for (row_index = 0; row_index < group->count; row_index++)
         insertion->findings[finding_index++] = group->rows[row_index];
     }
-    target = find_named_row(field(surface, "names"), &key->as.text);
-    if (!target_is_implemented(target))
-      break;
     insertion_count++;
   }
   if (status == ARCHBIRD_OK && index == groups->count) {

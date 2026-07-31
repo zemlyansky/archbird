@@ -27,6 +27,21 @@
       }
     },
     {
+      "id": "provider-parity-must-be-boolean",
+      "valid": false,
+      "configuration": {
+        "constraints": {
+          "PROVIDER-PARITY": {
+            "kind": "provider_surface",
+            "surface": "public",
+            "require_all_providers": "yes",
+            "owner": "architecture",
+            "rationale": "Provider parity is an explicit boolean policy."
+          }
+        }
+      }
+    },
+    {
       "id": "minimal",
       "valid": true,
       "configuration": {
@@ -130,7 +145,7 @@
           "FORBIDDEN-PATHS": {"kind": "forbidden_paths", "paths": ["build/**"], "owner": "architecture", "rationale": "Exercise the typed contract."},
           "FORBIDDEN-SYMBOLS": {"kind": "forbidden_symbols", "symbols": ["unsafe"], "paths": ["src/**"], "owner": "architecture", "rationale": "Exercise the typed contract."},
           "MAX-FILE-BYTES": {"kind": "max_file_bytes", "max": 1048576, "allow_empty": false, "owner": "architecture", "rationale": "Exercise the typed contract."},
-          "PROVIDER-SURFACE": {"kind": "provider_surface", "surface": "public", "declared": ["open"], "forbid_unresolved": true, "owner": "architecture", "rationale": "Exercise the typed contract."},
+          "PROVIDER-SURFACE": {"kind": "provider_surface", "surface": "public", "declared": ["open"], "forbid_unresolved": true, "require_all_providers": true, "owner": "architecture", "rationale": "Exercise the typed contract."},
           "REQUIRED-BRIDGE": {"kind": "required_bridge", "bridge": "python-native", "owner": "architecture", "rationale": "Exercise the typed contract."},
           "REQUIRED-COMPONENT-EDGES": {"kind": "required_component_edges", "edges": [], "owner": "architecture", "rationale": "Exercise the typed contract."},
           "REQUIRED-FILE-EDGE": {"kind": "required_file_edge", "edge_kind": "import", "source": "src/a.c", "target": "src/b.c", "name": "open", "owner": "architecture", "rationale": "Exercise the typed contract."},
