@@ -2,6 +2,7 @@
 
 #include "act_executor_internal.h"
 #include "act_source.h"
+#include "act_submission.h"
 #include "artifact_validation.h"
 #include "base64.h"
 #include "c/declaration.h"
@@ -525,6 +526,35 @@ static ArchbirdStatus add_replace_range(AbActContext *context,
                   replacement->as.text.length, NULL);
 }
 
+static ArchbirdStatus
+add_asserted_file_submission(AbActContext *context, const AbValue *operation,
+                             const AbString *item_id,
+                             const AbActSubmission *submission) {
+  const AbValue *path = object_field(operation, "path");
+  size_t work_index;
+  const AbActWork *work;
+  ArchbirdStatus status = ab_act_executor_begin(
+      context, item_id, "archbird.asserted.source.replace-file@1");
+  if (status != ARCHBIRD_OK)
+    return status;
+  status = source_work(context, &path->as.text, &work_index);
+  if (status != ARCHBIRD_OK)
+    return status;
+  work = &context->works[work_index];
+  if (work->before_length == submission->replacement_length &&
+      (!work->before_length ||
+       memcmp(work->before, submission->replacement, work->before_length) == 0))
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     "asserted replacement does not change the source");
+  status = ab_utf8_validate(context->engine, work->before, work->before_length);
+  if (status != ARCHBIRD_OK)
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     "asserted full-file replacement requires UTF-8 source");
+  return add_edit(context, work_index, item_id, 0, work->before_length,
+                  submission->replacement, submission->replacement_length,
+                  NULL);
+}
+
 static ArchbirdStatus locked_source_work(AbActContext *context,
                                          const AbValue *operation,
                                          size_t *out_index) {
@@ -665,7 +695,8 @@ static ArchbirdStatus add_json_pointer_edit(AbActContext *context,
 }
 
 static ArchbirdStatus collect_operation(AbActContext *context,
-                                        const AbValue *item) {
+                                        const AbValue *item,
+                                        AbActSubmissions *submissions) {
   const AbValue *item_id = object_field(item, "id");
   const AbValue *operation = object_field(item, "operation");
   const AbValue *action = object_field(operation, "action");
@@ -674,7 +705,18 @@ static ArchbirdStatus collect_operation(AbActContext *context,
   const AbValue *source_sha;
   size_t work_index = 0;
   ArchbirdStatus status;
-  if (!executable->as.boolean || ab_artifact_text_is(action, "manual"))
+  if (!executable->as.boolean) {
+    AbActSubmission *submission =
+        ab_act_submission_take(submissions, &item_id->as.text);
+    if (submission && ab_artifact_text_is(action, "add_symbol"))
+      return add_asserted_file_submission(context, operation, &item_id->as.text,
+                                          submission);
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     submission
+                         ? "executor submission is incompatible with Plan item"
+                         : "Plan contains a manual or blocked item");
+  }
+  if (ab_artifact_text_is(action, "manual"))
     return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
                      "Plan contains a manual or blocked item");
   if (ab_artifact_text_is(action, "replace_range")) {
@@ -1296,9 +1338,11 @@ ArchbirdStatus archbird_act_materialize(
     const uint8_t *plan_json, size_t plan_length, const uint8_t *map_json,
     size_t map_length, const uint8_t *verification_json,
     size_t verification_length, const uint8_t *source_metadata_json,
-    size_t source_metadata_length, uint32_t json_flags,
+    size_t source_metadata_length, const uint8_t *executor_submissions_json,
+    size_t executor_submissions_length, uint32_t json_flags,
     ArchbirdWriteFn write_fn, void *user_data) {
   AbPlan plan;
+  AbActSubmissions submissions = {0};
   AbValue map = {0};
   AbValue metadata = {0};
   AbVerificationArtifact verification = {0};
@@ -1308,7 +1352,9 @@ ArchbirdStatus archbird_act_materialize(
   size_t index;
   if (!engine || !project || !plan_json || !plan_length || !map_json ||
       !map_length || !verification_json || !verification_length ||
-      !source_metadata_json || !source_metadata_length || !write_fn ||
+      !source_metadata_json || !source_metadata_length ||
+      (!executor_submissions_json && executor_submissions_length) ||
+      !write_fn ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(&plan, 0, sizeof(plan));
@@ -1327,6 +1373,9 @@ ArchbirdStatus archbird_act_materialize(
   if (status == ARCHBIRD_OK)
     status = ab_act_source_metadata_load(engine, source_metadata_json,
                                          source_metadata_length, &metadata);
+  if (status == ARCHBIRD_OK)
+    status = ab_act_submissions_load(engine, executor_submissions_json,
+                                     executor_submissions_length, &submissions);
   if (status == ARCHBIRD_OK) {
     context.map = &map;
     context.metadata = &metadata;
@@ -1342,7 +1391,10 @@ ArchbirdStatus archbird_act_materialize(
   }
   for (index = 0; status == ARCHBIRD_OK && index < plan.items->as.array.count;
        index++)
-    status = collect_operation(&context, &plan.items->as.array.items[index]);
+    status = collect_operation(&context, &plan.items->as.array.items[index],
+                               &submissions);
+  if (status == ARCHBIRD_OK)
+    status = ab_act_submissions_require_consumed(engine, &submissions);
   if (status == ARCHBIRD_OK && context.edit_count > 1)
     qsort(context.edits, context.edit_count, sizeof(*context.edits),
           edit_compare);
@@ -1410,6 +1462,7 @@ ArchbirdStatus archbird_act_materialize(
   ab_free(engine, context.works);
   ab_free(engine, order);
   ab_verification_artifact_free(&verification);
+  ab_act_submissions_free(engine, &submissions);
   ab_value_free(engine, &metadata);
   ab_value_free(engine, &map);
   ab_plan_free(engine, &plan);

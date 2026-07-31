@@ -1163,12 +1163,18 @@ def act_validate(input: bytes) -> None:
 
 
 def plan_source_requirements(
-    plan_json: bytes, *, pretty: bool = False
+    plan_json: bytes,
+    executor_submissions_json: bytes = b"",
+    *,
+    pretty: bool = False,
 ) -> bytes:
     plan = _bytes(plan_json, "Plan")
+    submissions = _bytes(
+        executor_submissions_json, "executor submissions"
+    )
     return _simple_render(
         "archbird_plan_source_requirements",
-        [plan],
+        [plan, submissions],
         flags=_JSON_PRETTY if pretty else 0,
         saved_artifact=True,
     )
@@ -1192,6 +1198,7 @@ def act_materialize(
     map_json: bytes,
     verification_json: bytes,
     source_metadata_json: bytes,
+    executor_submissions_json: bytes = b"",
     *,
     pretty: bool = False,
 ) -> bytes:
@@ -1199,11 +1206,16 @@ def act_materialize(
     map_document = _bytes(map_json, "Map")
     verification = _bytes(verification_json, "Verification")
     metadata = _bytes(source_metadata_json, "source metadata")
+    submissions = _bytes(
+        executor_submissions_json, "executor submissions"
+    )
     function = _declare(
         "archbird_act_materialize",
         [
             _POINTER,
             _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
@@ -1230,6 +1242,8 @@ def act_materialize(
             len(verification),
             metadata,
             len(metadata),
+            submissions,
+            len(submissions),
             _JSON_PRETTY if pretty else 0,
             write,
             None,

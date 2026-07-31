@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -54,7 +55,11 @@ from .act_transport import (
     act_overlay,
     render_act,
 )
-from ._plan_limits import MAX_ACT_BYTES, MAX_PLAN_BYTES
+from ._plan_limits import (
+    MAX_ACT_BYTES,
+    MAX_OPERATION_TEXT_BYTES,
+    MAX_PLAN_BYTES,
+)
 from .project_configuration import (
     compile_named_query,
 )
@@ -996,6 +1001,16 @@ def act_parser() -> argparse.ArgumentParser:
         help="supply configuration resolution for an additional saved Map",
     )
     result.add_argument(
+        "--submit",
+        action="append",
+        default=[],
+        metavar="ITEM=FILE",
+        help=(
+            "submit reviewed full-file content for one exact unresolved "
+            "Plan item"
+        ),
+    )
+    result.add_argument(
         "--format",
         choices=("markdown", "json", "patch"),
         default="markdown",
@@ -1097,6 +1112,88 @@ def _repository_artifact_path(
     except ValueError:
         return None
     return relative if relative and relative != "." else None
+
+
+def _read_bounded_regular(
+    path: Path, maximum: int, description: str
+) -> bytes:
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{description} must be a regular non-symlink file")
+    if before.st_size > maximum:
+        raise ValueError(f"{description} exceeds the {maximum}-byte limit")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_dev != before.st_dev
+            or opened.st_ino != before.st_ino
+        ):
+            raise OSError(f"{description} changed while opening")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, maximum + 1))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > maximum:
+                raise ValueError(
+                    f"{description} exceeds the {maximum}-byte limit"
+                )
+        after = os.fstat(descriptor)
+        if (
+            after.st_dev != opened.st_dev
+            or after.st_ino != opened.st_ino
+            or after.st_size != opened.st_size
+            or after.st_mtime_ns != opened.st_mtime_ns
+        ):
+            raise OSError(f"{description} changed while reading")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _act_executor_submissions(
+    values: Sequence[str],
+) -> tuple[bytes, tuple[Path, ...]]:
+    rows: list[dict[str, str]] = []
+    files: list[Path] = []
+    seen: set[str] = set()
+    for value in values:
+        item_id, separator, raw_path = value.partition("=")
+        if not separator or not item_id or not raw_path:
+            raise ValueError("--submit expects ITEM=FILE")
+        if item_id in seen:
+            raise ValueError(f"--submit repeats Plan item {item_id}")
+        replacement_path = Path(raw_path).resolve()
+        content = _read_bounded_regular(
+            replacement_path,
+            MAX_OPERATION_TEXT_BYTES,
+            "executor submission",
+        )
+        rows.append(
+            {
+                "content_base64": base64.b64encode(content).decode("ascii"),
+                "item_id": item_id,
+                "kind": "replace_file",
+            }
+        )
+        files.append(replacement_path)
+        seen.add(item_id)
+    if not rows:
+        return b"", ()
+    rows.sort(key=lambda row: row["item_id"])
+    encoded = json.dumps(
+        {"items": rows},
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return _native.json_canonicalize(encoded), tuple(files)
 
 
 def _write_project_map(project: Project, output: str, *, pretty: bool) -> None:
@@ -2708,11 +2805,18 @@ def _act_main(argv: Sequence[str]) -> int:
                 f"Plan exceeds the {MAX_PLAN_BYTES}-byte input limit"
             )
         repository = Path(args.root_override or ".").resolve()
+        executor_submissions, submission_paths = _act_executor_submissions(
+            args.submit
+        )
         transient_artifacts = [
             path
             for path in (
                 _repository_artifact_path(repository, str(plan_path)),
                 _repository_artifact_path(repository, args.output),
+                *(
+                    _repository_artifact_path(repository, str(path))
+                    for path in submission_paths
+                ),
             )
             if path is not None
         ]
@@ -2738,13 +2842,16 @@ def _act_main(argv: Sequence[str]) -> int:
             policy_date=policy_date,
             pretty=False,
         )
-        source_metadata = observe_plan_sources(repository, plan_bytes)
+        source_metadata = observe_plan_sources(
+            repository, plan_bytes, executor_submissions
+        )
         materialized_act = _native.act_materialize(
             before_project._capsule,
             plan_bytes,
             before_map,
             before_verification,
             source_metadata,
+            executor_submissions,
         )
         overlay = act_overlay(materialized_act)
         after_config_json = config_json

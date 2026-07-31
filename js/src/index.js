@@ -1676,8 +1676,18 @@ function validateAct(actJson) {
   native.actValidate(Buffer.from(actJson));
 }
 
-function planSourceRequirements(planJson, { pretty = false } = {}) {
-  return native.planSourceRequirements(Buffer.from(planJson), pretty);
+function planSourceRequirements(
+  planJson,
+  {
+    executorSubmissionsJson = Buffer.alloc(0),
+    pretty = false,
+  } = {},
+) {
+  return native.planSourceRequirements(
+    Buffer.from(planJson),
+    Buffer.from(executorSubmissionsJson),
+    pretty,
+  );
 }
 
 function actSourceRequirements(actJson, { pretty = false } = {}) {
@@ -1690,7 +1700,10 @@ function materializeAct(
   mapJson,
   verificationJson,
   sourceMetadataJson,
-  { pretty = false } = {},
+  {
+    executorSubmissionsJson = Buffer.alloc(0),
+    pretty = false,
+  } = {},
 ) {
   if (!(project instanceof Project)) {
     throw new TypeError("Act materialization requires a Project");
@@ -1701,6 +1714,7 @@ function materializeAct(
     Buffer.from(mapJson),
     Buffer.from(verificationJson),
     Buffer.from(sourceMetadataJson),
+    Buffer.from(executorSubmissionsJson),
     pretty,
   );
 }

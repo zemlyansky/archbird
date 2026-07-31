@@ -2,6 +2,7 @@
 
 #include "act_internal.h"
 #include "act_source.h"
+#include "act_submission.h"
 #include "artifact_validation.h"
 #include "plan_internal.h"
 #include "render_internal.h"
@@ -61,6 +62,7 @@ static void sort_unique(PathRequirement *paths, size_t *count) {
 }
 
 static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
+                                   AbActSubmissions *submissions,
                                    PathRequirement *present,
                                    size_t *present_count,
                                    PathRequirement *absent,
@@ -69,8 +71,14 @@ static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
   const AbValue *action = field(operation, "action");
   const AbValue *path;
   size_t index;
-  if (!field(item, "executable")->as.boolean ||
-      ab_artifact_text_is(action, "manual"))
+  if (!field(item, "executable")->as.boolean) {
+    if (ab_artifact_text_is(action, "add_symbol") &&
+        ab_act_submission_take(submissions, &field(item, "id")->as.text))
+      return add_path(engine, present, present_count, field(operation, "path"));
+    return reject(engine, ARCHBIRD_POLICY_REJECTED,
+                  "Plan contains a manual or blocked item");
+  }
+  if (ab_artifact_text_is(action, "manual"))
     return reject(engine, ARCHBIRD_POLICY_REJECTED,
                   "Plan contains a manual or blocked item");
   if (ab_artifact_text_is(action, "create_file"))
@@ -155,8 +163,11 @@ static ArchbirdStatus render_paths(AbBuffer *buffer,
 
 ArchbirdStatus archbird_plan_source_requirements(
     ArchbirdEngine *engine, const uint8_t *plan_json, size_t plan_length,
-    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data) {
+    const uint8_t *executor_submissions_json,
+    size_t executor_submissions_length, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data) {
   AbPlan plan = {0};
+  AbActSubmissions submissions = {0};
   PathRequirement present[AB_ACT_MAX_TRANSITIONS];
   PathRequirement absent[AB_ACT_MAX_TRANSITIONS];
   size_t present_count = 0;
@@ -164,15 +175,23 @@ ArchbirdStatus archbird_plan_source_requirements(
   size_t index;
   AbBuffer document;
   ArchbirdStatus status;
-  if (!engine || !plan_json || !plan_length || !write_fn ||
+  if (!engine || !plan_json || !plan_length ||
+      (!executor_submissions_json && executor_submissions_length) ||
+      !write_fn ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&document, engine);
   status = ab_plan_load(engine, plan_json, plan_length, &plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_act_submissions_load(engine, executor_submissions_json,
+                                     executor_submissions_length, &submissions);
   for (index = 0; status == ARCHBIRD_OK && index < plan.items->as.array.count;
        index++)
-    status = collect_item(engine, &plan.items->as.array.items[index], present,
-                          &present_count, absent, &absent_count);
+    status =
+        collect_item(engine, &plan.items->as.array.items[index], &submissions,
+                     present, &present_count, absent, &absent_count);
+  if (status == ARCHBIRD_OK)
+    status = ab_act_submissions_require_consumed(engine, &submissions);
   if (status == ARCHBIRD_OK) {
     sort_unique(present, &present_count);
     sort_unique(absent, &absent_count);
@@ -198,6 +217,7 @@ ArchbirdStatus archbird_plan_source_requirements(
     status = archbird_json_canonicalize(engine, document.data, document.length,
                                         json_flags, write_fn, user_data);
   ab_buffer_free(&document);
+  ab_act_submissions_free(engine, &submissions);
   ab_plan_free(engine, &plan);
   return status;
 }

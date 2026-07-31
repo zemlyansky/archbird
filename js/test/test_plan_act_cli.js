@@ -33,6 +33,9 @@ const napiRoot = fs.mkdtempSync(
 const observedRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-observed-"),
 );
+const assertedRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-asserted-"),
+);
 const redirectRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-redirect-"),
 );
@@ -241,6 +244,69 @@ try {
     run(["apply", act, "--root", root]).stdout.toString("utf8"),
     "Result: applied-transitions=0; state=already-satisfied\n",
   );
+
+  fs.writeFileSync(
+    path.join(assertedRoot, "archbird.json"),
+    JSON.stringify({
+      project: "node-plan-act-asserted",
+      constraints: {
+        "IMPLEMENT-API": {
+          kind: "required_symbols",
+          symbols: ["futureApi"],
+          paths: ["api.js"],
+          kinds: ["function"],
+          owner: "architecture",
+          rationale: "The reviewed API implementation exists.",
+        },
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(assertedRoot, "api.js"),
+    "export function currentApi() {\n  return 1;\n}\n",
+  );
+  const assertedPlan = path.join(artifacts, "asserted-plan.json");
+  const assertedAct = path.join(artifacts, "asserted-act.json");
+  const assertedReplacement = path.join(artifacts, "asserted-api.js");
+  fs.writeFileSync(
+    assertedReplacement,
+    "export function currentApi() {\n  return 1;\n}\n\n" +
+      "export function futureApi() {\n  return 2;\n}\n",
+  );
+  run(["plan", "--root", assertedRoot, "--output", assertedPlan]);
+  const assertedPlanBytes = fs.readFileSync(assertedPlan);
+  const assertedPlanDocument = JSON.parse(assertedPlanBytes);
+  const assertedItem = assertedPlanDocument.items[0];
+  assert.equal(assertedItem.operation.action, "add_symbol");
+  assert.equal(assertedItem.executable, false);
+  assert.match(
+    run([
+      "act", assertedPlan, "--root", assertedRoot, "--format", "json",
+    ], 2).stderr.toString("utf8"),
+    /manual or blocked item/,
+  );
+  run([
+    "act", assertedPlan, "--root", assertedRoot,
+    "--submit", `${assertedItem.id}=${assertedReplacement}`,
+    "--format", "json", "--output", assertedAct,
+  ]);
+  assert.deepEqual(fs.readFileSync(assertedPlan), assertedPlanBytes);
+  const assertedActDocument = JSON.parse(fs.readFileSync(assertedAct));
+  assert.equal(assertedActDocument.state, "accepted");
+  assert.equal(
+    assertedActDocument.executors[0].capability,
+    "archbird.asserted.source.replace-file@1",
+  );
+  assert.deepEqual(
+    assertedActDocument.executors[0].item_ids,
+    [assertedItem.id],
+  );
+  run(["apply", assertedAct, "--root", assertedRoot]);
+  assert.match(
+    fs.readFileSync(path.join(assertedRoot, "api.js"), "utf8"),
+    /function futureApi/,
+  );
+  run(["verify", "--root", assertedRoot, "--check"]);
 
   fs.writeFileSync(
     path.join(root, "api.js"),
@@ -954,6 +1020,7 @@ try {
   fs.rmSync(coordinatedRoot, { force: true, recursive: true });
   fs.rmSync(napiRoot, { force: true, recursive: true });
   fs.rmSync(observedRoot, { force: true, recursive: true });
+  fs.rmSync(assertedRoot, { force: true, recursive: true });
   fs.rmSync(redirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptRedirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptUnobservedRoot, { force: true, recursive: true });

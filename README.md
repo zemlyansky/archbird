@@ -718,6 +718,9 @@ archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
 
 # Ground, verify, and inspect the exact Act without writing.
 archbird act .archbird/plan.json
+# Supply reviewed implementation semantics for one exact unresolved item.
+archbird act .archbird/plan.json \
+  --submit ITEM_ID=reviewed-module.py
 archbird act .archbird/plan.json --format patch
 archbird act .archbird/plan.json --format json \
   --output .archbird/act.json
@@ -734,9 +737,16 @@ but does not determine implementation code, Plan retains that target as a
 structured non-executable `add_symbol` or `add_test_route` operation instead
 of reducing it to an opaque manual note. This lets Plan order a semantic
 implementation before its declaration and its tests while continuing to state
-that Act has no authorized source transformation. A missing definition,
-declaration, and test route can therefore form one useful agent/developer task
-DAG without Archbird inventing a signature, body, or test.
+that Act has no authorized source transformation. A developer or agent may
+submit reviewed full-file content for one exact `add_symbol` item with
+`act --submit ITEM=FILE`. The Plan remains byte-identical and language-neutral;
+the native Act core binds the submission to the item and mapped source,
+records exact read/write/match evidence, builds a real isolated after-Map, and
+rejects the Act unless the original and preserved constraints pass. A missing
+definition, declaration, and test route can therefore form one useful
+agent/developer task DAG without Archbird inventing a signature, body, or
+test. `add_test_route` remains non-executable because its target does not
+identify a safe test source file.
 `redirect_dependency` and `declare_symbol` currently follow this boundary end
 to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores the exhaustive
 edge ProjectionPlan, exact relation, affected source paths, and symbol

@@ -14,7 +14,11 @@ const {
   actOverlay,
   renderAct,
 } = require("./act-transport");
-const { MAX_ACT_BYTES, MAX_PLAN_BYTES } = require("./plan-limits");
+const {
+  MAX_ACT_BYTES,
+  MAX_OPERATION_TEXT_BYTES,
+  MAX_PLAN_BYTES,
+} = require("./plan-limits");
 
 const COMMANDS = new Set([
   "act",
@@ -76,7 +80,7 @@ function usage(command = "map") {
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
     verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
     plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--before-map OLD.json | --git-diff REVISION] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--redirect FROM=TO] [--output PLAN.json]",
-    act: "archbird act PLAN.json [--root PROJECT] [--format markdown|json|patch] [--output ACT.json]",
+    act: "archbird act PLAN.json [--root PROJECT] [--submit ITEM=FILE] [--format markdown|json|patch] [--output ACT.json]",
     apply: "archbird apply ACT.json [--root PROJECT]",
     export: "archbird export graphml|json|mermaid --map MAP_OR_QUERY.json [--output FILE]",
     serve: "archbird serve [--root PROJECT] [--config PROJECT.json] [--host 127.0.0.1] [--port 4177]",
@@ -202,6 +206,44 @@ function readBounded(name, maximum, description) {
   } finally {
     fs.closeSync(descriptor);
   }
+}
+
+function actExecutorSubmissions(values) {
+  const seen = new Set();
+  const files = [];
+  const items = values.map((value) => {
+    const separator = value.indexOf("=");
+    if (separator <= 0 || separator === value.length - 1) {
+      throw new Error("--submit expects ITEM=FILE");
+    }
+    const itemId = value.slice(0, separator);
+    if (seen.has(itemId)) {
+      throw new Error(`--submit repeats Plan item ${itemId}`);
+    }
+    const file = path.resolve(value.slice(separator + 1));
+    const content = readBounded(
+      file,
+      MAX_OPERATION_TEXT_BYTES,
+      "executor submission",
+    );
+    seen.add(itemId);
+    files.push(file);
+    return {
+      content_base64: content.toString("base64"),
+      item_id: itemId,
+      kind: "replace_file",
+    };
+  });
+  if (!items.length) {
+    return { json: Buffer.alloc(0), files };
+  }
+  items.sort((left, right) =>
+    Buffer.compare(Buffer.from(left.item_id), Buffer.from(right.item_id))
+  );
+  return {
+    json: native.jsonCanonicalize(Buffer.from(JSON.stringify({ items }))),
+    files,
+  };
 }
 
 function write(value, output = "-") {
@@ -1848,6 +1890,7 @@ function actMain(argv) {
     observation: { type: "multiple" },
     mapInput: { flag: "map-input", type: "multiple" },
     resolutionInput: { flag: "resolution-input", type: "multiple" },
+    submit: { type: "multiple" },
     format: { default: "markdown", type: "string" },
   }, { positionals: 1 });
   if (options.help) {
@@ -1863,9 +1906,13 @@ function actMain(argv) {
   }
   const planJson = readBounded(options._[0], MAX_PLAN_BYTES, "Plan JSON");
   const repository = path.resolve(options.root || ".");
+  const executorSubmissions = actExecutorSubmissions(options.submit);
   options._transientExclude = [
     repositoryArtifactPath(repository, options._[0]),
     repositoryArtifactPath(repository, options.output),
+    ...executorSubmissions.files.map((file) =>
+      repositoryArtifactPath(repository, file)
+    ),
   ].filter((value, index, values) =>
     value !== null && values.indexOf(value) === index
   );
@@ -1900,6 +1947,7 @@ function actMain(argv) {
   const sourceMetadata = observePlanSources(
     resolvedInputs.repository,
     planJson,
+    executorSubmissions.json,
   );
   const materializedAct = archbird.materializeAct(
     beforeProject,
@@ -1907,6 +1955,7 @@ function actMain(argv) {
     beforeMap,
     beforeVerification,
     sourceMetadata,
+    { executorSubmissionsJson: executorSubmissions.json },
   );
   const overlay = actOverlay(materializedAct);
   let afterConfigJson = resolvedInputs.configJson;

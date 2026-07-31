@@ -483,6 +483,11 @@ An exact missing symbol or test route whose code is not derivable remains a
 structured non-executable `add_symbol` or `add_test_route` operation. Plan can
 order implementation before declaration and tests; Act still refuses the Plan
 until a reviewed executor or agent supplies the unresolved semantics.
+Supply reviewed full-file content for one exact `add_symbol` item with
+`act --submit ITEM=FILE`. This is Act executor input, not a Plan rewrite:
+native Act source-locks the mapped file, records the exact executor ledger,
+builds the isolated after-Map, and accepts only when fresh Verify closes the
+item's constraint and preserves the rest of the policy.
 
 ```bash
 archbird plan --output .archbird/plan.json
@@ -496,6 +501,7 @@ archbird map --format json --output .archbird/before-map.json
 archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
   --output .archbird/plan.json
 archbird act .archbird/plan.json
+archbird act .archbird/plan.json --submit ITEM_ID=reviewed-module.py
 archbird act .archbird/plan.json --format patch
 archbird act .archbird/plan.json --format json \
   --output .archbird/act.json
@@ -736,7 +742,11 @@ are presentation views.
 `compile_plan_json()` delegates Plan derivation to the native core. Its optional
 `before_map_json` input enables identity-checked residual planning; Python
 performs no Map comparison or action inference.
-`materialize_act_json()` produces exact binary-safe transitions from a Plan;
+`materialize_act_json()` produces exact binary-safe transitions from a Plan.
+Its optional `executor_submissions_json` input supplies reviewed full-file
+content for exact unresolved `add_symbol` items; the corresponding
+`plan_source_requirements()` input keeps path interpretation in the native
+core. Submissions are ephemeral executor input and never mutate Plan.
 `accept_act_json()` seals them only after callers supply the fresh isolated
 after-Map and Verification. `preflight_act_apply()` returns `ready` or
 `already_satisfied` after comparing newly observed sources with the complete

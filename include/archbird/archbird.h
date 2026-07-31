@@ -449,7 +449,9 @@ ARCHBIRD_API ArchbirdStatus archbird_act_validate(ArchbirdEngine *engine,
  */
 ARCHBIRD_API ArchbirdStatus archbird_plan_source_requirements(
     ArchbirdEngine *engine, const uint8_t *plan_json, size_t plan_length,
-    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+    const uint8_t *executor_submissions_json,
+    size_t executor_submissions_length, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data);
 
 /*
  * Return the exact sorted repository paths that a host must re-observe
@@ -466,7 +468,9 @@ ARCHBIRD_API ArchbirdStatus archbird_act_source_requirements(
  * binary-safe, read-only Act. map_json must be the Map named by the Plan.
  * source_metadata_json is a host observation with sorted existing file rows
  * (path, SHA-256, executable bit) and sorted paths proven absent for creates
- * or moves. The core performs no filesystem I/O.
+ * or moves. executor_submissions_json optionally supplies reviewed exact
+ * source content for otherwise non-executable Plan objectives. The core
+ * performs no filesystem I/O.
  *
  * A materialized Act is not applicable until after-state Map/Verification
  * acceptance seals it through the Act acceptance API.
@@ -476,7 +480,8 @@ ARCHBIRD_API ArchbirdStatus archbird_act_materialize(
     const uint8_t *plan_json, size_t plan_length, const uint8_t *map_json,
     size_t map_length, const uint8_t *verification_json,
     size_t verification_length, const uint8_t *source_metadata_json,
-    size_t source_metadata_length, uint32_t json_flags,
+    size_t source_metadata_length, const uint8_t *executor_submissions_json,
+    size_t executor_submissions_length, uint32_t json_flags,
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*

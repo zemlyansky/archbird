@@ -166,10 +166,18 @@ function observeSourceRequirements(rootValue, requirementsJson) {
   );
 }
 
-function observePlanSources(root, planJson) {
+function observePlanSources(
+  root,
+  planJson,
+  executorSubmissionsJson = Buffer.alloc(0),
+) {
   return observeSourceRequirements(
     root,
-    native.planSourceRequirements(Buffer.from(planJson), false),
+    native.planSourceRequirements(
+      Buffer.from(planJson),
+      Buffer.from(executorSubmissionsJson),
+      false,
+    ),
   );
 }
 

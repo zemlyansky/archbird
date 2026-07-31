@@ -2733,6 +2733,142 @@ class PlanActCliTest(unittest.TestCase):
         self.assertFalse(completed.stdout)
         self.assertIn("manual or blocked item", completed.stderr.decode())
 
+    def test_asserted_file_submission_grounds_plan_only_at_act_boundary(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "IMPLEMENT-API": {
+                    "kind": "required_symbols",
+                    "symbols": ["future_api"],
+                    "paths": ["module.py"],
+                    "kinds": ["function"],
+                    "owner": "architecture",
+                    "rationale": "The reviewed API implementation exists.",
+                }
+            }
+        )
+        source = self.root / "module.py"
+        original = "def current_api():\n    return 1\n"
+        source.write_text(original)
+        plan_path = self.plan_path("submitted-api-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan_bytes = plan_path.read_bytes()
+        plan = json.loads(plan_bytes)
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertEqual(
+            item["operation"],
+            {
+                "action": "add_symbol",
+                "kinds": ["function"],
+                "path": "module.py",
+                "symbol": "future_api",
+            },
+        )
+        self.assertFalse(item["executable"])
+
+        blocked = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn("manual or blocked item", blocked.stderr.decode())
+
+        bad_replacement = self.plan_path("bad-module.py")
+        bad_replacement.write_text("def current_api():\n    return 2\n")
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={bad_replacement}",
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn("failing constraint", rejected.stderr.decode())
+        self.assertEqual(source.read_text(), original)
+        self.assertEqual(plan_path.read_bytes(), plan_bytes)
+
+        replacement = self.plan_path("module.py")
+        completed_source = (
+            original + "\n\ndef future_api():\n    return 2\n"
+        )
+        replacement.write_text(completed_source)
+        act_path = self.plan_path("submitted-api-act.json")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={replacement}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["state"], "accepted")
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(len(act["executors"]), 1)
+        self.assertEqual(
+            act["executors"][0]["capability"],
+            "archbird.asserted.source.replace-file@1",
+        )
+        self.assertEqual(act["executors"][0]["item_ids"], [item["id"]])
+        self.assertEqual(act["executors"][0]["matches"], 1)
+        self.assertEqual(act["executors"][0]["reads"], ["module.py"])
+        self.assertEqual(act["executors"][0]["writes"], ["module.py"])
+        self.assertEqual(act["transitions"][0]["path"], "module.py")
+        self.assertEqual(source.read_text(), original)
+        self.assertEqual(plan_path.read_bytes(), plan_bytes)
+
+        source.write_text("def drifted():\n    return 3\n")
+        drift = run(
+            "apply",
+            str(act_path),
+            "--root",
+            str(self.root),
+            expected=2,
+        )
+        self.assertIn("module.py", drift.stderr.decode())
+        source.write_text(original)
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertEqual(source.read_text(), completed_source)
+        run("verify", "--root", str(self.root), "--check")
+        replay = run(
+            "apply", str(act_path), "--root", str(self.root)
+        ).stdout.decode()
+        self.assertEqual(
+            replay,
+            "Result: applied-transitions=0; state=already-satisfied\n",
+        )
+
+        unknown = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={replacement}",
+            "--submit",
+            f"unknown-item={replacement}",
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn(
+            "submission does not match an eligible Plan item",
+            unknown.stderr.decode(),
+        )
+
     def test_passing_policy_produces_and_applies_no_op(self) -> None:
         self.configure(
             {

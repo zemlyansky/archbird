@@ -2140,11 +2140,16 @@ def validate_act(act_json: bytes) -> None:
 
 
 def plan_source_requirements(
-    plan_json: bytes, *, pretty: bool = False
+    plan_json: bytes,
+    executor_submissions_json: bytes = b"",
+    *,
+    pretty: bool = False,
 ) -> bytes:
     """Return the source observations required to materialize a Plan."""
 
-    return _native.plan_source_requirements(plan_json, pretty=pretty)
+    return _native.plan_source_requirements(
+        plan_json, executor_submissions_json, pretty=pretty
+    )
 
 
 def act_source_requirements(
@@ -2161,6 +2166,7 @@ def materialize_act_json(
     map_json: bytes,
     verification_json: bytes,
     source_metadata_json: bytes,
+    executor_submissions_json: bytes = b"",
     *,
     pretty: bool = False,
 ) -> bytes:
@@ -2174,6 +2180,7 @@ def materialize_act_json(
         map_json,
         verification_json,
         source_metadata_json,
+        executor_submissions_json,
         pretty=pretty,
     )
 

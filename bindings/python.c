@@ -717,23 +717,29 @@ static PyObject *py_act_validate(PyObject *self, PyObject *args) {
 
 static PyObject *py_plan_source_requirements(PyObject *self, PyObject *args,
                                              PyObject *kwargs) {
-  static char *keywords[] = {"plan_json", "pretty", NULL};
+  static char *keywords[] = {"plan_json", "executor_submissions_json", "pretty",
+                             NULL};
   const char *plan;
+  const char *submissions = "";
   Py_ssize_t plan_length;
+  Py_ssize_t submissions_length = 0;
   int pretty = 0;
   ArchbirdEngine *engine = NULL;
   PyOutput output = {0};
   PyObject *result;
   ArchbirdStatus status;
+  size_t budget;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-                                   "y#|p:plan_source_requirements", keywords,
-                                   &plan, &plan_length, &pretty))
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#|y#p:plan_source_requirements", keywords, &plan,
+          &plan_length, &submissions, &submissions_length, &pretty))
     return NULL;
-  status = saved_artifact_engine((size_t)plan_length, &engine);
+  budget = larger_input((size_t)plan_length, (size_t)submissions_length);
+  status = saved_artifact_engine(budget, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_plan_source_requirements(
         engine, (const uint8_t *)plan, (size_t)plan_length,
+        (const uint8_t *)submissions, (size_t)submissions_length,
         pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);
@@ -771,6 +777,7 @@ static PyObject *py_act_materialize(PyObject *self, PyObject *args,
                              "map_json",
                              "verification_json",
                              "source_metadata_json",
+                             "executor_submissions_json",
                              "pretty",
                              NULL};
   PyObject *capsule;
@@ -778,19 +785,22 @@ static PyObject *py_act_materialize(PyObject *self, PyObject *args,
   const char *map;
   const char *verification;
   const char *metadata;
+  const char *submissions;
   Py_ssize_t plan_length;
   Py_ssize_t map_length;
   Py_ssize_t verification_length;
   Py_ssize_t metadata_length;
+  Py_ssize_t submissions_length;
   int pretty = 0;
   PyArchbirdProject *owned;
   PyOutput output = {0};
   ArchbirdStatus status;
   (void)self;
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "Oy#y#y#y#|p:act_materialize", keywords, &capsule,
+          args, kwargs, "Oy#y#y#y#y#|p:act_materialize", keywords, &capsule,
           &plan, &plan_length, &map, &map_length, &verification,
-          &verification_length, &metadata, &metadata_length, &pretty))
+          &verification_length, &metadata, &metadata_length, &submissions,
+          &submissions_length, &pretty))
     return NULL;
   owned = get_project(capsule);
   if (!owned)
@@ -799,8 +809,9 @@ static PyObject *py_act_materialize(PyObject *self, PyObject *args,
       owned->engine, owned->project, (const uint8_t *)plan, (size_t)plan_length,
       (const uint8_t *)map, (size_t)map_length, (const uint8_t *)verification,
       (size_t)verification_length, (const uint8_t *)metadata,
-      (size_t)metadata_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
-      &output);
+      (size_t)metadata_length, (const uint8_t *)submissions,
+      (size_t)submissions_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
+      output_write, &output);
   return render_result(owned->engine, status, &output);
 }
 

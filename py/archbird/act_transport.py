@@ -148,8 +148,14 @@ def observe_source_requirements(
     return _native.json_canonicalize(encoded)
 
 
-def observe_plan_sources(root: Path, plan_json: bytes) -> bytes:
-    requirements = _native.plan_source_requirements(plan_json)
+def observe_plan_sources(
+    root: Path,
+    plan_json: bytes,
+    executor_submissions_json: bytes = b"",
+) -> bytes:
+    requirements = _native.plan_source_requirements(
+        plan_json, executor_submissions_json
+    )
     return observe_source_requirements(root, requirements)
 
 

@@ -149,9 +149,23 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
   verification_sha =
       field(&verification_document, "verification_result_sha256");
   digest(map->data, map->length, map_sha);
-  if (empty) {
+  if (empty == 1) {
     memcpy(items, "[]", 3);
     items_length = 2;
+  } else if (empty == 2) {
+    items_length = snprintf(
+        items, sizeof(items),
+        "[{\"acceptance\":{\"constraints\":[\"UNCHANGED\"]},"
+        "\"depends_on\":[],\"evidence\":[],\"executable\":false,"
+        "\"id\":\"item:add-symbol\",\"non_executable_reasons\":"
+        "[\"Implementation semantics require review.\"],\"operation\":{"
+        "\"action\":\"add_symbol\",\"kinds\":[\"function\"],"
+        "\"path\":\"src/a.c\",\"symbol\":\"future_api\"},"
+        "\"origins\":[{\"constraint_id\":\"UNCHANGED\","
+        "\"constraint_result_sha256\":\"" VERIFY_SHA
+        "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
+        "\"provenance\":\"derived\",\"statement\":\"Implement future_api.\","
+        "\"unknowns\":[]}]");
   } else {
     items_length = snprintf(
         items, sizeof(items),
@@ -261,11 +275,14 @@ int main(void) {
   AbBuffer failing_verification;
   AbBuffer plan;
   AbBuffer empty_plan;
+  AbBuffer submitted_plan;
   AbBuffer source_requirements;
   AbBuffer empty_source_requirements;
+  AbBuffer submitted_source_requirements;
   AbBuffer metadata;
   AbBuffer act;
   AbBuffer empty_act;
+  AbBuffer submitted_act;
   AbBuffer accepted_act;
   AbBuffer act_requirements;
   AbBuffer failing_plan;
@@ -283,11 +300,14 @@ int main(void) {
   ab_buffer_init(&failing_verification, engine);
   ab_buffer_init(&plan, engine);
   ab_buffer_init(&empty_plan, engine);
+  ab_buffer_init(&submitted_plan, engine);
   ab_buffer_init(&source_requirements, engine);
   ab_buffer_init(&empty_source_requirements, engine);
+  ab_buffer_init(&submitted_source_requirements, engine);
   ab_buffer_init(&metadata, engine);
   ab_buffer_init(&act, engine);
   ab_buffer_init(&empty_act, engine);
+  ab_buffer_init(&submitted_act, engine);
   ab_buffer_init(&accepted_act, engine);
   ab_buffer_init(&act_requirements, engine);
   ab_buffer_init(&failing_plan, engine);
@@ -307,13 +327,16 @@ int main(void) {
                  "UNCHANGED", &plan) ||
       !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 1,
                  "UNCHANGED", &empty_plan) ||
+      !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 2,
+                 "UNCHANGED", &submitted_plan) ||
       !make_metadata(&metadata, a_sha, b_sha, json_sha)) {
     fprintf(stderr, "FAIL fixture construction\n");
     failures++;
     goto cleanup;
   }
-  status = archbird_plan_source_requirements(engine, plan.data, plan.length, 0,
-                                             collect, &source_requirements);
+  status =
+      archbird_plan_source_requirements(engine, plan.data, plan.length, NULL, 0,
+                                        0, collect, &source_requirements);
   expect_status("collect source requirements", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK &&
       (!find_bytes(&source_requirements,
@@ -323,9 +346,9 @@ int main(void) {
     fprintf(stderr, "FAIL source requirements content/order\n");
     failures++;
   }
-  status = archbird_plan_source_requirements(engine, empty_plan.data,
-                                             empty_plan.length, 0, collect,
-                                             &empty_source_requirements);
+  status = archbird_plan_source_requirements(
+      engine, empty_plan.data, empty_plan.length, NULL, 0, 0, collect,
+      &empty_source_requirements);
   expect_status("collect empty source requirements", status, ARCHBIRD_OK,
                 engine);
   if (status == ARCHBIRD_OK &&
@@ -334,10 +357,76 @@ int main(void) {
     fprintf(stderr, "FAIL empty source requirements shape\n");
     failures++;
   }
+  {
+    static const uint8_t submissions[] =
+        "{\"items\":[{\"content_base64\":\""
+        "aW50IGZ1dHVyZV9hcGkodm9pZCkgeyByZXR1cm4gMTsgfQo=\","
+        "\"item_id\":\"item:add-symbol\",\"kind\":\"replace_file\"}]}";
+    static const uint8_t duplicate_submissions[] =
+        "{\"items\":[{\"content_base64\":\""
+        "aW50IGZ1dHVyZV9hcGkodm9pZCkgeyByZXR1cm4gMTsgfQo=\","
+        "\"item_id\":\"item:add-symbol\",\"kind\":\"replace_file\"},"
+        "{\"content_base64\":\"YWxwaGEK\","
+        "\"item_id\":\"item:add-symbol\",\"kind\":\"replace_file\"}]}";
+    static const uint8_t unchanged_submission[] =
+        "{\"items\":[{\"content_base64\":\"YWxwaGEK\","
+        "\"item_id\":\"item:add-symbol\",\"kind\":\"replace_file\"}]}";
+    expect_status("reject missing executor submission",
+                  archbird_plan_source_requirements(
+                      engine, submitted_plan.data, submitted_plan.length, NULL,
+                      0, 0, collect, &submitted_source_requirements),
+                  ARCHBIRD_POLICY_REJECTED, engine);
+    expect_status("reject duplicate executor submissions",
+                  archbird_plan_source_requirements(
+                      engine, submitted_plan.data, submitted_plan.length,
+                      duplicate_submissions, sizeof(duplicate_submissions) - 1,
+                      0, collect, &submitted_source_requirements),
+                  ARCHBIRD_INVALID_SCHEMA, engine);
+    submitted_source_requirements.length = 0;
+    status = archbird_plan_source_requirements(
+        engine, submitted_plan.data, submitted_plan.length, submissions,
+        sizeof(submissions) - 1, 0, collect, &submitted_source_requirements);
+    expect_status("collect submitted source requirement", status, ARCHBIRD_OK,
+                  engine);
+    if (!find_bytes(&submitted_source_requirements,
+                    "\"files\":[\"src/a.c\"]")) {
+      fprintf(stderr, "FAIL submitted source requirement content\n");
+      failures++;
+    }
+    status = archbird_act_materialize(
+        engine, project, submitted_plan.data, submitted_plan.length, map.data,
+        map.length, verification.data, verification.length, metadata.data,
+        metadata.length, submissions, sizeof(submissions) - 1, 0, collect,
+        &submitted_act);
+    expect_status("materialize asserted file submission", status, ARCHBIRD_OK,
+                  engine);
+    if (!find_bytes(
+            &submitted_act,
+            "\"capability\":\"archbird.asserted.source.replace-file@1\"") ||
+        !find_bytes(&submitted_act,
+                    "\"content_base64\":\""
+                    "aW50IGZ1dHVyZV9hcGkodm9pZCkgeyByZXR1cm4gMTsgfQo=\"")) {
+      fprintf(stderr, "FAIL asserted submission Act content\n");
+      failures++;
+    }
+    submitted_act.length = 0;
+    expect_status(
+        "reject unchanged executor submission",
+        archbird_act_materialize(
+            engine, project, submitted_plan.data, submitted_plan.length,
+            map.data, map.length, verification.data, verification.length,
+            metadata.data, metadata.length, unchanged_submission,
+            sizeof(unchanged_submission) - 1, 0, collect, &submitted_act),
+        ARCHBIRD_POLICY_REJECTED, engine);
+    if (submitted_act.length) {
+      fprintf(stderr, "FAIL rejected submission emitted an Act\n");
+      failures++;
+    }
+  }
   status = archbird_act_materialize(engine, project, plan.data, plan.length,
                                     map.data, map.length, verification.data,
                                     verification.length, metadata.data,
-                                    metadata.length, 0, collect, &act);
+                                    metadata.length, NULL, 0, 0, collect, &act);
   expect_status("materialize", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK)
     expect_status("validate materialized",
@@ -364,7 +453,7 @@ int main(void) {
     status = archbird_act_materialize(
         engine, project, failing_plan.data, failing_plan.length, map.data,
         map.length, failing_verification.data, failing_verification.length,
-        metadata.data, metadata.length, 0, collect, &failing_act);
+        metadata.data, metadata.length, NULL, 0, 0, collect, &failing_act);
     expect_status("materialize failing policy", status, ARCHBIRD_OK, engine);
     if (status == ARCHBIRD_OK)
       expect_status("reject failing policy",
@@ -407,8 +496,8 @@ int main(void) {
   }
   status = archbird_act_materialize(
       engine, project, empty_plan.data, empty_plan.length, map.data, map.length,
-      verification.data, verification.length, metadata.data, metadata.length, 0,
-      collect, &empty_act);
+      verification.data, verification.length, metadata.data, metadata.length,
+      NULL, 0, 0, collect, &empty_act);
   expect_status("materialize empty", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK)
     expect_status(
@@ -474,10 +563,11 @@ int main(void) {
     locked_sha[0] = locked_sha[0] == '0' ? '1' : '0';
   }
   expect_status("stale metadata",
-                archbird_act_materialize(
-                    engine, project, plan.data, plan.length, map.data,
-                    map.length, verification.data, verification.length,
-                    metadata.data, metadata.length, 0, collect, &empty_act),
+                archbird_act_materialize(engine, project, plan.data,
+                                         plan.length, map.data, map.length,
+                                         verification.data, verification.length,
+                                         metadata.data, metadata.length, NULL,
+                                         0, 0, collect, &empty_act),
                 ARCHBIRD_CONFLICT, engine);
 
 cleanup:
@@ -488,11 +578,14 @@ cleanup:
   ab_buffer_free(&act_requirements);
   ab_buffer_free(&accepted_act);
   ab_buffer_free(&empty_act);
+  ab_buffer_free(&submitted_act);
   ab_buffer_free(&act);
   ab_buffer_free(&metadata);
   ab_buffer_free(&empty_source_requirements);
+  ab_buffer_free(&submitted_source_requirements);
   ab_buffer_free(&source_requirements);
   ab_buffer_free(&empty_plan);
+  ab_buffer_free(&submitted_plan);
   ab_buffer_free(&plan);
   ab_buffer_free(&verification);
   ab_buffer_free(&failing_verification);

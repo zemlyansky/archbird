@@ -833,24 +833,28 @@ static napi_value act_validate(napi_env env, napi_callback_info info) {
 
 static napi_value plan_source_requirements(napi_env env,
                                            napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
+  size_t argc = 3;
+  napi_value argv[3];
   const uint8_t *plan;
+  const uint8_t *submissions;
   size_t plan_length;
+  size_t submissions_length;
   int pretty;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
   NodeOutput output = {0};
   napi_value result;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 1 || !get_buffer(env, argv[0], &plan, &plan_length) ||
-      !get_optional_bool(env, argc, argv, 1, 0, &pretty))
+  if (argc < 2 || !get_buffer(env, argv[0], &plan, &plan_length) ||
+      !get_buffer(env, argv[1], &submissions, &submissions_length) ||
+      !get_optional_bool(env, argc, argv, 2, 0, &pretty))
     return NULL;
-  status = saved_artifact_engine(plan_length, &engine);
+  status = saved_artifact_engine(larger_input(plan_length, submissions_length),
+                                 &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_plan_source_requirements(
-        engine, plan, plan_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
-        output_write, &output);
+        engine, plan, plan_length, submissions, submissions_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(env, engine, status, &output);
   archbird_engine_destroy(engine);
   return result;
@@ -882,32 +886,36 @@ static napi_value act_source_requirements(napi_env env,
 }
 
 static napi_value act_materialize(napi_env env, napi_callback_info info) {
-  size_t argc = 6;
-  napi_value argv[6];
+  size_t argc = 7;
+  napi_value argv[7];
   NodeProject *owned;
   const uint8_t *plan;
   const uint8_t *map;
   const uint8_t *verification;
   const uint8_t *metadata;
+  const uint8_t *submissions;
   size_t plan_length;
   size_t map_length;
   size_t verification_length;
   size_t metadata_length;
+  size_t submissions_length;
   int pretty;
   ArchbirdStatus status;
   NodeOutput output = {0};
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 5 || !(owned = get_project(env, argv[0])) ||
+  if (argc < 6 || !(owned = get_project(env, argv[0])) ||
       !get_buffer(env, argv[1], &plan, &plan_length) ||
       !get_buffer(env, argv[2], &map, &map_length) ||
       !get_buffer(env, argv[3], &verification, &verification_length) ||
       !get_buffer(env, argv[4], &metadata, &metadata_length) ||
-      !get_optional_bool(env, argc, argv, 5, 0, &pretty))
+      !get_buffer(env, argv[5], &submissions, &submissions_length) ||
+      !get_optional_bool(env, argc, argv, 6, 0, &pretty))
     return NULL;
   status = archbird_act_materialize(
       owned->engine, owned->project, plan, plan_length, map, map_length,
-      verification, verification_length, metadata, metadata_length,
-      pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+      verification, verification_length, metadata, metadata_length, submissions,
+      submissions_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
+      &output);
   return render_result(env, owned->engine, status, &output);
 }
 
