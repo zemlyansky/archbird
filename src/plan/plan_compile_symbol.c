@@ -768,6 +768,8 @@ static ArchbirdStatus append_required_symbol(ArchbirdEngine *engine,
   ArchbirdStatus status = ARCHBIRD_OK;
   const AbValue *implementation_path = NULL;
   const AbValue *implementation_file = NULL;
+  const AbValue *kinds = field(definition, "kinds");
+  int structured = 0;
   if (!key || key->kind != AB_VALUE_STRING ||
       !portable_identifier(&key->as.text))
     reason = "The required symbol is not one portable identifier.";
@@ -783,6 +785,9 @@ static ArchbirdStatus append_required_symbol(ArchbirdEngine *engine,
       reason = "The required declaration has no exact mapped definition path.";
     }
   }
+  structured = !supported && key && key->kind == AB_VALUE_STRING &&
+               portable_identifier(&key->as.text) &&
+               repository_path_without_pattern(path);
   ab_buffer_init(&operation, engine);
   if (supported) {
     const AbValue *first = path;
@@ -808,6 +813,31 @@ static ArchbirdStatus append_required_symbol(ArchbirdEngine *engine,
       status = ab_value_render(&operation, second);
     if (status == ARCHBIRD_OK)
       status = literal(&operation, "]}");
+  } else if (structured) {
+    size_t index;
+    status = literal(&operation, "{\"action\":\"add_symbol\",\"kinds\":[");
+    for (index = 0;
+         status == ARCHBIRD_OK && kinds && kinds->kind == AB_VALUE_ARRAY &&
+         index < kinds->as.array.count;
+         index++) {
+      if (index)
+        status = literal(&operation, ",");
+      if (status == ARCHBIRD_OK)
+        status = ab_value_render(&operation, &kinds->as.array.items[index]);
+    }
+    if (status == ARCHBIRD_OK)
+      status = literal(&operation, "],\"path\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&operation, path);
+    if (status == ARCHBIRD_OK)
+      status = literal(&operation, ",\"symbol\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&operation, key);
+    if (status == ARCHBIRD_OK)
+      status = literal(&operation, "}");
+    if (!reason)
+      reason = "Architecture evidence defines the missing symbol but not its "
+               "implementation.";
   } else {
     status = manual_operation(
         engine, path && path->kind == AB_VALUE_STRING ? &path->as.text : NULL,
@@ -816,7 +846,9 @@ static ArchbirdStatus append_required_symbol(ArchbirdEngine *engine,
   length = snprintf(
       statement, sizeof(statement),
       "%s required symbol declaration %.*s%s%.*s.",
-      supported ? "Declare" : "Review",
+      supported    ? "Declare"
+      : structured ? "Add"
+                   : "Review",
       key && key->kind == AB_VALUE_STRING ? (int)key->as.text.length : 0,
       key && key->kind == AB_VALUE_STRING ? key->as.text.data : "",
       path && path->kind == AB_VALUE_STRING ? " in " : "",

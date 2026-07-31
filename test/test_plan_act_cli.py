@@ -694,7 +694,7 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
         )
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 3)
+        self.assertEqual(plan["schema_version"], 4)
         canonical_before_map = json.dumps(
             json.loads(before_map),
             allow_nan=False,
@@ -2637,6 +2637,101 @@ class PlanActCliTest(unittest.TestCase):
         self.assertFalse(completed.stdout)
         self.assertIn("manual or blocked item", completed.stderr.decode())
         self.assertEqual((self.root / "module.py").read_bytes(), before)
+
+    def test_missing_api_and_test_route_form_a_neutral_plan_dag(self) -> None:
+        self.configure(
+            {
+                "IMPLEMENT-API": {
+                    "kind": "required_symbols",
+                    "symbols": ["future_api"],
+                    "paths": ["src/api.c"],
+                    "kinds": ["function"],
+                    "owner": "architecture",
+                    "rationale": "The implementation exists.",
+                },
+                "DECLARE-API": {
+                    "kind": "required_symbols",
+                    "symbols": ["future_api"],
+                    "paths": ["include/api.h"],
+                    "kinds": ["declaration"],
+                    "owner": "architecture",
+                    "rationale": "The public declaration exists.",
+                },
+                "TEST-API": {
+                    "kind": "required_test_route",
+                    "group": "c",
+                    "target": "src/api.c",
+                    "selectors": ["api"],
+                    "owner": "architecture",
+                    "rationale": "The implementation has a test route.",
+                },
+            }
+        )
+        (self.root / "src").mkdir()
+        (self.root / "include").mkdir()
+        (self.root / "src/api.c").write_text(
+            "int current_api(void) { return 1; }\n"
+        )
+        (self.root / "include/api.h").write_text(
+            "int current_api(void);\n"
+        )
+
+        plan_path = self.plan_path("neutral-api-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(plan["schema_version"], 4)
+        self.assertEqual(len(plan["items"]), 3)
+        self.assertTrue(all(not item["executable"] for item in plan["items"]))
+
+        by_constraint = {
+            item["acceptance"]["constraints"][0]: item
+            for item in plan["items"]
+        }
+        implementation = by_constraint["IMPLEMENT-API"]
+        declaration = by_constraint["DECLARE-API"]
+        test_route = by_constraint["TEST-API"]
+        self.assertEqual(
+            implementation["operation"],
+            {
+                "action": "add_symbol",
+                "kinds": ["function"],
+                "path": "src/api.c",
+                "symbol": "future_api",
+            },
+        )
+        self.assertEqual(
+            declaration["operation"],
+            {
+                "action": "add_symbol",
+                "kinds": ["declaration"],
+                "path": "include/api.h",
+                "symbol": "future_api",
+            },
+        )
+        self.assertEqual(
+            test_route["operation"],
+            {
+                "action": "add_test_route",
+                "group": "c",
+                "selectors": ["api"],
+                "target": "src/api.c",
+            },
+        )
+        self.assertEqual(implementation["depends_on"], [])
+        self.assertEqual(declaration["depends_on"], [implementation["id"]])
+        self.assertEqual(test_route["depends_on"], [implementation["id"]])
+
+        completed = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertFalse(completed.stdout)
+        self.assertIn("manual or blocked item", completed.stderr.decode())
 
     def test_passing_policy_produces_and_applies_no_op(self) -> None:
         self.configure(

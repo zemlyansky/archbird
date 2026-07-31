@@ -206,7 +206,7 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
       body, sizeof(body),
       "{\"artifact\":\"plan\",\"items\":%s,\"objective\":\"Exercise native "
       "Plan materialization.\",\"preserved_constraints\":[\"%s\"],"
-      "\"provenance\":\"derived\",\"schema_version\":3,\"source\":{"
+      "\"provenance\":\"derived\",\"schema_version\":4,\"source\":{"
       "\"map\":{\"configuration_sha256\":\"%.*s\",\"input_sha256\":\"%.*s\","
       "\"producer_implementation_sha256\":\"%.*s\",\"sha256\":\"%s\"},"
       "\"project\":\"demo\",\"verification\":{\"policy_sha256\":\""

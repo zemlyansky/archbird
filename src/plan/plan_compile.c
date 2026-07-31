@@ -765,6 +765,10 @@ static ArchbirdStatus compile_constraint(AbPlanCompile *context,
                                               definition, actual, &handled);
   if (status != ARCHBIRD_OK || handled)
     return status;
+  status = ab_plan_compile_test_constraint(context->engine, &context->builder,
+                                           constraint, definition, &handled);
+  if (status != ARCHBIRD_OK || handled)
+    return status;
   if (strcmp(form, "forbidden_paths") == 0)
     return append_forbidden_paths(context, constraint, actual);
   if (!findings || findings->kind != AB_VALUE_ARRAY ||
@@ -921,7 +925,7 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
             ? "\"asserted\""
             : "\"derived\"");
   if (status == ARCHBIRD_OK)
-    status = literal(&rendered, ",\"schema_version\":3,\"source\":");
+    status = literal(&rendered, ",\"schema_version\":4,\"source\":");
   if (status == ARCHBIRD_OK)
     status = render_source_identity(context, &rendered, map_json, map_length,
                                     before_map_json, before_map_length);

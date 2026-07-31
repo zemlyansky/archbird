@@ -459,6 +459,11 @@ executors, rebuilds the isolated after-state, and emits only an accepted Act
 without writing. `apply` revalidates and replays that Act without reevaluating
 the Plan or rerunning an executor.
 
+An exact missing symbol or test route whose code is not derivable remains a
+structured non-executable `add_symbol` or `add_test_route` operation. Plan can
+order implementation before declaration and tests; Act still refuses the Plan
+until a reviewed executor or agent supplies the unresolved semantics.
+
 ```bash
 npx archbird plan --output .archbird/plan.json
 npx archbird plan CORE-PUBLIC-API --output .archbird/plan.json

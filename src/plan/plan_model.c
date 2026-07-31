@@ -472,6 +472,24 @@ static int validate_operation(const AbValue *value, int *out_manual,
         return 0;
     return 1;
   }
+  if (text_is(action, "add_symbol")) {
+    static const char *const fields[] = {"action", "kinds", "path", "symbol"};
+    const AbValue *kinds = ab_value_member(value, "kinds");
+    *out_manual = 1;
+    return object_exact(value, fields, 4) && string_array(kinds, 0, 0) &&
+           repository_path(ab_value_member(value, "path")) &&
+           portable_identifier(ab_value_member(value, "symbol"));
+  }
+  if (text_is(action, "add_test_route")) {
+    static const char *const fields[] = {"action", "group", "selectors",
+                                         "target"};
+    *out_manual = 1;
+    return object_exact(value, fields, 4) &&
+           bounded_text(ab_value_member(value, "group"), AB_PLAN_MAX_METADATA,
+                        1) &&
+           string_array(ab_value_member(value, "selectors"), 0, 0) &&
+           repository_path(ab_value_member(value, "target"));
+  }
   if (text_is(action, "rename_symbol")) {
     static const char *const fields[] = {
         "action",      "symbol",        "new_name",
@@ -747,7 +765,7 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
     return ARCHBIRD_OK;
   schema = ab_value_member(&plan->document, "schema_version");
   provenance = ab_value_member(&plan->document, "provenance");
-  if (!safe_integer(schema, &schema_number) || schema_number != 3 ||
+  if (!safe_integer(schema, &schema_number) || schema_number != 4 ||
       !text_is(ab_value_member(&plan->document, "artifact"), "plan") ||
       (!text_is(provenance, "derived") && !text_is(provenance, "asserted")) ||
       !validate_tool(ab_value_member(&plan->document, "tool")) ||

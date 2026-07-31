@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 const sha = (character: string): string => character.repeat(64);
 
 const plan = {
-  schema_version: 3,
+  schema_version: 4,
   artifact: "plan",
   provenance: "derived",
   tool: {
@@ -183,6 +183,34 @@ test("Plan schema rejects ambiguous operations and unsafe paths", () => {
   const escaped = structuredClone(plan);
   escaped.items[0].operation.path = "../src/api.py";
   assert.equal(validate(escaped), false);
+});
+
+test("Plan schema represents neutral missing-symbol and test-route work", () => {
+  const validate = validator("plan");
+  const neutral = structuredClone(plan);
+  neutral.items[0].executable = false;
+  neutral.items[0].non_executable_reasons = [
+    "Architecture evidence does not determine implementation source.",
+  ];
+  neutral.items[0].operation = {
+    action: "add_symbol",
+    kinds: ["function"],
+    path: "src/api.c",
+    symbol: "future_api",
+  };
+  assert.equal(validate(neutral), true, JSON.stringify(validate.errors));
+
+  neutral.items[0].operation = {
+    action: "add_test_route",
+    group: "c",
+    selectors: ["api"],
+    target: "src/api.c",
+  };
+  assert.equal(validate(neutral), true, JSON.stringify(validate.errors));
+
+  neutral.items[0].executable = true;
+  neutral.items[0].non_executable_reasons = [];
+  assert.equal(validate(neutral), false);
 });
 
 test("Act state cannot claim acceptance before evaluation", () => {

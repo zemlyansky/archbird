@@ -729,6 +729,14 @@ archbird apply .archbird/act.json
 Plan's target contract is language-neutral: it names architectural objectives,
 operators, exhaustive applicability, dependencies, executor capability, and
 acceptance without embedding source syntax or replacement bytes.
+When a reviewed constraint identifies one exact missing symbol or test route
+but does not determine implementation code, Plan retains that target as a
+structured non-executable `add_symbol` or `add_test_route` operation instead
+of reducing it to an opaque manual note. This lets Plan order a semantic
+implementation before its declaration and its tests while continuing to state
+that Act has no authorized source transformation. A missing definition,
+declaration, and test route can therefore form one useful agent/developer task
+DAG without Archbird inventing a signature, body, or test.
 `redirect_dependency` and `declare_symbol` currently follow this boundary end
 to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores the exhaustive
 edge ProjectionPlan, exact relation, affected source paths, and symbol

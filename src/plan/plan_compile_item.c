@@ -576,6 +576,23 @@ static int provider_kind_is(const AbValue *operation, const char *kind) {
          string_is(&value->as.text, kind);
 }
 
+static int string_array_contains(const AbValue *value, const char *text) {
+  size_t index;
+  if (!value || value->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < value->as.array.count; index++)
+    if (value->as.array.items[index].kind == AB_VALUE_STRING &&
+        string_is(&value->as.array.items[index].as.text, text))
+      return 1;
+  return 0;
+}
+
+static int add_symbol_is_declaration(const AbValue *operation) {
+  const AbValue *kinds = field(operation, "kinds");
+  return kinds && kinds->kind == AB_VALUE_ARRAY && kinds->as.array.count == 1 &&
+         string_array_contains(kinds, "declaration");
+}
+
 static int operation_dependency(const AbValue *prerequisite,
                                 const AbValue *dependent) {
   const AbValue *prerequisite_action = field(prerequisite, "action");
@@ -586,6 +603,17 @@ static int operation_dependency(const AbValue *prerequisite,
   if (string_is(&prerequisite_action->as.text, "declare_symbol") &&
       string_is(&dependent_action->as.text, "add_provider_capability"))
     return same_text_fields(prerequisite, "symbol", dependent, "capability");
+  if (string_is(&prerequisite_action->as.text, "add_symbol") &&
+      string_is(&dependent_action->as.text, "add_symbol"))
+    return same_text_fields(prerequisite, "symbol", dependent, "symbol") &&
+           !add_symbol_is_declaration(prerequisite) &&
+           add_symbol_is_declaration(dependent);
+  if (string_is(&prerequisite_action->as.text, "add_symbol") &&
+      string_is(&dependent_action->as.text, "add_provider_capability"))
+    return same_text_fields(prerequisite, "symbol", dependent, "capability");
+  if (string_is(&prerequisite_action->as.text, "add_symbol") &&
+      string_is(&dependent_action->as.text, "add_test_route"))
+    return same_text_fields(prerequisite, "path", dependent, "target");
   if (string_is(&prerequisite_action->as.text, "add_provider_capability") &&
       string_is(&dependent_action->as.text, "add_provider_capability") &&
       provider_kind_is(prerequisite, "file_pattern") &&

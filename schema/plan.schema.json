@@ -18,7 +18,7 @@
     "unknowns"
   ],
   "properties": {
-    "schema_version": {"const": 3},
+    "schema_version": {"const": 4},
     "artifact": {"const": "plan"},
     "provenance": {"$ref": "#/$defs/provenance"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -654,6 +654,38 @@
         }
       }
     },
+    "addSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "A language-independent required-symbol objective whose implementation remains manual until an executor supplies reviewed semantics.",
+      "required": ["action", "kinds", "path", "symbol"],
+      "properties": {
+        "action": {"const": "add_symbol"},
+        "kinds": {"$ref": "#/$defs/nonEmptyStrings"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "symbol": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 256
+        }
+      }
+    },
+    "addTestRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "A language-independent required test-route objective. It does not imply test code or registration syntax.",
+      "required": ["action", "group", "selectors", "target"],
+      "properties": {
+        "action": {"const": "add_test_route"},
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "selectors": {"$ref": "#/$defs/nonEmptyStrings"},
+        "target": {"$ref": "#/$defs/repositoryPath"}
+      }
+    },
     "candidateSite": {
       "type": "object",
       "additionalProperties": false,
@@ -713,6 +745,8 @@
         {"$ref": "#/$defs/providerCapability"},
         {"$ref": "#/$defs/providerCapabilityRename"},
         {"$ref": "#/$defs/declareSymbol"},
+        {"$ref": "#/$defs/addSymbol"},
+        {"$ref": "#/$defs/addTestRoute"},
         {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/redirectDependency"},
         {"$ref": "#/$defs/manual"}
@@ -773,7 +807,11 @@
               "non_executable_reasons": {"maxItems": 0},
               "operation": {
                 "not": {
-                  "properties": {"action": {"const": "manual"}},
+                  "properties": {
+                    "action": {
+                      "enum": ["add_symbol", "add_test_route", "manual"]
+                    }
+                  },
                   "required": ["action"]
                 }
               }
@@ -789,7 +827,11 @@
           "if": {
             "properties": {
               "operation": {
-                "properties": {"action": {"const": "manual"}},
+                "properties": {
+                  "action": {
+                    "enum": ["add_symbol", "add_test_route", "manual"]
+                  }
+                },
                 "required": ["action"]
               }
             },
