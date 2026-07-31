@@ -5,7 +5,7 @@
 #include "artifact_validation.h"
 #include "base64.h"
 #include "c/declaration.h"
-#include "c/dependency_redirect.h"
+#include "dependency_redirect.h"
 #include "json_value.h"
 #include "model.h"
 #include "plan_internal.h"
@@ -604,7 +604,7 @@ static ArchbirdStatus collect_operation(AbActContext *context,
   if (ab_artifact_text_is(action, "rename_symbol"))
     return ab_act_rename_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "redirect_dependency"))
-    return ab_act_c_dependency_redirect(context, operation, &item_id->as.text);
+    return ab_act_dependency_redirect(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "create_file")) {
     const AbValue *content = object_field(operation, "content");
     path = object_field(operation, "path");

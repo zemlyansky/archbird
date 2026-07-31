@@ -1420,6 +1420,219 @@ class PlanActCliTest(unittest.TestCase):
         run("verify", "--root", str(self.root), "--check")
         self.run_surface_gates(self.root)
 
+    def configure_python_dependency_redirect(
+        self, *, observed_replacement: bool = True, multiple_imports: bool = False
+    ) -> None:
+        for directory in ("app", "service", "storage"):
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+        imported = "raw_value, other" if multiple_imports else "raw_value"
+        (self.root / "app/main.py").write_text(
+            f"from storage.raw import {imported}\n\n"
+            "def render():\n"
+            "    return raw_value()\n"
+        )
+        (self.root / "app/alias.py").write_text(
+            "from storage.raw import raw_value as read\n\n"
+            "def alias_render():\n"
+            "    return read()\n"
+        )
+        if observed_replacement:
+            (self.root / "app/peer.py").write_text(
+                "from service.api import service_value\n\n"
+                "def peer():\n"
+                "    return service_value()\n"
+            )
+        (self.root / "service/api.py").write_text(
+            "from storage.raw import raw_value\n\n"
+            "def service_value():\n"
+            "    return raw_value()\n"
+        )
+        (self.root / "storage/raw.py").write_text(
+            "def raw_value():\n"
+            "    return 7\n\n"
+            "def other():\n"
+            "    return 8\n"
+        )
+        (self.root / "archbird.json").write_text(
+            json.dumps(
+                {
+                    "project": "python-dependency-redirect",
+                    "layers": [
+                        {
+                            "name": "python",
+                            "language": "python",
+                            "globs": ["**/*.py"],
+                            "import_roots": ["."],
+                        }
+                    ],
+                    "components": [
+                        {"name": "app", "paths": ["app/**"]},
+                        {"name": "service", "paths": ["service/**"]},
+                        {"name": "storage", "paths": ["storage/**"]},
+                    ],
+                    "constraints": {
+                        "APP-STORAGE-BOUNDARY": {
+                            "kind": "forbidden_component_edges",
+                            "edges": [
+                                {
+                                    "source": "app",
+                                    "kind": "import",
+                                    "target": "storage",
+                                }
+                            ],
+                            "kinds": ["import"],
+                            "owner": "architecture",
+                            "rationale": (
+                                "Application code reaches storage through "
+                                "the service boundary."
+                            ),
+                        }
+                    },
+                },
+                sort_keys=True,
+            )
+        )
+
+    def python_dependency_redirect_plan(self, name: str) -> Path:
+        plan_path = self.plan_path(name)
+        run(
+            "plan",
+            "APP-STORAGE-BOUNDARY",
+            "--root",
+            str(self.root),
+            "--redirect",
+            "raw_value=service_value",
+            "--output",
+            str(plan_path),
+        )
+        return plan_path
+
+    def test_python_dependency_redirect_preserves_aliases_and_closes_edge(
+        self,
+    ) -> None:
+        self.configure_python_dependency_redirect()
+        plan_path = self.python_dependency_redirect_plan(
+            "python-dependency-redirect-plan.json"
+        )
+        plan = json.loads(plan_path.read_bytes())
+        operation = plan["items"][0]["operation"]
+        self.assertEqual(operation["action"], "redirect_dependency")
+        self.assertEqual(
+            operation["source_paths"], ["app/alias.py", "app/main.py"]
+        )
+        widened = json.loads(json.dumps(plan))
+        widened["items"][0]["operation"]["source_paths"].append("app/peer.py")
+        widened_path = self.plan_path("python-widened-redirect-plan.json")
+        widened_path.write_text(json.dumps(widened, sort_keys=True))
+        rejected = run(
+            "act",
+            str(widened_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+            expected=2,
+        )
+        self.assertIn(
+            "Plan source scope differs from the current relation",
+            rejected.stderr.decode(),
+        )
+        preview = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn(
+            "-from storage.raw import raw_value as read", preview
+        )
+        self.assertIn(
+            "+from service.api import service_value as read", preview
+        )
+        self.assertIn("-from storage.raw import raw_value", preview)
+        self.assertIn("+from service.api import service_value", preview)
+        self.assertIn("-    return raw_value()", preview)
+        self.assertIn("+    return service_value()", preview)
+        self.assertNotIn("-    return read()", preview)
+
+        act_path, act = self.accepted_act(
+            plan_path, "python-dependency-redirect-act.json"
+        )
+        self.assertEqual(
+            [row["path"] for row in act["transitions"]],
+            ["app/alias.py", "app/main.py"],
+        )
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertIn(
+            "from service.api import service_value as read",
+            (self.root / "app/alias.py").read_text(),
+        )
+        self.assertIn(
+            "return read()", (self.root / "app/alias.py").read_text()
+        )
+        self.assertIn(
+            "return service_value()", (self.root / "app/main.py").read_text()
+        )
+        run("verify", "--root", str(self.root), "--check")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from app.main import render; "
+                    "from app.alias import alias_render; "
+                    "assert render() == alias_render() == 7"
+                ),
+            ],
+            cwd=self.root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout.decode())
+
+    def test_python_dependency_redirect_requires_observed_module_spelling(
+        self,
+    ) -> None:
+        self.configure_python_dependency_redirect(observed_replacement=False)
+        plan_path = self.python_dependency_redirect_plan(
+            "python-unobserved-module-plan.json"
+        )
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+            expected=2,
+        )
+        self.assertIn(
+            "replacement definition has no unique observed Python import module",
+            rejected.stderr.decode(),
+        )
+
+    def test_python_dependency_redirect_rejects_multi_name_import(self) -> None:
+        self.configure_python_dependency_redirect(multiple_imports=True)
+        plan_path = self.python_dependency_redirect_plan(
+            "python-multi-import-plan.json"
+        )
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+            expected=2,
+        )
+        self.assertIn(
+            "Python import does not bind exactly the redirected symbol",
+            rejected.stderr.decode(),
+        )
+
     def test_c_dependency_redirect_rejects_ambiguous_replacement(self) -> None:
         shutil.copytree(REDIRECT_FIXTURE, self.root, dirs_exist_ok=True)
         (self.root / "src/service/duplicate.c").write_text(

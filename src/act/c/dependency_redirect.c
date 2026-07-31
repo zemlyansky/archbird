@@ -1,8 +1,6 @@
 #include "c/dependency_redirect.h"
 
 #include "artifact_validation.h"
-#include "component_membership.h"
-#include "projection_internal.h"
 
 #include <string.h>
 
@@ -22,17 +20,6 @@ static const AbValue *field(const AbValue *object, const char *name) {
              : NULL;
 }
 
-static const AbValue *attribute(const AbProjectionItem *item,
-                                const char *name) {
-  size_t index;
-  size_t length = strlen(name);
-  for (index = 0; item && index < item->attribute_count; index++)
-    if (item->attributes[index].name.length == length &&
-        memcmp(item->attributes[index].name.data, name, length) == 0)
-      return &item->attributes[index].value;
-  return NULL;
-}
-
 static int text_is(const AbValue *value, const char *literal) {
   size_t length = strlen(literal);
   return value && value->kind == AB_VALUE_STRING &&
@@ -44,30 +31,6 @@ static ArchbirdStatus reject(AbActContext *context, const char *message) {
   return archbird_error_set(ab_act_executor_engine(context),
                             ARCHBIRD_POLICY_REJECTED, ARCHBIRD_NO_OFFSET,
                             "act C dependency redirect: %s", message);
-}
-
-static int projection_complete(const AbProjectionData *data) {
-  return data && data->state.length == 7 &&
-         memcmp(data->state.data, "current", 7) == 0 &&
-         strcmp(ab_projection_data_classification(data), "complete") == 0 &&
-         data->selection.has_truncated && !data->selection.truncated &&
-         (!data->selection.has_unknown || !data->selection.unknown) &&
-         (!data->selection.has_unsupported || !data->selection.unsupported);
-}
-
-static const AbProjectionItem *selected_relation(const AbProjectionData *data,
-                                                 const AbString *label) {
-  const AbProjectionItem *match = NULL;
-  size_t index;
-  for (index = 0; data && index < data->item_count; index++)
-    if (data->items[index].label.length == label->length &&
-        memcmp(data->items[index].label.data, label->data, label->length) ==
-            0) {
-      if (match)
-        return NULL;
-      match = &data->items[index];
-    }
-  return match;
 }
 
 static const AbValue *unique_c_definition(const AbValue *map,
@@ -182,33 +145,6 @@ static const AbString *canonical_include(const AbValue *map,
   return include;
 }
 
-static int file_in_component(const AbProjectionMembershipIndex *membership,
-                             const AbString *path, const AbString *component) {
-  const AbProjectionMembershipFile *file =
-      ab_projection_membership_file(membership, path);
-  size_t offset;
-  if (!file || !file->assignment_count)
-    return 0;
-  for (offset = 0; offset < file->assignment_count; offset++) {
-    const AbProjectionMembershipAssignment *assignment =
-        &membership->assignments[file->assignment_start + offset];
-    if (ab_string_equal(
-            membership->components[assignment->component_index].name,
-            component))
-      return 1;
-  }
-  return 0;
-}
-
-static int target_matches(const AbValue *projection,
-                          const AbProjectionMembershipIndex *membership,
-                          const AbString *candidate_path,
-                          const AbString *relation_target) {
-  if (text_is(field(projection, "select"), "file_edges"))
-    return ab_string_equal(candidate_path, relation_target);
-  return file_in_component(membership, candidate_path, relation_target);
-}
-
 static int site_add(AbActContext *context, AbActCRedirectSite *sites,
                     size_t *count, const AbString *path, uint64_t start,
                     uint64_t end, const AbString *expected,
@@ -263,21 +199,21 @@ static ArchbirdStatus collect_include_sites(AbActContext *context,
              : reject(context, "edge projection has no exact include sites");
 }
 
-static ArchbirdStatus collect_call_sites(
-    AbActContext *context, const AbValue *map, const AbValue *projection,
-    const AbValue *relation_sites, const AbString *relation_target,
-    const AbProjectionMembershipIndex *membership, const AbString *from_symbol,
-    const AbString *to_symbol, AbActCRedirectSite *sites, size_t *site_count) {
-  const AbValue *calls = field(map, "symbol_calls");
+static ArchbirdStatus
+collect_call_sites(AbActContext *context,
+                   const AbActDependencyRedirect *redirect,
+                   AbActCRedirectSite *sites, size_t *site_count) {
+  const AbValue *calls = field(redirect->map, "symbol_calls");
   size_t call_count = 0;
   size_t source_count = 0;
   size_t relation_index;
   for (relation_index = 0;
-       relation_sites && relation_sites->kind == AB_VALUE_ARRAY &&
-       relation_index < relation_sites->as.array.count;
+       redirect->relation_sites &&
+       redirect->relation_sites->kind == AB_VALUE_ARRAY &&
+       relation_index < redirect->relation_sites->as.array.count;
        relation_index++) {
-    const AbValue *path =
-        field(&relation_sites->as.array.items[relation_index], "path");
+    const AbValue *path = field(
+        &redirect->relation_sites->as.array.items[relation_index], "path");
     size_t row_index;
     int source_has_call = 0;
     if (!path || path->kind != AB_VALUE_STRING)
@@ -293,8 +229,8 @@ static ArchbirdStatus collect_call_sites(
       const AbValue *evidence = field(row, "evidence");
       size_t evidence_index;
       if (!name || name->kind != AB_VALUE_STRING ||
-          !ab_string_equal(&name->as.text, from_symbol) || !source_path ||
-          source_path->kind != AB_VALUE_STRING ||
+          !ab_string_equal(&name->as.text, redirect->from_symbol) ||
+          !source_path || source_path->kind != AB_VALUE_STRING ||
           !ab_string_equal(&source_path->as.text, &path->as.text))
         continue;
       if (!candidates || candidates->kind != AB_VALUE_ARRAY ||
@@ -306,8 +242,8 @@ static ArchbirdStatus collect_call_sites(
         const AbValue *candidate = &candidates->as.array.items[0];
         const AbValue *candidate_path = field(candidate, "path");
         if (!candidate_path || candidate_path->kind != AB_VALUE_STRING ||
-            !target_matches(projection, membership, &candidate_path->as.text,
-                            relation_target))
+            !ab_act_dependency_redirect_target_matches(
+                redirect, &candidate_path->as.text))
           return reject(context,
                         "source call does not target the forbidden relation");
       }
@@ -324,7 +260,7 @@ static ArchbirdStatus collect_call_sites(
             !ab_artifact_safe_integer(field(span, "start"), &start) ||
             !ab_artifact_safe_integer(field(span, "end"), &end) ||
             !site_add(context, sites, site_count, &path->as.text, start, end,
-                      from_symbol, to_symbol))
+                      redirect->from_symbol, redirect->to_symbol))
           return reject(context,
                         "source call has an invalid or conflicting exact span");
         call_count++;
@@ -341,24 +277,12 @@ static ArchbirdStatus collect_call_sites(
   return ARCHBIRD_OK;
 }
 
-ArchbirdStatus ab_act_c_dependency_redirect(AbActContext *context,
-                                            const AbValue *operation,
-                                            const AbString *item_id) {
+ArchbirdStatus
+ab_act_c_dependency_redirect(AbActContext *context,
+                             const AbActDependencyRedirect *redirect,
+                             const AbString *item_id) {
   ArchbirdEngine *engine = ab_act_executor_engine(context);
-  const AbValue *map = ab_act_executor_map(context);
-  const AbValue *definition = field(operation, "projection");
-  const AbValue *projection_id = field(operation, "projection_id");
-  const AbValue *expected_sha = field(operation, "projection_content_sha256");
-  const AbValue *relation_label = field(operation, "relation");
-  const AbValue *from_symbol = field(operation, "from_symbol");
-  const AbValue *to_symbol = field(operation, "to_symbol");
-  AbProjectionPlan plan = {0};
-  AbProjectionResult result = {0};
-  AbProjectionMembershipIndex membership = {0};
   AbActCRedirectSite *sites = NULL;
-  const AbProjectionItem *relation = NULL;
-  const AbValue *relation_sites;
-  const AbValue *relation_target;
   const AbValue *definition_file = NULL;
   const AbValue *definition_symbol = NULL;
   const AbValue *definition_path;
@@ -366,42 +290,10 @@ ArchbirdStatus ab_act_c_dependency_redirect(AbActContext *context,
   const AbString *include;
   size_t site_count = 0;
   size_t index;
-  ArchbirdStatus status;
-  status = ab_projection_plan_compile(engine, definition,
-                                      &projection_id->as.text, &plan);
-  if (status == ARCHBIRD_OK)
-    status = ab_projection_plan_evaluate(engine, &plan, map, NULL, &result);
-  if (status == ARCHBIRD_OK &&
-      memcmp(result.data.sha256, expected_sha->as.text.data, 64) != 0)
-    status =
-        reject(context, "edge ProjectionResult content differs from the Plan");
-  if (status == ARCHBIRD_OK && !projection_complete(&result.data))
-    status = reject(context,
-                    "edge projection is not complete, current, and exhaustive");
+  ArchbirdStatus status = ARCHBIRD_OK;
   if (status == ARCHBIRD_OK) {
-    relation = selected_relation(&result.data, &relation_label->as.text);
-    if (!relation || relation->state.length != 7 ||
-        memcmp(relation->state.data, "current", 7) != 0)
-      status =
-          reject(context, "Plan relation is absent, ambiguous, or not current");
-  }
-  relation_sites = attribute(relation, "sites");
-  relation_target = attribute(relation, "target");
-  if (status == ARCHBIRD_OK &&
-      (!relation_sites || relation_sites->kind != AB_VALUE_ARRAY ||
-       !relation_target || relation_target->kind != AB_VALUE_STRING))
-    status =
-        reject(context, "edge projection lacks typed source sites or target");
-  if (status == ARCHBIRD_OK &&
-      text_is(field(definition, "select"), "component_edges"))
-    status = ab_projection_membership_index_build(engine, map, &membership);
-  if (status == ARCHBIRD_OK &&
-      text_is(field(definition, "select"), "component_edges") &&
-      !membership.current)
-    status = reject(context, "component membership is not current");
-  if (status == ARCHBIRD_OK) {
-    definition_symbol =
-        unique_c_definition(map, &to_symbol->as.text, &definition_file);
+    definition_symbol = unique_c_definition(redirect->map, redirect->to_symbol,
+                                            &definition_file);
     definition_path = field(definition_file, "path");
     if (!definition_symbol || !definition_path ||
         definition_path->kind != AB_VALUE_STRING)
@@ -410,21 +302,21 @@ ArchbirdStatus ab_act_c_dependency_redirect(AbActContext *context,
   } else {
     definition_path = NULL;
   }
-  if (status == ARCHBIRD_OK &&
-      target_matches(definition, &membership, &definition_path->as.text,
-                     &relation_target->as.text))
+  if (status == ARCHBIRD_OK && ab_act_dependency_redirect_target_matches(
+                                   redirect, &definition_path->as.text))
     status =
         reject(context, "replacement remains inside the forbidden dependency "
                         "target");
-  declaration_path = status == ARCHBIRD_OK
-                         ? unique_declaration_file(map, &to_symbol->as.text,
-                                                   &definition_path->as.text)
-                         : NULL;
+  declaration_path =
+      status == ARCHBIRD_OK
+          ? unique_declaration_file(redirect->map, redirect->to_symbol,
+                                    &definition_path->as.text)
+          : NULL;
   if (status == ARCHBIRD_OK && !declaration_path)
     status =
         reject(context, "replacement has no unique exact C declaration header");
   include = status == ARCHBIRD_OK
-                ? canonical_include(map, &declaration_path->as.text)
+                ? canonical_include(redirect->map, &declaration_path->as.text)
                 : NULL;
   if (status == ARCHBIRD_OK && !include)
     status = reject(
@@ -437,13 +329,10 @@ ArchbirdStatus ab_act_c_dependency_redirect(AbActContext *context,
       status = ARCHBIRD_OUT_OF_MEMORY;
   }
   if (status == ARCHBIRD_OK)
-    status = collect_include_sites(context, relation_sites, include, sites,
-                                   &site_count);
+    status = collect_include_sites(context, redirect->relation_sites, include,
+                                   sites, &site_count);
   if (status == ARCHBIRD_OK)
-    status = collect_call_sites(context, map, definition, relation_sites,
-                                &relation_target->as.text, &membership,
-                                &from_symbol->as.text, &to_symbol->as.text,
-                                sites, &site_count);
+    status = collect_call_sites(context, redirect, sites, &site_count);
   for (index = 0; status == ARCHBIRD_OK && index < site_count; index++)
     status = ab_act_executor_replace_exact(
         context, item_id, sites[index].path, (size_t)sites[index].start,
@@ -452,8 +341,5 @@ ArchbirdStatus ab_act_c_dependency_redirect(AbActContext *context,
         (const uint8_t *)sites[index].replacement->data,
         sites[index].replacement->length);
   ab_free(engine, sites);
-  ab_projection_membership_index_free(engine, &membership);
-  ab_projection_result_free(engine, &result);
-  ab_projection_plan_free(engine, &plan);
   return status;
 }

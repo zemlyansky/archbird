@@ -494,10 +494,14 @@ archbird apply .archbird/act.json
 
 The neutral `redirect_dependency` operator stores an exhaustive edge
 ProjectionPlan, the relation and symbol identities, and affected source paths.
-It stores no source ranges or replacement text. Act's native C executor
-reevaluates the projection and resolves exact declaration, definition, include,
-and call evidence before materializing transitions. Incomplete or ambiguous
-evidence blocks execution.
+It stores no source ranges or replacement text. Act reevaluates the projection
+once and dispatches its typed evidence by mapped source language. The native C
+executor resolves exact declaration, definition, include, and call evidence.
+The native Python executor requires one exact imported binding, exact
+CPython-AST call evidence, and an already observed import-module spelling for
+the replacement; it preserves explicit local aliases. Incomplete evidence,
+ambiguous definitions, missing observed include/import routes, multi-name
+Python imports, and non-unique calls block execution.
 
 Older exact `replace_range`, `create_file`, `delete_file`, `move_file`,
 `edit_json_pointer`, `edit_make_variable_token`,

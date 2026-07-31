@@ -439,6 +439,11 @@
           {
             "source": "act",
             "kind": "*",
+            "target": "syntax-vendor"
+          },
+          {
+            "source": "act",
+            "kind": "*",
             "target": "verify"
           },
           {

@@ -724,12 +724,16 @@ Plan's target contract is language-neutral: it names architectural objectives,
 operators, exhaustive applicability, dependencies, executor capability, and
 acceptance without embedding source syntax or replacement bytes.
 `redirect_dependency` and `declare_symbol` currently follow this boundary end
-to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores
-the exhaustive edge ProjectionPlan, exact relation, affected source paths, and
-symbol identities. Act reevaluates that projection and dispatches to the native
-C executor, which resolves exact declarations, definitions, include spelling,
-and call sites before producing transitions. It rejects incomplete projections,
-ambiguous definitions, missing observed includes, or non-unique call sites.
+to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores the exhaustive
+edge ProjectionPlan, exact relation, affected source paths, and symbol
+identities. Act reevaluates that projection once and dispatches its typed
+evidence by mapped source language. The native C executor resolves exact
+declarations, definitions, include spelling, and call sites. The native Python
+executor resolves one exact imported binding and its CPython-AST calls, uses an
+already observed import-module spelling for the replacement, and preserves an
+explicit local alias. Incomplete projections, ambiguous definitions, missing
+observed include/import routes, multi-name Python imports, and non-unique call
+sites block Act instead of producing partial edits.
 
 Older operators currently include `replace_range`, `create_file`,
 `delete_file`, `move_file`, `edit_json_pointer`,
