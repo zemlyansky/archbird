@@ -57,6 +57,18 @@ typedef struct AbActWork {
   char after_sha256[65];
 } AbActWork;
 
+typedef struct AbActExecutorRecord {
+  const AbString *item_id;
+  AbString capability;
+  AbString *reads;
+  size_t read_count;
+  size_t read_capacity;
+  AbString *writes;
+  size_t write_count;
+  size_t write_capacity;
+  size_t matches;
+} AbActExecutorRecord;
+
 struct AbActContext {
   ArchbirdEngine *engine;
   const ArchbirdProject *project;
@@ -66,6 +78,9 @@ struct AbActContext {
   size_t work_count;
   AbActEdit *edits;
   size_t edit_count;
+  AbActExecutorRecord *executors;
+  size_t executor_count;
+  AbActExecutorRecord *active_executor;
   size_t total_after_bytes;
 };
 
@@ -95,6 +110,58 @@ static ArchbirdStatus act_error(ArchbirdEngine *engine, ArchbirdStatus code,
                                 const char *message) {
   return archbird_error_set(engine, code, ARCHBIRD_NO_OFFSET, "act: %s",
                             message);
+}
+
+static ArchbirdStatus executor_path_add(AbActContext *context,
+                                        const AbString *path, AbString **values,
+                                        size_t *count, size_t *capacity) {
+  AbString *resized;
+  size_t index;
+  size_t next;
+  for (index = 0; index < *count; index++)
+    if (ab_string_equal(&(*values)[index], path))
+      return ARCHBIRD_OK;
+  if (*count >= AB_ACT_MAX_WORK_ITEMS)
+    return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                     "executor ledger contains too many paths");
+  if (*count == *capacity) {
+    next = *capacity ? *capacity * 2 : 4;
+    if (next > AB_ACT_MAX_WORK_ITEMS)
+      next = AB_ACT_MAX_WORK_ITEMS;
+    resized = (AbString *)ab_realloc(context->engine, *values,
+                                     next * sizeof(*resized));
+    if (!resized)
+      return act_error(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                       "out of memory recording executor paths");
+    *values = resized;
+    *capacity = next;
+  }
+  if (ab_string_copy(context->engine, &(*values)[*count], path->data,
+                     path->length) != ARCHBIRD_OK)
+    return act_error(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                     "out of memory copying an executor path");
+  (*count)++;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus executor_read(AbActContext *context,
+                                    const AbString *path) {
+  if (!context->active_executor)
+    return act_error(context->engine, ARCHBIRD_CONFLICT,
+                     "native operator read without an executor capability");
+  return executor_path_add(context, path, &context->active_executor->reads,
+                           &context->active_executor->read_count,
+                           &context->active_executor->read_capacity);
+}
+
+static ArchbirdStatus executor_write(AbActContext *context,
+                                     const AbString *path) {
+  if (!context->active_executor)
+    return act_error(context->engine, ARCHBIRD_CONFLICT,
+                     "native operator wrote without an executor capability");
+  return executor_path_add(context, path, &context->active_executor->writes,
+                           &context->active_executor->write_count,
+                           &context->active_executor->write_capacity);
 }
 
 static ArchbirdStatus digest_bytes(const uint8_t *bytes, size_t length,
@@ -157,7 +224,7 @@ static ArchbirdStatus source_work(AbActContext *context, const AbString *path,
   for (index = 0; index < context->work_count; index++)
     if (ab_string_equal(&context->works[index].path, path)) {
       *out_index = index;
-      return ARCHBIRD_OK;
+      return executor_read(context, path);
     }
   if (context->work_count >= AB_ACT_MAX_WORK_ITEMS)
     return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
@@ -187,7 +254,7 @@ static ArchbirdStatus source_work(AbActContext *context, const AbString *path,
     work->executable = object_field(metadata, "executable")->as.boolean != 0;
     *out_index = context->work_count++;
   }
-  return ARCHBIRD_OK;
+  return executor_read(context, path);
 }
 
 static ArchbirdStatus absent_work(AbActContext *context, const AbString *path,
@@ -230,6 +297,13 @@ static ArchbirdStatus add_edit(AbActContext *context, size_t work_index,
   edit->replacement = replacement;
   edit->replacement_length = replacement_length;
   edit->owned_replacement = owned_replacement;
+  {
+    ArchbirdStatus status =
+        executor_write(context, &context->works[work_index].path);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  context->active_executor->matches++;
   return ARCHBIRD_OK;
 }
 
@@ -243,6 +317,36 @@ const ArchbirdProject *ab_act_executor_project(const AbActContext *context) {
 
 const AbValue *ab_act_executor_map(const AbActContext *context) {
   return context ? context->map : NULL;
+}
+
+ArchbirdStatus ab_act_executor_begin(AbActContext *context,
+                                     const AbString *item_id,
+                                     const char *capability) {
+  size_t capability_length;
+  size_t index;
+  AbActExecutorRecord *record;
+  if (!context || !item_id || !capability || !capability[0])
+    return ARCHBIRD_INVALID_ARGUMENT;
+  capability_length = strlen(capability);
+  for (index = 0; index < context->executor_count; index++) {
+    record = &context->executors[index];
+    if (ab_string_equal(record->item_id, item_id) &&
+        record->capability.length == capability_length &&
+        memcmp(record->capability.data, capability, capability_length) == 0) {
+      context->active_executor = record;
+      return ARCHBIRD_OK;
+    }
+  }
+  if (context->executor_count >= AB_ACT_MAX_WORK_ITEMS)
+    return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                     "Act uses too many executor capabilities");
+  record = &context->executors[context->executor_count++];
+  memset(record, 0, sizeof(*record));
+  record->item_id = item_id;
+  record->capability.data = (char *)capability;
+  record->capability.length = capability_length;
+  context->active_executor = record;
+  return ARCHBIRD_OK;
 }
 
 ArchbirdStatus ab_act_executor_source(AbActContext *context,
@@ -272,7 +376,7 @@ ArchbirdStatus ab_act_executor_source(AbActContext *context,
                      "executor read metadata is stale");
   out->bytes = ab_project_source_bytes(context->project, source_index);
   out->byte_length = manifest->files[source_index].byte_length;
-  return ARCHBIRD_OK;
+  return executor_read(context, path);
 }
 
 ArchbirdStatus ab_act_executor_replace_exact(
@@ -549,10 +653,20 @@ static ArchbirdStatus collect_operation(AbActContext *context,
   if (!executable->as.boolean || ab_artifact_text_is(action, "manual"))
     return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
                      "Plan contains a manual or blocked item");
-  if (ab_artifact_text_is(action, "replace_range"))
+  if (ab_artifact_text_is(action, "replace_range")) {
+    status = ab_act_executor_begin(context, &item_id->as.text,
+                                   "archbird.native.bytes.replace-range@1");
+    if (status != ARCHBIRD_OK)
+      return status;
     return add_replace_range(context, operation, &item_id->as.text);
-  if (ab_artifact_text_is(action, "edit_json_pointer"))
+  }
+  if (ab_artifact_text_is(action, "edit_json_pointer")) {
+    status = ab_act_executor_begin(context, &item_id->as.text,
+                                   "archbird.native.json.pointer-edit@1");
+    if (status != ARCHBIRD_OK)
+      return status;
     return add_json_pointer_edit(context, operation, &item_id->as.text);
+  }
   if (ab_artifact_text_is(action, "add_provider_capability") ||
       ab_artifact_text_is(action, "remove_provider_capability") ||
       ab_artifact_text_is(action, "rename_provider_capability"))
@@ -566,6 +680,10 @@ static ArchbirdStatus collect_operation(AbActContext *context,
     return ab_act_dependency_redirect(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "create_file")) {
     const AbValue *content = object_field(operation, "content");
+    status = ab_act_executor_begin(context, &item_id->as.text,
+                                   "archbird.native.filesystem.create-file@1");
+    if (status != ARCHBIRD_OK)
+      return status;
     path = object_field(operation, "path");
     status = absent_work(context, &path->as.text, &work_index);
     if (status != ARCHBIRD_OK)
@@ -580,9 +698,16 @@ static ArchbirdStatus collect_operation(AbActContext *context,
         (const uint8_t *)content->as.text.data;
     context->works[work_index].created_length = content->as.text.length;
     context->works[work_index].executable = 0;
-    return ARCHBIRD_OK;
+    status = executor_write(context, &context->works[work_index].path);
+    if (status == ARCHBIRD_OK)
+      context->active_executor->matches++;
+    return status;
   }
   if (ab_artifact_text_is(action, "delete_file")) {
+    status = ab_act_executor_begin(context, &item_id->as.text,
+                                   "archbird.native.filesystem.delete-file@1");
+    if (status != ARCHBIRD_OK)
+      return status;
     path = object_field(operation, "path");
     source_sha = object_field(operation, "source_sha256");
     status = source_work(context, &path->as.text, &work_index);
@@ -598,10 +723,17 @@ static ArchbirdStatus collect_operation(AbActContext *context,
                        "Plan consumes one source file more than once");
     context->works[work_index].delete_file = 1;
     context->works[work_index].action_item_id = &item_id->as.text;
-    return ARCHBIRD_OK;
+    status = executor_write(context, &context->works[work_index].path);
+    if (status == ARCHBIRD_OK)
+      context->active_executor->matches++;
+    return status;
   }
   if (ab_artifact_text_is(action, "move_file")) {
     const AbValue *destination = object_field(operation, "destination_path");
+    status = ab_act_executor_begin(context, &item_id->as.text,
+                                   "archbird.native.filesystem.move-file@1");
+    if (status != ARCHBIRD_OK)
+      return status;
     path = object_field(operation, "source_path");
     source_sha = object_field(operation, "source_sha256");
     status = source_work(context, &path->as.text, &work_index);
@@ -621,7 +753,10 @@ static ArchbirdStatus collect_operation(AbActContext *context,
     context->works[work_index].move = 1;
     context->works[work_index].destination = destination->as.text;
     context->works[work_index].action_item_id = &item_id->as.text;
-    return ARCHBIRD_OK;
+    status = executor_write(context, &context->works[work_index].destination);
+    if (status == ARCHBIRD_OK)
+      context->active_executor->matches++;
+    return status;
   }
   return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
                    "Plan operator is not native yet");
@@ -733,6 +868,78 @@ static int string_pointer_compare(const void *left, const void *right) {
   const AbString *const *a = (const AbString *const *)left;
   const AbString *const *b = (const AbString *const *)right;
   return ab_string_compare(*a, *b);
+}
+
+static int string_compare(const void *left, const void *right) {
+  return ab_string_compare((const AbString *)left, (const AbString *)right);
+}
+
+static ArchbirdStatus render_owned_string_array(AbBuffer *buffer,
+                                                const AbString *values,
+                                                size_t count) {
+  size_t index;
+  ArchbirdStatus status = ab_buffer_literal(buffer, "[");
+  for (index = 0; status == ARCHBIRD_OK && index < count; index++) {
+    if (index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, values[index].data,
+                                     values[index].length);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "]");
+  return status;
+}
+
+static int executor_compare(const void *left, const void *right) {
+  const AbActExecutorRecord *a = (const AbActExecutorRecord *)left;
+  const AbActExecutorRecord *b = (const AbActExecutorRecord *)right;
+  int compared = ab_string_compare(&a->capability, &b->capability);
+  return compared ? compared : ab_string_compare(a->item_id, b->item_id);
+}
+
+static ArchbirdStatus render_executor(AbBuffer *buffer,
+                                      AbActExecutorRecord *record) {
+  ArchbirdStatus status;
+  if (record->read_count > 1)
+    qsort(record->reads, record->read_count, sizeof(*record->reads),
+          string_compare);
+  if (record->write_count > 1)
+    qsort(record->writes, record->write_count, sizeof(*record->writes),
+          string_compare);
+  status = ab_buffer_literal(buffer, "{\"capability\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, record->capability.data,
+                                   record->capability.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(
+        buffer, ",\"deterministic\":true,\"implementation_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_json_string(buffer, archbird_implementation_sha256(), 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"item_ids\":[");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, record->item_id->data,
+                                   record->item_id->length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "],\"matches\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, (uint64_t)record->matches);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"reads\":");
+  if (status == ARCHBIRD_OK)
+    status =
+        render_owned_string_array(buffer, record->reads, record->read_count);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer,
+                               ",\"skipped\":0,\"unsupported\":0,\"writes\":");
+  if (status == ARCHBIRD_OK)
+    status =
+        render_owned_string_array(buffer, record->writes, record->write_count);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  return status;
 }
 
 static ArchbirdStatus collect_constraint_ids(AbActContext *context,
@@ -910,51 +1117,16 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
                                  uint32_t json_flags, ArchbirdWriteFn write_fn,
                                  void *user_data) {
   AbBuffer document;
-  const AbString *item_ids[AB_ACT_MAX_WORK_ITEMS];
-  const AbString *reads[AB_ACT_MAX_WORK_ITEMS];
-  const AbString *writes[AB_ACT_MAX_WORK_ITEMS];
   const AbString *constraint_ids[AB_ACT_MAX_WORK_ITEMS];
-  size_t item_count = 0;
-  size_t read_count = 0;
-  size_t write_count = 0;
   size_t constraint_count = 0;
   size_t index;
   ArchbirdStatus status;
   ab_buffer_init(&document, context->engine);
   status =
       collect_constraint_ids(context, plan, constraint_ids, &constraint_count);
-  for (index = 0; index < context->work_count; index++) {
-    size_t work_index = order[index].work_index;
-    const AbActWork *work = &context->works[work_index];
-    const AbString *ids[AB_ACT_MAX_WORK_ITEMS];
-    size_t count = work_item_ids(context, work_index, ids);
-    size_t id_index;
-    for (id_index = 0; id_index < count; id_index++)
-      item_ids[item_count++] = ids[id_index];
-    if (work->before_exists)
-      reads[read_count++] = &work->path;
-    writes[write_count++] = work->move ? &work->destination : &work->path;
-  }
-  if (item_count > 1)
-    qsort(item_ids, item_count, sizeof(*item_ids), string_pointer_compare);
-  if (read_count > 1)
-    qsort(reads, read_count, sizeof(*reads), string_pointer_compare);
-  if (write_count > 1)
-    qsort(writes, write_count, sizeof(*writes), string_pointer_compare);
-#define UNIQUE_POINTERS(values, count)                                         \
-  do {                                                                         \
-    size_t _input;                                                             \
-    size_t _output = 0;                                                        \
-    for (_input = 0; _input < (count); _input++)                               \
-      if (!_output ||                                                          \
-          !ab_string_equal((values)[_output - 1], (values)[_input]))           \
-        (values)[_output++] = (values)[_input];                                \
-    (count) = _output;                                                         \
-  } while (0)
-  UNIQUE_POINTERS(item_ids, item_count);
-  UNIQUE_POINTERS(reads, read_count);
-  UNIQUE_POINTERS(writes, write_count);
-#undef UNIQUE_POINTERS
+  if (context->executor_count > 1)
+    qsort(context->executors, context->executor_count,
+          sizeof(*context->executors), executor_compare);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&document, "{\"acceptance\":{\"constraints\":");
   if (status == ARCHBIRD_OK)
@@ -965,32 +1137,12 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
         &document,
         ",\"status\":\"not_evaluated\",\"verification_sha256\":null},"
         "\"after\":null,\"artifact\":\"act\",\"executors\":[");
-  if (status == ARCHBIRD_OK && item_count) {
-    status = ab_buffer_literal(
-        &document, "{\"capability\":\"archbird.native.plan-operators@1\","
-                   "\"deterministic\":true,\"implementation_sha256\":");
+  for (index = 0; status == ARCHBIRD_OK && index < context->executor_count;
+       index++) {
+    if (index)
+      status = ab_buffer_literal(&document, ",");
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_json_string(&document,
-                                     archbird_implementation_sha256(), 64);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(&document, ",\"item_ids\":");
-    if (status == ARCHBIRD_OK)
-      status = render_string_array(&document, item_ids, item_count);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(&document, ",\"matches\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_u64(&document, (uint64_t)item_count);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(&document, ",\"reads\":");
-    if (status == ARCHBIRD_OK)
-      status = render_string_array(&document, reads, read_count);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(
-          &document, ",\"skipped\":0,\"unsupported\":0,\"writes\":");
-    if (status == ARCHBIRD_OK)
-      status = render_string_array(&document, writes, write_count);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(&document, "}");
+      status = render_executor(&document, &context->executors[index]);
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&document, "],\"plan_sha256\":");
@@ -1139,7 +1291,9 @@ ArchbirdStatus archbird_act_materialize(
                                            sizeof(*context.works));
     context.edits = (AbActEdit *)ab_calloc(engine, AB_ACT_MAX_WORK_ITEMS,
                                            sizeof(*context.edits));
-    if (!context.works || !context.edits)
+    context.executors = (AbActExecutorRecord *)ab_calloc(
+        engine, AB_ACT_MAX_WORK_ITEMS, sizeof(*context.executors));
+    if (!context.works || !context.edits || !context.executors)
       status = act_error(engine, ARCHBIRD_OUT_OF_MEMORY,
                          "out of memory preparing Plan operators");
   }
@@ -1197,6 +1351,18 @@ ArchbirdStatus archbird_act_materialize(
   }
   for (index = 0; index < context.work_count; index++)
     ab_free(engine, context.works[index].after);
+  for (index = 0; index < context.executor_count; index++) {
+    size_t path_index;
+    for (path_index = 0; path_index < context.executors[index].read_count;
+         path_index++)
+      ab_string_free(engine, &context.executors[index].reads[path_index]);
+    for (path_index = 0; path_index < context.executors[index].write_count;
+         path_index++)
+      ab_string_free(engine, &context.executors[index].writes[path_index]);
+    ab_free(engine, context.executors[index].reads);
+    ab_free(engine, context.executors[index].writes);
+  }
+  ab_free(engine, context.executors);
   ab_free(engine, context.edits);
   ab_free(engine, context.works);
   ab_free(engine, order);

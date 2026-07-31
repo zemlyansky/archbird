@@ -578,7 +578,10 @@ ab_act_ecmascript_dependency_redirect(AbActContext *context,
   size_t binding_count = redirect->relation_sites->as.array.count;
   size_t site_count = 0;
   size_t index;
-  ArchbirdStatus status = ARCHBIRD_OK;
+  ArchbirdStatus status = ab_act_executor_begin(
+      context, item_id, "archbird.native.ecmascript.redirect-dependency@1");
+  if (status != ARCHBIRD_OK)
+    return status;
   definition_symbol =
       unique_definition(redirect->map, redirect->to_symbol, &definition_file);
   definition_path = field(definition_file, "path");

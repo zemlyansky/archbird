@@ -290,7 +290,8 @@ ab_act_c_dependency_redirect(AbActContext *context,
   const AbString *include;
   size_t site_count = 0;
   size_t index;
-  ArchbirdStatus status = ARCHBIRD_OK;
+  ArchbirdStatus status = ab_act_executor_begin(
+      context, item_id, "archbird.native.c.redirect-dependency@1");
   if (status == ARCHBIRD_OK) {
     definition_symbol = unique_c_definition(redirect->map, redirect->to_symbol,
                                             &definition_file);

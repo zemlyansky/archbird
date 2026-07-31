@@ -864,11 +864,69 @@ class PlanActCliTest(unittest.TestCase):
                 "surface": "ffi",
             },
         )
+        declaration_item = next(
+            item
+            for item in plan["items"]
+            if item["operation"]["action"] == "declare_symbol"
+        )
+        registration_item = next(
+            item
+            for item in plan["items"]
+            if item["operation"]["action"] == "add_provider_capability"
+        )
+        self.assertEqual(
+            registration_item["depends_on"], [declaration_item["id"]]
+        )
+        self.assertEqual(declaration_item["depends_on"], [])
 
         act_path, patch = self.accepted_act(
             plan_path, "coordinated-surface-act.json"
         )
         self.assertEqual(len(patch["transitions"]), 2)
+        executors = {
+            row["capability"]: row for row in patch["executors"]
+        }
+        self.assertEqual(
+            set(executors),
+            {
+                "archbird.native.c.declare-symbol@1",
+                "archbird.native.make.provider-capability@1",
+            },
+        )
+        self.assertEqual(
+            executors["archbird.native.c.declare-symbol@1"],
+            {
+                "capability": "archbird.native.c.declare-symbol@1",
+                "deterministic": True,
+                "implementation_sha256": patch["tool"][
+                    "implementation_sha256"
+                ],
+                "item_ids": [declaration_item["id"]],
+                "matches": 1,
+                "reads": ["src/core.c", "src/core.h"],
+                "skipped": 0,
+                "unsupported": 0,
+                "writes": ["src/core.h"],
+            },
+        )
+        self.assertEqual(
+            executors["archbird.native.make.provider-capability@1"],
+            {
+                "capability": (
+                    "archbird.native.make.provider-capability@1"
+                ),
+                "deterministic": True,
+                "implementation_sha256": patch["tool"][
+                    "implementation_sha256"
+                ],
+                "item_ids": [registration_item["id"]],
+                "matches": 1,
+                "reads": ["Makefile"],
+                "skipped": 0,
+                "unsupported": 0,
+                "writes": ["Makefile"],
+            },
+        )
         self.assertEqual(header.read_bytes(), original_header)
         run("apply", str(act_path), "--root", str(self.root))
         self.assertIn(
@@ -1342,8 +1400,28 @@ class PlanActCliTest(unittest.TestCase):
         ).stdout.decode()
         self.assertIn("--- a/api.py", patch)
         self.assertIn("--- a/consumer.py", patch)
-        act_path, _patch = self.accepted_act(
+        act_path, rename_act = self.accepted_act(
             plan_path, "rename-act.json"
+        )
+        self.assertEqual(
+            rename_act["executors"],
+            [
+                {
+                    "capability": (
+                        "archbird.native.python.rename-symbol@1"
+                    ),
+                    "deterministic": True,
+                    "implementation_sha256": rename_act["tool"][
+                        "implementation_sha256"
+                    ],
+                    "item_ids": [item["id"]],
+                    "matches": 3,
+                    "reads": ["api.py", "consumer.py"],
+                    "skipped": 0,
+                    "unsupported": 0,
+                    "writes": ["api.py", "consumer.py"],
+                }
+            ],
         )
         self.assertIn("old_api", (self.root / "api.py").read_text())
         run("apply", str(act_path), "--root", str(self.root))
@@ -1492,6 +1570,13 @@ class PlanActCliTest(unittest.TestCase):
             [(row["kind"], row["path"]) for row in act["transitions"]],
             [("modify", "src/ui/view.c")],
         )
+        self.assertEqual(
+            act["executors"][0]["capability"],
+            "archbird.native.c.redirect-dependency@1",
+        )
+        self.assertEqual(act["executors"][0]["matches"], 2)
+        self.assertEqual(act["executors"][0]["reads"], ["src/ui/view.c"])
+        self.assertEqual(act["executors"][0]["writes"], ["src/ui/view.c"])
         run("apply", str(act_path), "--root", str(self.root))
         source = (self.root / "src/ui/view.c").read_text()
         self.assertIn('#include "service/api.h"', source)
@@ -1642,6 +1727,17 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(
             [row["path"] for row in act["transitions"]],
             ["app/alias.py", "app/main.py"],
+        )
+        self.assertEqual(
+            act["executors"][0]["capability"],
+            "archbird.native.python.redirect-dependency@1",
+        )
+        self.assertEqual(act["executors"][0]["matches"], 5)
+        self.assertEqual(
+            act["executors"][0]["reads"], ["app/alias.py", "app/main.py"]
+        )
+        self.assertEqual(
+            act["executors"][0]["writes"], ["app/alias.py", "app/main.py"]
         )
         run("apply", str(act_path), "--root", str(self.root))
         self.assertIn(

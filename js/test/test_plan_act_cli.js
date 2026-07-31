@@ -456,10 +456,19 @@ try {
       .sort(),
     ["add_provider_capability", "declare_symbol"],
   );
+  const coordinatedDeclaration = coordinatedDocument.items.find(
+    (item) => item.operation.action === "declare_symbol",
+  );
+  const coordinatedRegistration = coordinatedDocument.items.find(
+    (item) => item.operation.action === "add_provider_capability",
+  );
+  assert.deepEqual(coordinatedDeclaration.depends_on, []);
   assert.deepEqual(
-    coordinatedDocument.items.find(
-      (item) => item.operation.action === "declare_symbol",
-    ).operation,
+    coordinatedRegistration.depends_on,
+    [coordinatedDeclaration.id],
+  );
+  assert.deepEqual(
+    coordinatedDeclaration.operation,
     {
       action: "declare_symbol",
       path: "src/core.h",
@@ -471,6 +480,49 @@ try {
     "act", coordinatedPlan, "--root", coordinatedRoot, "--format", "json",
     "--output", coordinatedAct,
   ]);
+  const coordinatedActDocument = JSON.parse(
+    fs.readFileSync(coordinatedAct, "utf8"),
+  );
+  const coordinatedExecutors = Object.fromEntries(
+    coordinatedActDocument.executors.map((row) => [row.capability, row]),
+  );
+  assert.deepEqual(
+    Object.keys(coordinatedExecutors).sort(),
+    [
+      "archbird.native.c.declare-symbol@1",
+      "archbird.native.make.provider-capability@1",
+    ],
+  );
+  assert.deepEqual(
+    coordinatedExecutors["archbird.native.c.declare-symbol@1"],
+    {
+      capability: "archbird.native.c.declare-symbol@1",
+      deterministic: true,
+      implementation_sha256:
+        coordinatedActDocument.tool.implementation_sha256,
+      item_ids: [coordinatedDeclaration.id],
+      matches: 1,
+      reads: ["src/core.c", "src/core.h"],
+      skipped: 0,
+      unsupported: 0,
+      writes: ["src/core.h"],
+    },
+  );
+  assert.deepEqual(
+    coordinatedExecutors["archbird.native.make.provider-capability@1"],
+    {
+      capability: "archbird.native.make.provider-capability@1",
+      deterministic: true,
+      implementation_sha256:
+        coordinatedActDocument.tool.implementation_sha256,
+      item_ids: [coordinatedRegistration.id],
+      matches: 1,
+      reads: ["Makefile"],
+      skipped: 0,
+      unsupported: 0,
+      writes: ["Makefile"],
+    },
+  );
   run(["apply", coordinatedAct, "--root", coordinatedRoot]);
   run(["verify", "--root", coordinatedRoot, "--check"]);
 

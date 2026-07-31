@@ -9,6 +9,9 @@ ArchbirdEngine *ab_act_executor_engine(AbActContext *context);
 const ArchbirdProject *ab_act_executor_project(const AbActContext *context);
 const AbValue *ab_act_executor_map(const AbActContext *context);
 
+ArchbirdStatus ab_act_executor_begin(AbActContext *context,
+                                     const AbString *item_id,
+                                     const char *capability);
 ArchbirdStatus ab_act_executor_source(AbActContext *context,
                                       const AbString *path,
                                       ArchbirdSourceView *out);

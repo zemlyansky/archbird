@@ -872,8 +872,7 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
   ab_buffer_init(&canonical, context->engine);
   status = literal(&rendered, "{\"artifact\":\"plan\",\"items\":[");
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_append(&rendered, context->builder.items.data,
-                              context->builder.items.length);
+    status = ab_plan_item_builder_render_items(&context->builder, &rendered);
   if (status == ARCHBIRD_OK)
     status = literal(&rendered, "],\"objective\":");
   if (status == ARCHBIRD_OK) {

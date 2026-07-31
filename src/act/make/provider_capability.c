@@ -506,7 +506,10 @@ ArchbirdStatus ab_act_make_provider_capability(AbActContext *context,
   const AbValue *to = field(operation, "to");
   AbActMakeProvider provider;
   const AbValue *row;
-  ArchbirdStatus status = load_provider(context, operation, &provider);
+  ArchbirdStatus status = ab_act_executor_begin(
+      context, item_id, "archbird.native.make.provider-capability@1");
+  if (status == ARCHBIRD_OK)
+    status = load_provider(context, operation, &provider);
   if (status != ARCHBIRD_OK)
     return status;
   if (text_is(action, "add_provider_capability")) {

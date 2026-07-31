@@ -383,7 +383,10 @@ ArchbirdStatus ab_act_c_declare_symbol(AbActContext *context,
   memset(&proof, 0, sizeof(proof));
   ab_buffer_init(&signature, engine);
   ab_buffer_init(&replacement, engine);
-  status = ab_act_executor_source(context, &path->as.text, &source);
+  status = ab_act_executor_begin(context, item_id,
+                                 "archbird.native.c.declare-symbol@1");
+  if (status == ARCHBIRD_OK)
+    status = ab_act_executor_source(context, &path->as.text, &source);
   if (status == ARCHBIRD_OK &&
       !analyze_declaration(ab_act_executor_map(context), &path->as.text,
                            &symbol->as.text, &proof, &reason))

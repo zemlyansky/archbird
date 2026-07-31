@@ -238,7 +238,14 @@ static ArchbirdStatus ground_occurrence(AbActContext *context,
     return reject(context, ARCHBIRD_POLICY_REJECTED,
                   reason ? reason
                          : "no language executor supports the occurrence");
-  status = ab_act_executor_source(context, &path->as.text, &source);
+  if (value_is(language, "python"))
+    status = ab_act_executor_begin(context, item_id,
+                                   "archbird.native.python.rename-symbol@1");
+  else
+    status = ab_act_executor_begin(
+        context, item_id, "archbird.native.ecmascript.rename-symbol@1");
+  if (status == ARCHBIRD_OK)
+    status = ab_act_executor_source(context, &path->as.text, &source);
   if (status == ARCHBIRD_OK &&
       (end > source.byte_length || end - start != leaf->length ||
        memcmp(source.bytes + (size_t)start, leaf->data, leaf->length) != 0))

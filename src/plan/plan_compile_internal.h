@@ -56,6 +56,8 @@ ab_plan_item_builder_init(AbPlanItemBuilder *builder, ArchbirdEngine *engine,
 void ab_plan_item_builder_free(AbPlanItemBuilder *builder);
 ArchbirdStatus ab_plan_item_builder_append(AbPlanItemBuilder *builder,
                                            const AbPlanItemSpec *spec);
+ArchbirdStatus ab_plan_item_builder_render_items(AbPlanItemBuilder *builder,
+                                                 AbBuffer *out);
 int ab_plan_item_builder_targeted(const AbPlanItemBuilder *builder,
                                   const AbString *constraint_id);
 

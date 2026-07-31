@@ -34,6 +34,12 @@ static ArchbirdStatus json_cstring(AbBuffer *buffer, const char *value) {
   return ab_buffer_json_string(buffer, value, strlen(value));
 }
 
+static int string_is(const AbString *value, const char *literal) {
+  size_t length = strlen(literal);
+  return value && value->length == length &&
+         memcmp(value->data, literal, length) == 0;
+}
+
 static int rendered_compare(const void *left_raw, const void *right_raw) {
   const AbRenderedValue *left = (const AbRenderedValue *)left_raw;
   const AbRenderedValue *right = (const AbRenderedValue *)right_raw;
@@ -551,5 +557,162 @@ cleanup:
   ab_free(builder->engine, evidence);
   rendered_values_free(origins, origin_count);
   ab_free(builder->engine, origins);
+  return status;
+}
+
+static int same_text_fields(const AbValue *left, const char *left_name,
+                            const AbValue *right, const char *right_name) {
+  const AbValue *left_value = field(left, left_name);
+  const AbValue *right_value = field(right, right_name);
+  return left_value && left_value->kind == AB_VALUE_STRING && right_value &&
+         right_value->kind == AB_VALUE_STRING &&
+         ab_string_equal(&left_value->as.text, &right_value->as.text);
+}
+
+static int operation_dependency(const AbValue *prerequisite,
+                                const AbValue *dependent) {
+  const AbValue *prerequisite_action = field(prerequisite, "action");
+  const AbValue *dependent_action = field(dependent, "action");
+  if (!prerequisite_action || prerequisite_action->kind != AB_VALUE_STRING ||
+      !dependent_action || dependent_action->kind != AB_VALUE_STRING)
+    return 0;
+  if (string_is(&prerequisite_action->as.text, "declare_symbol") &&
+      string_is(&dependent_action->as.text, "add_provider_capability"))
+    return same_text_fields(prerequisite, "symbol", dependent, "capability");
+  if (string_is(&prerequisite_action->as.text, "rename_symbol") &&
+      string_is(&dependent_action->as.text, "rename_provider_capability"))
+    return same_text_fields(prerequisite, "from", dependent, "from") &&
+           same_text_fields(prerequisite, "to", dependent, "to");
+  return 0;
+}
+
+static int value_text_pointer_compare(const void *left_raw,
+                                      const void *right_raw) {
+  const AbValue *left = *(const AbValue *const *)left_raw;
+  const AbValue *right = *(const AbValue *const *)right_raw;
+  return ab_string_compare(&left->as.text, &right->as.text);
+}
+
+static int dependency_present(const AbValue *const *dependencies, size_t count,
+                              const AbValue *candidate) {
+  size_t index;
+  for (index = 0; index < count; index++)
+    if (ab_value_equal(dependencies[index], candidate))
+      return 1;
+  return 0;
+}
+
+static ArchbirdStatus render_dependencies(AbPlanItemBuilder *builder,
+                                          const AbValue *items,
+                                          size_t dependent_index,
+                                          AbBuffer *out) {
+  const AbValue *dependent = &items->as.array.items[dependent_index];
+  const AbValue *existing = field(dependent, "depends_on");
+  const AbValue *dependent_operation = field(dependent, "operation");
+  const AbValue **dependencies = NULL;
+  size_t capacity =
+      items->as.array.count + (existing && existing->kind == AB_VALUE_ARRAY
+                                   ? existing->as.array.count
+                                   : 0);
+  size_t count = 0;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (capacity) {
+    dependencies = (const AbValue **)ab_calloc(builder->engine, capacity,
+                                               sizeof(*dependencies));
+    if (!dependencies)
+      return invalid(builder, ARCHBIRD_OUT_OF_MEMORY,
+                     "out of memory deriving Plan dependencies");
+  }
+  for (index = 0; existing && existing->kind == AB_VALUE_ARRAY &&
+                  index < existing->as.array.count;
+       index++)
+    dependencies[count++] = &existing->as.array.items[index];
+  for (index = 0; index < items->as.array.count; index++) {
+    const AbValue *prerequisite = &items->as.array.items[index];
+    const AbValue *prerequisite_id;
+    if (index == dependent_index ||
+        !operation_dependency(field(prerequisite, "operation"),
+                              dependent_operation))
+      continue;
+    prerequisite_id = field(prerequisite, "id");
+    if (prerequisite_id && prerequisite_id->kind == AB_VALUE_STRING &&
+        !dependency_present(dependencies, count, prerequisite_id))
+      dependencies[count++] = prerequisite_id;
+  }
+  if (count > 1)
+    qsort(dependencies, count, sizeof(*dependencies),
+          value_text_pointer_compare);
+  status = literal(out, "[");
+  for (index = 0; status == ARCHBIRD_OK && index < count; index++) {
+    if (index)
+      status = literal(out, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(out, dependencies[index]);
+  }
+  if (status == ARCHBIRD_OK)
+    status = literal(out, "]");
+  ab_free(builder->engine, dependencies);
+  return status;
+}
+
+static ArchbirdStatus render_item(AbPlanItemBuilder *builder,
+                                  const AbValue *items, size_t item_index,
+                                  AbBuffer *out) {
+  const AbValue *item = &items->as.array.items[item_index];
+  size_t index;
+  ArchbirdStatus status = literal(out, "{");
+  for (index = 0; status == ARCHBIRD_OK && index < item->as.object.count;
+       index++) {
+    const AbObjectField *member = &item->as.object.fields[index];
+    if (index)
+      status = literal(out, ",");
+    if (status == ARCHBIRD_OK)
+      status = json_string(out, &member->name);
+    if (status == ARCHBIRD_OK)
+      status = literal(out, ":");
+    if (status != ARCHBIRD_OK)
+      break;
+    if (string_is(&member->name, "depends_on"))
+      status = render_dependencies(builder, items, item_index, out);
+    else
+      status = ab_value_render(out, &member->value);
+  }
+  if (status == ARCHBIRD_OK)
+    status = literal(out, "}");
+  return status;
+}
+
+ArchbirdStatus ab_plan_item_builder_render_items(AbPlanItemBuilder *builder,
+                                                 AbBuffer *out) {
+  AbBuffer encoded;
+  AbValue items = {0};
+  size_t index;
+  ArchbirdStatus status;
+  if (!builder || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  ab_buffer_init(&encoded, builder->engine);
+  status = literal(&encoded, "[");
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_append(&encoded, builder->items.data, builder->items.length);
+  if (status == ARCHBIRD_OK)
+    status = literal(&encoded, "]");
+  if (status == ARCHBIRD_OK)
+    status = ab_json_value_decode(builder->engine, encoded.data, encoded.length,
+                                  &items);
+  if (status == ARCHBIRD_OK && (items.kind != AB_VALUE_ARRAY ||
+                                items.as.array.count != builder->item_count))
+    status = invalid(builder, ARCHBIRD_CONFLICT,
+                     "generated Plan item inventory is inconsistent");
+  for (index = 0; status == ARCHBIRD_OK && index < items.as.array.count;
+       index++) {
+    if (index)
+      status = literal(out, ",");
+    if (status == ARCHBIRD_OK)
+      status = render_item(builder, &items, index, out);
+  }
+  ab_value_free(builder->engine, &items);
+  ab_buffer_free(&encoded);
   return status;
 }
