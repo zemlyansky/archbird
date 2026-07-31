@@ -19,6 +19,7 @@ typedef struct AbActSubmissions {
 ArchbirdStatus ab_act_submissions_load(ArchbirdEngine *engine,
                                        const uint8_t *json, size_t length,
                                        AbActSubmissions *out);
+const AbValue *ab_act_submission_path(const AbValue *operation);
 AbActSubmission *ab_act_submission_take(AbActSubmissions *submissions,
                                         const AbString *item_id);
 ArchbirdStatus

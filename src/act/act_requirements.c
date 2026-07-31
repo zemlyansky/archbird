@@ -72,9 +72,10 @@ static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
   const AbValue *path;
   size_t index;
   if (!field(item, "executable")->as.boolean) {
-    if (ab_artifact_text_is(action, "add_symbol") &&
+    path = ab_act_submission_path(operation);
+    if (path &&
         ab_act_submission_take(submissions, &field(item, "id")->as.text))
-      return add_path(engine, present, present_count, field(operation, "path"));
+      return add_path(engine, present, present_count, path);
     return reject(engine, ARCHBIRD_POLICY_REJECTED,
                   "Plan contains a manual or blocked item");
   }

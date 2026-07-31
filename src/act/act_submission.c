@@ -114,6 +114,15 @@ cleanup:
   return status;
 }
 
+const AbValue *ab_act_submission_path(const AbValue *operation) {
+  const AbValue *action = field(operation, "action");
+  const AbValue *path = field(operation, "path");
+  if (path && (ab_artifact_text_is(action, "add_symbol") ||
+               ab_artifact_text_is(action, "add_test_route")))
+    return path;
+  return NULL;
+}
+
 AbActSubmission *ab_act_submission_take(AbActSubmissions *submissions,
                                         const AbString *item_id) {
   size_t index;

@@ -20,6 +20,33 @@ static int exact_path(const AbValue *definition, const AbValue **out) {
   return 1;
 }
 
+static const AbValue *unique_test_path(const AbValue *map,
+                                       const AbValue *group) {
+  const AbValue *tests = field(map, "tests");
+  const AbValue *candidate = NULL;
+  size_t index;
+  if (!tests || tests->kind != AB_VALUE_ARRAY || !group ||
+      group->kind != AB_VALUE_STRING)
+    return NULL;
+  for (index = 0; index < tests->as.array.count; index++) {
+    const AbValue *test = &tests->as.array.items[index];
+    const AbValue *test_group = field(test, "group");
+    const AbValue *generated = field(test, "generated");
+    const AbValue *path = field(test, "path");
+    if (!test_group || test_group->kind != AB_VALUE_STRING ||
+        !ab_string_equal(&test_group->as.text, &group->as.text))
+      continue;
+    if (!ab_artifact_repository_path(path))
+      return NULL;
+    if (!generated || generated->kind != AB_VALUE_BOOL || generated->as.boolean)
+      return NULL;
+    if (candidate && !ab_value_equal(candidate, path))
+      return NULL;
+    candidate = path;
+  }
+  return candidate;
+}
+
 static ArchbirdStatus render_string_array(AbBuffer *out,
                                           const AbValue *values) {
   size_t index;
@@ -38,15 +65,14 @@ static ArchbirdStatus render_string_array(AbBuffer *out,
   return status;
 }
 
-ArchbirdStatus ab_plan_compile_test_constraint(ArchbirdEngine *engine,
-                                               AbPlanItemBuilder *builder,
-                                               const AbValue *constraint,
-                                               const AbValue *definition,
-                                               int *out_handled) {
+ArchbirdStatus ab_plan_compile_test_constraint(
+    ArchbirdEngine *engine, const AbValue *map, AbPlanItemBuilder *builder,
+    const AbValue *constraint, const AbValue *definition, int *out_handled) {
   const AbValue *findings = field(constraint, "findings");
   const AbValue *group = field(definition, "group");
   const AbValue *selectors = field(definition, "selectors");
   const AbValue *target = NULL;
+  const AbValue *test_path;
   AbPlanFindingGroups groups = {0};
   size_t group_index;
   ArchbirdStatus status;
@@ -58,6 +84,7 @@ ArchbirdStatus ab_plan_compile_test_constraint(ArchbirdEngine *engine,
       !ab_artifact_bounded_text(group, 65536u, 1))
     return ARCHBIRD_OK;
   status = ab_plan_finding_groups_collect(engine, findings, &groups);
+  test_path = unique_test_path(map, group);
   for (group_index = 0; status == ARCHBIRD_OK && group_index < groups.count;
        group_index++) {
     const AbPlanFindingGroup *finding_group = &groups.groups[group_index];
@@ -83,6 +110,10 @@ ArchbirdStatus ab_plan_compile_test_constraint(ArchbirdEngine *engine,
       status = ab_buffer_literal(&operation, ",\"selectors\":");
     if (status == ARCHBIRD_OK)
       status = render_string_array(&operation, selectors);
+    if (status == ARCHBIRD_OK && test_path)
+      status = ab_buffer_literal(&operation, ",\"path\":");
+    if (status == ARCHBIRD_OK && test_path)
+      status = ab_value_render(&operation, test_path);
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(&operation, ",\"target\":");
     if (status == ARCHBIRD_OK)

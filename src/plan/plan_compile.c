@@ -765,8 +765,9 @@ static ArchbirdStatus compile_constraint(AbPlanCompile *context,
                                               definition, actual, &handled);
   if (status != ARCHBIRD_OK || handled)
     return status;
-  status = ab_plan_compile_test_constraint(context->engine, &context->builder,
-                                           constraint, definition, &handled);
+  status = ab_plan_compile_test_constraint(context->engine, &context->map,
+                                           &context->builder, constraint,
+                                           definition, &handled);
   if (status != ARCHBIRD_OK || handled)
     return status;
   if (strcmp(form, "forbidden_paths") == 0)

@@ -203,6 +203,7 @@ test("Plan schema represents neutral missing-symbol and test-route work", () => 
   neutral.items[0].operation = {
     action: "add_test_route",
     group: "c",
+    path: "test/test_api.c",
     selectors: ["api"],
     target: "src/api.c",
   };

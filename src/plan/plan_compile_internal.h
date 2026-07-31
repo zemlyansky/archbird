@@ -97,10 +97,8 @@ ArchbirdStatus ab_plan_compile_package_constraint(
     const AbValue *constraint, const AbValue *definition,
     const AbProjectionData *actual, int *out_handled);
 
-ArchbirdStatus ab_plan_compile_test_constraint(ArchbirdEngine *engine,
-                                               AbPlanItemBuilder *builder,
-                                               const AbValue *constraint,
-                                               const AbValue *definition,
-                                               int *out_handled);
+ArchbirdStatus ab_plan_compile_test_constraint(
+    ArchbirdEngine *engine, const AbValue *map, AbPlanItemBuilder *builder,
+    const AbValue *constraint, const AbValue *definition, int *out_handled);
 
 #endif

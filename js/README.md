@@ -463,11 +463,13 @@ An exact missing symbol or test route whose code is not derivable remains a
 structured non-executable `add_symbol` or `add_test_route` operation. Plan can
 order implementation before declaration and tests; Act still refuses the Plan
 until a reviewed executor or agent supplies the unresolved semantics.
-Supply reviewed full-file content for one exact `add_symbol` item with
+Supply reviewed full-file content for one exact `add_symbol` item, or for an
+`add_test_route` item with one exact mapped test file, with
 `act --submit ITEM=FILE`. This is Act executor input, not a Plan rewrite:
 native Act source-locks the mapped file, records the exact executor ledger,
 builds the isolated after-Map, and accepts only when fresh Verify closes the
-item's constraint and preserves the rest of the policy.
+item's constraint and preserves the rest of the policy. Absent or ambiguous
+test locations remain manual.
 
 ```bash
 npx archbird plan --output .archbird/plan.json
@@ -723,7 +725,7 @@ are presentation views.
 no Map comparison or action inference.
 `materializeAct()` produces exact binary-safe transitions from a Plan. Its
 optional `executorSubmissionsJson` option supplies reviewed full-file content
-for exact unresolved `add_symbol` items; the corresponding
+for exact unresolved symbol or test-route items; the corresponding
 `planSourceRequirements()` option keeps path interpretation in the native
 core. Submissions are ephemeral executor input and never mutate Plan.
 `acceptAct()` seals them only after callers supply the fresh isolated

@@ -483,11 +483,15 @@ static int validate_operation(const AbValue *value, int *out_manual,
   if (text_is(action, "add_test_route")) {
     static const char *const fields[] = {"action", "group", "selectors",
                                          "target"};
+    static const char *const path_fields[] = {"action", "group", "path",
+                                              "selectors", "target"};
+    const AbValue *path = ab_value_member(value, "path");
     *out_manual = 1;
-    return object_exact(value, fields, 4) &&
+    return object_exact(value, path ? path_fields : fields, path ? 5 : 4) &&
            bounded_text(ab_value_member(value, "group"), AB_PLAN_MAX_METADATA,
                         1) &&
            string_array(ab_value_member(value, "selectors"), 0, 0) &&
+           (!path || repository_path(path)) &&
            repository_path(ab_value_member(value, "target"));
   }
   if (text_is(action, "rename_symbol")) {

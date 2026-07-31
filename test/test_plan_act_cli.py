@@ -66,15 +66,23 @@ class PlanActCliTest(unittest.TestCase):
                 path.rmdir()
         self.artifacts.rmdir()
 
-    def configure(self, constraints: dict[str, object]) -> None:
+    def configure(
+        self,
+        constraints: dict[str, object],
+        *,
+        layers: list[dict[str, object]] | None = None,
+        tests: list[dict[str, object]] | None = None,
+    ) -> None:
+        document: dict[str, object] = {
+            "project": "plan-act-fixture",
+            "constraints": constraints,
+        }
+        if tests is not None:
+            document["tests"] = tests
+        if layers is not None:
+            document["layers"] = layers
         (self.root / "archbird.json").write_text(
-            json.dumps(
-                {
-                    "project": "plan-act-fixture",
-                    "constraints": constraints,
-                },
-                sort_keys=True,
-            )
+            json.dumps(document, sort_keys=True)
         )
 
     def plan_path(self, name: str = "plan.json") -> Path:
@@ -2868,6 +2876,243 @@ class PlanActCliTest(unittest.TestCase):
             "submission does not match an eligible Plan item",
             unknown.stderr.decode(),
         )
+
+    def test_asserted_test_submission_uses_one_exact_mapped_test_file(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "TEST-API": {
+                    "kind": "required_test_route",
+                    "group": "python",
+                    "target": "module.py",
+                    "selectors": ["test_future"],
+                    "owner": "architecture",
+                    "rationale": "The reviewed API has a focused test route.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["**/*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+            tests=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["tests/test_*.py"],
+                    "route_to": ["python"],
+                }
+            ],
+        )
+        (self.root / "module.py").write_text(
+            "def future_api():\n    return 2\n"
+        )
+        tests = self.root / "tests"
+        tests.mkdir()
+        test_source = tests / "test_module.py"
+        original = "def test_current():\n    assert True\n"
+        test_source.write_text(original)
+
+        plan_path = self.plan_path("test-route-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan_bytes = plan_path.read_bytes()
+        plan = json.loads(plan_bytes)
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertEqual(
+            item["operation"],
+            {
+                "action": "add_test_route",
+                "group": "python",
+                "path": "tests/test_module.py",
+                "selectors": ["test_future"],
+                "target": "module.py",
+            },
+        )
+        self.assertFalse(item["executable"])
+
+        replacement = self.plan_path("test_module.py")
+        replacement.write_text(
+            "from module import future_api\n\n"
+            "def test_future():\n"
+            "    assert future_api() == 2\n"
+        )
+        act_path = self.plan_path("test-route-act.json")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={replacement}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(
+            act["executors"][0]["capability"],
+            "archbird.asserted.source.replace-file@1",
+        )
+        self.assertEqual(act["transitions"][0]["path"], "tests/test_module.py")
+        self.assertEqual(test_source.read_text(), original)
+        self.assertEqual(plan_path.read_bytes(), plan_bytes)
+
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertIn("future_api()", test_source.read_text())
+        verified = run(
+            "verify",
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            "--check",
+        )
+        self.assertEqual(
+            json.loads(verified.stdout)["summary"]["constraints"]["pass"],
+            1,
+        )
+
+    def test_ambiguous_test_group_does_not_authorize_submission(self) -> None:
+        self.configure(
+            {
+                "TEST-API": {
+                    "kind": "required_test_route",
+                    "group": "python",
+                    "target": "module.py",
+                    "selectors": ["test_future"],
+                    "owner": "architecture",
+                    "rationale": "The reviewed API has a focused test route.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["**/*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+            tests=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["tests/test_*.py"],
+                    "route_to": ["python"],
+                }
+            ],
+        )
+        (self.root / "module.py").write_text(
+            "def future_api():\n    return 2\n"
+        )
+        tests = self.root / "tests"
+        tests.mkdir()
+        (tests / "test_first.py").write_text(
+            "def test_first():\n    assert True\n"
+        )
+        (tests / "test_second.py").write_text(
+            "def test_second():\n    assert True\n"
+        )
+        plan_path = self.plan_path("ambiguous-test-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan = json.loads(plan_path.read_bytes())
+        item = plan["items"][0]
+        self.assertNotIn("path", item["operation"])
+
+        replacement = self.plan_path("ambiguous-test.py")
+        replacement.write_text(
+            "from module import future_api\n\n"
+            "def test_future():\n"
+            "    assert future_api() == 2\n"
+        )
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={replacement}",
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn("manual or blocked item", rejected.stderr.decode())
+
+    def test_generated_test_file_does_not_authorize_direct_submission(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "TEST-API": {
+                    "kind": "required_test_route",
+                    "group": "python",
+                    "target": "module.py",
+                    "selectors": ["test_future"],
+                    "owner": "architecture",
+                    "rationale": "The reviewed API has a focused test route.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["**/*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+            tests=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["tests/test_*.py"],
+                    "route_to": ["python"],
+                    "generated_files": [
+                        {
+                            "globs": ["tests/test_generated.py"],
+                            "sources": ["tests/test_source.py"],
+                        }
+                    ],
+                }
+            ],
+        )
+        (self.root / "module.py").write_text(
+            "def future_api():\n    return 2\n"
+        )
+        tests = self.root / "tests"
+        tests.mkdir()
+        (tests / "test_source.py").write_text("CASES = ['current']\n")
+        (tests / "test_generated.py").write_text(
+            "def test_current():\n    assert True\n"
+        )
+        plan_path = self.plan_path("generated-test-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        item = json.loads(plan_path.read_bytes())["items"][0]
+        self.assertNotIn("path", item["operation"])
+
+        replacement = self.plan_path("generated-test.py")
+        replacement.write_text(
+            "from module import future_api\n\n"
+            "def test_future():\n"
+            "    assert future_api() == 2\n"
+        )
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={replacement}",
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn("manual or blocked item", rejected.stderr.decode())
 
     def test_passing_policy_produces_and_applies_no_op(self) -> None:
         self.configure(

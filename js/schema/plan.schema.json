@@ -682,6 +682,7 @@
           "minLength": 1,
           "maxLength": 65536
         },
+        "path": {"$ref": "#/$defs/repositoryPath"},
         "selectors": {"$ref": "#/$defs/nonEmptyStrings"},
         "target": {"$ref": "#/$defs/repositoryPath"}
       }
