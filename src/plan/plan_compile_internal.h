@@ -110,7 +110,7 @@ ArchbirdStatus ab_plan_compile_edge_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
     AbPlanItemBuilder *builder, const AbValue *constraint,
     const AbValue *definition, const AbProjectionData *actual,
-    int *out_handled);
+    const AbValue *redirects, uint8_t *redirect_used, int *out_handled);
 
 ArchbirdStatus ab_plan_compile_surface_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,

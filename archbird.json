@@ -13,14 +13,14 @@
       "language": "c",
       "globs": ["include/**/*.h", "src/**/*.c", "src/**/*.h"],
       "public_headers": ["include/archbird/archbird.h"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/patch", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "vendor/yyjson/src", "vendor/pcre2/src", "vendor/tree-sitter/lib/include", "vendor/tree-sitter/lib/src"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "vendor/yyjson/src", "vendor/pcre2/src", "vendor/tree-sitter/lib/include", "vendor/tree-sitter/lib/src"]
     },
     {
       "name": "bindings",
       "role": "frontend",
       "language": "c",
       "globs": ["bindings/*.c"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/patch", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
     },
     {
       "name": "python-host",
@@ -140,7 +140,7 @@
       "role": "test",
       "language": "c",
       "globs": ["test/*.c", "test/scip_fixture.h", "test/fuzz/*.c", "test/fuzz/*.h", "test/cmake_consumer/*.c"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/patch", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "test"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "test"]
     },
     {
       "name": "oracle-tests",
@@ -287,7 +287,7 @@
     {"name": "query", "paths": ["src/query/**"], "description": "Query plan compilation, typed projection selection, traversal, ranking, and result construction"},
     {"name": "verify", "paths": ["src/verify/**"], "description": "Constraint predicates, observations, baselines, findings, and canonical verification results"},
     {"name": "plan", "paths": ["src/plan/**"], "description": "Evidence-bound architecture objectives and executable transformation planning"},
-    {"name": "patch", "paths": ["src/patch/**"], "description": "Plan materialization, isolated after-state acceptance, sealed byte transitions, and apply preflight"},
+    {"name": "act", "paths": ["src/act/**"], "description": "Language-specific Plan grounding, isolated after-state acceptance, sealed byte transitions, and apply preflight"},
     {"name": "interchange", "paths": ["src/interchange/**"], "description": "Host-neutral report and graph projections"},
     {"name": "bindings", "paths": ["bindings/**"], "description": "CPython and Node-API ABI adapters"},
     {"name": "python-host", "paths": ["py/archbird/**"], "description": "PyPI host and Python precision providers"},
@@ -333,7 +333,7 @@
         "test/test_tree_sitter.c",
         "test/test_scip.c",
         "test/fuzz/fuzz_map.c",
-        "test/test_patch_materialize.c",
+        "test/test_act_materialize.c",
         "py/tests/test_repository.py",
         "js/test/test_frontend.js"
       ],
@@ -412,32 +412,32 @@
       "expected": {
         "literal": [
           {
-            "source": "patch",
+            "source": "act",
             "kind": "*",
             "target": "abi"
           },
           {
-            "source": "patch",
+            "source": "act",
             "kind": "*",
             "target": "base"
           },
           {
-            "source": "patch",
+            "source": "act",
             "kind": "*",
             "target": "evidence"
           },
           {
-            "source": "patch",
+            "source": "act",
             "kind": "*",
             "target": "plan"
           },
           {
-            "source": "patch",
+            "source": "act",
             "kind": "*",
             "target": "projection"
           },
           {
-            "source": "patch",
+            "source": "act",
             "kind": "*",
             "target": "verify"
           },
@@ -469,7 +469,7 @@
           {
             "source": "api",
             "kind": "*",
-            "target": "patch"
+            "target": "act"
           },
           {
             "source": "api",

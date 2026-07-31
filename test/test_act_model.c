@@ -14,7 +14,7 @@ static int failures;
 static void expect_status(ArchbirdEngine *engine, const char *name,
                           const char *json, ArchbirdStatus expected) {
   ArchbirdStatus actual =
-      archbird_patch_validate(engine, (const uint8_t *)json, strlen(json));
+      archbird_act_validate(engine, (const uint8_t *)json, strlen(json));
   if (actual != expected) {
     fprintf(stderr, "FAIL %s: status %d, expected %d: %s\n", name, actual,
             expected, archbird_engine_error(engine));
@@ -26,7 +26,7 @@ int main(void) {
   ArchbirdEngine *engine = NULL;
   const char *valid =
       "{\"acceptance\":{\"constraints\":[],\"status\":\"not_evaluated\","
-      "\"verification_sha256\":null},\"after\":null,\"artifact\":\"patch\","
+      "\"verification_sha256\":null},\"after\":null,\"artifact\":\"act\","
       "\"executors\":[{\"capability\":\"archbird.native.create-file@1\","
       "\"deterministic\":true,\"implementation_sha256\":\"" SHA_C
       "\",\"item_ids\":[\"item:create\"],\"matches\":1,\"reads\":[],"
@@ -47,7 +47,7 @@ int main(void) {
       "\"kind\":\"create\",\"path\":\"hello.txt\",\"source_path\":null}]}";
   const char *bad_content =
       "{\"acceptance\":{\"constraints\":[],\"status\":\"not_evaluated\","
-      "\"verification_sha256\":null},\"after\":null,\"artifact\":\"patch\","
+      "\"verification_sha256\":null},\"after\":null,\"artifact\":\"act\","
       "\"executors\":[{\"capability\":\"archbird.native.create-file@1\","
       "\"deterministic\":true,\"implementation_sha256\":\"" SHA_C
       "\",\"item_ids\":[\"item:create\"],\"matches\":1,\"reads\":[],"
@@ -73,10 +73,10 @@ int main(void) {
                 ARCHBIRD_INVALID_SCHEMA);
   expect_status(engine, "not-object", "[]", ARCHBIRD_INVALID_SCHEMA);
   expect_status(engine, "duplicate-key",
-                "{\"artifact\":\"patch\",\"artifact\":\"patch\"}",
+                "{\"artifact\":\"act\",\"artifact\":\"act\"}",
                 ARCHBIRD_DUPLICATE_KEY);
   archbird_engine_destroy(engine);
   if (failures)
-    fprintf(stderr, "%d Patch model test(s) failed\n", failures);
+    fprintf(stderr, "%d Act model test(s) failed\n", failures);
   return failures ? 1 : 0;
 }

@@ -1,4 +1,4 @@
-#include "patch_internal.h"
+#include "act_internal.h"
 
 #include "artifact_validation.h"
 #include "base64.h"
@@ -9,31 +9,31 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define AB_PATCH_MAX_ROWS 4096u
-#define AB_PATCH_MAX_METADATA (64u * 1024u)
-#define AB_PATCH_MAX_FILE_BYTES (64u * 1024u * 1024u)
-#define AB_PATCH_MAX_TOTAL_BYTES (256u * 1024u * 1024u)
+#define AB_ACT_MAX_ROWS 4096u
+#define AB_ACT_MAX_METADATA (64u * 1024u)
+#define AB_ACT_MAX_FILE_BYTES (64u * 1024u * 1024u)
+#define AB_ACT_MAX_TOTAL_BYTES (256u * 1024u * 1024u)
 
-typedef struct PatchDigestWriter {
+typedef struct ActDigestWriter {
   ArchbirdSha256Context context;
   ArchbirdStatus status;
-} PatchDigestWriter;
+} ActDigestWriter;
 
 static int digest_write(void *user_data, const uint8_t *bytes, size_t length) {
-  PatchDigestWriter *writer = (PatchDigestWriter *)user_data;
+  ActDigestWriter *writer = (ActDigestWriter *)user_data;
   writer->status = archbird_sha256_update(&writer->context, bytes, length);
   return writer->status == ARCHBIRD_OK ? 0 : 1;
 }
 
 static ArchbirdStatus invalid(ArchbirdEngine *engine, const char *message) {
   return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
-                            "patch: %s", message);
+                            "act: %s", message);
 }
 
 static int array_value(const AbValue *value, size_t minimum) {
   return value && value->kind == AB_VALUE_ARRAY &&
          value->as.array.count >= minimum &&
-         value->as.array.count <= AB_PATCH_MAX_ROWS;
+         value->as.array.count <= AB_ACT_MAX_ROWS;
 }
 
 static int sorted_string_array(const AbValue *value, int ids, size_t minimum) {
@@ -86,7 +86,7 @@ static int validate_source(const AbValue *value) {
   return (ab_artifact_object_exact(value, fields, 3) ||
           ab_artifact_object_exact(value, observed_fields, 4)) &&
          ab_artifact_bounded_text(ab_value_member(value, "project"),
-                                  AB_PATCH_MAX_METADATA, 1) &&
+                                  AB_ACT_MAX_METADATA, 1) &&
          (!before || validate_identity(before, 1)) &&
          validate_identity(ab_value_member(value, "map"), 1) &&
          validate_identity(ab_value_member(value, "verification"), 0);
@@ -111,11 +111,11 @@ static int validate_file_state(const AbValue *value, int content) {
          ab_artifact_sha256(ab_value_member(value, "sha256")) &&
          ab_artifact_safe_integer(ab_value_member(value, "byte_length"),
                                   &length) &&
-         length <= AB_PATCH_MAX_FILE_BYTES &&
+         length <= AB_ACT_MAX_FILE_BYTES &&
          ab_artifact_boolean(ab_value_member(value, "executable")) &&
          (!content ||
           ab_artifact_bounded_text(ab_value_member(value, "content_base64"),
-                                   ((AB_PATCH_MAX_FILE_BYTES + 2) / 3) * 4, 0));
+                                   ((AB_ACT_MAX_FILE_BYTES + 2) / 3) * 4, 0));
 }
 
 static int validate_constraint_result(const AbValue *value, int accepted) {
@@ -179,7 +179,7 @@ static int validate_executor(const AbValue *value) {
   uint64_t unsupported;
   return ab_artifact_object_exact(value, fields, 9) &&
          ab_artifact_bounded_text(ab_value_member(value, "capability"),
-                                  AB_PATCH_MAX_METADATA, 1) &&
+                                  AB_ACT_MAX_METADATA, 1) &&
          ab_artifact_sha256(ab_value_member(value, "implementation_sha256")) &&
          ab_artifact_boolean(ab_value_member(value, "deterministic")) &&
          sorted_string_array(ab_value_member(value, "item_ids"), 1, 1) &&
@@ -205,7 +205,7 @@ static int transition_compare(const AbValue *left, const AbValue *right) {
 
 static ArchbirdStatus validate_transition(ArchbirdEngine *engine,
                                           const AbValue *value,
-                                          AbPatchTransition *out,
+                                          AbActTransition *out,
                                           size_t *aggregate) {
   static const char *const fields[] = {"item_ids",    "kind",   "path",
                                        "source_path", "before", "after"};
@@ -268,10 +268,10 @@ static ArchbirdStatus validate_transition(ArchbirdEngine *engine,
   if (memcmp(digest_hex, ab_value_member(after, "sha256")->as.text.data, 64) !=
       0)
     return invalid(engine, "transition after SHA-256 is inconsistent");
-  if (out->after_length > AB_PATCH_MAX_TOTAL_BYTES - *aggregate)
+  if (out->after_length > AB_ACT_MAX_TOTAL_BYTES - *aggregate)
     return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
                               ARCHBIRD_NO_OFFSET,
-                              "Patch after-source bytes exceed the limit");
+                              "Act after-source bytes exceed the limit");
   *aggregate += out->after_length;
   return ARCHBIRD_OK;
 }
@@ -279,7 +279,7 @@ static ArchbirdStatus validate_transition(ArchbirdEngine *engine,
 static ArchbirdStatus canonical_digest(ArchbirdEngine *engine,
                                        const uint8_t *json, size_t length,
                                        char out[65]) {
-  PatchDigestWriter writer;
+  ActDigestWriter writer;
   uint8_t digest[32];
   ArchbirdStatus status;
   archbird_sha256_init(&writer.context);
@@ -319,7 +319,7 @@ static ArchbirdStatus seal_digest(ArchbirdEngine *engine,
   return status;
 }
 
-static ArchbirdStatus validate_patch(ArchbirdEngine *engine, AbPatch *patch) {
+static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
   static const char *const fields[] = {
       "schema_version", "artifact",    "provenance", "tool",
       "plan_sha256",    "source",      "state",      "after",
@@ -333,105 +333,105 @@ static ArchbirdStatus validate_patch(ArchbirdEngine *engine, AbPatch *patch) {
   size_t aggregate = 0;
   int accepted;
   ArchbirdStatus status;
-  if (!ab_artifact_object_exact(&patch->document, fields, 12) ||
+  if (!ab_artifact_object_exact(&act->document, fields, 12) ||
       !ab_artifact_safe_integer(
-          ab_value_member(&patch->document, "schema_version"), &schema) ||
+          ab_value_member(&act->document, "schema_version"), &schema) ||
       schema != 2 ||
-      !ab_artifact_text_is(ab_value_member(&patch->document, "artifact"),
-                           "patch") ||
-      !ab_artifact_text_is(ab_value_member(&patch->document, "provenance"),
+      !ab_artifact_text_is(ab_value_member(&act->document, "artifact"),
+                           "act") ||
+      !ab_artifact_text_is(ab_value_member(&act->document, "provenance"),
                            "derived") ||
-      !validate_tool(ab_value_member(&patch->document, "tool")) ||
-      !ab_artifact_sha256(ab_value_member(&patch->document, "plan_sha256")) ||
-      !validate_source(ab_value_member(&patch->document, "source")))
-    return invalid(engine, "document does not satisfy the Patch contract");
-  state = ab_value_member(&patch->document, "state");
+      !validate_tool(ab_value_member(&act->document, "tool")) ||
+      !ab_artifact_sha256(ab_value_member(&act->document, "plan_sha256")) ||
+      !validate_source(ab_value_member(&act->document, "source")))
+    return invalid(engine, "document does not satisfy the Act contract");
+  state = ab_value_member(&act->document, "state");
   accepted = ab_artifact_text_is(state, "accepted");
   if (!accepted && !ab_artifact_text_is(state, "materialized"))
     return invalid(engine, "state must be materialized or accepted");
-  patch->source = ab_value_member(&patch->document, "source");
-  patch->after = ab_value_member(&patch->document, "after");
-  patch->acceptance = ab_value_member(&patch->document, "acceptance");
-  if (!validate_after(patch->after) ||
-      (accepted && patch->after->kind == AB_VALUE_NULL) ||
-      (!accepted && patch->after->kind != AB_VALUE_NULL) ||
-      !validate_acceptance(patch->acceptance, accepted))
+  act->source = ab_value_member(&act->document, "source");
+  act->after = ab_value_member(&act->document, "after");
+  act->acceptance = ab_value_member(&act->document, "acceptance");
+  if (!validate_after(act->after) ||
+      (accepted && act->after->kind == AB_VALUE_NULL) ||
+      (!accepted && act->after->kind != AB_VALUE_NULL) ||
+      !validate_acceptance(act->acceptance, accepted))
     return invalid(engine, "after-state acceptance is inconsistent");
   if (accepted &&
       !ab_value_equal(
-          ab_value_member(patch->acceptance, "verification_sha256"),
-          ab_value_member(ab_value_member(patch->after, "verification"),
+          ab_value_member(act->acceptance, "verification_sha256"),
+          ab_value_member(ab_value_member(act->after, "verification"),
                           "sha256")))
     return invalid(engine, "accepted verification identities do not match");
-  executors = ab_value_member(&patch->document, "executors");
+  executors = ab_value_member(&act->document, "executors");
   if (!array_value(executors, 0))
     return invalid(engine, "executors must be an array");
   for (index = 0; index < executors->as.array.count; index++)
     if (!validate_executor(&executors->as.array.items[index]))
       return invalid(engine, "executor ledger is invalid");
-  transitions = ab_value_member(&patch->document, "transitions");
+  transitions = ab_value_member(&act->document, "transitions");
   if (!array_value(transitions, 0))
     return invalid(engine, "transitions must be an array");
   if (transitions->as.array.count) {
-    patch->transitions = (AbPatchTransition *)ab_calloc(
-        engine, transitions->as.array.count, sizeof(*patch->transitions));
-    if (!patch->transitions)
+    act->transitions = (AbActTransition *)ab_calloc(
+        engine, transitions->as.array.count, sizeof(*act->transitions));
+    if (!act->transitions)
       return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
                                 ARCHBIRD_NO_OFFSET,
-                                "out of memory decoding Patch transitions");
+                                "out of memory decoding Act transitions");
   }
-  patch->transition_count = transitions->as.array.count;
-  for (index = 0; index < patch->transition_count; index++) {
+  act->transition_count = transitions->as.array.count;
+  for (index = 0; index < act->transition_count; index++) {
     if (index && transition_compare(&transitions->as.array.items[index - 1],
                                     &transitions->as.array.items[index]) >= 0)
       return invalid(engine, "transitions are not uniquely sorted");
     status = validate_transition(engine, &transitions->as.array.items[index],
-                                 &patch->transitions[index], &aggregate);
+                                 &act->transitions[index], &aggregate);
     if (status != ARCHBIRD_OK)
       return status;
   }
-  seal = ab_value_member(&patch->document, "seal");
+  seal = ab_value_member(&act->document, "seal");
   if (accepted) {
     static const char *const seal_fields[] = {"content_sha256"};
     char actual[65];
     if (!ab_artifact_object_exact(seal, seal_fields, 1) ||
         !ab_artifact_sha256(ab_value_member(seal, "content_sha256")))
-      return invalid(engine, "accepted Patch seal is invalid");
-    status = seal_digest(engine, &patch->document, actual);
+      return invalid(engine, "accepted Act seal is invalid");
+    status = seal_digest(engine, &act->document, actual);
     if (status != ARCHBIRD_OK)
       return status;
     if (memcmp(actual, ab_value_member(seal, "content_sha256")->as.text.data,
                64) != 0)
-      return invalid(engine, "accepted Patch seal does not match content");
+      return invalid(engine, "accepted Act seal does not match content");
   } else if (seal->kind != AB_VALUE_NULL) {
-    return invalid(engine, "materialized Patch must not be sealed");
+    return invalid(engine, "materialized Act must not be sealed");
   }
   return ARCHBIRD_OK;
 }
 
-ArchbirdStatus ab_patch_load(ArchbirdEngine *engine, const uint8_t *json,
-                             size_t length, AbPatch *out) {
+ArchbirdStatus ab_act_load(ArchbirdEngine *engine, const uint8_t *json,
+                           size_t length, AbAct *out) {
   ArchbirdStatus status;
   if (!engine || !json || !length || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(out, 0, sizeof(*out));
   status = ab_json_value_decode(engine, json, length, &out->document);
   if (status == ARCHBIRD_OK)
-    status = validate_patch(engine, out);
+    status = validate_act(engine, out);
   if (status == ARCHBIRD_OK)
     status = canonical_digest(engine, json, length, out->sha256);
   if (status != ARCHBIRD_OK)
-    ab_patch_free(engine, out);
+    ab_act_free(engine, out);
   return status;
 }
 
-void ab_patch_free(ArchbirdEngine *engine, AbPatch *patch) {
+void ab_act_free(ArchbirdEngine *engine, AbAct *act) {
   size_t index;
-  if (!patch)
+  if (!act)
     return;
-  for (index = 0; index < patch->transition_count; index++)
-    ab_free(engine, patch->transitions[index].after_bytes);
-  ab_free(engine, patch->transitions);
-  ab_value_free(engine, &patch->document);
-  memset(patch, 0, sizeof(*patch));
+  for (index = 0; index < act->transition_count; index++)
+    ab_free(engine, act->transitions[index].after_bytes);
+  ab_free(engine, act->transitions);
+  ab_value_free(engine, &act->document);
+  memset(act, 0, sizeof(*act));
 }

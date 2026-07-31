@@ -43,7 +43,7 @@ _NATIVE_EXPORTS = (
     "analyze_workspace_json",
     "analyze_okf_source",
     "audit_map_freshness",
-    "accept_patch_json",
+    "accept_act_json",
     "compile_plan_json",
     "compile_project_configuration",
     "compile_query_plan_json",
@@ -54,30 +54,30 @@ _NATIVE_EXPORTS = (
     "export_graph",
     "export_okf_bundle",
     "freeze_constraints_json",
-    "materialize_patch_json",
-    "patch_source_requirements",
+    "materialize_act_json",
     "act_source_requirements",
-    "preflight_patch_apply",
+    "plan_source_requirements",
+    "preflight_act_apply",
     "publish_okf_bundle",
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",
     "render_source_markdown",
     "resolve_discovery",
-    "validate_patch",
+    "validate_act",
     "validate_plan",
     "validate_test_symbol_observations",
     "write_okf_bundle",
 )
 
 _ADAPTER_EXPORTS = (
-    "apply_accepted_patch",
+    "apply_accepted_act",
     "inspect_ast_grep_executable",
     "materialize_ast_grep_operations",
-    "observe_patch_sources",
+    "observe_act_sources",
     "observe_plan_sources",
-    "patch_overlay",
-    "render_patch",
+    "act_overlay",
+    "render_act",
 )
 
 
@@ -86,26 +86,26 @@ def __getattr__(name: str) -> Any:
 
     if name in _ADAPTER_EXPORTS:
         if name in {
-            "apply_accepted_patch",
-            "observe_patch_sources",
+            "apply_accepted_act",
+            "observe_act_sources",
             "observe_plan_sources",
-            "patch_overlay",
-            "render_patch",
+            "act_overlay",
+            "render_act",
         }:
-            from .patching import (
-                apply_accepted_patch,
-                observe_patch_sources,
+            from .act_transport import (
+                apply_accepted_act,
+                observe_act_sources,
                 observe_plan_sources,
-                patch_overlay,
-                render_patch,
+                act_overlay,
+                render_act,
             )
 
             return {
-                "apply_accepted_patch": apply_accepted_patch,
-                "observe_patch_sources": observe_patch_sources,
+                "apply_accepted_act": apply_accepted_act,
+                "observe_act_sources": observe_act_sources,
                 "observe_plan_sources": observe_plan_sources,
-                "patch_overlay": patch_overlay,
-                "render_patch": render_patch,
+                "act_overlay": act_overlay,
+                "render_act": render_act,
             }[name]
         from .adapters.ast_grep import (
             inspect_ast_grep_executable,

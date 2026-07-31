@@ -5,12 +5,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const native = require("./native");
 const {
-  applyAcceptedPatch,
-  observePatchSources,
+  applyAcceptedAct,
+  observeActSources,
   observePlanSources,
-  patchOverlay,
-  renderPatch,
-} = require("./patching");
+  actOverlay,
+  renderAct,
+} = require("./act-transport");
 const { okfNormalization } = require("./adapters/okf/normalization");
 const { compileTestObservations: compileCoverageObservations } = require("./adapters/coverage");
 const {
@@ -1672,19 +1672,19 @@ function compilePlan(
   );
 }
 
-function validatePatch(patchJson) {
-  native.patchValidate(Buffer.from(patchJson));
+function validateAct(actJson) {
+  native.actValidate(Buffer.from(actJson));
 }
 
-function actSourceRequirements(planJson, { pretty = false } = {}) {
-  return native.actSourceRequirements(Buffer.from(planJson), pretty);
+function planSourceRequirements(planJson, { pretty = false } = {}) {
+  return native.planSourceRequirements(Buffer.from(planJson), pretty);
 }
 
-function patchSourceRequirements(patchJson, { pretty = false } = {}) {
-  return native.patchSourceRequirements(Buffer.from(patchJson), pretty);
+function actSourceRequirements(actJson, { pretty = false } = {}) {
+  return native.actSourceRequirements(Buffer.from(actJson), pretty);
 }
 
-function materializePatch(
+function materializeAct(
   project,
   planJson,
   mapJson,
@@ -1693,9 +1693,9 @@ function materializePatch(
   { pretty = false } = {},
 ) {
   if (!(project instanceof Project)) {
-    throw new TypeError("Patch materialization requires a Project");
+    throw new TypeError("Act materialization requires a Project");
   }
-  return native.actMaterializePatch(
+  return native.actMaterialize(
     project._handle,
     Buffer.from(planJson),
     Buffer.from(mapJson),
@@ -1705,15 +1705,15 @@ function materializePatch(
   );
 }
 
-function acceptPatch(
-  patchJson,
+function acceptAct(
+  actJson,
   beforeMapJson,
   afterMapJson,
   verificationJson,
   { pretty = false } = {},
 ) {
-  return native.patchAccept(
-    Buffer.from(patchJson),
+  return native.actAccept(
+    Buffer.from(actJson),
     Buffer.from(beforeMapJson),
     Buffer.from(afterMapJson),
     Buffer.from(verificationJson),
@@ -1721,9 +1721,9 @@ function acceptPatch(
   );
 }
 
-function preflightPatchApply(patchJson, sourceMetadataJson) {
-  native.patchPreflightApply(
-    Buffer.from(patchJson),
+function preflightActApply(actJson, sourceMetadataJson) {
+  native.actPreflightApply(
+    Buffer.from(actJson),
     Buffer.from(sourceMetadataJson),
   );
 }
@@ -1867,11 +1867,11 @@ module.exports = {
   Workspace,
   auditMapFreshness,
   analyzeOkfSource,
-  actSourceRequirements,
+  planSourceRequirements,
   publishOkfBundle,
   analyzeWorkspace,
-  applyAcceptedPatch,
-  acceptPatch,
+  applyAcceptedAct,
+  acceptAct,
   compilePlan,
   compileProjectConfiguration,
   compileQueryPlan,
@@ -1890,14 +1890,14 @@ module.exports = {
   renderMapMarkdown,
   renderSourceMarkdown,
   freezeConstraints,
-  materializePatch,
-  observePatchSources,
+  materializeAct,
+  observeActSources,
   observePlanSources,
-  patchOverlay,
-  patchSourceRequirements,
-  preflightPatchApply,
-  renderPatch,
-  validatePatch,
+  actOverlay,
+  actSourceRequirements,
+  preflightActApply,
+  renderAct,
+  validateAct,
   validatePlan,
   jsonCanonicalize: native.jsonCanonicalize,
 };

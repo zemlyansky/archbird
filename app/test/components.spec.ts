@@ -309,7 +309,7 @@ describe("artifact workspaces", () => {
     expect(root.textContent).toContain("Saved the project configuration");
   });
 
-  it("renders Diff, Plan, and Patch artifacts as task-oriented summaries", () => {
+  it("renders Diff, Plan, and Act artifacts as task-oriented summaries", () => {
     const diff = mount(DocumentPanel, {
       artifact: artifact({
         artifact: "diff",
@@ -347,10 +347,10 @@ describe("artifact workspaces", () => {
     expect(plan.textContent).toContain("Remove legacy from src/api.c");
     mounted?.unmount();
 
-    const patch = mount(DocumentPanel, {
+    const act = mount(DocumentPanel, {
       artifact: artifact({
-        artifact: "patch",
-        schema_version: 1,
+        artifact: "act",
+        schema_version: 2,
         state: "accepted",
         plan_sha256: "a".repeat(64),
         transitions: [{
@@ -360,10 +360,10 @@ describe("artifact workspaces", () => {
           source_path: null,
         }],
         acceptance: { status: "satisfied" },
-      }, "patch.json"),
+      }, "act.json"),
     });
-    expect(patch.textContent).toContain("Architecture patch");
-    expect(patch.textContent).toContain("satisfied");
-    expect(patch.textContent).toContain("src/api.c");
+    expect(act.textContent).toContain("Architecture act");
+    expect(act.textContent).toContain("satisfied");
+    expect(act.textContent).toContain("src/api.c");
   });
 });

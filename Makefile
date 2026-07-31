@@ -199,7 +199,7 @@ test-js: build-js build-py
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) --expose-gc js/test/test_frontend.js $(NODE_NATIVE) $(CURDIR)
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
-		$(NODE) js/test/test_plan_patch_cli.js $(NODE_NATIVE) $(CURDIR)
+		$(NODE) js/test/test_plan_act_cli.js $(NODE_NATIVE) $(CURDIR)
 	$(NODE) test/test_cli_progress.js js/src/cli.js $(CURDIR) $(NODE_NATIVE)
 	$(NODE) test/test_readme_examples.js $(CURDIR) js/src/cli.js $(NODE_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_git_diff_cli.py \

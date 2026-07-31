@@ -85,7 +85,7 @@ static int render_project(ArchbirdEngine *engine, ArchbirdProject **out_project,
       "{\"bytes\":%zu,\"language\":\"c\",\"layer\":\"core\","
       "\"path\":\"src/b.c\",\"roles\":[\"source\"],\"sha256\":\"%s\"}],"
       "\"producer\":{\"implementation_sha256\":\"%s\",\"name\":"
-      "\"patch-test\",\"version\":\"1\"},\"project\":\"demo\","
+      "\"act-test\",\"version\":\"1\"},\"project\":\"demo\","
       "\"schema_version\":1}",
       sizeof(make_bytes) - 1, make_sha, sizeof(json_bytes) - 1, json_sha,
       sizeof(a_bytes) - 1, a_sha, sizeof(b_bytes) - 1, b_sha,
@@ -308,12 +308,12 @@ int main(void) {
   AbBuffer source_requirements;
   AbBuffer empty_source_requirements;
   AbBuffer metadata;
-  AbBuffer patch;
-  AbBuffer empty_patch;
-  AbBuffer accepted_patch;
-  AbBuffer patch_requirements;
+  AbBuffer act;
+  AbBuffer empty_act;
+  AbBuffer accepted_act;
+  AbBuffer act_requirements;
   AbBuffer failing_plan;
-  AbBuffer failing_patch;
+  AbBuffer failing_act;
   AbBuffer duplicate_plan;
   AbBuffer drift_map;
   char a_sha[65];
@@ -331,12 +331,12 @@ int main(void) {
   ab_buffer_init(&source_requirements, engine);
   ab_buffer_init(&empty_source_requirements, engine);
   ab_buffer_init(&metadata, engine);
-  ab_buffer_init(&patch, engine);
-  ab_buffer_init(&empty_patch, engine);
-  ab_buffer_init(&accepted_patch, engine);
-  ab_buffer_init(&patch_requirements, engine);
+  ab_buffer_init(&act, engine);
+  ab_buffer_init(&empty_act, engine);
+  ab_buffer_init(&accepted_act, engine);
+  ab_buffer_init(&act_requirements, engine);
   ab_buffer_init(&failing_plan, engine);
-  ab_buffer_init(&failing_patch, engine);
+  ab_buffer_init(&failing_act, engine);
   ab_buffer_init(&duplicate_plan, engine);
   ab_buffer_init(&drift_map, engine);
   if (!render_project(engine, &project, &map, a_sha, b_sha, json_sha,
@@ -359,8 +359,8 @@ int main(void) {
     failures++;
     goto cleanup;
   }
-  status = archbird_act_source_requirements(engine, plan.data, plan.length, 0,
-                                            collect, &source_requirements);
+  status = archbird_plan_source_requirements(engine, plan.data, plan.length, 0,
+                                             collect, &source_requirements);
   expect_status("collect source requirements", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK &&
       (!find_bytes(&source_requirements,
@@ -371,9 +371,9 @@ int main(void) {
     fprintf(stderr, "FAIL source requirements content/order\n");
     failures++;
   }
-  status = archbird_act_source_requirements(engine, empty_plan.data,
-                                            empty_plan.length, 0, collect,
-                                            &empty_source_requirements);
+  status = archbird_plan_source_requirements(engine, empty_plan.data,
+                                             empty_plan.length, 0, collect,
+                                             &empty_source_requirements);
   expect_status("collect empty source requirements", status, ARCHBIRD_OK,
                 engine);
   if (status == ARCHBIRD_OK &&
@@ -382,25 +382,25 @@ int main(void) {
     fprintf(stderr, "FAIL empty source requirements shape\n");
     failures++;
   }
-  status = archbird_act_materialize_patch(
-      engine, project, plan.data, plan.length, map.data, map.length,
-      verification.data, verification.length, metadata.data, metadata.length, 0,
-      collect, &patch);
+  status = archbird_act_materialize(engine, project, plan.data, plan.length,
+                                    map.data, map.length, verification.data,
+                                    verification.length, metadata.data,
+                                    metadata.length, 0, collect, &act);
   expect_status("materialize", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK)
     expect_status("validate materialized",
-                  archbird_patch_validate(engine, patch.data, patch.length),
+                  archbird_act_validate(engine, act.data, act.length),
                   ARCHBIRD_OK, engine);
-  if (!find_bytes(&patch, "\"content_base64\":\"QUxQSEEK\"") ||
-      !find_bytes(&patch, "\"kind\":\"create\",\"path\":\"src/c.c\"") ||
-      !find_bytes(&patch, "\"kind\":\"move\",\"path\":\"src/z.c\","
-                          "\"source_path\":\"src/b.c\"") ||
-      !find_bytes(&patch, "\"content_base64\":\"eyJuYW1lIjoibmV3In0K\"") ||
-      !find_bytes(&patch, "\"content_base64\":\""
-                          "V0FTTV9FWFBPUlRTID0gX25ldyBfb3RoZXIK\"") ||
-      find_bytes(&patch, "\"path\":\"src/z.c\"") <
-          find_bytes(&patch, "\"path\":\"src/c.c\"")) {
-    fprintf(stderr, "FAIL materialized Patch content/order\n");
+  if (!find_bytes(&act, "\"content_base64\":\"QUxQSEEK\"") ||
+      !find_bytes(&act, "\"kind\":\"create\",\"path\":\"src/c.c\"") ||
+      !find_bytes(&act, "\"kind\":\"move\",\"path\":\"src/z.c\","
+                        "\"source_path\":\"src/b.c\"") ||
+      !find_bytes(&act, "\"content_base64\":\"eyJuYW1lIjoibmV3In0K\"") ||
+      !find_bytes(&act, "\"content_base64\":\""
+                        "V0FTTV9FWFBPUlRTID0gX25ldyBfb3RoZXIK\"") ||
+      find_bytes(&act, "\"path\":\"src/z.c\"") <
+          find_bytes(&act, "\"path\":\"src/c.c\"")) {
+    fprintf(stderr, "FAIL materialized Act content/order\n");
     failures++;
   }
   {
@@ -418,13 +418,13 @@ int main(void) {
       fprintf(stderr, "FAIL construct duplicate Make insertion Plan\n");
       failures++;
     } else {
-      empty_patch.length = 0;
+      empty_act.length = 0;
       expect_status("reject duplicate Make insertion",
-                    archbird_act_materialize_patch(
+                    archbird_act_materialize(
                         engine, project, duplicate_plan.data,
                         duplicate_plan.length, map.data, map.length,
                         verification.data, verification.length, metadata.data,
-                        metadata.length, 0, collect, &empty_patch),
+                        metadata.length, 0, collect, &empty_act),
                     ARCHBIRD_CONFLICT, engine);
     }
   }
@@ -436,18 +436,18 @@ int main(void) {
   if (status == ARCHBIRD_OK &&
       make_plan(engine, &map, &failing_verification, a_sha, b_sha, json_sha,
                 make_sha, 1, "BROKEN", &failing_plan)) {
-    status = archbird_act_materialize_patch(
+    status = archbird_act_materialize(
         engine, project, failing_plan.data, failing_plan.length, map.data,
         map.length, failing_verification.data, failing_verification.length,
-        metadata.data, metadata.length, 0, collect, &failing_patch);
+        metadata.data, metadata.length, 0, collect, &failing_act);
     expect_status("materialize failing policy", status, ARCHBIRD_OK, engine);
     if (status == ARCHBIRD_OK)
       expect_status("reject failing policy",
-                    archbird_patch_accept(
-                        engine, failing_patch.data, failing_patch.length,
-                        map.data, map.length, map.data, map.length,
+                    archbird_act_accept(
+                        engine, failing_act.data, failing_act.length, map.data,
+                        map.length, map.data, map.length,
                         failing_verification.data, failing_verification.length,
-                        0, collect, &accepted_patch),
+                        0, collect, &accepted_act),
                     ARCHBIRD_POLICY_REJECTED, engine);
   } else {
     fprintf(stderr, "FAIL failing policy fixture construction\n");
@@ -466,13 +466,13 @@ int main(void) {
                          description + sizeof(empty_description) - 1,
                          map.length - offset -
                              (sizeof(empty_description) - 1)) == ARCHBIRD_OK) {
-      accepted_patch.length = 0;
-      status = archbird_patch_accept(
-          engine, empty_patch.data, empty_patch.length, drift_map.data,
+      accepted_act.length = 0;
+      status = archbird_act_accept(
+          engine, empty_act.data, empty_act.length, drift_map.data,
           drift_map.length, map.data, map.length, verification.data,
-          verification.length, 0, collect, &accepted_patch);
-      if (status == ARCHBIRD_OK || accepted_patch.length) {
-        fprintf(stderr, "FAIL altered before Map produced an accepted Patch\n");
+          verification.length, 0, collect, &accepted_act);
+      if (status == ARCHBIRD_OK || accepted_act.length) {
+        fprintf(stderr, "FAIL altered before Map produced an accepted Act\n");
         failures++;
       }
     } else {
@@ -480,62 +480,62 @@ int main(void) {
       failures++;
     }
   }
-  status = archbird_act_materialize_patch(
+  status = archbird_act_materialize(
       engine, project, empty_plan.data, empty_plan.length, map.data, map.length,
       verification.data, verification.length, metadata.data, metadata.length, 0,
-      collect, &empty_patch);
+      collect, &empty_act);
   expect_status("materialize empty", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK)
     expect_status(
         "validate empty",
-        archbird_patch_validate(engine, empty_patch.data, empty_patch.length),
+        archbird_act_validate(engine, empty_act.data, empty_act.length),
         ARCHBIRD_OK, engine);
-  if (!find_bytes(&empty_patch, "\"executors\":[],\"plan_sha256\":") ||
-      !find_bytes(&empty_patch, "\"transitions\":[]")) {
-    fprintf(stderr, "FAIL empty Patch shape\n");
+  if (!find_bytes(&empty_act, "\"executors\":[],\"plan_sha256\":") ||
+      !find_bytes(&empty_act, "\"transitions\":[]")) {
+    fprintf(stderr, "FAIL empty Act shape\n");
     failures++;
   }
-  status = archbird_patch_accept(engine, empty_patch.data, empty_patch.length,
-                                 map.data, map.length, map.data, map.length,
-                                 verification.data, verification.length, 0,
-                                 collect, &accepted_patch);
+  status =
+      archbird_act_accept(engine, empty_act.data, empty_act.length, map.data,
+                          map.length, map.data, map.length, verification.data,
+                          verification.length, 0, collect, &accepted_act);
   expect_status("accept empty", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK)
-    expect_status("validate accepted",
-                  archbird_patch_validate(engine, accepted_patch.data,
-                                          accepted_patch.length),
-                  ARCHBIRD_OK, engine);
-  if (!find_bytes(&accepted_patch, "\"state\":\"accepted\"") ||
-      !find_bytes(&accepted_patch, "\"status\":\"satisfied\"") ||
-      !find_bytes(&accepted_patch, "\"content_sha256\":")) {
-    fprintf(stderr, "FAIL accepted Patch shape\n");
+    expect_status(
+        "validate accepted",
+        archbird_act_validate(engine, accepted_act.data, accepted_act.length),
+        ARCHBIRD_OK, engine);
+  if (!find_bytes(&accepted_act, "\"state\":\"accepted\"") ||
+      !find_bytes(&accepted_act, "\"status\":\"satisfied\"") ||
+      !find_bytes(&accepted_act, "\"content_sha256\":")) {
+    fprintf(stderr, "FAIL accepted Act shape\n");
     failures++;
   }
-  status = archbird_patch_source_requirements(engine, accepted_patch.data,
-                                              accepted_patch.length, 0, collect,
-                                              &patch_requirements);
-  expect_status("collect accepted Patch requirements", status, ARCHBIRD_OK,
+  status = archbird_act_source_requirements(engine, accepted_act.data,
+                                            accepted_act.length, 0, collect,
+                                            &act_requirements);
+  expect_status("collect accepted Act requirements", status, ARCHBIRD_OK,
                 engine);
   if (status == ARCHBIRD_OK &&
-      (!find_bytes(&patch_requirements, "\"absent\":[]") ||
-       !find_bytes(&patch_requirements, "\"files\":[]"))) {
-    fprintf(stderr, "FAIL accepted Patch requirements shape\n");
+      (!find_bytes(&act_requirements, "\"absent\":[]") ||
+       !find_bytes(&act_requirements, "\"files\":[]"))) {
+    fprintf(stderr, "FAIL accepted Act requirements shape\n");
     failures++;
   }
-  expect_status("reject materialized Patch requirements",
-                archbird_patch_source_requirements(
-                    engine, empty_patch.data, empty_patch.length, 0, collect,
-                    &patch_requirements),
+  expect_status("reject materialized Act requirements",
+                archbird_act_source_requirements(engine, empty_act.data,
+                                                 empty_act.length, 0, collect,
+                                                 &act_requirements),
                 ARCHBIRD_POLICY_REJECTED, engine);
   expect_status("preflight accepted",
-                archbird_patch_preflight_apply(engine, accepted_patch.data,
-                                               accepted_patch.length,
-                                               metadata.data, metadata.length),
+                archbird_act_preflight_apply(engine, accepted_act.data,
+                                             accepted_act.length, metadata.data,
+                                             metadata.length),
                 ARCHBIRD_OK, engine);
   expect_status("reject materialized apply",
-                archbird_patch_preflight_apply(engine, empty_patch.data,
-                                               empty_patch.length,
-                                               metadata.data, metadata.length),
+                archbird_act_preflight_apply(engine, empty_act.data,
+                                             empty_act.length, metadata.data,
+                                             metadata.length),
                 ARCHBIRD_POLICY_REJECTED, engine);
   {
     uint8_t *locked_sha = (uint8_t *)find_bytes(&metadata, b_sha);
@@ -547,22 +547,22 @@ int main(void) {
     locked_sha[0] = locked_sha[0] == '0' ? '1' : '0';
   }
   expect_status("stale metadata",
-                archbird_act_materialize_patch(
+                archbird_act_materialize(
                     engine, project, plan.data, plan.length, map.data,
                     map.length, verification.data, verification.length,
-                    metadata.data, metadata.length, 0, collect, &empty_patch),
+                    metadata.data, metadata.length, 0, collect, &empty_act),
                 ARCHBIRD_CONFLICT, engine);
 
 cleanup:
   archbird_project_destroy(project);
   ab_buffer_free(&drift_map);
-  ab_buffer_free(&failing_patch);
+  ab_buffer_free(&failing_act);
   ab_buffer_free(&failing_plan);
   ab_buffer_free(&duplicate_plan);
-  ab_buffer_free(&patch_requirements);
-  ab_buffer_free(&accepted_patch);
-  ab_buffer_free(&empty_patch);
-  ab_buffer_free(&patch);
+  ab_buffer_free(&act_requirements);
+  ab_buffer_free(&accepted_act);
+  ab_buffer_free(&empty_act);
+  ab_buffer_free(&act);
   ab_buffer_free(&metadata);
   ab_buffer_free(&empty_source_requirements);
   ab_buffer_free(&source_requirements);
@@ -573,6 +573,6 @@ cleanup:
   ab_buffer_free(&map);
   archbird_engine_destroy(engine);
   if (failures)
-    fprintf(stderr, "%d Patch materialization test(s) failed\n", failures);
+    fprintf(stderr, "%d Act materialization test(s) failed\n", failures);
   return failures ? 1 : 0;
 }

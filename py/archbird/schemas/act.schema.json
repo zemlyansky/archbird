@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/patch.schema.json",
-  "title": "Archbird patch",
-  "description": "An exact binary-safe Patch materialized from one Plan. Only an accepted Patch has a verified after-state and content seal and may be applied.",
-  "$comment": "Native and host validation additionally limit the canonical Patch to 268435456 bytes, each file preimage or postimage to 67108864 bytes, aggregate postimage content to 268435456 bytes, and collections to 4096 entries. JSON Schema validates the public structural contract; native validation owns decoded byte lengths, digests, uniqueness by stable identity, and seal integrity.",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/act.schema.json",
+  "title": "Archbird act",
+  "description": "An exact binary-safe Act materialized from one Plan. Only an accepted Act has a verified after-state and content seal and may be applied.",
+  "$comment": "Native and host validation additionally limit the canonical Act to 268435456 bytes, each file preimage or postimage to 67108864 bytes, aggregate postimage content to 268435456 bytes, and collections to 4096 entries. JSON Schema validates the public structural contract; native validation owns decoded byte lengths, digests, uniqueness by stable identity, and seal integrity.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,7 +22,7 @@
   ],
   "properties": {
     "schema_version": {"const": 2},
-    "artifact": {"const": "patch"},
+    "artifact": {"const": "act"},
     "provenance": {"const": "derived"},
     "tool": {"$ref": "#/$defs/tool"},
     "plan_sha256": {"$ref": "#/$defs/sha256"},

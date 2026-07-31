@@ -2133,29 +2133,29 @@ def compile_plan_json(
     )
 
 
-def validate_patch(patch_json: bytes) -> None:
-    """Validate one canonical Patch artifact."""
+def validate_act(act_json: bytes) -> None:
+    """Validate one canonical Act artifact."""
 
-    _native.patch_validate(patch_json)
+    _native.act_validate(act_json)
 
 
-def act_source_requirements(
+def plan_source_requirements(
     plan_json: bytes, *, pretty: bool = False
 ) -> bytes:
     """Return the source observations required to materialize a Plan."""
 
-    return _native.act_source_requirements(plan_json, pretty=pretty)
+    return _native.plan_source_requirements(plan_json, pretty=pretty)
 
 
-def patch_source_requirements(
-    patch_json: bytes, *, pretty: bool = False
+def act_source_requirements(
+    act_json: bytes, *, pretty: bool = False
 ) -> bytes:
-    """Return the source observations required to apply a Patch."""
+    """Return the source observations required to apply an Act."""
 
-    return _native.patch_source_requirements(patch_json, pretty=pretty)
+    return _native.act_source_requirements(act_json, pretty=pretty)
 
 
-def materialize_patch_json(
+def materialize_act_json(
     project: Project,
     plan_json: bytes,
     map_json: bytes,
@@ -2164,11 +2164,11 @@ def materialize_patch_json(
     *,
     pretty: bool = False,
 ) -> bytes:
-    """Materialize exact Plan operations into a source-locked Patch."""
+    """Materialize exact Plan operations into a source-locked Act."""
 
     if not isinstance(project, Project):
-        raise TypeError("Patch materialization requires a Project")
-    return _native.act_materialize_patch(
+        raise TypeError("Act materialization requires a Project")
+    return _native.act_materialize(
         project._capsule,
         plan_json,
         map_json,
@@ -2178,18 +2178,18 @@ def materialize_patch_json(
     )
 
 
-def accept_patch_json(
-    patch_json: bytes,
+def accept_act_json(
+    act_json: bytes,
     before_map_json: bytes,
     after_map_json: bytes,
     verification_json: bytes,
     *,
     pretty: bool = False,
 ) -> bytes:
-    """Bind a materialized Patch to its verified isolated after-state."""
+    """Bind a materialized Act to its verified isolated after-state."""
 
-    return _native.patch_accept(
-        patch_json,
+    return _native.act_accept(
+        act_json,
         before_map_json,
         after_map_json,
         verification_json,
@@ -2197,12 +2197,12 @@ def accept_patch_json(
     )
 
 
-def preflight_patch_apply(
-    patch_json: bytes, source_metadata_json: bytes
+def preflight_act_apply(
+    act_json: bytes, source_metadata_json: bytes
 ) -> None:
-    """Revalidate an accepted Patch and its current source preimages."""
+    """Revalidate an accepted Act and its current source preimages."""
 
-    _native.patch_preflight_apply(patch_json, source_metadata_json)
+    _native.act_preflight_apply(act_json, source_metadata_json)
 
 
 def _constraint_request_json(
@@ -2913,7 +2913,7 @@ __all__ = [
     "Workspace",
     "analyze_okf_source",
     "analyze_workspace_json",
-    "accept_patch_json",
+    "accept_act_json",
     "audit_map_freshness",
     "compile_plan_json",
     "compile_project_configuration",
@@ -2925,17 +2925,17 @@ __all__ = [
     "export_graph",
     "export_okf_bundle",
     "freeze_constraints_json",
-    "materialize_patch_json",
-    "patch_source_requirements",
+    "materialize_act_json",
     "act_source_requirements",
-    "preflight_patch_apply",
+    "plan_source_requirements",
+    "preflight_act_apply",
     "publish_okf_bundle",
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",
     "render_source_markdown",
     "resolve_discovery",
-    "validate_patch",
+    "validate_act",
     "validate_plan",
     "validate_test_symbol_observations",
     "write_okf_bundle",

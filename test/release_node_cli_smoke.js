@@ -238,15 +238,15 @@ const preview = run([
 ]);
 assert.match(preview, /--- a\/legacy\.js/);
 assert.equal(fs.existsSync(legacyPath), true);
-const patchPath = path.join(actRoot, "patch.json");
-fs.writeFileSync(patchPath, run([
+const actPath = path.join(actRoot, "act.json");
+fs.writeFileSync(actPath, run([
   "act", planPath, "--root", actRoot, "--format", "json",
 ]));
-const patch = JSON.parse(fs.readFileSync(patchPath));
-assert.equal(patch.artifact, "patch");
-assert.equal(patch.state, "accepted");
-assert.equal(patch.acceptance.status, "satisfied");
+const act = JSON.parse(fs.readFileSync(actPath));
+assert.equal(act.artifact, "act");
+assert.equal(act.state, "accepted");
+assert.equal(act.acceptance.status, "satisfied");
 assert.equal(fs.existsSync(legacyPath), true);
-run(["apply", patchPath, "--root", actRoot]);
+run(["apply", actPath, "--root", actRoot]);
 assert.equal(fs.existsSync(legacyPath), false);
 console.log(`packaged Node CLI Map/Query/Verify/Plan/Act passed through ${engine}`);

@@ -175,8 +175,8 @@ elif command == 'plan':
   }]}
 elif command == 'act':
   value = {
-    'artifact':'patch',
-    'schema_version':1,
+    'artifact':'act',
+    'schema_version':2,
     'state':'accepted',
   }
 else:

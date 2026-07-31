@@ -1,10 +1,12 @@
 #include <archbird/archbird.h>
 
+#include "act_executor_internal.h"
+#include "act_source.h"
 #include "artifact_validation.h"
 #include "base64.h"
+#include "c/dependency_redirect.h"
 #include "json_value.h"
 #include "model.h"
-#include "patch_source.h"
 #include "plan_compile_internal.h"
 #include "plan_internal.h"
 #include "project_internal.h"
@@ -17,9 +19,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define AB_PATCH_MAX_WORK_ITEMS AB_PATCH_MAX_TRANSITIONS
-#define AB_PATCH_MAX_FILE_BYTES (64u * 1024u * 1024u)
-#define AB_PATCH_MAX_SOURCE_BYTES (256u * 1024u * 1024u)
+#define AB_ACT_MAX_WORK_ITEMS AB_ACT_MAX_TRANSITIONS
+#define AB_ACT_MAX_FILE_BYTES (64u * 1024u * 1024u)
+#define AB_ACT_MAX_SOURCE_BYTES (256u * 1024u * 1024u)
 
 typedef struct AbActEdit {
   size_t work_index;
@@ -54,7 +56,7 @@ typedef struct AbActWork {
   char after_sha256[65];
 } AbActWork;
 
-typedef struct AbActContext {
+struct AbActContext {
   ArchbirdEngine *engine;
   const ArchbirdProject *project;
   const AbValue *map;
@@ -64,7 +66,7 @@ typedef struct AbActContext {
   AbActEdit *edits;
   size_t edit_count;
   size_t total_after_bytes;
-} AbActContext;
+};
 
 typedef struct AbActWorkOrder {
   size_t work_index;
@@ -156,14 +158,14 @@ static ArchbirdStatus source_work(AbActContext *context, const AbString *path,
       *out_index = index;
       return ARCHBIRD_OK;
     }
-  if (context->work_count >= AB_PATCH_MAX_WORK_ITEMS)
+  if (context->work_count >= AB_ACT_MAX_WORK_ITEMS)
     return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                      "Plan touches too many files");
   source_index = project_source_index(context->project, path);
   if (source_index == SIZE_MAX)
     return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
                      "Plan source path is outside the mapped project");
-  metadata = ab_patch_source_file(context->metadata, path);
+  metadata = ab_act_source_file(context->metadata, path);
   if (!metadata)
     return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
                      "Plan source path has no host metadata");
@@ -176,7 +178,7 @@ static ArchbirdStatus source_work(AbActContext *context, const AbString *path,
       return act_error(context->engine, ARCHBIRD_CONFLICT,
                        "host source metadata is stale");
     memset(work, 0, sizeof(*work));
-    work->path = *path;
+    work->path = manifest->files[source_index].path;
     work->before = ab_project_source_bytes(context->project, source_index);
     work->before_length = manifest->files[source_index].byte_length;
     memcpy(work->before_sha256, source_sha, sizeof(source_sha));
@@ -195,10 +197,10 @@ static ArchbirdStatus absent_work(AbActContext *context, const AbString *path,
       *out_index = index;
       return ARCHBIRD_OK;
     }
-  if (!ab_patch_source_path_absent(context->metadata, path))
+  if (!ab_act_source_path_absent(context->metadata, path))
     return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
                      "Plan destination was not proven absent");
-  if (context->work_count >= AB_PATCH_MAX_WORK_ITEMS)
+  if (context->work_count >= AB_ACT_MAX_WORK_ITEMS)
     return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                      "Plan touches too many files");
   memset(&context->works[context->work_count], 0,
@@ -214,7 +216,7 @@ static ArchbirdStatus add_edit(AbActContext *context, size_t work_index,
                                size_t replacement_length,
                                uint8_t *owned_replacement) {
   AbActEdit *edit;
-  if (context->edit_count >= AB_PATCH_MAX_WORK_ITEMS) {
+  if (context->edit_count >= AB_ACT_MAX_WORK_ITEMS) {
     ab_free(context->engine, owned_replacement);
     return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                      "Plan contains too many exact edit sites");
@@ -228,6 +230,50 @@ static ArchbirdStatus add_edit(AbActContext *context, size_t work_index,
   edit->replacement_length = replacement_length;
   edit->owned_replacement = owned_replacement;
   return ARCHBIRD_OK;
+}
+
+ArchbirdEngine *ab_act_executor_engine(AbActContext *context) {
+  return context ? context->engine : NULL;
+}
+
+const ArchbirdProject *ab_act_executor_project(const AbActContext *context) {
+  return context ? context->project : NULL;
+}
+
+const AbValue *ab_act_executor_map(const AbActContext *context) {
+  return context ? context->map : NULL;
+}
+
+ArchbirdStatus ab_act_executor_replace_exact(
+    AbActContext *context, const AbString *item_id, const AbString *path,
+    size_t start, size_t end, const uint8_t *expected, size_t expected_length,
+    const uint8_t *replacement, size_t replacement_length) {
+  size_t work_index;
+  AbActWork *work;
+  ArchbirdStatus status;
+  if (!context || !item_id || !path || !expected ||
+      (replacement_length && !replacement))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = source_work(context, path, &work_index);
+  if (status != ARCHBIRD_OK)
+    return status;
+  work = &context->works[work_index];
+  if (start > end || end > work->before_length ||
+      expected_length != end - start ||
+      memcmp(work->before + start, expected, expected_length) != 0)
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     "executor edit does not match exact source bytes");
+  status = ab_utf8_validate(context->engine, work->before, work->before_length);
+  if (status == ARCHBIRD_OK)
+    status = ab_utf8_validate(context->engine, work->before, start);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_utf8_validate(context->engine, work->before + start, end - start);
+  if (status != ARCHBIRD_OK)
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     "executor edit must align to UTF-8 byte boundaries");
+  return add_edit(context, work_index, item_id, start, end, replacement,
+                  replacement_length, NULL);
 }
 
 static int edit_compare(const void *left, const void *right) {
@@ -585,8 +631,11 @@ static int string_array_set_equal(const AbValue *left, const AbValue *right) {
   size_t left_index;
   size_t right_index;
   if (!left || left->kind != AB_VALUE_ARRAY)
-    return right && right->kind == AB_VALUE_ARRAY && right->as.array.count == 0;
-  if (!right || right->kind != AB_VALUE_ARRAY ||
+    return !right ||
+           (right->kind == AB_VALUE_ARRAY && right->as.array.count == 0);
+  if (!right)
+    return left->as.array.count == 0;
+  if (right->kind != AB_VALUE_ARRAY ||
       left->as.array.count != right->as.array.count)
     return 0;
   for (left_index = 0; left_index < left->as.array.count; left_index++) {
@@ -814,6 +863,8 @@ static ArchbirdStatus collect_operation(AbActContext *context,
     return add_c_declaration(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "rename_symbol"))
     return add_rename_symbol(context, operation, &item_id->as.text);
+  if (ab_artifact_text_is(action, "redirect_dependency"))
+    return ab_act_c_dependency_redirect(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "create_file")) {
     const AbValue *content = object_field(operation, "content");
     path = object_field(operation, "path");
@@ -861,7 +912,7 @@ static ArchbirdStatus collect_operation(AbActContext *context,
                source_sha->as.text.data, 64) != 0)
       return act_error(context->engine, ARCHBIRD_CONFLICT,
                        "move_file source lock is stale");
-    if (!ab_patch_source_path_absent(context->metadata, &destination->as.text))
+    if (!ab_act_source_path_absent(context->metadata, &destination->as.text))
       return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
                        "move_file destination was not proven absent");
     if (context->works[work_index].delete_file ||
@@ -917,14 +968,13 @@ static ArchbirdStatus materialize_work(AbActContext *context,
                        "Plan contains overlapping exact edits");
     if (edit->end - edit->start > after_length ||
         edit->replacement_length >
-            AB_PATCH_MAX_FILE_BYTES -
-                (after_length - (edit->end - edit->start)))
+            AB_ACT_MAX_FILE_BYTES - (after_length - (edit->end - edit->start)))
       return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                        "materialized file exceeds the Act limit");
     after_length =
         after_length - (edit->end - edit->start) + edit->replacement_length;
   }
-  if (after_length > AB_PATCH_MAX_FILE_BYTES)
+  if (after_length > AB_ACT_MAX_FILE_BYTES)
     return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                      "materialized file exceeds the Act limit");
   if (after_length) {
@@ -996,7 +1046,7 @@ static ArchbirdStatus collect_constraint_ids(AbActContext *context,
   for (value_index = 0;
        value_index < plan->preserved_constraints->as.array.count;
        value_index++) {
-    if (count == AB_PATCH_MAX_WORK_ITEMS)
+    if (count == AB_ACT_MAX_WORK_ITEMS)
       return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                        "Plan acceptance names too many constraints");
     values[count++] =
@@ -1008,7 +1058,7 @@ static ArchbirdStatus collect_constraint_ids(AbActContext *context,
     const AbValue *constraints = object_field(acceptance, "constraints");
     for (value_index = 0; value_index < constraints->as.array.count;
          value_index++) {
-      if (count == AB_PATCH_MAX_WORK_ITEMS)
+      if (count == AB_ACT_MAX_WORK_ITEMS)
         return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
                          "Plan acceptance names too many constraints");
       values[count++] = &constraints->as.array.items[value_index].as.text;
@@ -1105,7 +1155,7 @@ static ArchbirdStatus render_transition(AbBuffer *buffer,
                                         const AbActContext *context,
                                         size_t work_index) {
   const AbActWork *work = &context->works[work_index];
-  const AbString *ids[AB_PATCH_MAX_WORK_ITEMS];
+  const AbString *ids[AB_ACT_MAX_WORK_ITEMS];
   const AbString *path = work->move ? &work->destination : &work->path;
   const char *kind = work->create        ? "create"
                      : work->delete_file ? "delete"
@@ -1156,15 +1206,15 @@ static ArchbirdStatus render_transition(AbBuffer *buffer,
   return status;
 }
 
-static ArchbirdStatus render_patch(AbActContext *context, const AbPlan *plan,
-                                   const AbActWorkOrder *order,
-                                   uint32_t json_flags,
-                                   ArchbirdWriteFn write_fn, void *user_data) {
+static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
+                                 const AbActWorkOrder *order,
+                                 uint32_t json_flags, ArchbirdWriteFn write_fn,
+                                 void *user_data) {
   AbBuffer document;
-  const AbString *item_ids[AB_PATCH_MAX_WORK_ITEMS];
-  const AbString *reads[AB_PATCH_MAX_WORK_ITEMS];
-  const AbString *writes[AB_PATCH_MAX_WORK_ITEMS];
-  const AbString *constraint_ids[AB_PATCH_MAX_WORK_ITEMS];
+  const AbString *item_ids[AB_ACT_MAX_WORK_ITEMS];
+  const AbString *reads[AB_ACT_MAX_WORK_ITEMS];
+  const AbString *writes[AB_ACT_MAX_WORK_ITEMS];
+  const AbString *constraint_ids[AB_ACT_MAX_WORK_ITEMS];
   size_t item_count = 0;
   size_t read_count = 0;
   size_t write_count = 0;
@@ -1177,7 +1227,7 @@ static ArchbirdStatus render_patch(AbActContext *context, const AbPlan *plan,
   for (index = 0; index < context->work_count; index++) {
     size_t work_index = order[index].work_index;
     const AbActWork *work = &context->works[work_index];
-    const AbString *ids[AB_PATCH_MAX_WORK_ITEMS];
+    const AbString *ids[AB_ACT_MAX_WORK_ITEMS];
     size_t count = work_item_ids(context, work_index, ids);
     size_t id_index;
     for (id_index = 0; id_index < count; id_index++)
@@ -1215,7 +1265,7 @@ static ArchbirdStatus render_patch(AbActContext *context, const AbPlan *plan,
     status = ab_buffer_literal(
         &document,
         ",\"status\":\"not_evaluated\",\"verification_sha256\":null},"
-        "\"after\":null,\"artifact\":\"patch\",\"executors\":[");
+        "\"after\":null,\"artifact\":\"act\",\"executors\":[");
   if (status == ARCHBIRD_OK && item_count) {
     status = ab_buffer_literal(
         &document, "{\"capability\":\"archbird.native.plan-operators@1\","
@@ -1347,7 +1397,7 @@ validate_verification_binding(ArchbirdEngine *engine, const AbPlan *plan,
   return ARCHBIRD_OK;
 }
 
-ArchbirdStatus archbird_act_materialize_patch(
+ArchbirdStatus archbird_act_materialize(
     ArchbirdEngine *engine, const ArchbirdProject *project,
     const uint8_t *plan_json, size_t plan_length, const uint8_t *map_json,
     size_t map_length, const uint8_t *verification_json,
@@ -1381,14 +1431,14 @@ ArchbirdStatus archbird_act_materialize_patch(
   if (status == ARCHBIRD_OK)
     status = validate_verification_binding(engine, &plan, &verification);
   if (status == ARCHBIRD_OK)
-    status = ab_patch_source_metadata_load(engine, source_metadata_json,
-                                           source_metadata_length, &metadata);
+    status = ab_act_source_metadata_load(engine, source_metadata_json,
+                                         source_metadata_length, &metadata);
   if (status == ARCHBIRD_OK) {
     context.map = &map;
     context.metadata = &metadata;
-    context.works = (AbActWork *)ab_calloc(engine, AB_PATCH_MAX_WORK_ITEMS,
+    context.works = (AbActWork *)ab_calloc(engine, AB_ACT_MAX_WORK_ITEMS,
                                            sizeof(*context.works));
-    context.edits = (AbActEdit *)ab_calloc(engine, AB_PATCH_MAX_WORK_ITEMS,
+    context.edits = (AbActEdit *)ab_calloc(engine, AB_ACT_MAX_WORK_ITEMS,
                                            sizeof(*context.edits));
     if (!context.works || !context.edits)
       status = act_error(engine, ARCHBIRD_OUT_OF_MEMORY,
@@ -1407,7 +1457,7 @@ ArchbirdStatus archbird_act_materialize_patch(
         (AbActWorkOrder *)ab_calloc(engine, context.work_count, sizeof(*order));
     if (!order)
       status = act_error(engine, ARCHBIRD_OUT_OF_MEMORY,
-                         "out of memory ordering Patch transitions");
+                         "out of memory ordering Act transitions");
   }
   for (index = 0; status == ARCHBIRD_OK && index < context.work_count;
        index++) {
@@ -1430,16 +1480,16 @@ ArchbirdStatus archbird_act_materialize_patch(
        index++) {
     if (!context.works[index].delete_file) {
       if (context.works[index].after_length >
-          AB_PATCH_MAX_SOURCE_BYTES - context.total_after_bytes)
+          AB_ACT_MAX_SOURCE_BYTES - context.total_after_bytes)
         status = act_error(engine, ARCHBIRD_LIMIT_EXCEEDED,
-                           "Patch after-source bytes exceed the Act limit");
+                           "Act after-source bytes exceed the Act limit");
       else
         context.total_after_bytes += context.works[index].after_length;
     }
   }
   if (status == ARCHBIRD_OK)
     status =
-        render_patch(&context, &plan, order, json_flags, write_fn, user_data);
+        render_act(&context, &plan, order, json_flags, write_fn, user_data);
   for (index = 0; index < context.edit_count; index++)
     ab_free(engine, context.edits[index].owned_replacement);
   for (index = 0; index < context.work_count; index++)

@@ -807,7 +807,7 @@ static napi_value plan_compile(napi_env env, napi_callback_info info) {
   return render_result(env, owned->engine, status, &output);
 }
 
-static napi_value patch_validate(napi_env env, napi_callback_info info) {
+static napi_value act_validate(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1];
   const uint8_t *input;
@@ -820,7 +820,7 @@ static napi_value patch_validate(napi_env env, napi_callback_info info) {
     return NULL;
   status = saved_artifact_engine(input_length, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_patch_validate(engine, input, input_length);
+    status = archbird_act_validate(engine, input, input_length);
   if (status != ARCHBIRD_OK) {
     result = throw_status(env, engine, status);
     archbird_engine_destroy(engine);
@@ -831,8 +831,8 @@ static napi_value patch_validate(napi_env env, napi_callback_info info) {
   return result;
 }
 
-static napi_value act_source_requirements(napi_env env,
-                                          napi_callback_info info) {
+static napi_value plan_source_requirements(napi_env env,
+                                           napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
   const uint8_t *plan;
@@ -848,7 +848,32 @@ static napi_value act_source_requirements(napi_env env,
     return NULL;
   status = saved_artifact_engine(plan_length, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_act_source_requirements(engine, plan, plan_length,
+    status = archbird_plan_source_requirements(
+        engine, plan, plan_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
+        output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static napi_value act_source_requirements(napi_env env,
+                                          napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  const uint8_t *act;
+  size_t act_length;
+  int pretty;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 1 || !get_buffer(env, argv[0], &act, &act_length) ||
+      !get_optional_bool(env, argc, argv, 1, 0, &pretty))
+    return NULL;
+  status = saved_artifact_engine(act_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_act_source_requirements(engine, act, act_length,
                                               pretty ? ARCHBIRD_JSON_PRETTY : 0,
                                               output_write, &output);
   result = render_result(env, engine, status, &output);
@@ -856,32 +881,7 @@ static napi_value act_source_requirements(napi_env env,
   return result;
 }
 
-static napi_value patch_source_requirements(napi_env env,
-                                            napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
-  const uint8_t *patch;
-  size_t patch_length;
-  int pretty;
-  ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status;
-  NodeOutput output = {0};
-  napi_value result;
-  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 1 || !get_buffer(env, argv[0], &patch, &patch_length) ||
-      !get_optional_bool(env, argc, argv, 1, 0, &pretty))
-    return NULL;
-  status = saved_artifact_engine(patch_length, &engine);
-  if (status == ARCHBIRD_OK)
-    status = archbird_patch_source_requirements(
-        engine, patch, patch_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
-        output_write, &output);
-  result = render_result(env, engine, status, &output);
-  archbird_engine_destroy(engine);
-  return result;
-}
-
-static napi_value act_materialize_patch(napi_env env, napi_callback_info info) {
+static napi_value act_materialize(napi_env env, napi_callback_info info) {
   size_t argc = 6;
   napi_value argv[6];
   NodeProject *owned;
@@ -904,21 +904,21 @@ static napi_value act_materialize_patch(napi_env env, napi_callback_info info) {
       !get_buffer(env, argv[4], &metadata, &metadata_length) ||
       !get_optional_bool(env, argc, argv, 5, 0, &pretty))
     return NULL;
-  status = archbird_act_materialize_patch(
+  status = archbird_act_materialize(
       owned->engine, owned->project, plan, plan_length, map, map_length,
       verification, verification_length, metadata, metadata_length,
       pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   return render_result(env, owned->engine, status, &output);
 }
 
-static napi_value patch_accept(napi_env env, napi_callback_info info) {
+static napi_value act_accept(napi_env env, napi_callback_info info) {
   size_t argc = 5;
   napi_value argv[5];
-  const uint8_t *patch;
+  const uint8_t *act;
   const uint8_t *before_map;
   const uint8_t *after_map;
   const uint8_t *verification;
-  size_t patch_length;
+  size_t act_length;
   size_t before_map_length;
   size_t after_map_length;
   size_t verification_length;
@@ -929,18 +929,18 @@ static napi_value patch_accept(napi_env env, napi_callback_info info) {
   napi_value result;
   size_t budget;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 4 || !get_buffer(env, argv[0], &patch, &patch_length) ||
+  if (argc < 4 || !get_buffer(env, argv[0], &act, &act_length) ||
       !get_buffer(env, argv[1], &before_map, &before_map_length) ||
       !get_buffer(env, argv[2], &after_map, &after_map_length) ||
       !get_buffer(env, argv[3], &verification, &verification_length) ||
       !get_optional_bool(env, argc, argv, 4, 0, &pretty))
     return NULL;
-  budget = larger_input(larger_input(patch_length, before_map_length),
+  budget = larger_input(larger_input(act_length, before_map_length),
                         larger_input(after_map_length, verification_length));
   status = saved_artifact_engine(budget, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_patch_accept(
-        engine, patch, patch_length, before_map, before_map_length, after_map,
+    status = archbird_act_accept(
+        engine, act, act_length, before_map, before_map_length, after_map,
         after_map_length, verification, verification_length,
         pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(env, engine, status, &output);
@@ -948,25 +948,25 @@ static napi_value patch_accept(napi_env env, napi_callback_info info) {
   return result;
 }
 
-static napi_value patch_preflight_apply(napi_env env, napi_callback_info info) {
+static napi_value act_preflight_apply(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2];
-  const uint8_t *patch;
+  const uint8_t *act;
   const uint8_t *metadata;
-  size_t patch_length;
+  size_t act_length;
   size_t metadata_length;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
   napi_value result;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 2 || !get_buffer(env, argv[0], &patch, &patch_length) ||
+  if (argc < 2 || !get_buffer(env, argv[0], &act, &act_length) ||
       !get_buffer(env, argv[1], &metadata, &metadata_length))
     return NULL;
-  status = saved_artifact_engine(larger_input(patch_length, metadata_length),
-                                 &engine);
+  status =
+      saved_artifact_engine(larger_input(act_length, metadata_length), &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_patch_preflight_apply(engine, patch, patch_length,
-                                            metadata, metadata_length);
+    status = archbird_act_preflight_apply(engine, act, act_length, metadata,
+                                          metadata_length);
   if (status != ARCHBIRD_OK) {
     result = throw_status(env, engine, status);
     archbird_engine_destroy(engine);
@@ -2430,16 +2430,15 @@ static napi_value init(napi_env env, napi_value exports) {
       {"planValidate", NULL, plan_validate, NULL, NULL, NULL, napi_default,
        NULL},
       {"planCompile", NULL, plan_compile, NULL, NULL, NULL, napi_default, NULL},
-      {"patchValidate", NULL, patch_validate, NULL, NULL, NULL, napi_default,
-       NULL},
+      {"actValidate", NULL, act_validate, NULL, NULL, NULL, napi_default, NULL},
+      {"planSourceRequirements", NULL, plan_source_requirements, NULL, NULL,
+       NULL, napi_default, NULL},
       {"actSourceRequirements", NULL, act_source_requirements, NULL, NULL, NULL,
        napi_default, NULL},
-      {"patchSourceRequirements", NULL, patch_source_requirements, NULL, NULL,
-       NULL, napi_default, NULL},
-      {"actMaterializePatch", NULL, act_materialize_patch, NULL, NULL, NULL,
-       napi_default, NULL},
-      {"patchAccept", NULL, patch_accept, NULL, NULL, NULL, napi_default, NULL},
-      {"patchPreflightApply", NULL, patch_preflight_apply, NULL, NULL, NULL,
+      {"actMaterialize", NULL, act_materialize, NULL, NULL, NULL, napi_default,
+       NULL},
+      {"actAccept", NULL, act_accept, NULL, NULL, NULL, napi_default, NULL},
+      {"actPreflightApply", NULL, act_preflight_apply, NULL, NULL, NULL,
        napi_default, NULL},
   };
   napi_value abi;

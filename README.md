@@ -26,9 +26,9 @@ npm install --save-dev archbird
 archbird                # shorthand for: archbird map
 archbird .              # shorthand for: archbird map .
 archbird map            # explicit form; npm: npx archbird map
-archbird plan           # derive edits from current constraint issues
-archbird act PLAN.json  # materialize and verify a Patch; writes nothing
-archbird apply PATCH.json # replay the accepted Patch
+archbird plan             # derive a Plan from current constraint issues
+archbird act PLAN.json    # ground and verify an Act; writes nothing
+archbird apply ACT.json   # replay the accepted Act
 archbird serve          # npm: npx archbird serve
 archbird mcp            # Python/root launcher: local agent protocol
 ```
@@ -59,8 +59,8 @@ Archbird reads a supplied index but does not invoke an indexer.
 | **Map** | What exists, and how is it connected? | Searchable files, symbols, dependencies, tests, and build routes |
 | **Query** | Which exact evidence matters for this task? | Focused, ranked context with source witnesses |
 | **Verify** | Does the code follow the architecture constraints? | Constraint status, violations, code locations, and unknowns |
-| **Plan** | What exact edits follow from current evidence, and what remains unknown? | An editable source-locked Plan with operations and acceptance constraints |
-| **Act** | What exact patch does the Plan produce, and does its after-state pass? | An accepted, sealed Patch bound to fresh Map and Verification evidence |
+| **Plan** | What structural change follows from current evidence, and what remains unknown? | An editable language-neutral Plan with objectives, operators, applicability, and acceptance constraints |
+| **Act** | How does that Plan ground into exact repository changes, and does its after-state pass? | An accepted, sealed Act bound to exact transitions plus fresh Map and Verification evidence |
 
 **Map handles fragmentation.** In a complex repository, architecture is spread
 across source languages, package manifests, public interfaces, native/frontend
@@ -78,18 +78,20 @@ or stale information prevents a reliable answer.
 **Plan and Act handle coordinated change.** A structural fix may need
 synchronized updates to an implementation, public interface, language binding,
 package entrypoint, tests, and build artifacts. Plan derives source-locked
-operations only where current Map and Verify evidence establish the exact edit.
-Underdetermined work remains a visible manual item rather than guessed code. A
-developer or agent may edit the Plan. Act validates the complete Plan and
-materializes one deterministic Patch, evaluates those exact bytes through an
-isolated source overlay and fresh Map/Verification, and writes no repository
-files. Apply revalidates source locks and replays only the already accepted
-Patch; it never reevaluates the Plan.
+operators only where current Map and Verify evidence establish sufficient
+applicability. Underdetermined work remains a visible manual item rather than
+guessed code. A developer or agent may edit the Plan. Act selects the
+language-specific executor, grounds the operator into exact transitions,
+evaluates those bytes through an isolated source overlay and fresh
+Map/Verification, and writes no repository files. Apply revalidates source
+locks and replays only the already accepted Act; it never reevaluates the Plan
+or reruns an executor. `archbird act --format patch` renders the same Act as a
+unified patch for review; patch is not a separate artifact.
 
 Across all stages, results retain links to the source, configuration, or
 test data that produced them. Archbird keeps ambiguous, incomplete, and stale
 information visible instead of guessing. Repository mutation occurs only
-through `archbird apply PATCH`.
+through `archbird apply ACT.json`.
 
 ## Map
 
@@ -708,27 +710,42 @@ archbird map --format json --output .archbird/before-map.json
 archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
   --output .archbird/plan.json
 
-# Materialize, verify, and inspect the exact Patch without writing.
+# Ground, verify, and inspect the exact Act without writing.
 archbird act .archbird/plan.json
 archbird act .archbird/plan.json --format patch
 archbird act .archbird/plan.json --format json \
-  --output .archbird/patch.json
+  --output .archbird/act.json
 
-# Replay only the accepted Patch after review.
-archbird apply .archbird/patch.json
+# Replay only the accepted Act after review.
+archbird apply .archbird/act.json
 ```
 
-An executable Plan item contains one exact `replace_range`, `create_file`,
+Plan's target contract is language-neutral: it names architectural objectives,
+operators, exhaustive applicability, dependencies, executor capability, and
+acceptance without embedding source syntax or replacement bytes. The first
+operator that follows this boundary end to end is
+`redirect_dependency`. Given reviewed `--redirect OLD=NEW` intent, Plan stores
+the exhaustive edge ProjectionPlan, exact relation, affected source paths, and
+symbol identities. Act reevaluates that projection and dispatches to the native
+C executor, which resolves exact declarations, definitions, include spelling,
+and call sites before producing transitions. It rejects incomplete projections,
+ambiguous definitions, missing observed includes, or non-unique call sites.
+
+Older operators currently include `replace_range`, `create_file`,
 `delete_file`, `move_file`, `edit_json_pointer`,
 `edit_make_variable_token`, `insert_make_variable_token`,
-`insert_c_declaration`, or evidence-bound `rename_symbol` operation. A
-one-extra/one-missing symbol constraint may suggest a rename, but that does not
-establish intent: the derived candidate stays non-executable until a developer
-or agent supplies `--rename OLD=NEW`. The reviewed command evaluates one
-exhaustive `symbol_occurrences` projection and locks every declaration,
+`insert_c_declaration`, and evidence-bound `rename_symbol`. They predate the
+neutral Plan boundary and still carry some grounded source details. They remain
+supported while they are migrated behind Act executors; they are not the model
+for new Plan operators.
+
+A one-extra/one-missing symbol constraint may suggest a rename, but that does
+not establish intent: the derived candidate stays non-executable until a
+developer or agent supplies `--rename OLD=NEW`. The reviewed command evaluates
+one exhaustive `symbol_occurrences` projection and locks every declaration,
 definition, import origin, export, and proven reference span. Act reevaluates
 the same ProjectionPlan and requires an identical result digest, completeness
-ledger, and site set before producing a patch.
+ledger, and site set before producing transitions.
 
 The same reviewed `--rename OLD=NEW` intent can close an exact stale
 `provider_surface` registration when `NEW` already resolves uniquely on that
@@ -746,7 +763,7 @@ current old registration must be unused and unresolved; and exactly one new
 current member must retain the same implementation paths and use ledger with
 declaration and implementation signatures differing only by the symbol name.
 Both Maps must share project, configuration, and producer identities and have
-no error diagnostics. Plan and Patch retain both Map identities. Missing
+no error diagnostics. Plan and Act retain both Map identities. Missing
 signatures, incompatible histories, or multiple matching targets do not
 authorize an edit.
 
@@ -851,10 +868,10 @@ Plan's source snapshot. Act then applies the prepared create/modify/delete/move
 set to an immutable source overlay, reruns discovery and providers from those
 bytes, and evaluates the union of item acceptance constraints and preserved
 constraints against that isolated after-Map. A `not_satisfied`, `unknown`, or
-evaluation failure emits no accepted Patch and performs no worktree write.
-Satisfied acceptance seals the exact Patch bytes and after-state identities.
+evaluation failure emits no accepted Act and performs no worktree write.
+Satisfied acceptance seals the exact Act bytes and after-state identities.
 Apply performs a second source-lock revalidation and transactional replay of
-those bytes. Commit failures restore only Patch-owned paths; concurrent changes
+those bytes. Commit failures restore only Act-owned paths; concurrent changes
 to those paths are detected and never overwritten.
 Archbird does not run project compilers or tests; configure test observations
 and build evidence when those results must participate in Verify.
@@ -998,7 +1015,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
-| Plan, Act, and Patch | `accept_patch_json`, `act_source_requirements`, `apply_accepted_patch`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_ast_grep_operations`, `materialize_patch_json`, `observe_patch_sources`, `observe_plan_sources`, `patch_overlay`, `patch_source_requirements`, `preflight_patch_apply`, `render_patch`, `validate_patch`, `validate_plan` |
+| Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `validate_act`, `validate_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
 | Runtime and schemas | `__version__`, `implementation_digest`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `read_schema`, `schema_names` |
 <!-- archbird-python-api:end -->
@@ -1009,7 +1026,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
-| Plan, Act, and Patch | `acceptPatch`, `actSourceRequirements`, `applyAcceptedPatch`, `compilePlan`, `materializePatch`, `observePatchSources`, `observePlanSources`, `patchOverlay`, `patchSourceRequirements`, `preflightPatchApply`, `renderPatch`, `validatePatch`, `validatePlan` |
+| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
 | Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
 | Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |
@@ -1049,7 +1066,7 @@ The complete C ABI is declared in
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
 | Map, Query, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_unified_diff` |
 | Workspace | `archbird_workspace_analyze`, `archbird_workspace_plan` |
-| Plan, Act, and Patch | `archbird_act_materialize_patch`, `archbird_act_source_requirements`, `archbird_patch_accept`, `archbird_patch_preflight_apply`, `archbird_patch_source_requirements`, `archbird_patch_validate`, `archbird_plan_compile`, `archbird_plan_validate` |
+| Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_source_requirements`, `archbird_plan_validate` |
 <!-- archbird-c-api:end -->
 
 ## Interchange and command surface
@@ -1125,7 +1142,7 @@ For agents:
 4. Treat candidate/conservative tests as navigation, not execution.
 5. Review or edit the generated Plan before invoking Act.
 6. Materialize and verify with `archbird act PLAN.json`, review the accepted
-   Patch, then replay it explicitly with `archbird apply PATCH.json`.
+   Act, then replay it explicitly with `archbird apply ACT.json`.
 7. Regenerate runner evidence after changes when behavioral acceptance depends
    on project-owned observations.
 8. Check freshness before treating saved evidence as the live checkout.
@@ -1137,7 +1154,7 @@ For agents:
   implementation.
 - Archbird performs no analyzed-project import/execution, network call, model
   call, or agent invocation. Repository mutation occurs only through explicit
-  `archbird apply PATCH.json`; Plan compilation and Act are non-mutating.
+  `archbird apply ACT.json`; Plan compilation and Act are non-mutating.
 - Lexical/syntax evidence is not whole-program semantic resolution; static test
   routes are not runtime execution or behavioral coverage.
 - Dynamic dispatch/reflection, C preprocessing, complete Make evaluation, ABI

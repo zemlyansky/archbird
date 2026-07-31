@@ -9,12 +9,12 @@ const { TextDecoder } = require("node:util");
 const archbird = require("./index");
 const native = require("./native");
 const {
-  applyAcceptedPatch,
+  applyAcceptedAct,
   observePlanSources,
-  patchOverlay,
-  renderPatch,
-} = require("./patching");
-const { MAX_PATCH_BYTES, MAX_PLAN_BYTES } = require("./plan-limits");
+  actOverlay,
+  renderAct,
+} = require("./act-transport");
+const { MAX_ACT_BYTES, MAX_PLAN_BYTES } = require("./plan-limits");
 
 const COMMANDS = new Set([
   "act",
@@ -75,9 +75,9 @@ function usage(command = "map") {
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
     verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
-    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--before-map OLD.json | --git-diff REVISION] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--output PLAN.json]",
-    act: "archbird act PLAN.json [--root PROJECT] [--format markdown|json|patch] [--output PATCH.json]",
-    apply: "archbird apply PATCH.json [--root PROJECT]",
+    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--before-map OLD.json | --git-diff REVISION] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--redirect FROM=TO] [--output PLAN.json]",
+    act: "archbird act PLAN.json [--root PROJECT] [--format markdown|json|patch] [--output ACT.json]",
+    apply: "archbird apply ACT.json [--root PROJECT]",
     export: "archbird export graphml|json|mermaid --map MAP_OR_QUERY.json [--output FILE]",
     serve: "archbird serve [--root PROJECT] [--config PROJECT.json] [--host 127.0.0.1] [--port 4177]",
     support: "archbird support",
@@ -1647,6 +1647,7 @@ function planMain(argv) {
     resolutionInput: { flag: "resolution-input", type: "multiple" },
     objective: { type: "string" },
     rename: { type: "multiple" },
+    redirect: { type: "multiple" },
   }, { positionals: Number.POSITIVE_INFINITY });
   if (options.help) { process.stdout.write(usage("plan")); return 0; }
   const positionals = [...options._];
@@ -1743,6 +1744,25 @@ function planMain(argv) {
   if (positionals.length) planRequest.constraint_ids = positionals;
   if (Object.keys(renameDirectives).length) {
     planRequest.renames = renameDirectives;
+  }
+  const redirectDirectives = {};
+  for (const directive of options.redirect || []) {
+    const separator = directive.indexOf("=");
+    const from = separator >= 0 ? directive.slice(0, separator) : "";
+    const to = separator >= 0 ? directive.slice(separator + 1) : "";
+    if (
+      separator < 1 ||
+      to.length === 0 ||
+      Object.hasOwn(redirectDirectives, from)
+    ) {
+      throw new Error(
+        "--redirect requires unique non-empty FROM=TO directives",
+      );
+    }
+    redirectDirectives[from] = to;
+  }
+  if (Object.keys(redirectDirectives).length) {
+    planRequest.redirects = redirectDirectives;
   }
   if (options.objective) planRequest.objective = options.objective;
   const encoded = archbird.compilePlan(
@@ -1881,14 +1901,14 @@ function actMain(argv) {
     resolvedInputs.repository,
     planJson,
   );
-  const materializedPatch = archbird.materializePatch(
+  const materializedAct = archbird.materializeAct(
     beforeProject,
     planJson,
     beforeMap,
     beforeVerification,
     sourceMetadata,
   );
-  const overlay = patchOverlay(materializedPatch);
+  const overlay = actOverlay(materializedAct);
   let afterConfigJson = resolvedInputs.configJson;
   if (resolvedInputs.configPath) {
     const relativeConfig = path.relative(
@@ -1930,14 +1950,14 @@ function actMain(argv) {
       pretty: false,
     },
   );
-  const acceptedPatch = archbird.acceptPatch(
-    materializedPatch,
+  const acceptedAct = archbird.acceptAct(
+    materializedAct,
     beforeMap,
     afterMap,
     afterVerification,
   );
   write(
-    renderPatch(resolvedInputs.repository, acceptedPatch, {
+    renderAct(resolvedInputs.repository, acceptedAct, {
       format: options.format,
       pretty: options.pretty,
     }),
@@ -1956,15 +1976,15 @@ function applyMain(argv) {
     process.stdout.write(usage("apply"));
     return 0;
   }
-  if (!options._[0]) throw new Error("Apply requires a Patch JSON path");
-  const patchJson = readBounded(
+  if (!options._[0]) throw new Error("Apply requires an Act JSON path");
+  const actJson = readBounded(
     options._[0],
-    MAX_PATCH_BYTES,
-    "Patch JSON",
+    MAX_ACT_BYTES,
+    "Act JSON",
   );
-  const transitions = applyAcceptedPatch(
+  const transitions = applyAcceptedAct(
     path.resolve(options.root || "."),
-    patchJson,
+    actJson,
   );
   process.stdout.write(`Result: applied-transitions=${transitions}\n`);
   return 0;

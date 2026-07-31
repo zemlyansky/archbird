@@ -694,18 +694,18 @@ static PyObject *py_plan_compile(PyObject *self, PyObject *args,
   return render_result(owned->engine, status, &output);
 }
 
-static PyObject *py_patch_validate(PyObject *self, PyObject *args) {
+static PyObject *py_act_validate(PyObject *self, PyObject *args) {
   const char *input;
   Py_ssize_t input_length;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
   (void)self;
-  if (!PyArg_ParseTuple(args, "y#:patch_validate", &input, &input_length))
+  if (!PyArg_ParseTuple(args, "y#:act_validate", &input, &input_length))
     return NULL;
   status = saved_artifact_engine((size_t)input_length, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_patch_validate(engine, (const uint8_t *)input,
-                                     (size_t)input_length);
+    status = archbird_act_validate(engine, (const uint8_t *)input,
+                                   (size_t)input_length);
   if (status != ARCHBIRD_OK) {
     PyObject *result = raise_status(engine, status);
     archbird_engine_destroy(engine);
@@ -715,8 +715,8 @@ static PyObject *py_patch_validate(PyObject *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
-static PyObject *py_act_source_requirements(PyObject *self, PyObject *args,
-                                            PyObject *kwargs) {
+static PyObject *py_plan_source_requirements(PyObject *self, PyObject *args,
+                                             PyObject *kwargs) {
   static char *keywords[] = {"plan_json", "pretty", NULL};
   const char *plan;
   Py_ssize_t plan_length;
@@ -726,12 +726,13 @@ static PyObject *py_act_source_requirements(PyObject *self, PyObject *args,
   PyObject *result;
   ArchbirdStatus status;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|p:act_source_requirements",
-                                   keywords, &plan, &plan_length, &pretty))
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+                                   "y#|p:plan_source_requirements", keywords,
+                                   &plan, &plan_length, &pretty))
     return NULL;
   status = saved_artifact_engine((size_t)plan_length, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_act_source_requirements(
+    status = archbird_plan_source_requirements(
         engine, (const uint8_t *)plan, (size_t)plan_length,
         pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(engine, status, &output);
@@ -739,33 +740,32 @@ static PyObject *py_act_source_requirements(PyObject *self, PyObject *args,
   return result;
 }
 
-static PyObject *py_patch_source_requirements(PyObject *self, PyObject *args,
-                                              PyObject *kwargs) {
-  static char *keywords[] = {"patch_json", "pretty", NULL};
-  const char *patch;
-  Py_ssize_t patch_length;
+static PyObject *py_act_source_requirements(PyObject *self, PyObject *args,
+                                            PyObject *kwargs) {
+  static char *keywords[] = {"act_json", "pretty", NULL};
+  const char *act;
+  Py_ssize_t act_length;
   int pretty = 0;
   ArchbirdEngine *engine = NULL;
   PyOutput output = {0};
   PyObject *result;
   ArchbirdStatus status;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-                                   "y#|p:patch_source_requirements", keywords,
-                                   &patch, &patch_length, &pretty))
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|p:act_source_requirements",
+                                   keywords, &act, &act_length, &pretty))
     return NULL;
-  status = saved_artifact_engine((size_t)patch_length, &engine);
+  status = saved_artifact_engine((size_t)act_length, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_patch_source_requirements(
-        engine, (const uint8_t *)patch, (size_t)patch_length,
+    status = archbird_act_source_requirements(
+        engine, (const uint8_t *)act, (size_t)act_length,
         pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);
   return result;
 }
 
-static PyObject *py_act_materialize_patch(PyObject *self, PyObject *args,
-                                          PyObject *kwargs) {
+static PyObject *py_act_materialize(PyObject *self, PyObject *args,
+                                    PyObject *kwargs) {
   static char *keywords[] = {"project",
                              "plan_json",
                              "map_json",
@@ -788,14 +788,14 @@ static PyObject *py_act_materialize_patch(PyObject *self, PyObject *args,
   ArchbirdStatus status;
   (void)self;
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "Oy#y#y#y#|p:act_materialize_patch", keywords, &capsule,
+          args, kwargs, "Oy#y#y#y#|p:act_materialize", keywords, &capsule,
           &plan, &plan_length, &map, &map_length, &verification,
           &verification_length, &metadata, &metadata_length, &pretty))
     return NULL;
   owned = get_project(capsule);
   if (!owned)
     return NULL;
-  status = archbird_act_materialize_patch(
+  status = archbird_act_materialize(
       owned->engine, owned->project, (const uint8_t *)plan, (size_t)plan_length,
       (const uint8_t *)map, (size_t)map_length, (const uint8_t *)verification,
       (size_t)verification_length, (const uint8_t *)metadata,
@@ -804,16 +804,16 @@ static PyObject *py_act_materialize_patch(PyObject *self, PyObject *args,
   return render_result(owned->engine, status, &output);
 }
 
-static PyObject *py_patch_accept(PyObject *self, PyObject *args,
-                                 PyObject *kwargs) {
-  static char *keywords[] = {"patch_json",     "before_map_json",
+static PyObject *py_act_accept(PyObject *self, PyObject *args,
+                               PyObject *kwargs) {
+  static char *keywords[] = {"act_json",       "before_map_json",
                              "after_map_json", "verification_json",
                              "pretty",         NULL};
-  const char *patch;
+  const char *act;
   const char *before_map;
   const char *after_map;
   const char *verification;
-  Py_ssize_t patch_length;
+  Py_ssize_t act_length;
   Py_ssize_t before_map_length;
   Py_ssize_t after_map_length;
   Py_ssize_t verification_length;
@@ -825,17 +825,17 @@ static PyObject *py_patch_accept(PyObject *self, PyObject *args,
   size_t budget;
   (void)self;
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#y#y#y#|p:patch_accept", keywords, &patch,
-          &patch_length, &before_map, &before_map_length, &after_map,
-          &after_map_length, &verification, &verification_length, &pretty))
+          args, kwargs, "y#y#y#y#|p:act_accept", keywords, &act, &act_length,
+          &before_map, &before_map_length, &after_map, &after_map_length,
+          &verification, &verification_length, &pretty))
     return NULL;
   budget = larger_input(
-      larger_input((size_t)patch_length, (size_t)before_map_length),
+      larger_input((size_t)act_length, (size_t)before_map_length),
       larger_input((size_t)after_map_length, (size_t)verification_length));
   status = saved_artifact_engine(budget, &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_patch_accept(
-        engine, (const uint8_t *)patch, (size_t)patch_length,
+    status = archbird_act_accept(
+        engine, (const uint8_t *)act, (size_t)act_length,
         (const uint8_t *)before_map, (size_t)before_map_length,
         (const uint8_t *)after_map, (size_t)after_map_length,
         (const uint8_t *)verification, (size_t)verification_length,
@@ -845,22 +845,22 @@ static PyObject *py_patch_accept(PyObject *self, PyObject *args,
   return result;
 }
 
-static PyObject *py_patch_preflight_apply(PyObject *self, PyObject *args) {
-  const char *patch;
+static PyObject *py_act_preflight_apply(PyObject *self, PyObject *args) {
+  const char *act;
   const char *metadata;
-  Py_ssize_t patch_length;
+  Py_ssize_t act_length;
   Py_ssize_t metadata_length;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
   (void)self;
-  if (!PyArg_ParseTuple(args, "y#y#:patch_preflight_apply", &patch,
-                        &patch_length, &metadata, &metadata_length))
+  if (!PyArg_ParseTuple(args, "y#y#:act_preflight_apply", &act, &act_length,
+                        &metadata, &metadata_length))
     return NULL;
   status = saved_artifact_engine(
-      larger_input((size_t)patch_length, (size_t)metadata_length), &engine);
+      larger_input((size_t)act_length, (size_t)metadata_length), &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_patch_preflight_apply(
-        engine, (const uint8_t *)patch, (size_t)patch_length,
+    status = archbird_act_preflight_apply(
+        engine, (const uint8_t *)act, (size_t)act_length,
         (const uint8_t *)metadata, (size_t)metadata_length);
   if (status != ARCHBIRD_OK) {
     PyObject *result = raise_status(engine, status);
@@ -2288,21 +2288,21 @@ static PyMethodDef archbird_methods[] = {
      "Validate one canonical editable Plan."},
     {"plan_compile", (PyCFunction)py_plan_compile, METH_VARARGS | METH_KEYWORDS,
      "Compile one native editable Plan from a Project, Map, and Verification."},
-    {"patch_validate", py_patch_validate, METH_VARARGS,
-     "Validate one materialized or accepted Patch."},
-    {"act_source_requirements", (PyCFunction)py_act_source_requirements,
+    {"act_validate", py_act_validate, METH_VARARGS,
+     "Validate one materialized or accepted Act."},
+    {"plan_source_requirements", (PyCFunction)py_plan_source_requirements,
      METH_VARARGS | METH_KEYWORDS,
      "Return exact source paths required to materialize a Plan."},
-    {"patch_source_requirements", (PyCFunction)py_patch_source_requirements,
+    {"act_source_requirements", (PyCFunction)py_act_source_requirements,
      METH_VARARGS | METH_KEYWORDS,
-     "Return exact source paths required to apply an accepted Patch."},
-    {"act_materialize_patch", (PyCFunction)py_act_materialize_patch,
+     "Return exact source paths required to apply an accepted Act."},
+    {"act_materialize", (PyCFunction)py_act_materialize,
      METH_VARARGS | METH_KEYWORDS,
-     "Materialize a Plan as an exact read-only Patch."},
-    {"patch_accept", (PyCFunction)py_patch_accept, METH_VARARGS | METH_KEYWORDS,
-     "Seal a Patch after independent Map and Verification acceptance."},
-    {"patch_preflight_apply", py_patch_preflight_apply, METH_VARARGS,
-     "Revalidate an accepted Patch immediately before commit."},
+     "Materialize a Plan as an exact read-only Act."},
+    {"act_accept", (PyCFunction)py_act_accept, METH_VARARGS | METH_KEYWORDS,
+     "Seal a Act after independent Map and Verification acceptance."},
+    {"act_preflight_apply", py_act_preflight_apply, METH_VARARGS,
+     "Revalidate an accepted Act immediately before commit."},
     {NULL, NULL, 0, NULL},
 };
 

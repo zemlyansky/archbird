@@ -48,13 +48,13 @@ from .native import (
     resolve_discovery,
 )
 from .adapters.okf.parser import okf_query_input, parse_okf_bundle
-from .patching import (
-    apply_accepted_patch,
+from .act_transport import (
+    apply_accepted_act,
     observe_plan_sources,
-    patch_overlay,
-    render_patch,
+    act_overlay,
+    render_act,
 )
-from ._plan_limits import MAX_PATCH_BYTES, MAX_PLAN_BYTES
+from ._plan_limits import MAX_ACT_BYTES, MAX_PLAN_BYTES
 from .project_configuration import (
     compile_named_query,
 )
@@ -936,6 +936,16 @@ def plan_parser() -> argparse.ArgumentParser:
             "provider-surface issues in a selected constraint"
         ),
     )
+    result.add_argument(
+        "--redirect",
+        action="append",
+        default=[],
+        metavar="FROM=TO",
+        help=(
+            "review one dependency replacement for a selected edge "
+            "constraint"
+        ),
+    )
     result.add_argument("--pretty", action="store_true", help="pretty JSON")
     result.add_argument("-o", "--output", default="-")
     return result
@@ -946,7 +956,7 @@ def act_parser() -> argparse.ArgumentParser:
         prog="archbird act",
         description=(
             "Materialize a source-locked Plan in isolation and emit an accepted "
-            "Patch after a fresh Map and Verify."
+            "Act after a fresh Map and Verify."
         ),
     )
     result.add_argument("plan", help="editable Plan JSON")
@@ -1000,11 +1010,11 @@ def apply_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird apply",
         description=(
-            "Replay the exact bytes of an accepted Patch after source-preimage "
+            "Replay the exact bytes of an accepted Act after source-preimage "
             "and destination checks."
         ),
     )
-    result.add_argument("patch", help="accepted Patch JSON")
+    result.add_argument("act", help="accepted Act JSON")
     result.add_argument(
         "--root", dest="root_override", help="repository root (default: .)"
     )
@@ -2560,11 +2570,26 @@ def _plan_main(argv: Sequence[str]) -> int:
                     "--rename requires unique non-empty OLD=NEW directives"
                 )
             rename_directives[old] = new
+        redirect_directives: dict[str, str] = {}
+        for directive in args.redirect:
+            old, separator, new = directive.partition("=")
+            if (
+                separator != "="
+                or not old
+                or not new
+                or old in redirect_directives
+            ):
+                raise ValueError(
+                    "--redirect requires unique non-empty FROM=TO directives"
+                )
+            redirect_directives[old] = new
         request: dict[str, object] = {}
         if args.constraint_ids:
             request["constraint_ids"] = args.constraint_ids
         if rename_directives:
             request["renames"] = rename_directives
+        if redirect_directives:
+            request["redirects"] = redirect_directives
         if args.objective:
             request["objective"] = args.objective
         encoded = project.plan_json(
@@ -2714,14 +2739,14 @@ def _act_main(argv: Sequence[str]) -> int:
             pretty=False,
         )
         source_metadata = observe_plan_sources(repository, plan_bytes)
-        materialized_patch = _native.act_materialize_patch(
+        materialized_act = _native.act_materialize(
             before_project._capsule,
             plan_bytes,
             before_map,
             before_verification,
             source_metadata,
         )
-        overlay = patch_overlay(materialized_patch)
+        overlay = act_overlay(materialized_act)
         after_config_json = config_json
         if config_path is not None:
             try:
@@ -2751,16 +2776,16 @@ def _act_main(argv: Sequence[str]) -> int:
             policy_date=policy_date,
             pretty=False,
         )
-        accepted_patch = _native.patch_accept(
-            materialized_patch,
+        accepted_act = _native.act_accept(
+            materialized_act,
             before_map,
             after_map,
             after_verification,
         )
         _write(
-            render_patch(
+            render_act(
                 repository,
-                accepted_patch,
+                accepted_act,
                 format=args.format,
                 pretty=args.pretty,
             ),
@@ -2784,23 +2809,23 @@ def _act_main(argv: Sequence[str]) -> int:
 def _apply_main(argv: Sequence[str]) -> int:
     args = apply_parser().parse_args(argv)
     try:
-        patch_path = Path(args.patch)
-        metadata = patch_path.lstat()
+        act_path = Path(args.act)
+        metadata = act_path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise ValueError("Patch input must not be a symbolic link")
+            raise ValueError("Act input must not be a symbolic link")
         if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("Patch input must be a regular file")
-        if metadata.st_size > MAX_PATCH_BYTES:
+            raise ValueError("Act input must be a regular file")
+        if metadata.st_size > MAX_ACT_BYTES:
             raise ValueError(
-                f"Patch exceeds the {MAX_PATCH_BYTES}-byte input limit"
+                f"Act exceeds the {MAX_ACT_BYTES}-byte input limit"
             )
-        patch_bytes = patch_path.read_bytes()
-        if len(patch_bytes) > MAX_PATCH_BYTES:
+        act_bytes = act_path.read_bytes()
+        if len(act_bytes) > MAX_ACT_BYTES:
             raise ValueError(
-                f"Patch exceeds the {MAX_PATCH_BYTES}-byte input limit"
+                f"Act exceeds the {MAX_ACT_BYTES}-byte input limit"
             )
-        transitions = apply_accepted_patch(
-            Path(args.root_override or "."), patch_bytes
+        transitions = apply_accepted_act(
+            Path(args.root_override or "."), act_bytes
         )
         print(f"Result: applied-transitions={transitions}")
         return 0

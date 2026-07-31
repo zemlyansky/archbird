@@ -2,6 +2,12 @@
   "artifact": "archbird-python-schemas",
   "files": [
     {
+      "bytes": 10949,
+      "path": "act.schema.json",
+      "sha256": "24ab772c62a4246ae389ebc12c348746ebd3b45d62dde03bfc97cb62caf5cc0f",
+      "source": "schema/act.schema.json"
+    },
+    {
       "bytes": 43765,
       "path": "archbird.schema.json",
       "sha256": "5e6fdf8aea47aee8f31ee7584db731a46afa963ebeaa5ed917d270eed9bd3807",
@@ -116,15 +122,9 @@
       "source": "schema/okf-text-normalization.schema.json"
     },
     {
-      "bytes": 10961,
-      "path": "patch.schema.json",
-      "sha256": "e4feaa9e5c5a71b52d2b9e99900caf79a02d16c33192c3db2fbcbeb7a873168a",
-      "source": "schema/patch.schema.json"
-    },
-    {
-      "bytes": 22366,
+      "bytes": 24435,
       "path": "plan.schema.json",
-      "sha256": "52f6e4f29e4d492d4a14c811b67d1976adca50325c5e4cd0b1a064a5b15274c8",
+      "sha256": "0c5d5742891721ea2b083f88cdd4283cf4394b527c199b917852fee43c7314df",
       "source": "schema/plan.schema.json"
     },
     {

@@ -14,9 +14,9 @@ npm install --save-dev archbird
 npx archbird            # shorthand for: npx archbird map
 npx archbird .          # shorthand for: npx archbird map .
 npx archbird map        # explicit form
-npx archbird plan       # derive edits from current constraint issues
-npx archbird act PLAN.json # materialize and verify a Patch; writes nothing
-npx archbird apply PATCH.json # replay the accepted Patch
+npx archbird plan       # derive a Plan from current constraint issues
+npx archbird act PLAN.json # ground and verify an Act; writes nothing
+npx archbird apply ACT.json # replay the accepted Act
 npx archbird serve      # explore it in the local web application
 ```
 
@@ -27,8 +27,8 @@ npx archbird serve      # explore it in the local web application
 | **Map** | What exists, and how is it connected? | Searchable files, symbols, dependencies, tests, and build routes |
 | **Query** | Which exact evidence matters for this task? | Focused, ranked context with source witnesses |
 | **Verify** | Does the code follow the architecture constraints? | Constraint status, violations, code locations, and unknowns |
-| **Plan** | What exact edits follow from current evidence, and what remains unknown? | An editable source-locked Plan with operations and acceptance constraints |
-| **Act** | What exact patch does the Plan produce, and does its after-state pass? | An accepted, sealed Patch bound to fresh Map and Verification evidence |
+| **Plan** | What structural change follows from current evidence, and what remains unknown? | An editable language-neutral Plan with objectives, operators, applicability, and acceptance constraints |
+| **Act** | How does that Plan ground into exact repository changes, and does its after-state pass? | An accepted, sealed Act bound to exact transitions plus fresh Map and Verification evidence |
 
 Every result links back to the source, configuration, or test data used to
 produce it. Missing or uncertain information is shown instead of guessed.
@@ -37,7 +37,7 @@ Map works without configuration. Add Verify when you want automated
 architecture constraints. Plan derives only edits established by current
 evidence and exposes underdetermined work as manual items. Act materializes and
 checks exact edits against an isolated after-state without writing. Apply
-revalidates source locks and replays only an accepted Patch.
+revalidates source locks and replays only an accepted Act.
 
 `npx archbird` and `npx archbird .` remain supported shortcuts for mapping the
 current repository. The explicit `npx archbird map` form is useful in scripts
@@ -449,9 +449,10 @@ Python host for coverage.py dynamic contexts.
 ## Plan and Act
 
 `plan` evaluates the complete current policy and produces one editable
-source-locked artifact. `act` materializes its deterministic Patch, rebuilds the
-isolated after-state, and emits only accepted bytes without writing. `apply`
-revalidates and replays that Patch without reevaluating the Plan.
+language-neutral artifact. `act` grounds its operators through native language
+executors, rebuilds the isolated after-state, and emits only an accepted Act
+without writing. `apply` revalidates and replays that Act without reevaluating
+the Plan or rerunning an executor.
 
 ```bash
 npx archbird plan --output .archbird/plan.json
@@ -467,14 +468,23 @@ npx archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
 npx archbird act .archbird/plan.json
 npx archbird act .archbird/plan.json --format patch
 npx archbird act .archbird/plan.json --format json \
-  --output .archbird/patch.json
-npx archbird apply .archbird/patch.json
+  --output .archbird/act.json
+npx archbird apply .archbird/act.json
 ```
 
-Exact `replace_range`, `create_file`, `delete_file`, `move_file`,
+The neutral `redirect_dependency` operator stores an exhaustive edge
+ProjectionPlan, the relation and symbol identities, and affected source paths.
+It stores no source ranges or replacement text. Act's native C executor
+reevaluates the projection and resolves exact declaration, definition, include,
+and call evidence before materializing transitions. Incomplete or ambiguous
+evidence blocks execution.
+
+Older exact `replace_range`, `create_file`, `delete_file`, `move_file`,
 `edit_json_pointer`, `edit_make_variable_token`,
 `insert_make_variable_token`, `insert_c_declaration`, and evidence-bound
-`rename_symbol` operations are executable. An asserted `edit_json_pointer`
+`rename_symbol` operations remain executable while their grounded details are
+migrated behind Act executors. They are compatibility operations, not the model
+for new Plan operators. An asserted `edit_json_pointer`
 operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
 expected old JSON value without reformatting the complete file. An asserted
@@ -550,7 +560,7 @@ through `Project.withSourceOverlay()`, deriving a fresh Map and every
 source-policy constraint before the first write. Incomplete relation evidence
 blocks destructive generation. Failed, unknown, or unsatisfied fresh
 acceptance writes nothing; only a satisfied after-state emits an accepted
-Patch. Apply then advances through source-lock revalidation and transactional
+Act. Apply then advances through source-lock revalidation and transactional
 replay. Plan input is bounded to
 64 MiB, collections and touched files to 4,096, individual source files and
 patches to 64 MiB, and aggregate touched source and patch output to 256 MiB.
@@ -605,7 +615,7 @@ Canonical Archbird JSON is authoritative. Graph-view JSON drives the app;
 GraphML and Mermaid are deterministic projections. Node exposes normalized OKF
 publication primitives, but the filesystem OKF CLI is Python-only. SCIP is an
 input evidence provider. Verification results can render SARIF or JUnit; Plan
-and Patch remain canonical JSON artifacts.
+and Act remain canonical JSON artifacts.
 
 <!-- archbird-node-cli:start -->
 The CLI command names are `map`, `config`, `query`, `impact`, `diff`,
@@ -668,12 +678,12 @@ are presentation views.
 `compilePlan()` delegates Plan derivation to the native core. Its optional
 `beforeMapJson` input enables identity-checked residual planning; Node performs
 no Map comparison or action inference.
-`materializePatch()` produces exact binary-safe transitions from a Plan;
-`acceptPatch()` seals them only after callers supply the fresh isolated
-after-Map and Verification. `preflightPatchApply()` checks the accepted Patch
+`materializeAct()` produces exact binary-safe transitions from a Plan;
+`acceptAct()` seals them only after callers supply the fresh isolated
+after-Map and Verification. `preflightActApply()` checks the accepted Act
 against newly observed source preimages immediately before a host replays its
 stored bytes. The explicit filesystem helpers `observePlanSources()`,
-`patchOverlay()`, `renderPatch()`, and `applyAcceptedPatch()` provide that host
+`actOverlay()`, `renderAct()`, and `applyAcceptedAct()` provide that host
 transport; all Plan interpretation, edit materialization, and acceptance
 remain in the native core.
 
@@ -683,7 +693,7 @@ remain in the native core.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
-| Plan, Act, and Patch | `acceptPatch`, `actSourceRequirements`, `applyAcceptedPatch`, `compilePlan`, `materializePatch`, `observePatchSources`, `observePlanSources`, `patchOverlay`, `patchSourceRequirements`, `preflightPatchApply`, `renderPatch`, `validatePatch`, `validatePlan` |
+| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
 | Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
 | Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |

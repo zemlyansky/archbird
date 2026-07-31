@@ -7,26 +7,29 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 if (process.argv.length !== 4) {
-  throw new Error("usage: test_plan_patch_cli.js NATIVE_ADDON REPOSITORY");
+  throw new Error("usage: test_plan_act_cli.js NATIVE_ADDON REPOSITORY");
 }
 
 const addon = path.resolve(process.argv[2]);
 const repository = path.resolve(process.argv[3]);
-const root = fs.mkdtempSync(path.join(repository, "build/node-plan-patch-"));
+const root = fs.mkdtempSync(path.join(repository, "build/node-plan-act-"));
 const artifacts = fs.mkdtempSync(
-  path.join(repository, "build/node-plan-patch-artifacts-"),
+  path.join(repository, "build/node-plan-act-artifacts-"),
 );
 const surfaceRoot = fs.mkdtempSync(
-  path.join(repository, "build/node-plan-patch-surface-"),
+  path.join(repository, "build/node-plan-act-surface-"),
 );
 const registrationRoot = fs.mkdtempSync(
-  path.join(repository, "build/node-plan-patch-registration-"),
+  path.join(repository, "build/node-plan-act-registration-"),
 );
 const coordinatedRoot = fs.mkdtempSync(
-  path.join(repository, "build/node-plan-patch-coordinated-"),
+  path.join(repository, "build/node-plan-act-coordinated-"),
 );
 const observedRoot = fs.mkdtempSync(
-  path.join(repository, "build/node-plan-patch-observed-"),
+  path.join(repository, "build/node-plan-act-observed-"),
+);
+const redirectRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-redirect-"),
 );
 const cli = path.join(repository, "js/src/cli.js");
 
@@ -68,7 +71,7 @@ try {
   fs.writeFileSync(
     path.join(root, "archbird.json"),
     JSON.stringify({
-      project: "node-plan-patch",
+      project: "node-plan-act",
       constraints: {
         "NO-LEGACY": {
           kind: "forbidden_paths",
@@ -82,7 +85,7 @@ try {
   const legacy = path.join(root, "legacy.js");
   fs.writeFileSync(legacy, "module.exports = 1;\n");
   const plan = path.join(artifacts, "plan.json");
-  const patch = path.join(artifacts, "patch.json");
+  const act = path.join(artifacts, "act.json");
 
   run(["plan", "NO-LEGACY", "--root", root, "--output", plan]);
   const preview = run([
@@ -93,23 +96,23 @@ try {
   assert.equal(fs.existsSync(legacy), true, "Act mutated the repository");
 
   run([
-    "act", plan, "--root", root, "--format", "json", "--output", patch,
+    "act", plan, "--root", root, "--format", "json", "--output", act,
   ]);
-  const document = JSON.parse(fs.readFileSync(patch, "utf8"));
-  assert.equal(document.artifact, "patch");
+  const document = JSON.parse(fs.readFileSync(act, "utf8"));
+  assert.equal(document.artifact, "act");
   assert.equal(document.state, "accepted");
   assert.equal(document.acceptance.status, "satisfied");
   assert.deepEqual(document.acceptance.constraints, [
     { id: "NO-LEGACY", status: "pass" },
   ]);
-  assert.equal(fs.existsSync(legacy), true, "Patch creation mutated the repository");
+  assert.equal(fs.existsSync(legacy), true, "Act creation mutated the repository");
 
   assert.equal(
-    run(["apply", patch, "--root", root]).stdout.toString("utf8"),
+    run(["apply", act, "--root", root]).stdout.toString("utf8"),
     "Result: applied-transitions=1\n",
   );
   assert.equal(fs.existsSync(legacy), false);
-  const replay = run(["apply", patch, "--root", root], 2);
+  const replay = run(["apply", act, "--root", root], 2);
   assert.match(replay.stderr.toString("utf8"), /legacy\.js/);
 
   fs.writeFileSync(
@@ -123,7 +126,7 @@ try {
   fs.writeFileSync(
     path.join(root, "archbird.json"),
     JSON.stringify({
-      project: "node-plan-patch-rename",
+      project: "node-plan-act-rename",
       layers: [{
         name: "javascript",
         language: "javascript",
@@ -148,7 +151,7 @@ try {
     }),
   );
   const renamePlan = path.join(artifacts, "rename-plan.json");
-  const renamePatch = path.join(artifacts, "rename-patch.json");
+  const renameAct = path.join(artifacts, "rename-act.json");
   run([
     "plan", "API-SURFACE", "--root", root,
     "--rename", "oldApi=newApi", "--output", renamePlan,
@@ -165,12 +168,12 @@ try {
   );
   run([
     "act", renamePlan, "--root", root, "--format", "json",
-    "--output", renamePatch,
+    "--output", renameAct,
   ]);
-  const acceptedRename = JSON.parse(fs.readFileSync(renamePatch, "utf8"));
+  const acceptedRename = JSON.parse(fs.readFileSync(renameAct, "utf8"));
   assert.equal(acceptedRename.state, "accepted");
   assert.equal(acceptedRename.transitions.length, 2);
-  run(["apply", renamePatch, "--root", root]);
+  run(["apply", renameAct, "--root", root]);
   assert.doesNotMatch(fs.readFileSync(path.join(root, "api.js"), "utf8"), /oldApi/);
   assert.doesNotMatch(
     fs.readFileSync(path.join(root, "consumer.js"), "utf8"),
@@ -184,7 +187,7 @@ try {
     { recursive: true },
   );
   const surfacePlan = path.join(artifacts, "surface-plan.json");
-  const surfacePatch = path.join(artifacts, "surface-patch.json");
+  const surfaceAct = path.join(artifacts, "surface-act.json");
   const surfaceMakefile = fs.readFileSync(path.join(surfaceRoot, "Makefile"));
   run([
     "plan", "FFI-SURFACE", "--root", surfaceRoot,
@@ -203,14 +206,14 @@ try {
   });
   run([
     "act", surfacePlan, "--root", surfaceRoot, "--format", "json",
-    "--output", surfacePatch,
+    "--output", surfaceAct,
   ]);
-  const acceptedSurface = JSON.parse(fs.readFileSync(surfacePatch, "utf8"));
+  const acceptedSurface = JSON.parse(fs.readFileSync(surfaceAct, "utf8"));
   assert.equal(acceptedSurface.state, "accepted");
   assert.deepEqual(acceptedSurface.acceptance.constraints, [
     { id: "FFI-SURFACE", status: "pass" },
   ]);
-  run(["apply", surfacePatch, "--root", surfaceRoot]);
+  run(["apply", surfaceAct, "--root", surfaceRoot]);
   assert.match(
     fs.readFileSync(path.join(surfaceRoot, "Makefile"), "utf8"),
     /WASM_EXPORTS = _core_sum/,
@@ -223,7 +226,7 @@ try {
       .replace("WASM_EXPORTS = _core_sum", "WASM_EXPORTS = _core_sum _core_add"),
   );
   const removalPlan = path.join(artifacts, "surface-removal-plan.json");
-  const removalPatch = path.join(artifacts, "surface-removal-patch.json");
+  const removalAct = path.join(artifacts, "surface-removal-act.json");
   run([
     "plan", "FFI-SURFACE", "--root", surfaceRoot,
     "--output", removalPlan,
@@ -239,9 +242,9 @@ try {
   assert.equal(removalDocument.items[0].operation.replacement_token, "");
   run([
     "act", removalPlan, "--root", surfaceRoot, "--format", "json",
-    "--output", removalPatch,
+    "--output", removalAct,
   ]);
-  run(["apply", removalPatch, "--root", surfaceRoot]);
+  run(["apply", removalAct, "--root", surfaceRoot]);
   assert.doesNotMatch(
     fs.readFileSync(path.join(surfaceRoot, "Makefile"), "utf8"),
     /_core_add/,
@@ -254,7 +257,7 @@ try {
     { recursive: true },
   );
   const registrationPlan = path.join(artifacts, "registration-plan.json");
-  const registrationPatch = path.join(artifacts, "registration-patch.json");
+  const registrationAct = path.join(artifacts, "registration-act.json");
   const registrationMakefile = fs.readFileSync(
     path.join(registrationRoot, "Makefile"),
   );
@@ -282,13 +285,13 @@ try {
   });
   run([
     "act", registrationPlan, "--root", registrationRoot, "--format", "json",
-    "--output", registrationPatch,
+    "--output", registrationAct,
   ]);
   const acceptedRegistration = JSON.parse(
-    fs.readFileSync(registrationPatch, "utf8"),
+    fs.readFileSync(registrationAct, "utf8"),
   );
   assert.equal(acceptedRegistration.state, "accepted");
-  run(["apply", registrationPatch, "--root", registrationRoot]);
+  run(["apply", registrationAct, "--root", registrationRoot]);
   assert.match(
     fs.readFileSync(path.join(registrationRoot, "Makefile"), "utf8"),
     /WASM_EXPORTS = _core_peer _core_sum/,
@@ -313,7 +316,7 @@ try {
     ),
   );
   const coordinatedPlan = path.join(artifacts, "coordinated-plan.json");
-  const coordinatedPatch = path.join(artifacts, "coordinated-patch.json");
+  const coordinatedAct = path.join(artifacts, "coordinated-act.json");
   run(["plan", "--root", coordinatedRoot, "--output", coordinatedPlan]);
   const coordinatedDocument = JSON.parse(
     fs.readFileSync(coordinatedPlan, "utf8"),
@@ -326,9 +329,9 @@ try {
   );
   run([
     "act", coordinatedPlan, "--root", coordinatedRoot, "--format", "json",
-    "--output", coordinatedPatch,
+    "--output", coordinatedAct,
   ]);
-  run(["apply", coordinatedPatch, "--root", coordinatedRoot]);
+  run(["apply", coordinatedAct, "--root", coordinatedRoot]);
   run(["verify", "--root", coordinatedRoot, "--check"]);
 
   const observedProject = path.join(observedRoot, "packages", "surface");
@@ -375,7 +378,7 @@ try {
     observedRoot,
   );
   const observedPlan = path.join(artifacts, "observed-plan.json");
-  const observedPatch = path.join(artifacts, "observed-patch.json");
+  const observedAct = path.join(artifacts, "observed-act.json");
   run([
     "plan", "FFI-SURFACE", "--root", observedProject,
     "--git-diff", "HEAD", "--output", observedPlan,
@@ -397,12 +400,42 @@ try {
   assert.ok(observedDocument.source.before_map);
   run([
     "act", observedPlan, "--root", observedProject, "--format", "json",
-    "--output", observedPatch,
+    "--output", observedAct,
   ]);
-  run(["apply", observedPatch, "--root", observedProject]);
+  run(["apply", observedAct, "--root", observedProject]);
   run(["verify", "FFI-SURFACE", "--root", observedProject, "--check"]);
 
-  process.stdout.write("node Plan/Patch CLI lifecycle passed\n");
+  const redirectFixture = path.join(
+    repository,
+    "test/fixtures/plan_act/dependency_redirect",
+  );
+  fs.cpSync(redirectFixture, redirectRoot, { recursive: true });
+  const redirectPlan = path.join(artifacts, "redirect-plan.json");
+  const redirectAct = path.join(artifacts, "redirect-act.json");
+  run([
+    "plan", "UI-STORAGE-BOUNDARY", "--root", redirectRoot,
+    "--redirect", "raw_value=service_value", "--output", redirectPlan,
+  ]);
+  const redirectDocument = JSON.parse(
+    fs.readFileSync(redirectPlan, "utf8"),
+  );
+  assert.equal(
+    redirectDocument.items[0].operation.action,
+    "redirect_dependency",
+  );
+  assert.equal(
+    Object.hasOwn(redirectDocument.items[0].operation, "replacement"),
+    false,
+  );
+  run([
+    "act", redirectPlan, "--root", redirectRoot, "--format", "json",
+    "--output", redirectAct,
+  ]);
+  assert.equal(JSON.parse(fs.readFileSync(redirectAct)).artifact, "act");
+  run(["apply", redirectAct, "--root", redirectRoot]);
+  run(["verify", "--root", redirectRoot, "--check"]);
+
+  process.stdout.write("node Plan/Act CLI lifecycle passed\n");
 } finally {
   fs.rmSync(root, { force: true, recursive: true });
   fs.rmSync(artifacts, { force: true, recursive: true });
@@ -410,4 +443,5 @@ try {
   fs.rmSync(registrationRoot, { force: true, recursive: true });
   fs.rmSync(coordinatedRoot, { force: true, recursive: true });
   fs.rmSync(observedRoot, { force: true, recursive: true });
+  fs.rmSync(redirectRoot, { force: true, recursive: true });
 }

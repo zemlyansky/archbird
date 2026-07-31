@@ -312,6 +312,50 @@ static int validate_rename_coverage(const AbValue *value, size_t site_count) {
          safe_integer(ab_value_member(value, "unsupported"), &unsupported);
 }
 
+static int validate_edge_projection(const AbValue *value) {
+  static const char *const fields[] = {
+      "id",    "select",        "from_paths",   "to_paths",
+      "kinds", "kind_patterns", "name_patterns"};
+  const AbValue *select;
+  size_t index;
+  if (!value || value->kind != AB_VALUE_OBJECT)
+    return 0;
+  for (index = 0; index < value->as.object.count; index++) {
+    size_t field_index;
+    int allowed = 0;
+    for (field_index = 0; field_index < sizeof(fields) / sizeof(fields[0]);
+         field_index++)
+      if (value->as.object.fields[index].name.length ==
+              strlen(fields[field_index]) &&
+          memcmp(value->as.object.fields[index].name.data, fields[field_index],
+                 value->as.object.fields[index].name.length) == 0) {
+        allowed = 1;
+        break;
+      }
+    if (!allowed)
+      return 0;
+  }
+  select = ab_value_member(value, "select");
+  if (!text_is(select, "component_edges") && !text_is(select, "file_edges"))
+    return 0;
+  if (text_is(select, "component_edges") &&
+      (ab_value_member(value, "from_paths") ||
+       ab_value_member(value, "to_paths")))
+    return 0;
+  for (index = 0; index < sizeof(fields) / sizeof(fields[0]); index++) {
+    const AbValue *member = ab_value_member(value, fields[index]);
+    if (!member || index == 1)
+      continue;
+    if (index == 0) {
+      if (!stable_id(member))
+        return 0;
+    } else if (!string_array(member, 0, 0)) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static int validate_symbol_projection(const AbValue *value) {
   static const char *const base_fields[] = {"select", "names"};
   static const char *const path_fields[] = {"select", "names", "paths"};
@@ -471,6 +515,37 @@ static int validate_operation(const AbValue *value, int *out_manual,
         return 0;
     return validate_rename_coverage(ab_value_member(value, "coverage"),
                                     sites->as.array.count);
+  }
+  if (text_is(action, "redirect_dependency")) {
+    static const char *const fields[] = {
+        "action",     "from_symbol",   "to_symbol",
+        "projection", "projection_id", "projection_content_sha256",
+        "relation",   "source_paths"};
+    const AbValue *paths;
+    size_t index;
+    *out_requires_asserted = 1;
+    if (!object_exact(value, fields, 8) ||
+        !bounded_text(ab_value_member(value, "from_symbol"),
+                      AB_PLAN_MAX_METADATA, 1) ||
+        !bounded_text(ab_value_member(value, "to_symbol"), AB_PLAN_MAX_METADATA,
+                      1) ||
+        ab_value_equal(ab_value_member(value, "from_symbol"),
+                       ab_value_member(value, "to_symbol")) ||
+        !validate_edge_projection(ab_value_member(value, "projection")) ||
+        !bounded_text(ab_value_member(value, "projection_id"),
+                      AB_PLAN_MAX_METADATA, 1) ||
+        !lowercase_sha256(
+            ab_value_member(value, "projection_content_sha256")) ||
+        !bounded_text(ab_value_member(value, "relation"), AB_PLAN_MAX_METADATA,
+                      1))
+      return 0;
+    paths = ab_value_member(value, "source_paths");
+    if (!array_value(paths, 1))
+      return 0;
+    for (index = 0; index < paths->as.array.count; index++)
+      if (!repository_path(&paths->as.array.items[index]))
+        return 0;
+    return 1;
   }
   if (text_is(action, "manual")) {
     static const char *const base_fields[] = {"action", "instructions",

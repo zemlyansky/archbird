@@ -71,9 +71,9 @@ const plan = {
   unknowns: [],
 };
 
-const patch = {
+const act = {
   schema_version: 2,
-  artifact: "patch",
+  artifact: "act",
   provenance: "derived",
   tool: {
     name: "archbird",
@@ -152,18 +152,18 @@ function validator(name: string) {
   }).compile(schema);
 }
 
-test("Plan and Patch examples satisfy their public schemas", () => {
+test("Plan and Act examples satisfy their public schemas", () => {
   const validatePlan = validator("plan");
-  const validatePatch = validator("patch");
+  const validateAct = validator("act");
   assert.equal(
     validatePlan(plan),
     true,
     JSON.stringify(validatePlan.errors),
   );
   assert.equal(
-    validatePatch(patch),
+    validateAct(act),
     true,
-    JSON.stringify(validatePatch.errors),
+    JSON.stringify(validateAct.errors),
   );
 
   const noOp = structuredClone(plan);
@@ -185,9 +185,9 @@ test("Plan schema rejects ambiguous operations and unsafe paths", () => {
   assert.equal(validate(escaped), false);
 });
 
-test("Patch state cannot claim acceptance before evaluation", () => {
-  const validate = validator("patch");
-  const materialized = structuredClone(patch) as {
+test("Act state cannot claim acceptance before evaluation", () => {
+  const validate = validator("act");
+  const materialized = structuredClone(act) as {
     state: string;
     after: unknown;
     seal: unknown;
@@ -213,7 +213,7 @@ test("Patch state cannot claim acceptance before evaluation", () => {
   materialized.acceptance.status = "satisfied";
   assert.equal(validate(materialized), false);
 
-  const invalidTransition = structuredClone(patch);
+  const invalidTransition = structuredClone(act);
   invalidTransition.transitions[0].kind = "delete";
   assert.equal(validate(invalidTransition), false);
 });

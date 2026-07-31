@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the complete Verify -> Plan -> Act -> Patch -> Apply lifecycle."""
+"""Exercise the complete Verify -> Plan -> Act -> Apply lifecycle."""
 
 from __future__ import annotations
 
@@ -13,12 +13,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-from archbird import patching
+from archbird import act_transport
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHBIRD = ROOT / "archbird"
 SURFACE_FIXTURE = ROOT / "test/fixtures/plan_act/surface_closure"
 REGISTRATION_FIXTURE = ROOT / "test/fixtures/plan_act/surface_registration"
+REDIRECT_FIXTURE = ROOT / "test/fixtures/plan_act/dependency_redirect"
 
 
 def run(*arguments: str, expected: int = 0) -> subprocess.CompletedProcess[bytes]:
@@ -69,15 +70,15 @@ class PlanActCliTest(unittest.TestCase):
     def plan_path(self, name: str = "plan.json") -> Path:
         return self.artifacts / name
 
-    def accepted_patch(
+    def accepted_act(
         self,
         plan_path: Path,
-        name: str = "patch.json",
+        name: str = "act.json",
         *,
         root: Path | None = None,
     ) -> tuple[Path, dict[str, object]]:
         repository = root or self.root
-        patch_path = self.plan_path(name)
+        act_path = self.plan_path(name)
         run(
             "act",
             str(plan_path),
@@ -86,13 +87,13 @@ class PlanActCliTest(unittest.TestCase):
             "--format",
             "json",
             "--output",
-            str(patch_path),
+            str(act_path),
         )
-        patch = json.loads(patch_path.read_bytes())
-        self.assertEqual(patch["artifact"], "patch")
-        self.assertEqual(patch["state"], "accepted")
-        self.assertEqual(patch["acceptance"]["status"], "satisfied")
-        return patch_path, patch
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["artifact"], "act")
+        self.assertEqual(act["state"], "accepted")
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        return act_path, act
 
     def run_surface_gates(self, root: Path | None = None) -> None:
         repository = root or self.root
@@ -155,7 +156,7 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("+++ /dev/null", preview)
         self.assertTrue(legacy.exists(), "preview mutated the repository")
 
-        patch_path, patch = self.accepted_patch(plan_path)
+        act_path, patch = self.accepted_act(plan_path)
         self.assertTrue(legacy.exists(), "Act mutated the repository")
         self.assertEqual(
             patch["acceptance"]["constraints"],
@@ -165,7 +166,7 @@ class PlanActCliTest(unittest.TestCase):
         legacy.write_text("drifted = True\n")
         drift = run(
             "apply",
-            str(patch_path),
+            str(act_path),
             "--root",
             str(self.root),
             expected=2,
@@ -173,11 +174,11 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("legacy.py", drift.stderr.decode())
         self.assertEqual(legacy.read_text(), "drifted = True\n")
         legacy.write_bytes(original)
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertFalse(legacy.exists())
         replay = run(
             "apply",
-            str(patch_path),
+            str(act_path),
             "--root",
             str(self.root),
             expected=2,
@@ -223,9 +224,9 @@ class PlanActCliTest(unittest.TestCase):
         )
         self.assertEqual(operation["replacement"], "")
 
-        patch_path, _ = self.accepted_patch(plan_path)
+        act_path, _ = self.accepted_act(plan_path)
         self.assertIn("def obsolete", source.read_text())
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertNotIn("def obsolete", source.read_text())
         self.assertIn("def retained", source.read_text())
 
@@ -349,14 +350,14 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("+WASM_EXPORTS = _core_sum", preview)
         self.assertEqual(makefile.read_bytes(), original)
 
-        patch_path, patch = self.accepted_patch(
-            plan_path, "surface-patch.json"
+        act_path, patch = self.accepted_act(
+            plan_path, "surface-act.json"
         )
         self.assertEqual(
             patch["acceptance"]["constraints"],
             [{"id": "FFI-SURFACE", "status": "pass"}],
         )
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertIn("WASM_EXPORTS = _core_sum", makefile.read_text())
         run("verify", "--root", str(self.root), "--check")
         self.run_surface_gates()
@@ -538,14 +539,14 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(item["operation"]["expected_token"], "_core_add")
         self.assertEqual(item["operation"]["replacement_token"], "_core_sum")
 
-        patch_path, patch = self.accepted_patch(
-            plan_path, "observed-patch.json"
+        act_path, patch = self.accepted_act(
+            plan_path, "observed-act.json"
         )
         self.assertEqual(
             patch["acceptance"]["constraints"],
             [{"id": "FFI-SURFACE", "status": "pass"}],
         )
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertIn(
             "WASM_EXPORTS = _core_sum",
             (self.root / "Makefile").read_text(),
@@ -627,10 +628,10 @@ class PlanActCliTest(unittest.TestCase):
             "_core_sum",
         )
 
-        patch_path, _ = self.accepted_patch(
-            plan_path, "git-residual-patch.json", root=project
+        act_path, _ = self.accepted_act(
+            plan_path, "git-residual-act.json", root=project
         )
-        run("apply", str(patch_path), "--root", str(project))
+        run("apply", str(act_path), "--root", str(project))
         run("verify", "FFI-SURFACE", "--root", str(project), "--check")
         self.run_surface_gates(project)
 
@@ -692,8 +693,8 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("+WASM_EXPORTS = _core_peer _core_sum", preview)
         self.assertEqual(makefile.read_bytes(), original)
 
-        patch_path, patch = self.accepted_patch(
-            plan_path, "registration-patch.json"
+        act_path, patch = self.accepted_act(
+            plan_path, "registration-act.json"
         )
         self.assertEqual(
             patch["acceptance"]["constraints"],
@@ -702,7 +703,7 @@ class PlanActCliTest(unittest.TestCase):
                 {"id": "REQUIRED-HEADER", "status": "pass"},
             ],
         )
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertIn("WASM_EXPORTS = _core_peer _core_sum", makefile.read_text())
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
@@ -764,12 +765,12 @@ class PlanActCliTest(unittest.TestCase):
             hashlib.sha256(original_makefile).hexdigest(),
         )
 
-        patch_path, patch = self.accepted_patch(
-            plan_path, "coordinated-surface-patch.json"
+        act_path, patch = self.accepted_act(
+            plan_path, "coordinated-surface-act.json"
         )
         self.assertEqual(len(patch["transitions"]), 2)
         self.assertEqual(header.read_bytes(), original_header)
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertIn(
             "int core_sum(int left,int right);", header.read_text()
         )
@@ -943,15 +944,15 @@ class PlanActCliTest(unittest.TestCase):
             {"_core_product", "_core_sum"},
         )
 
-        patch_path, patch = self.accepted_patch(
-            plan_path, "multiple-registration-patch.json"
+        act_path, patch = self.accepted_act(
+            plan_path, "multiple-registration-act.json"
         )
         self.assertEqual(len(patch["transitions"]), 1)
         self.assertEqual(
             set(patch["transitions"][0]["item_ids"]),
             {item["id"] for item in plan["items"]},
         )
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertIn(
             "WASM_EXPORTS = _core_peer _core_product _core_sum",
             (self.root / "Makefile").read_text(),
@@ -1022,12 +1023,12 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("+WASM_EXPORTS = _core_sum", preview)
         self.assertEqual(makefile.read_bytes(), original)
 
-        patch_path, patch = self.accepted_patch(plan_path, "removal-patch.json")
+        act_path, patch = self.accepted_act(plan_path, "removal-act.json")
         self.assertEqual(
             patch["acceptance"]["constraints"],
             [{"id": "FFI-SURFACE", "status": "pass"}],
         )
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertIn("WASM_EXPORTS = _core_sum\n", makefile.read_text())
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
@@ -1151,11 +1152,11 @@ class PlanActCliTest(unittest.TestCase):
         ).stdout.decode()
         self.assertIn("--- a/api.py", patch)
         self.assertIn("--- a/consumer.py", patch)
-        patch_path, _patch = self.accepted_patch(
-            plan_path, "rename-patch.json"
+        act_path, _patch = self.accepted_act(
+            plan_path, "rename-act.json"
         )
         self.assertIn("old_api", (self.root / "api.py").read_text())
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertNotIn("old_api", (self.root / "api.py").read_text())
         self.assertNotIn("old_api", (self.root / "consumer.py").read_text())
         run("verify", "--root", str(self.root), "--check")
@@ -1170,6 +1171,142 @@ class PlanActCliTest(unittest.TestCase):
             "--check",
         )
         self.assertIn(b'"new_api"', after_query.stdout)
+
+    def test_neutral_plan_is_grounded_by_the_c_dependency_executor(self) -> None:
+        shutil.copytree(REDIRECT_FIXTURE, self.root, dirs_exist_ok=True)
+        plan_path = self.plan_path("dependency-redirect-plan.json")
+        failed = run(
+            "verify",
+            "--root",
+            str(self.root),
+            "--check",
+            expected=1,
+        )
+        self.assertIn("UI-STORAGE-BOUNDARY", failed.stdout.decode())
+        run(
+            "plan",
+            "UI-STORAGE-BOUNDARY",
+            "--root",
+            str(self.root),
+            "--redirect",
+            "raw_value=service_value",
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        operation = plan["items"][0]["operation"]
+        self.assertEqual(operation["action"], "redirect_dependency")
+        self.assertEqual(operation["from_symbol"], "raw_value")
+        self.assertEqual(operation["to_symbol"], "service_value")
+        self.assertEqual(operation["relation"], "ui -[import]-> storage")
+        self.assertEqual(operation["source_paths"], ["src/ui/view.c"])
+        self.assertEqual(
+            operation["projection"],
+            {"kinds": ["import"], "select": "component_edges"},
+        )
+        for grounded in (
+            "before",
+            "end_byte",
+            "replacement",
+            "sites",
+            "source_sha256",
+            "start_byte",
+        ):
+            self.assertNotIn(grounded, operation)
+
+        preview = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn('-#include "storage/raw.h"', preview)
+        self.assertIn('+#include "service/api.h"', preview)
+        self.assertIn("-int render_value(void) { return raw_value(); }", preview)
+        self.assertIn(
+            "+int render_value(void) { return service_value(); }", preview
+        )
+        self.assertIn("raw_value", (self.root / "src/ui/view.c").read_text())
+
+        act_path, act = self.accepted_act(
+            plan_path, "dependency-redirect-act.json"
+        )
+        self.assertEqual(act["artifact"], "act")
+        self.assertEqual(
+            [(row["kind"], row["path"]) for row in act["transitions"]],
+            [("modify", "src/ui/view.c")],
+        )
+        run("apply", str(act_path), "--root", str(self.root))
+        source = (self.root / "src/ui/view.c").read_text()
+        self.assertIn('#include "service/api.h"', source)
+        self.assertIn("service_value()", source)
+        run("verify", "--root", str(self.root), "--check")
+        self.run_surface_gates(self.root)
+
+    def test_c_dependency_redirect_rejects_ambiguous_replacement(self) -> None:
+        shutil.copytree(REDIRECT_FIXTURE, self.root, dirs_exist_ok=True)
+        (self.root / "src/service/duplicate.c").write_text(
+            '#include "service/api.h"\n\n'
+            "int service_value(void) { return 8; }\n"
+        )
+        plan_path = self.plan_path("ambiguous-redirect-plan.json")
+        run(
+            "plan",
+            "UI-STORAGE-BOUNDARY",
+            "--root",
+            str(self.root),
+            "--redirect",
+            "raw_value=service_value",
+            "--output",
+            str(plan_path),
+        )
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+            expected=2,
+        )
+        self.assertIn(
+            "replacement has no unique exact C function definition",
+            rejected.stderr.decode(),
+        )
+
+    def test_c_dependency_redirect_does_not_invent_include_spelling(self) -> None:
+        shutil.copytree(REDIRECT_FIXTURE, self.root, dirs_exist_ok=True)
+        implementation = self.root / "src/service/api.c"
+        implementation.write_text(
+            '#include "storage/raw.h"\n\n'
+            "int service_value(void) { return raw_value(); }\n"
+        )
+        plan_path = self.plan_path("unobserved-include-redirect-plan.json")
+        run(
+            "plan",
+            "UI-STORAGE-BOUNDARY",
+            "--root",
+            str(self.root),
+            "--redirect",
+            "raw_value=service_value",
+            "--output",
+            str(plan_path),
+        )
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+            expected=2,
+        )
+        self.assertIn(
+            "replacement declaration has no unique observed include spelling",
+            rejected.stderr.decode(),
+        )
 
     def test_plan_saved_in_repository_does_not_invalidate_itself(self) -> None:
         self.configure(
@@ -1198,10 +1335,10 @@ class PlanActCliTest(unittest.TestCase):
         second = json.loads(plan_path.read_bytes())
         self.assertEqual(second["source"], first["source"])
 
-        patch_path, patch = self.accepted_patch(plan_path)
+        act_path, patch = self.accepted_act(plan_path)
         self.assertEqual(patch["acceptance"]["status"], "satisfied")
         self.assertTrue(legacy.exists())
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertFalse(legacy.exists())
 
     def test_unrelated_source_drift_blocks_before_any_write(self) -> None:
@@ -1285,11 +1422,11 @@ class PlanActCliTest(unittest.TestCase):
         plan = json.loads(plan_path.read_bytes())
         self.assertEqual(plan["items"], [])
 
-        patch_path, patch = self.accepted_patch(plan_path)
+        act_path, patch = self.accepted_act(plan_path)
         self.assertEqual(patch["transitions"], [])
         self.assertEqual(patch["acceptance"]["status"], "satisfied")
         applied = run(
-            "apply", str(patch_path), "--root", str(self.root)
+            "apply", str(act_path), "--root", str(self.root)
         ).stdout.decode()
         self.assertEqual(applied, "Result: applied-transitions=0\n")
 
@@ -1369,7 +1506,7 @@ class PlanActCliTest(unittest.TestCase):
             completed.stderr.decode(),
         )
 
-    def test_asserted_create_and_move_apply_as_one_accepted_patch(self) -> None:
+    def test_asserted_create_and_move_apply_as_one_accepted_act(self) -> None:
         self.configure(
             {
                 "CREATE": {
@@ -1431,13 +1568,13 @@ class PlanActCliTest(unittest.TestCase):
         plan["unknowns"] = []
         plan_path.write_text(json.dumps(plan, sort_keys=True))
 
-        patch_path, patch = self.accepted_patch(plan_path)
+        act_path, patch = self.accepted_act(plan_path)
         self.assertEqual(
             {transition["kind"] for transition in patch["transitions"]},
             {"create", "move"},
         )
         self.assertTrue(old.exists())
-        run("apply", str(patch_path), "--root", str(self.root))
+        run("apply", str(act_path), "--root", str(self.root))
         self.assertFalse(old.exists())
         self.assertEqual((self.root / "new/name.py").read_text(), "value = 1\n")
         self.assertEqual(
@@ -1461,7 +1598,7 @@ class PlanActCliTest(unittest.TestCase):
         second.write_text("b = 1\n")
         plan_path = self.plan_path()
         run("plan", "--root", str(self.root), "--output", str(plan_path))
-        patch_path, _patch = self.accepted_patch(plan_path)
+        act_path, _patch = self.accepted_act(plan_path)
         original_unlink = Path.unlink
 
         def fail_second(path: Path, *args: object, **kwargs: object) -> None:
@@ -1471,7 +1608,7 @@ class PlanActCliTest(unittest.TestCase):
 
         with mock.patch.object(Path, "unlink", fail_second):
             with self.assertRaisesRegex(OSError, "injected second delete failure"):
-                patching._commit_patch(self.root, patch_path.read_bytes())
+                act_transport._commit_act(self.root, act_path.read_bytes())
         self.assertEqual(first.read_text(), "a = 1\n")
         self.assertEqual(second.read_text(), "b = 1\n")
 

@@ -1,7 +1,7 @@
 #include <archbird/archbird.h>
 
+#include "act_internal.h"
 #include "artifact_validation.h"
-#include "patch_internal.h"
 #include "projection_internal.h"
 #include "render_internal.h"
 #include "sha256.h"
@@ -18,7 +18,7 @@ static const AbValue *field(const AbValue *object, const char *name) {
 static ArchbirdStatus reject(ArchbirdEngine *engine, ArchbirdStatus status,
                              const char *message) {
   return archbird_error_set(engine, status, ARCHBIRD_NO_OFFSET,
-                            "patch acceptance: %s", message);
+                            "act acceptance: %s", message);
 }
 
 static int buffer_write(void *user_data, const uint8_t *bytes, size_t length) {
@@ -89,15 +89,15 @@ static ArchbirdStatus validate_diagnostic_delta(ArchbirdEngine *engine,
 }
 
 static ArchbirdStatus validate_verification_binding(
-    ArchbirdEngine *engine, const AbPatch *patch, const AbValue *after_map,
+    ArchbirdEngine *engine, const AbAct *act, const AbValue *after_map,
     const AbVerificationArtifact *verification, const char after_map_sha[65]) {
-  const AbValue *source_project = field(patch->source, "project");
+  const AbValue *source_project = field(act->source, "project");
   const AbValue *map_project = field(after_map, "project");
   const AbValue *evaluation = verification->evaluation;
   const AbValue *policy = verification->policy;
   const AbValue *map_evidence = field(after_map, "evidence");
   const AbValue *map_tool = field(after_map, "tool");
-  const AbValue *source_verification = field(patch->source, "verification");
+  const AbValue *source_verification = field(act->source, "verification");
   (void)after_map_sha;
   if (!source_project || !map_project ||
       !ab_value_equal(source_project, map_project) ||
@@ -117,10 +117,10 @@ static ArchbirdStatus validate_verification_binding(
 }
 
 static ArchbirdStatus
-collect_accepted_constraints(ArchbirdEngine *engine, const AbPatch *patch,
+collect_accepted_constraints(ArchbirdEngine *engine, const AbAct *act,
                              const AbVerificationArtifact *verification,
                              const AbValue ***out_rows, size_t *out_count) {
-  const AbValue *requirements = field(patch->acceptance, "constraints");
+  const AbValue *requirements = field(act->acceptance, "constraints");
   const AbValue **rows = NULL;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -248,7 +248,7 @@ static ArchbirdStatus render_constraint_results(AbBuffer *buffer,
 }
 
 static ArchbirdStatus
-render_accepted_document(AbBuffer *buffer, const AbPatch *patch,
+render_accepted_document(AbBuffer *buffer, const AbAct *act,
                          const AbValue *after_map, const char after_map_sha[65],
                          const AbVerificationArtifact *verification,
                          const AbValue *const *constraint_rows,
@@ -274,14 +274,14 @@ render_accepted_document(AbBuffer *buffer, const AbPatch *patch,
   if (status == ARCHBIRD_OK)
     status = render_verification_identity(buffer, verification);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(buffer, "},\"artifact\":\"patch\","
+    status = ab_buffer_literal(buffer, "},\"artifact\":\"act\","
                                        "\"executors\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(buffer, field(&patch->document, "executors"));
+    status = ab_value_render(buffer, field(&act->document, "executors"));
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"plan_sha256\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(buffer, field(&patch->document, "plan_sha256"));
+    status = ab_value_render(buffer, field(&act->document, "plan_sha256"));
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         buffer, ",\"provenance\":\"derived\",\"schema_version\":2,\"seal\":");
@@ -299,28 +299,28 @@ render_accepted_document(AbBuffer *buffer, const AbPatch *patch,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"source\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(buffer, patch->source);
+    status = ab_value_render(buffer, act->source);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"state\":\"accepted\",\"tool\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(buffer, field(&patch->document, "tool"));
+    status = ab_value_render(buffer, field(&act->document, "tool"));
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"transitions\":");
   if (status == ARCHBIRD_OK)
-    status = ab_value_render(buffer, field(&patch->document, "transitions"));
+    status = ab_value_render(buffer, field(&act->document, "transitions"));
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "}");
   return status;
 }
 
 ArchbirdStatus
-archbird_patch_accept(ArchbirdEngine *engine, const uint8_t *patch_json,
-                      size_t patch_length, const uint8_t *before_map_json,
-                      size_t before_map_length, const uint8_t *after_map_json,
-                      size_t after_map_length, const uint8_t *verification_json,
-                      size_t verification_length, uint32_t json_flags,
-                      ArchbirdWriteFn write_fn, void *user_data) {
-  AbPatch patch = {0};
+archbird_act_accept(ArchbirdEngine *engine, const uint8_t *act_json,
+                    size_t act_length, const uint8_t *before_map_json,
+                    size_t before_map_length, const uint8_t *after_map_json,
+                    size_t after_map_length, const uint8_t *verification_json,
+                    size_t verification_length, uint32_t json_flags,
+                    ArchbirdWriteFn write_fn, void *user_data) {
+  AbAct act = {0};
   AbVerificationArtifact verification = {0};
   AbValue before_map = {0};
   AbValue after_map = {0};
@@ -330,12 +330,12 @@ archbird_patch_accept(ArchbirdEngine *engine, const uint8_t *patch_json,
   AbBuffer canonical;
   AbBuffer sealed;
   AbBuffer accepted;
-  AbPatch accepted_patch = {0};
+  AbAct accepted_act = {0};
   char before_sha[65];
   char after_sha[65];
   char seal[65];
   ArchbirdStatus status;
-  if (!engine || !patch_json || !patch_length || !before_map_json ||
+  if (!engine || !act_json || !act_length || !before_map_json ||
       !before_map_length || !after_map_json || !after_map_length ||
       !verification_json || !verification_length || !write_fn ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
@@ -344,13 +344,13 @@ archbird_patch_accept(ArchbirdEngine *engine, const uint8_t *patch_json,
   ab_buffer_init(&canonical, engine);
   ab_buffer_init(&sealed, engine);
   ab_buffer_init(&accepted, engine);
-  status = ab_patch_load(engine, patch_json, patch_length, &patch);
+  status = ab_act_load(engine, act_json, act_length, &act);
   if (status == ARCHBIRD_OK &&
-      !ab_artifact_text_is(field(&patch.document, "state"), "materialized"))
+      !ab_artifact_text_is(field(&act.document, "state"), "materialized"))
     status = reject(engine, ARCHBIRD_INVALID_SCHEMA,
-                    "input Patch is not materialized");
+                    "input Act is not materialized");
   if (status == ARCHBIRD_OK &&
-      memcmp(field(field(&patch.document, "tool"), "implementation_sha256")
+      memcmp(field(field(&act.document, "tool"), "implementation_sha256")
                  ->as.text.data,
              archbird_implementation_sha256(), 64) != 0)
     status = reject(engine, ARCHBIRD_CONFLICT,
@@ -359,21 +359,19 @@ archbird_patch_accept(ArchbirdEngine *engine, const uint8_t *patch_json,
     status = ab_json_value_decode(engine, before_map_json, before_map_length,
                                   &before_map);
   if (status == ARCHBIRD_OK)
-    status =
-        ab_projection_map_validate(engine, &before_map, "Patch before Map");
+    status = ab_projection_map_validate(engine, &before_map, "Act before Map");
   if (status == ARCHBIRD_OK)
     status = ab_json_value_decode(engine, after_map_json, after_map_length,
                                   &after_map);
   if (status == ARCHBIRD_OK)
-    status = ab_projection_map_validate(engine, &after_map, "Patch after Map");
+    status = ab_projection_map_validate(engine, &after_map, "Act after Map");
   if (status == ARCHBIRD_OK)
     status = ab_artifact_json_sha256(engine, before_map_json, before_map_length,
                                      before_sha);
   if (status == ARCHBIRD_OK &&
-      !map_identity_matches(&before_map, before_sha,
-                            field(patch.source, "map")))
+      !map_identity_matches(&before_map, before_sha, field(act.source, "map")))
     status = reject(engine, ARCHBIRD_CONFLICT,
-                    "materialized Patch does not match the before Map");
+                    "materialized Act does not match the before Map");
   if (status == ARCHBIRD_OK)
     status = ab_artifact_json_sha256(engine, after_map_json, after_map_length,
                                      after_sha);
@@ -381,15 +379,15 @@ archbird_patch_accept(ArchbirdEngine *engine, const uint8_t *patch_json,
     status = ab_verification_artifact_load(engine, verification_json,
                                            verification_length, &verification);
   if (status == ARCHBIRD_OK)
-    status = validate_verification_binding(engine, &patch, &after_map,
+    status = validate_verification_binding(engine, &act, &after_map,
                                            &verification, after_sha);
   if (status == ARCHBIRD_OK)
     status = validate_diagnostic_delta(engine, &before_map, &after_map);
   if (status == ARCHBIRD_OK)
-    status = collect_accepted_constraints(engine, &patch, &verification,
+    status = collect_accepted_constraints(engine, &act, &verification,
                                           &constraint_rows, &constraint_count);
   if (status == ARCHBIRD_OK)
-    status = render_accepted_document(&unsealed, &patch, &after_map, after_sha,
+    status = render_accepted_document(&unsealed, &act, &after_map, after_sha,
                                       &verification, constraint_rows,
                                       constraint_count, NULL);
   if (status == ARCHBIRD_OK)
@@ -399,19 +397,18 @@ archbird_patch_accept(ArchbirdEngine *engine, const uint8_t *patch_json,
     status =
         ab_artifact_json_sha256(engine, canonical.data, canonical.length, seal);
   if (status == ARCHBIRD_OK)
-    status = render_accepted_document(&sealed, &patch, &after_map, after_sha,
+    status = render_accepted_document(&sealed, &act, &after_map, after_sha,
                                       &verification, constraint_rows,
                                       constraint_count, seal);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, sealed.data, sealed.length, 0,
                                         buffer_write, &accepted);
   if (status == ARCHBIRD_OK)
-    status =
-        ab_patch_load(engine, accepted.data, accepted.length, &accepted_patch);
+    status = ab_act_load(engine, accepted.data, accepted.length, &accepted_act);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, accepted.data, accepted.length,
                                         json_flags, write_fn, user_data);
-  ab_patch_free(engine, &accepted_patch);
+  ab_act_free(engine, &accepted_act);
   ab_buffer_free(&accepted);
   ab_free(engine, constraint_rows);
   ab_buffer_free(&sealed);
@@ -420,6 +417,6 @@ archbird_patch_accept(ArchbirdEngine *engine, const uint8_t *patch_json,
   ab_value_free(engine, &after_map);
   ab_value_free(engine, &before_map);
   ab_verification_artifact_free(&verification);
-  ab_patch_free(engine, &patch);
+  ab_act_free(engine, &act);
   return status;
 }

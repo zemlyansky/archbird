@@ -26,6 +26,8 @@ typedef struct AbPlanCompile {
   const AbValue *selected_ids;
   const AbValue *renames;
   uint8_t *rename_used;
+  const AbValue *redirects;
+  uint8_t *redirect_used;
   const AbValue *objective;
   AbPlanItemBuilder builder;
   AbProjectionPlan destructive_plan;
@@ -79,6 +81,7 @@ static ArchbirdStatus json_cstring(AbBuffer *buffer, const char *value) {
 static int request_field_allowed(const AbString *name) {
   return string_equal_literal(name, "constraint_ids") ||
          string_equal_literal(name, "objective") ||
+         string_equal_literal(name, "redirects") ||
          string_equal_literal(name, "renames");
 }
 
@@ -96,6 +99,7 @@ static ArchbirdStatus validate_request(AbPlanCompile *context) {
                   "request contains an unsupported field");
   context->selected_ids = field(&context->request, "constraint_ids");
   context->renames = field(&context->request, "renames");
+  context->redirects = field(&context->request, "redirects");
   context->objective = field(&context->request, "objective");
   if (context->selected_ids) {
     size_t left;
@@ -131,6 +135,20 @@ static ArchbirdStatus validate_request(AbPlanCompile *context) {
           !ab_artifact_bounded_text(&rename->value, 256, 1))
         return fail(context, ARCHBIRD_INVALID_SCHEMA,
                     "renames must map non-empty names");
+    }
+  }
+  if (context->redirects) {
+    if (context->redirects->kind != AB_VALUE_OBJECT ||
+        context->redirects->as.object.count > AB_PLAN_COMPILE_MAX_ROWS)
+      return fail(context, ARCHBIRD_INVALID_SCHEMA,
+                  "redirects must be a bounded object");
+    for (index = 0; index < context->redirects->as.object.count; index++) {
+      const AbObjectField *redirect =
+          &context->redirects->as.object.fields[index];
+      if (!redirect->name.length ||
+          !ab_artifact_bounded_text(&redirect->value, 256, 1))
+        return fail(context, ARCHBIRD_INVALID_SCHEMA,
+                    "redirects must map non-empty names");
     }
   }
   return ARCHBIRD_OK;
@@ -732,7 +750,8 @@ static ArchbirdStatus compile_constraint(AbPlanCompile *context,
     return status;
   status = ab_plan_compile_edge_constraint(
       context->engine, context->project, &context->map, &context->builder,
-      constraint, definition, actual, &handled);
+      constraint, definition, actual, context->redirects,
+      context->redirect_used, &handled);
   if (status != ARCHBIRD_OK || handled)
     return status;
   status = ab_plan_compile_surface_constraint(
@@ -860,10 +879,12 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
   if (status == ARCHBIRD_OK) {
     if (context->objective)
       status = ab_value_render(&rendered, context->objective);
-    else if (context->renames && context->renames->as.object.count)
-      status = literal(
-          &rendered, "\"Apply the reviewed symbol renames and satisfy selected "
-                     "constraints without regressing preserved constraints.\"");
+    else if ((context->renames && context->renames->as.object.count) ||
+             (context->redirects && context->redirects->as.object.count))
+      status =
+          literal(&rendered,
+                  "\"Apply the reviewed transformations and satisfy selected "
+                  "constraints without regressing preserved constraints.\"");
     else
       status =
           literal(&rendered, "\"Satisfy selected Verification constraints "
@@ -889,10 +910,12 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
   if (status == ARCHBIRD_OK)
     status = literal(&rendered, "],\"provenance\":");
   if (status == ARCHBIRD_OK)
-    status =
-        literal(&rendered, context->renames && context->renames->as.object.count
-                               ? "\"asserted\""
-                               : "\"derived\"");
+    status = literal(
+        &rendered,
+        (context->renames && context->renames->as.object.count) ||
+                (context->redirects && context->redirects->as.object.count)
+            ? "\"asserted\""
+            : "\"derived\"");
   if (status == ARCHBIRD_OK)
     status = literal(&rendered, ",\"schema_version\":2,\"source\":");
   if (status == ARCHBIRD_OK)
@@ -988,6 +1011,14 @@ archbird_plan_compile(ArchbirdEngine *engine, const ArchbirdProject *project,
       status = fail(&context, ARCHBIRD_OUT_OF_MEMORY,
                     "out of memory tracking asserted renames");
   }
+  if (status == ARCHBIRD_OK && context.redirects &&
+      context.redirects->as.object.count) {
+    context.redirect_used =
+        (uint8_t *)ab_calloc(engine, context.redirects->as.object.count, 1);
+    if (!context.redirect_used)
+      status = fail(&context, ARCHBIRD_OUT_OF_MEMORY,
+                    "out of memory tracking asserted redirects");
+  }
   for (index = 0; status == ARCHBIRD_OK &&
                   index < context.verification.constraints->as.array.count;
        index++)
@@ -999,12 +1030,19 @@ archbird_plan_compile(ArchbirdEngine *engine, const ArchbirdProject *project,
     if (!context.rename_used[index])
       status = fail(&context, ARCHBIRD_INVALID_SCHEMA,
                     "asserted rename does not match one selected constraint");
+  for (index = 0; status == ARCHBIRD_OK && context.redirects &&
+                  index < context.redirects->as.object.count;
+       index++)
+    if (!context.redirect_used[index])
+      status = fail(&context, ARCHBIRD_INVALID_SCHEMA,
+                    "asserted redirect does not match one selected constraint");
   if (status == ARCHBIRD_OK)
     status = render_plan(&context, map_json, map_length, before_map_json,
                          before_map_length, json_flags, write_fn, user_data);
   ab_projection_result_free(engine, &context.destructive_result);
   ab_projection_plan_free(engine, &context.destructive_plan);
   ab_free(engine, context.rename_used);
+  ab_free(engine, context.redirect_used);
   ab_plan_item_builder_free(&context.builder);
   ab_verification_artifact_free(&context.verification);
   ab_value_free(engine, &context.request);

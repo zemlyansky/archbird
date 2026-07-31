@@ -66,7 +66,7 @@ function readRegular(root, relative) {
   }
   if (before.size > MAX_FILE_BYTES) {
     throw new Error(
-      `source exceeds the ${MAX_FILE_BYTES}-byte Patch limit: ${relative}`,
+      `source exceeds the ${MAX_FILE_BYTES}-byte Act limit: ${relative}`,
     );
   }
   const descriptor = fs.openSync(
@@ -85,7 +85,7 @@ function readRegular(root, relative) {
     const length = Number(opened.size);
     if (!Number.isSafeInteger(length) || length > MAX_FILE_BYTES) {
       throw new Error(
-        `source exceeds the ${MAX_FILE_BYTES}-byte Patch limit: ${relative}`,
+        `source exceeds the ${MAX_FILE_BYTES}-byte Act limit: ${relative}`,
       );
     }
     const data = Buffer.alloc(length);
@@ -126,7 +126,7 @@ function requireAbsent(root, relative) {
     if (error.code === "ENOENT") return;
     throw error;
   }
-  throw new Error(`Patch destination already exists: ${relative}`);
+  throw new Error(`Act destination already exists: ${relative}`);
 }
 
 function observeSourceRequirements(rootValue, requirementsJson) {
@@ -169,20 +169,20 @@ function observeSourceRequirements(rootValue, requirementsJson) {
 function observePlanSources(root, planJson) {
   return observeSourceRequirements(
     root,
-    native.actSourceRequirements(Buffer.from(planJson), false),
+    native.planSourceRequirements(Buffer.from(planJson), false),
   );
 }
 
-function observePatchSources(root, patchJson) {
+function observeActSources(root, actJson) {
   return observeSourceRequirements(
     root,
-    native.patchSourceRequirements(Buffer.from(patchJson), false),
+    native.actSourceRequirements(Buffer.from(actJson), false),
   );
 }
 
-function patchOverlay(patchJson) {
-  native.patchValidate(Buffer.from(patchJson));
-  const document = JSON.parse(Buffer.from(patchJson).toString("utf8"));
+function actOverlay(actJson) {
+  native.actValidate(Buffer.from(actJson));
+  const document = JSON.parse(Buffer.from(actJson).toString("utf8"));
   const overlay = Object.create(null);
   for (const transition of document.transitions) {
     const kind = transition.kind;
@@ -200,13 +200,13 @@ function patchOverlay(patchJson) {
   return Object.freeze(overlay);
 }
 
-function renderPatch(rootValue, patchJson, { format, pretty = false }) {
+function renderAct(rootValue, actJson, { format, pretty = false }) {
   const root = repositoryRoot(rootValue);
-  native.patchValidate(Buffer.from(patchJson));
+  native.actValidate(Buffer.from(actJson));
   if (format === "json") {
-    return native.jsonCanonicalize(Buffer.from(patchJson), pretty, false);
+    return native.jsonCanonicalize(Buffer.from(actJson), pretty, false);
   }
-  const document = JSON.parse(Buffer.from(patchJson).toString("utf8"));
+  const document = JSON.parse(Buffer.from(actJson).toString("utf8"));
   const diffs = [];
   for (const transition of document.transitions) {
     const kind = transition.kind;
@@ -231,10 +231,10 @@ function renderPatch(rootValue, patchJson, { format, pretty = false }) {
   const patch = Buffer.concat(diffs);
   if (format === "patch") return patch;
   if (format !== "markdown") {
-    throw new Error("Patch format must be markdown, json, or patch");
+    throw new Error("Act format must be markdown, json, or patch");
   }
   const lines = [
-    "# Accepted Patch",
+    "# Accepted Act",
     "",
     `- Plan: \`${document.plan_sha256}\``,
     `- Transitions: ${document.transitions.length}`,
@@ -294,8 +294,8 @@ function makeParents(root, relative, created) {
   }
 }
 
-function transitionStates(root, patchJson) {
-  const document = JSON.parse(Buffer.from(patchJson).toString("utf8"));
+function transitionStates(root, actJson) {
+  const document = JSON.parse(Buffer.from(actJson).toString("utf8"));
   const initial = new Map();
   const final = new Map();
   for (const transition of document.transitions) {
@@ -332,11 +332,11 @@ function replaceFile(source, destination) {
   }
 }
 
-function commitPatch(root, patchJson) {
-  const { initial, final } = transitionStates(root, patchJson);
+function commitAct(root, actJson) {
+  const { initial, final } = transitionStates(root, actJson);
   const affected = [...new Set([...initial.keys(), ...final.keys()])]
     .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
-  const stage = fs.mkdtempSync(path.join(root, ".archbird-patch-"));
+  const stage = fs.mkdtempSync(path.join(root, ".archbird-act-"));
   const stagedNew = new Map();
   const stagedOld = new Map();
   const createdDirectories = [];
@@ -359,8 +359,8 @@ function commitPatch(root, patchJson) {
         stagedOld.set(filePath, backup);
       }
     }
-    const metadata = observePatchSources(root, patchJson);
-    native.patchPreflightApply(Buffer.from(patchJson), metadata);
+    const metadata = observeActSources(root, actJson);
+    native.actPreflightApply(Buffer.from(actJson), metadata);
     for (const [filePath, temporary] of stagedNew) {
       makeParents(root, filePath, createdDirectories);
       checkParents(root, filePath);
@@ -429,10 +429,10 @@ function commitPatch(root, patchJson) {
   }
 }
 
-function applyAcceptedPatch(rootValue, patchJson) {
+function applyAcceptedAct(rootValue, actJson) {
   const root = repositoryRoot(rootValue);
-  const metadata = observePatchSources(root, patchJson);
-  native.patchPreflightApply(Buffer.from(patchJson), metadata);
+  const metadata = observeActSources(root, actJson);
+  native.actPreflightApply(Buffer.from(actJson), metadata);
   const lockPath = path.join(root, ".archbird-apply.lock");
   const descriptor = fs.openSync(
     lockPath,
@@ -446,7 +446,7 @@ function applyAcceptedPatch(rootValue, patchJson) {
       { encoding: "ascii" },
     );
     fs.fsyncSync(descriptor);
-    commitPatch(root, patchJson);
+    commitAct(root, actJson);
   } finally {
     fs.closeSync(descriptor);
     try {
@@ -455,15 +455,15 @@ function applyAcceptedPatch(rootValue, patchJson) {
       if (error.code !== "ENOENT") throw error;
     }
   }
-  const document = JSON.parse(Buffer.from(patchJson).toString("utf8"));
+  const document = JSON.parse(Buffer.from(actJson).toString("utf8"));
   return document.transitions.length;
 }
 
 module.exports = {
-  applyAcceptedPatch,
-  observePatchSources,
+  applyAcceptedAct,
+  observeActSources,
   observePlanSources,
   observeSourceRequirements,
-  patchOverlay,
-  renderPatch,
+  actOverlay,
+  renderAct,
 };

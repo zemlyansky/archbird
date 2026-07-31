@@ -134,7 +134,7 @@ test("Plan schema bounds metadata, operation text, and collections", () => {
   assert.equal(validate(candidates), false);
 });
 
-test("Plan and Patch schemas publish the host byte budgets", () => {
+test("Plan and Act schemas publish the host byte budgets", () => {
   const planSchema = loadSchema("plan") as {
     $comment: string;
     properties: {
@@ -150,7 +150,7 @@ test("Plan and Patch schemas publish the host byte budgets", () => {
       };
     };
   };
-  const patchSchema = loadSchema("patch") as {
+  const actSchema = loadSchema("act") as {
     $comment: string;
     properties: {
       transitions: { maxItems: number };
@@ -178,15 +178,15 @@ test("Plan and Patch schemas publish the host byte budgets", () => {
     planSchema.$defs.replaceRange.properties.replacement.maxLength,
     MAX_OPERATION_TEXT_LENGTH,
   );
-  assert.match(patchSchema.$comment, /268435456 bytes/);
-  assert.equal(patchSchema.properties.transitions.maxItems, MAX_ARRAY_ITEMS);
-  assert.equal(patchSchema.properties.executors.maxItems, MAX_ARRAY_ITEMS);
+  assert.match(actSchema.$comment, /268435456 bytes/);
+  assert.equal(actSchema.properties.transitions.maxItems, MAX_ARRAY_ITEMS);
+  assert.equal(actSchema.properties.executors.maxItems, MAX_ARRAY_ITEMS);
   assert.equal(
-    patchSchema.$defs.afterFile.properties.byte_length.maximum,
+    actSchema.$defs.afterFile.properties.byte_length.maximum,
     67_108_864,
   );
   assert.equal(
-    patchSchema.$defs.afterFile.properties.content_base64.maxLength,
+    actSchema.$defs.afterFile.properties.content_base64.maxLength,
     89_478_488,
   );
 });

@@ -1,4 +1,4 @@
-"""Filesystem transport for native Plan materialization and accepted Patches."""
+"""Filesystem transport for native Plan materialization and accepted Acts."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def _read_regular(root: Path, relative: str) -> tuple[bytes, int]:
         raise OSError(f"source is not a regular file: {relative}")
     if before.st_size > _MAX_FILE_BYTES:
         raise OSError(
-            f"source exceeds the {_MAX_FILE_BYTES}-byte Patch limit: {relative}"
+            f"source exceeds the {_MAX_FILE_BYTES}-byte Act limit: {relative}"
         )
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags)
@@ -82,7 +82,7 @@ def _read_regular(root: Path, relative: str) -> tuple[bytes, int]:
             total += len(chunk)
             if total > _MAX_FILE_BYTES:
                 raise OSError(
-                    f"source exceeds the {_MAX_FILE_BYTES}-byte Patch limit: "
+                    f"source exceeds the {_MAX_FILE_BYTES}-byte Act limit: "
                     f"{relative}"
                 )
         after = os.fstat(descriptor)
@@ -104,7 +104,7 @@ def _require_absent(root: Path, relative: str) -> None:
         _candidate(root, relative).lstat()
     except FileNotFoundError:
         return
-    raise OSError(f"Patch destination already exists: {relative}")
+    raise OSError(f"Act destination already exists: {relative}")
 
 
 def observe_source_requirements(
@@ -149,25 +149,25 @@ def observe_source_requirements(
 
 
 def observe_plan_sources(root: Path, plan_json: bytes) -> bytes:
-    requirements = _native.act_source_requirements(plan_json)
+    requirements = _native.plan_source_requirements(plan_json)
     return observe_source_requirements(root, requirements)
 
 
-def observe_patch_sources(root: Path, patch_json: bytes) -> bytes:
-    requirements = _native.patch_source_requirements(patch_json)
+def observe_act_sources(root: Path, act_json: bytes) -> bytes:
+    requirements = _native.act_source_requirements(act_json)
     return observe_source_requirements(root, requirements)
 
 
-def patch_overlay(patch_json: bytes) -> Mapping[str, bytes | None]:
-    _native.patch_validate(patch_json)
-    document = json.loads(patch_json)
+def act_overlay(act_json: bytes) -> Mapping[str, bytes | None]:
+    _native.act_validate(act_json)
+    document = json.loads(act_json)
     transitions = document.get("transitions")
     if not isinstance(transitions, list):
-        raise ValueError("Patch has no transitions")
+        raise ValueError("Act has no transitions")
     overlay: dict[str, bytes | None] = {}
     for transition in transitions:
         if not isinstance(transition, dict):
-            raise ValueError("Patch transition must be an object")
+            raise ValueError("Act transition must be an object")
         kind = transition.get("kind")
         path = _relative_path(transition.get("path"))
         after = transition.get("after")
@@ -175,30 +175,30 @@ def patch_overlay(patch_json: bytes) -> Mapping[str, bytes | None]:
             overlay[path] = None
             continue
         if not isinstance(after, dict):
-            raise ValueError("Patch transition has no after-state")
+            raise ValueError("Act transition has no after-state")
         content = after.get("content_base64")
         if not isinstance(content, str):
-            raise ValueError("Patch after-state has no content")
+            raise ValueError("Act after-state has no content")
         try:
             data = base64.b64decode(content, validate=True)
         except (ValueError, TypeError) as error:
-            raise ValueError("Patch after-state has invalid base64") from error
+            raise ValueError("Act after-state has invalid base64") from error
         if kind == "move":
             source = _relative_path(transition.get("source_path"))
             overlay[source] = None
         elif kind not in {"create", "modify"}:
-            raise ValueError(f"unsupported Patch transition kind: {kind}")
+            raise ValueError(f"unsupported Act transition kind: {kind}")
         overlay[path] = data
     return MappingProxyType(dict(sorted(overlay.items())))
 
 
-def render_patch(
-    root: Path, patch_json: bytes, *, format: str, pretty: bool = False
+def render_act(
+    root: Path, act_json: bytes, *, format: str, pretty: bool = False
 ) -> bytes:
-    _native.patch_validate(patch_json)
+    _native.act_validate(act_json)
     if format == "json":
-        return _native.json_canonicalize(patch_json, pretty=pretty)
-    document = json.loads(patch_json)
+        return _native.json_canonicalize(act_json, pretty=pretty)
+    document = json.loads(act_json)
     diffs: list[bytes] = []
     for transition in document["transitions"]:
         kind = transition["kind"]
@@ -228,10 +228,10 @@ def render_patch(
     if format == "patch":
         return patch
     if format != "markdown":
-        raise ValueError("Patch format must be markdown, json, or patch")
+        raise ValueError("Act format must be markdown, json, or patch")
     acceptance = document["acceptance"]
     lines = [
-        "# Accepted Patch",
+        "# Accepted Act",
         "",
         f"- Plan: `{document['plan_sha256']}`",
         f"- Transitions: {len(document['transitions'])}",
@@ -276,9 +276,9 @@ def _make_parents(root: Path, relative: str, created: list[Path]) -> None:
 
 
 def _transition_states(
-    patch_json: bytes, root: Path
+    act_json: bytes, root: Path
 ) -> tuple[dict[str, tuple[bytes, int]], dict[str, tuple[bytes, int]]]:
-    document = json.loads(patch_json)
+    document = json.loads(act_json)
     initial: dict[str, tuple[bytes, int]] = {}
     final: dict[str, tuple[bytes, int]] = {}
     for transition in document["transitions"]:
@@ -307,10 +307,10 @@ def _transition_states(
     return initial, final
 
 
-def _commit_patch(root: Path, patch_json: bytes) -> None:
-    initial, final = _transition_states(patch_json, root)
+def _commit_act(root: Path, act_json: bytes) -> None:
+    initial, final = _transition_states(act_json, root)
     affected = sorted(set(initial) | set(final))
-    stage = Path(tempfile.mkdtemp(prefix=".archbird-patch-", dir=root))
+    stage = Path(tempfile.mkdtemp(prefix=".archbird-act-", dir=root))
     staged_new: dict[str, Path] = {}
     staged_old: dict[str, Path] = {}
     created_directories: list[Path] = []
@@ -329,8 +329,8 @@ def _commit_patch(root: Path, patch_json: bytes) -> None:
                 backup = stage / f"old-{index}"
                 _write_stage_file(backup, data, stat.S_IMODE(mode))
                 staged_old[path] = backup
-        metadata = observe_patch_sources(root, patch_json)
-        _native.patch_preflight_apply(patch_json, metadata)
+        metadata = observe_act_sources(root, act_json)
+        _native.act_preflight_apply(act_json, metadata)
         for path in sorted(staged_new):
             _make_parents(root, path, created_directories)
             _check_parents(root, path)
@@ -383,10 +383,10 @@ def _commit_patch(root: Path, patch_json: bytes) -> None:
             raise OSError(f"rollback was incomplete: {detail}")
 
 
-def apply_accepted_patch(root: Path, patch_json: bytes) -> int:
+def apply_accepted_act(root: Path, act_json: bytes) -> int:
     root = root.resolve()
-    metadata = observe_patch_sources(root, patch_json)
-    _native.patch_preflight_apply(patch_json, metadata)
+    metadata = observe_act_sources(root, act_json)
+    _native.act_preflight_apply(act_json, metadata)
     lock_path = root / ".archbird-apply.lock"
     descriptor = os.open(
         lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
@@ -394,22 +394,22 @@ def apply_accepted_patch(root: Path, patch_json: bytes) -> int:
     try:
         os.write(descriptor, f"{os.getpid()}\n".encode("ascii"))
         os.fsync(descriptor)
-        _commit_patch(root, patch_json)
+        _commit_act(root, act_json)
     finally:
         os.close(descriptor)
         try:
             lock_path.unlink()
         except FileNotFoundError:
             pass
-    document = json.loads(patch_json)
+    document = json.loads(act_json)
     return len(document["transitions"])
 
 
 __all__ = [
-    "apply_accepted_patch",
-    "observe_patch_sources",
+    "apply_accepted_act",
+    "observe_act_sources",
     "observe_plan_sources",
     "observe_source_requirements",
-    "patch_overlay",
-    "render_patch",
+    "act_overlay",
+    "render_act",
 ]

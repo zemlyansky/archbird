@@ -1,4 +1,4 @@
-#include "patch_source.h"
+#include "act_source.h"
 
 #include "artifact_validation.h"
 
@@ -12,11 +12,11 @@ static const AbValue *field(const AbValue *object, const char *name) {
 
 static ArchbirdStatus invalid(ArchbirdEngine *engine, const char *message) {
   return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
-                            "patch source metadata: %s", message);
+                            "act source metadata: %s", message);
 }
 
-const AbValue *ab_patch_source_file(const AbValue *metadata,
-                                    const AbString *path) {
+const AbValue *ab_act_source_file(const AbValue *metadata,
+                                  const AbString *path) {
   const AbValue *files = field(metadata, "files");
   size_t low = 0;
   size_t high =
@@ -36,7 +36,7 @@ const AbValue *ab_patch_source_file(const AbValue *metadata,
   return NULL;
 }
 
-int ab_patch_source_path_absent(const AbValue *metadata, const AbString *path) {
+int ab_act_source_path_absent(const AbValue *metadata, const AbString *path) {
   const AbValue *absent = field(metadata, "absent");
   size_t low = 0;
   size_t high =
@@ -67,10 +67,10 @@ static ArchbirdStatus validate_metadata(ArchbirdEngine *engine,
   files = field(metadata, "files");
   absent = field(metadata, "absent");
   if (!files || files->kind != AB_VALUE_ARRAY ||
-      files->as.array.count > AB_PATCH_MAX_TRANSITIONS || !absent ||
+      files->as.array.count > AB_ACT_MAX_TRANSITIONS || !absent ||
       absent->kind != AB_VALUE_ARRAY ||
-      absent->as.array.count > AB_PATCH_MAX_TRANSITIONS)
-    return invalid(engine, "file inventories exceed the Patch limit");
+      absent->as.array.count > AB_ACT_MAX_TRANSITIONS)
+    return invalid(engine, "file inventories exceed the Act limit");
   for (index = 0; index < files->as.array.count; index++) {
     const AbValue *row = &files->as.array.items[index];
     const AbValue *path = field(row, "path");
@@ -90,15 +90,15 @@ static ArchbirdStatus validate_metadata(ArchbirdEngine *engine,
         (index && ab_string_compare(&absent->as.array.items[index - 1].as.text,
                                     &path->as.text) >= 0))
       return invalid(engine, "absent paths are not uniquely sorted");
-    if (ab_patch_source_file(metadata, &path->as.text))
+    if (ab_act_source_file(metadata, &path->as.text))
       return invalid(engine, "one path is both present and absent");
   }
   return ARCHBIRD_OK;
 }
 
-ArchbirdStatus ab_patch_source_metadata_load(ArchbirdEngine *engine,
-                                             const uint8_t *json, size_t length,
-                                             AbValue *out) {
+ArchbirdStatus ab_act_source_metadata_load(ArchbirdEngine *engine,
+                                           const uint8_t *json, size_t length,
+                                           AbValue *out) {
   ArchbirdStatus status;
   if (!engine || !json || !length || !out)
     return ARCHBIRD_INVALID_ARGUMENT;

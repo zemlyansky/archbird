@@ -1,8 +1,8 @@
 #include <archbird/archbird.h>
 
+#include "act_internal.h"
+#include "act_source.h"
 #include "artifact_validation.h"
-#include "patch_internal.h"
-#include "patch_source.h"
 #include "plan_internal.h"
 #include "render_internal.h"
 
@@ -32,7 +32,7 @@ static int path_compare(const void *left, const void *right) {
 
 static ArchbirdStatus add_path(ArchbirdEngine *engine, PathRequirement *paths,
                                size_t *count, const AbValue *value) {
-  if (*count >= AB_PATCH_MAX_TRANSITIONS)
+  if (*count >= AB_ACT_MAX_TRANSITIONS)
     return reject(engine, ARCHBIRD_LIMIT_EXCEEDED,
                   "Plan references too many paths");
   paths[(*count)++].path = &value->as.text;
@@ -83,6 +83,15 @@ static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
     }
     return status;
   }
+  if (ab_artifact_text_is(action, "redirect_dependency")) {
+    const AbValue *paths = field(operation, "source_paths");
+    ArchbirdStatus status = ARCHBIRD_OK;
+    for (index = 0; status == ARCHBIRD_OK && index < paths->as.array.count;
+         index++)
+      status = add_path(engine, present, present_count,
+                        &paths->as.array.items[index]);
+    return status;
+  }
   path = field(operation, "path");
   if (!path)
     return reject(engine, ARCHBIRD_INVALID_SCHEMA,
@@ -106,12 +115,12 @@ static ArchbirdStatus render_paths(AbBuffer *buffer,
   return status;
 }
 
-ArchbirdStatus archbird_act_source_requirements(
+ArchbirdStatus archbird_plan_source_requirements(
     ArchbirdEngine *engine, const uint8_t *plan_json, size_t plan_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data) {
   AbPlan plan = {0};
-  PathRequirement present[AB_PATCH_MAX_TRANSITIONS];
-  PathRequirement absent[AB_PATCH_MAX_TRANSITIONS];
+  PathRequirement present[AB_ACT_MAX_TRANSITIONS];
+  PathRequirement absent[AB_ACT_MAX_TRANSITIONS];
   size_t present_count = 0;
   size_t absent_count = 0;
   size_t index;
@@ -155,29 +164,29 @@ ArchbirdStatus archbird_act_source_requirements(
   return status;
 }
 
-ArchbirdStatus archbird_patch_source_requirements(
-    ArchbirdEngine *engine, const uint8_t *patch_json, size_t patch_length,
+ArchbirdStatus archbird_act_source_requirements(
+    ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data) {
-  AbPatch patch = {0};
-  PathRequirement present[AB_PATCH_MAX_TRANSITIONS];
-  PathRequirement absent[AB_PATCH_MAX_TRANSITIONS];
+  AbAct act = {0};
+  PathRequirement present[AB_ACT_MAX_TRANSITIONS];
+  PathRequirement absent[AB_ACT_MAX_TRANSITIONS];
   size_t present_count = 0;
   size_t absent_count = 0;
   size_t index;
   AbBuffer document;
   ArchbirdStatus status;
-  if (!engine || !patch_json || !patch_length || !write_fn ||
+  if (!engine || !act_json || !act_length || !write_fn ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&document, engine);
-  status = ab_patch_load(engine, patch_json, patch_length, &patch);
+  status = ab_act_load(engine, act_json, act_length, &act);
   if (status == ARCHBIRD_OK &&
-      !ab_artifact_text_is(field(&patch.document, "state"), "accepted"))
+      !ab_artifact_text_is(field(&act.document, "state"), "accepted"))
     status = reject(engine, ARCHBIRD_POLICY_REJECTED,
-                    "only an accepted Patch can be applied");
-  for (index = 0; status == ARCHBIRD_OK && index < patch.transition_count;
+                    "only an accepted Act can be applied");
+  for (index = 0; status == ARCHBIRD_OK && index < act.transition_count;
        index++) {
-    const AbValue *transition = patch.transitions[index].record;
+    const AbValue *transition = act.transitions[index].record;
     const AbValue *kind = field(transition, "kind");
     if (ab_artifact_text_is(kind, "create")) {
       status =
@@ -211,6 +220,6 @@ ArchbirdStatus archbird_patch_source_requirements(
     status = archbird_json_canonicalize(engine, document.data, document.length,
                                         json_flags, write_fn, user_data);
   ab_buffer_free(&document);
-  ab_patch_free(engine, &patch);
+  ab_act_free(engine, &act);
   return status;
 }

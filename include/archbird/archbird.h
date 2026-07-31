@@ -430,41 +430,41 @@ ARCHBIRD_API ArchbirdStatus archbird_plan_compile(
     void *user_data);
 
 /*
- * Validate one exact Patch. A materialized Patch is a read-only Act preview;
- * only an accepted Patch carries a verified after-state and content seal.
+ * Validate one exact Act. A materialized Act is a read-only Act preview;
+ * only an accepted Act carries a verified after-state and content seal.
  */
-ARCHBIRD_API ArchbirdStatus archbird_patch_validate(ArchbirdEngine *engine,
-                                                    const uint8_t *patch_json,
-                                                    size_t patch_length);
+ARCHBIRD_API ArchbirdStatus archbird_act_validate(ArchbirdEngine *engine,
+                                                  const uint8_t *act_json,
+                                                  size_t act_length);
 
 /*
  * Return the exact sorted present/absent repository paths that a host must
  * observe before materializing this Plan. This keeps Plan interpretation in
  * the core while filesystem access remains a host responsibility.
  */
-ARCHBIRD_API ArchbirdStatus archbird_act_source_requirements(
+ARCHBIRD_API ArchbirdStatus archbird_plan_source_requirements(
     ArchbirdEngine *engine, const uint8_t *plan_json, size_t plan_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
 /*
  * Return the exact sorted present/absent repository paths that a host must
- * re-observe immediately before applying an accepted Patch.
+ * re-observe immediately before applying an accepted Act.
  */
-ARCHBIRD_API ArchbirdStatus archbird_patch_source_requirements(
-    ArchbirdEngine *engine, const uint8_t *patch_json, size_t patch_length,
+ARCHBIRD_API ArchbirdStatus archbird_act_source_requirements(
+    ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
 /*
  * Materialize source-locked Plan operators against exact project bytes as a
- * binary-safe, read-only Patch. map_json must be the Map named by the Plan.
+ * binary-safe, read-only Act. map_json must be the Map named by the Plan.
  * source_metadata_json is a host observation with sorted existing file rows
  * (path, SHA-256, executable bit) and sorted paths proven absent for creates
  * or moves. The core performs no filesystem I/O.
  *
- * A materialized Patch is not applicable until after-state Map/Verification
- * acceptance seals it through the Patch acceptance API.
+ * A materialized Act is not applicable until after-state Map/Verification
+ * acceptance seals it through the Act acceptance API.
  */
-ARCHBIRD_API ArchbirdStatus archbird_act_materialize_patch(
+ARCHBIRD_API ArchbirdStatus archbird_act_materialize(
     ArchbirdEngine *engine, const ArchbirdProject *project,
     const uint8_t *plan_json, size_t plan_length, const uint8_t *map_json,
     size_t map_length, const uint8_t *verification_json,
@@ -473,26 +473,26 @@ ARCHBIRD_API ArchbirdStatus archbird_act_materialize_patch(
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*
- * Accept a materialized Patch only after exact before/after Maps and fresh
+ * Accept a materialized Act only after exact before/after Maps and fresh
  * Verification prove its complete constraint contract without new Map
- * diagnostics. The result is an immutable content-sealed Patch; this function
+ * diagnostics. The result is an immutable content-sealed Act; this function
  * performs no filesystem I/O.
  */
-ARCHBIRD_API ArchbirdStatus archbird_patch_accept(
-    ArchbirdEngine *engine, const uint8_t *patch_json, size_t patch_length,
+ARCHBIRD_API ArchbirdStatus archbird_act_accept(
+    ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
     const uint8_t *before_map_json, size_t before_map_length,
     const uint8_t *after_map_json, size_t after_map_length,
     const uint8_t *verification_json, size_t verification_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
 /*
- * Revalidate an accepted Patch against source metadata observed immediately
+ * Revalidate an accepted Act against source metadata observed immediately
  * before filesystem commit. This checks exact source preimages, executable
- * bits, and destination absence. Hosts may then replay only the Patch's
+ * bits, and destination absence. Hosts may then replay only the Act's
  * already-materialized bytes; they must not reevaluate the Plan.
  */
-ARCHBIRD_API ArchbirdStatus archbird_patch_preflight_apply(
-    ArchbirdEngine *engine, const uint8_t *patch_json, size_t patch_length,
+ARCHBIRD_API ArchbirdStatus archbird_act_preflight_apply(
+    ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
     const uint8_t *source_metadata_json, size_t source_metadata_length);
 
 /*

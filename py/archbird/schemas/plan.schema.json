@@ -555,6 +555,67 @@
         "coverage": {"$ref": "#/$defs/renameCoverage"}
       }
     },
+    "edgeProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["select"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "select": {"enum": ["component_edges", "file_edges"]},
+        "from_paths": {"$ref": "#/$defs/nonEmptyStrings"},
+        "to_paths": {"$ref": "#/$defs/nonEmptyStrings"},
+        "kinds": {"$ref": "#/$defs/nonEmptyStrings"},
+        "kind_patterns": {"$ref": "#/$defs/nonEmptyStrings"},
+        "name_patterns": {"$ref": "#/$defs/nonEmptyStrings"}
+      }
+    },
+    "redirectDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "A language-independent reviewed dependency redirect. Act re-evaluates the exhaustive edge projection and grounds exact source edits through a language executor.",
+      "required": [
+        "action",
+        "from_symbol",
+        "to_symbol",
+        "projection",
+        "projection_id",
+        "projection_content_sha256",
+        "relation",
+        "source_paths"
+      ],
+      "properties": {
+        "action": {"const": "redirect_dependency"},
+        "from_symbol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "to_symbol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "projection": {"$ref": "#/$defs/edgeProjection"},
+        "projection_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "projection_content_sha256": {"$ref": "#/$defs/sha256"},
+        "relation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "source_paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/repositoryPath"}
+        }
+      }
+    },
     "manual": {
       "type": "object",
       "additionalProperties": false,
@@ -639,6 +700,7 @@
         {"$ref": "#/$defs/makeVariableTokenInsert"},
         {"$ref": "#/$defs/cDeclarationInsert"},
         {"$ref": "#/$defs/renameSymbol"},
+        {"$ref": "#/$defs/redirectDependency"},
         {"$ref": "#/$defs/manual"}
       ]
     },
@@ -731,7 +793,11 @@
             "properties": {
               "executable": {"const": true},
               "operation": {
-                "properties": {"action": {"const": "rename_symbol"}},
+                "properties": {
+                  "action": {
+                    "enum": ["redirect_dependency", "rename_symbol"]
+                  }
+                },
                 "required": ["action"]
               }
             },

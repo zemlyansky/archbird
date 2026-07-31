@@ -1149,10 +1149,10 @@ def plan_compile(
     )
 
 
-def patch_validate(input: bytes) -> None:
-    data = _bytes(input, "Patch")
+def act_validate(input: bytes) -> None:
+    data = _bytes(input, "Act")
     function = _declare(
-        "archbird_patch_validate",
+        "archbird_act_validate",
         [_POINTER, ctypes.c_char_p, ctypes.c_size_t],
     )
     _one_shot(
@@ -1162,31 +1162,31 @@ def patch_validate(input: bytes) -> None:
     )
 
 
-def act_source_requirements(
+def plan_source_requirements(
     plan_json: bytes, *, pretty: bool = False
 ) -> bytes:
     plan = _bytes(plan_json, "Plan")
     return _simple_render(
-        "archbird_act_source_requirements",
+        "archbird_plan_source_requirements",
         [plan],
         flags=_JSON_PRETTY if pretty else 0,
         saved_artifact=True,
     )
 
 
-def patch_source_requirements(
-    patch_json: bytes, *, pretty: bool = False
+def act_source_requirements(
+    act_json: bytes, *, pretty: bool = False
 ) -> bytes:
-    patch = _bytes(patch_json, "Patch")
+    act = _bytes(act_json, "Act")
     return _simple_render(
-        "archbird_patch_source_requirements",
-        [patch],
+        "archbird_act_source_requirements",
+        [act],
         flags=_JSON_PRETTY if pretty else 0,
         saved_artifact=True,
     )
 
 
-def act_materialize_patch(
+def act_materialize(
     project: _Project,
     plan_json: bytes,
     map_json: bytes,
@@ -1200,7 +1200,7 @@ def act_materialize_patch(
     verification = _bytes(verification_json, "Verification")
     metadata = _bytes(source_metadata_json, "source metadata")
     function = _declare(
-        "archbird_act_materialize_patch",
+        "archbird_act_materialize",
         [
             _POINTER,
             _POINTER,
@@ -1237,8 +1237,8 @@ def act_materialize_patch(
     )
 
 
-def patch_accept(
-    patch_json: bytes,
+def act_accept(
+    act_json: bytes,
     before_map_json: bytes,
     after_map_json: bytes,
     verification_json: bytes,
@@ -1246,9 +1246,9 @@ def patch_accept(
     pretty: bool = False,
 ) -> bytes:
     return _simple_render(
-        "archbird_patch_accept",
+        "archbird_act_accept",
         [
-            _bytes(patch_json, "Patch"),
+            _bytes(act_json, "Act"),
             _bytes(before_map_json, "before Map"),
             _bytes(after_map_json, "after Map"),
             _bytes(verification_json, "Verification"),
@@ -1258,13 +1258,13 @@ def patch_accept(
     )
 
 
-def patch_preflight_apply(
-    patch_json: bytes, source_metadata_json: bytes
+def act_preflight_apply(
+    act_json: bytes, source_metadata_json: bytes
 ) -> None:
-    patch = _bytes(patch_json, "Patch")
+    act = _bytes(act_json, "Act")
     metadata = _bytes(source_metadata_json, "source metadata")
     function = _declare(
-        "archbird_patch_preflight_apply",
+        "archbird_act_preflight_apply",
         [
             _POINTER,
             ctypes.c_char_p,
@@ -1275,9 +1275,9 @@ def patch_preflight_apply(
     )
     _one_shot(
         lambda engine, _write: function(
-            engine, patch, len(patch), metadata, len(metadata)
+            engine, act, len(act), metadata, len(metadata)
         ),
-        input_budget=max(len(patch), len(metadata)),
+        input_budget=max(len(act), len(metadata)),
         saved_artifact=True,
     )
 
