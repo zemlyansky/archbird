@@ -1,6 +1,7 @@
 #include "plan_compile_internal.h"
 
 #include "artifact_validation.h"
+#include "utf8.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -183,19 +184,23 @@ render_candidate_sites(ArchbirdEngine *engine, const ArchbirdProject *project,
     status = ab_plan_source_lock(engine, project, map, &path->as.text, &lock);
     if (status != ARCHBIRD_OK)
       break;
-    if (end > lock.source.byte_length || end - start != name->as.text.length ||
-        memcmp(lock.source.bytes + start, name->as.text.data,
-               name->as.text.length) != 0)
+    if (end > lock.source.byte_length || end - start > 64u * 1024u)
       return archbird_error_set(
           engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-          "plan compilation: edge projection source site does not match "
-          "source-locked bytes");
+          "plan compilation: edge projection source site is outside the "
+          "source-lock or Plan limit");
+    status = ab_utf8_validate(engine, lock.source.bytes + start,
+                              (size_t)(end - start));
+    if (status != ARCHBIRD_OK)
+      break;
     if (count++)
       status = literal(output, ",");
     if (status == ARCHBIRD_OK)
       status = literal(output, "{\"before\":");
     if (status == ARCHBIRD_OK)
-      status = ab_value_render(output, name);
+      status = ab_buffer_json_string(
+          output, (const char *)lock.source.bytes + (size_t)start,
+          (size_t)(end - start));
     if (status == ARCHBIRD_OK)
       status = literal(output, ",\"end_byte\":");
     if (status == ARCHBIRD_OK)

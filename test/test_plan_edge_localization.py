@@ -104,6 +104,71 @@ class PlanEdgeLocalizationTest(unittest.TestCase):
         )
         self.assertEqual(len({site["fact_id"] for site in sites}), 2)
 
+    def test_python_import_retains_statement_span_and_semantic_name(self) -> None:
+        root = self.root / "python-project"
+        (root / "app").mkdir(parents=True)
+        (root / "ui").mkdir()
+        source = root / "app/main.py"
+        source.write_text(
+            "from ui.widget import render\n\n"
+            "def run():\n"
+            "    return render()\n"
+        )
+        (root / "ui/widget.py").write_text(
+            "def render():\n"
+            '    return "ok"\n'
+        )
+        (root / "archbird.json").write_text(
+            json.dumps(
+                {
+                    "project": "python-edge-plan",
+                    "layers": [
+                        {
+                            "name": "python",
+                            "language": "python",
+                            "globs": ["**/*.py"],
+                            "import_roots": ["."],
+                        }
+                    ],
+                    "components": [
+                        {"name": "app", "paths": ["app/**"]},
+                        {"name": "ui", "paths": ["ui/**"]},
+                    ],
+                    "constraints": {
+                        "NO-CROSS-COMPONENT-IMPORTS": {
+                            "kind": "allowed_component_edges",
+                            "edges": [],
+                            "kinds": ["import"],
+                            "owner": "architecture",
+                            "rationale": "Components remain independent.",
+                        }
+                    },
+                }
+            )
+        )
+        project = Project.from_repository(
+            root,
+            config=root / "archbird.json",
+            cache_dir=None,
+            map_cache=False,
+        )
+        plan = json.loads(
+            compile_plan_json(
+                project, project.map_json(), project.verify_json()
+            )
+        )
+
+        site = plan["items"][0]["operation"]["candidate_sites"][0]
+        self.assertEqual(site["path"], "app/main.py")
+        self.assertEqual(site["name"], "ui.widget")
+        self.assertEqual(site["before"], "from ui.widget import render")
+        self.assertEqual(site["start_byte"], 0)
+        self.assertEqual(site["end_byte"], 28)
+        self.assertEqual(
+            site["source_sha256"],
+            hashlib.sha256(source.read_bytes()).hexdigest(),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -67,6 +67,14 @@
     {"name": "frontends", "paths": ["py/**", "js/**"]}
   ],
   "constraints": {
+    "REQUIRED-HEADER": {
+      "kind": "required_symbols",
+      "symbols": ["core_sum", "core_peer"],
+      "paths": ["src/core.h"],
+      "severity": "error",
+      "owner": "architecture",
+      "rationale": "Every reviewed core API remains declared in the public C header."
+    },
     "FFI-SURFACE": {
       "kind": "provider_surface",
       "surface": "ffi",

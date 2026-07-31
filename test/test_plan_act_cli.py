@@ -697,12 +697,181 @@ class PlanActCliTest(unittest.TestCase):
         )
         self.assertEqual(
             patch["acceptance"]["constraints"],
-            [{"id": "FFI-SURFACE", "status": "pass"}],
+            [
+                {"id": "FFI-SURFACE", "status": "pass"},
+                {"id": "REQUIRED-HEADER", "status": "pass"},
+            ],
         )
         run("apply", str(patch_path), "--root", str(self.root))
         self.assertIn("WASM_EXPORTS = _core_peer _core_sum", makefile.read_text())
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
+
+    def test_required_c_declaration_and_registration_form_one_plan(self) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        implementation = self.root / "src/core.c"
+        implementation.write_text(
+            implementation.read_text().replace(
+                "int core_sum(int left, int right)",
+                "int core_sum(int left,int right)",
+            )
+        )
+        (self.root / "js/decoy.js").write_text(
+            "function core_sum(left, right) { return left + right; }\n"
+        )
+        header = self.root / "src/core.h"
+        header.write_text(
+            header.read_text().replace(
+                "int core_sum(int left, int right);\n", ""
+            )
+        )
+        original_header = header.read_bytes()
+        original_makefile = (self.root / "Makefile").read_bytes()
+        failed = run(
+            "verify",
+            "--root",
+            str(self.root),
+            "--check",
+            expected=1,
+        )
+        report = failed.stdout.decode()
+        self.assertIn("REQUIRED-HEADER", report)
+        self.assertIn("FFI-SURFACE", report)
+
+        plan_path = self.plan_path("coordinated-surface-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 2)
+        operations = {
+            item["operation"]["action"]: item["operation"]
+            for item in plan["items"]
+        }
+        declaration = operations["insert_c_declaration"]
+        self.assertEqual(declaration["path"], "src/core.h")
+        self.assertEqual(declaration["symbol"], "core_sum")
+        self.assertEqual(
+            declaration["signature"], "int core_sum(int left,int right)"
+        )
+        self.assertTrue(declaration["anchor_fact_id"].startswith("f:"))
+        self.assertEqual(
+            declaration["source_sha256"],
+            hashlib.sha256(original_header).hexdigest(),
+        )
+        registration = operations["insert_make_variable_token"]
+        self.assertEqual(registration["token"], "_core_sum")
+        self.assertEqual(
+            registration["source_sha256"],
+            hashlib.sha256(original_makefile).hexdigest(),
+        )
+
+        patch_path, patch = self.accepted_patch(
+            plan_path, "coordinated-surface-patch.json"
+        )
+        self.assertEqual(len(patch["transitions"]), 2)
+        self.assertEqual(header.read_bytes(), original_header)
+        run("apply", str(patch_path), "--root", str(self.root))
+        self.assertIn(
+            "int core_sum(int left,int right);", header.read_text()
+        )
+        self.assertIn(
+            "WASM_EXPORTS = _core_peer _core_sum",
+            (self.root / "Makefile").read_text(),
+        )
+        run("verify", "--root", str(self.root), "--check")
+        self.run_surface_gates()
+
+    def test_c_declaration_requires_proven_style_and_rechecks_signature(
+        self,
+    ) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        makefile = self.root / "Makefile"
+        makefile.write_text(
+            makefile.read_text().replace(
+                "WASM_EXPORTS = _core_peer",
+                "WASM_EXPORTS = _core_peer _core_sum",
+            )
+        )
+        header = self.root / "src/core.h"
+        header.write_text(
+            header.read_text()
+            .replace("int core_sum(int left, int right);\n", "")
+            .replace(
+                "int core_peer(int left, int right);",
+                "extern int core_peer(int left, int right);",
+            )
+        )
+        manual_path = self.plan_path("manual-header-plan.json")
+        run(
+            "plan",
+            "REQUIRED-HEADER",
+            "--root",
+            str(self.root),
+            "--output",
+            str(manual_path),
+        )
+        manual = json.loads(manual_path.read_bytes())
+        self.assertEqual(len(manual["items"]), 1)
+        self.assertFalse(manual["items"][0]["executable"])
+        self.assertEqual(manual["items"][0]["operation"]["action"], "manual")
+        self.assertIn(
+            "signature style",
+            " ".join(manual["items"][0]["non_executable_reasons"]),
+        )
+
+        header.write_text(
+            header.read_text().replace(
+                "extern int core_peer", "int core_peer"
+            )
+        )
+        plan_path = self.plan_path("tampered-header-plan.json")
+        run(
+            "plan",
+            "REQUIRED-HEADER",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertTrue(plan["items"][0]["executable"])
+        plan["items"][0]["operation"]["signature"] = "int core_sum(void)"
+        plan_path.write_text(json.dumps(plan, sort_keys=True))
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn(
+            "insert_c_declaration differs from its Map proof",
+            rejected.stderr.decode(),
+        )
+
+        implementation = self.root / "src/core.c"
+        implementation.write_text(
+            implementation.read_text().replace(
+                "int core_sum(int left, int right)",
+                "static int core_sum(int left, int right)",
+            )
+        )
+        static_path = self.plan_path("static-header-plan.json")
+        run(
+            "plan",
+            "REQUIRED-HEADER",
+            "--root",
+            str(self.root),
+            "--output",
+            str(static_path),
+        )
+        static_plan = json.loads(static_path.read_bytes())
+        self.assertFalse(static_plan["items"][0]["executable"])
+        self.assertIn(
+            "safe external declaration",
+            " ".join(static_plan["items"][0]["non_executable_reasons"]),
+        )
 
     def test_multiple_required_registrations_compose_one_file_transition(
         self,

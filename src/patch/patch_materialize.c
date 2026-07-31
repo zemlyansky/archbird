@@ -5,6 +5,7 @@
 #include "json_value.h"
 #include "model.h"
 #include "patch_source.h"
+#include "plan_compile_internal.h"
 #include "plan_internal.h"
 #include "project_internal.h"
 #include "projection_internal.h"
@@ -493,6 +494,78 @@ static ArchbirdStatus add_make_token_insert(AbActContext *context,
   return status;
 }
 
+static ArchbirdStatus add_c_declaration(AbActContext *context,
+                                        const AbValue *operation,
+                                        const AbString *item_id) {
+  const AbValue *path = object_field(operation, "path");
+  const AbValue *symbol = object_field(operation, "symbol");
+  const AbValue *signature = object_field(operation, "signature");
+  const AbValue *anchor_fact_id = object_field(operation, "anchor_fact_id");
+  AbPlanCDeclarationProof proof;
+  AbPlanCDeclarationPlacement placement;
+  ArchbirdSourceView source_view;
+  const char *reason = NULL;
+  AbBuffer proved_signature;
+  AbBuffer replacement;
+  size_t work_index = 0;
+  size_t line_start;
+  ArchbirdStatus status = locked_source_work(context, operation, &work_index);
+  ab_buffer_init(&proved_signature, context->engine);
+  ab_buffer_init(&replacement, context->engine);
+  memset(&proof, 0, sizeof(proof));
+  memset(&placement, 0, sizeof(placement));
+  memset(&source_view, 0, sizeof(source_view));
+  source_view.struct_size = sizeof(source_view);
+  source_view.bytes = context->works[work_index].before;
+  source_view.byte_length = context->works[work_index].before_length;
+  if (status == ARCHBIRD_OK &&
+      !ab_plan_c_declaration_analyze(context->map, &path->as.text,
+                                     &symbol->as.text, &proof, &reason))
+    status =
+        act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                  reason ? reason : "C declaration proof is not available");
+  if (status == ARCHBIRD_OK)
+    status = ab_plan_c_declaration_signature(
+        context->engine, context->project, context->map, &symbol->as.text,
+        &proof, &proved_signature, &reason);
+  if (status == ARCHBIRD_OK && reason)
+    status = act_error(context->engine, ARCHBIRD_POLICY_REJECTED, reason);
+  if (status == ARCHBIRD_OK &&
+      (signature->as.text.length != proved_signature.length ||
+       memcmp(signature->as.text.data, proved_signature.data,
+              proved_signature.length) != 0 ||
+       !ab_value_equal(anchor_fact_id, proof.anchor_fact_id)))
+    status = act_error(context->engine, ARCHBIRD_CONFLICT,
+                       "insert_c_declaration differs from its Map proof");
+  if (status == ARCHBIRD_OK &&
+      !ab_plan_c_declaration_place(&proof, &source_view, &placement, &reason))
+    status = act_error(context->engine, ARCHBIRD_CONFLICT,
+                       reason ? reason : "C declaration placement is invalid");
+  line_start = placement.line_start;
+  if (status == ARCHBIRD_OK) {
+    const uint8_t *source = context->works[work_index].before;
+    if (placement.newline_length == 2)
+      status = ab_buffer_append(&replacement, "\r\n", 2);
+    else
+      status = ab_buffer_append(&replacement, "\n", 1);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(&replacement, source + line_start,
+                                proof.anchor_start - line_start);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(&replacement, proved_signature.data,
+                                proved_signature.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(&replacement, ";", 1);
+  }
+  if (status == ARCHBIRD_OK)
+    status =
+        take_edit_buffer(context, work_index, item_id, (size_t)proof.anchor_end,
+                         (size_t)proof.anchor_end, &replacement);
+  ab_buffer_free(&proved_signature);
+  ab_buffer_free(&replacement);
+  return status;
+}
+
 static const AbValue *projection_attribute(const AbProjectionItem *item,
                                            const char *name) {
   size_t index;
@@ -737,6 +810,8 @@ static ArchbirdStatus collect_operation(AbActContext *context,
     return add_make_token_edit(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "insert_make_variable_token"))
     return add_make_token_insert(context, operation, &item_id->as.text);
+  if (ab_artifact_text_is(action, "insert_c_declaration"))
+    return add_c_declaration(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "rename_symbol"))
     return add_rename_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "create_file")) {

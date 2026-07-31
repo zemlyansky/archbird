@@ -385,6 +385,39 @@
         "position": {"enum": ["before", "after"]}
       }
     },
+    "cDeclarationInsert": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Act rederives one exact single-line external implementation signature and peer declaration style from the source-bound Map before inserting after the named declaration fact.",
+      "required": [
+        "action",
+        "path",
+        "source_sha256",
+        "symbol",
+        "signature",
+        "anchor_fact_id"
+      ],
+      "properties": {
+        "action": {"const": "insert_c_declaration"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "symbol": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 256
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "anchor_fact_id": {
+          "type": "string",
+          "pattern": "^f:.+$",
+          "maxLength": 65536
+        }
+      }
+    },
     "renameSite": {
       "type": "object",
       "additionalProperties": false,
@@ -604,6 +637,7 @@
         {"$ref": "#/$defs/jsonPointerEdit"},
         {"$ref": "#/$defs/makeVariableTokenEdit"},
         {"$ref": "#/$defs/makeVariableTokenInsert"},
+        {"$ref": "#/$defs/cDeclarationInsert"},
         {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/manual"}
       ]

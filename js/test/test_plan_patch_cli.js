@@ -22,6 +22,9 @@ const surfaceRoot = fs.mkdtempSync(
 const registrationRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-patch-registration-"),
 );
+const coordinatedRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-patch-coordinated-"),
+);
 const observedRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-patch-observed-"),
 );
@@ -296,6 +299,38 @@ try {
     repository,
     "test/fixtures/plan_act/surface_closure",
   );
+  const registrationFixture = path.join(
+    repository,
+    "test/fixtures/plan_act/surface_registration",
+  );
+  fs.cpSync(registrationFixture, coordinatedRoot, { recursive: true });
+  const coordinatedHeader = path.join(coordinatedRoot, "src/core.h");
+  fs.writeFileSync(
+    coordinatedHeader,
+    fs.readFileSync(coordinatedHeader, "utf8").replace(
+      "int core_sum(int left, int right);\n",
+      "",
+    ),
+  );
+  const coordinatedPlan = path.join(artifacts, "coordinated-plan.json");
+  const coordinatedPatch = path.join(artifacts, "coordinated-patch.json");
+  run(["plan", "--root", coordinatedRoot, "--output", coordinatedPlan]);
+  const coordinatedDocument = JSON.parse(
+    fs.readFileSync(coordinatedPlan, "utf8"),
+  );
+  assert.deepEqual(
+    coordinatedDocument.items
+      .map((item) => item.operation.action)
+      .sort(),
+    ["insert_c_declaration", "insert_make_variable_token"],
+  );
+  run([
+    "act", coordinatedPlan, "--root", coordinatedRoot, "--format", "json",
+    "--output", coordinatedPatch,
+  ]);
+  run(["apply", coordinatedPatch, "--root", coordinatedRoot]);
+  run(["verify", "--root", coordinatedRoot, "--check"]);
+
   const observedProject = path.join(observedRoot, "packages", "surface");
   fs.cpSync(surfaceFixture, observedProject, { recursive: true });
   for (const relative of [
@@ -373,5 +408,6 @@ try {
   fs.rmSync(artifacts, { force: true, recursive: true });
   fs.rmSync(surfaceRoot, { force: true, recursive: true });
   fs.rmSync(registrationRoot, { force: true, recursive: true });
+  fs.rmSync(coordinatedRoot, { force: true, recursive: true });
   fs.rmSync(observedRoot, { force: true, recursive: true });
 }

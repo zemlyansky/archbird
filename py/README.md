@@ -493,8 +493,9 @@ archbird apply .archbird/patch.json
 
 Exact `replace_range`, `create_file`, `delete_file`, `move_file`,
 `edit_json_pointer`, `edit_make_variable_token`,
-`insert_make_variable_token`, and evidence-bound `rename_symbol` operations are
-executable. An asserted `edit_json_pointer` operation changes one reviewed
+`insert_make_variable_token`, `insert_c_declaration`, and evidence-bound
+`rename_symbol` operations are executable. An asserted `edit_json_pointer`
+operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
 expected old JSON value without reformatting the complete file. An asserted
 `edit_make_variable_token` operation replaces or removes one exact direct
@@ -533,6 +534,15 @@ uses the current project configuration, does not run checkout filters or
 mutate the source worktree, removes the temporary snapshot after mapping, and
 reuses content-addressed provider facts. Revision ranges, saved-current-Map
 mode, and simultaneous `--before-map` are rejected.
+
+A `required_symbols` constraint naming one exact C header can derive
+`insert_c_declaration` from one unique implementation only when an existing
+declaration/implementation peer proves the header's signature style. Act
+rederives the exact single-line implementation source rather than rendering a
+normalized Map signature, and rejects edited signatures, stale anchors, globs,
+ambiguous or internal implementations, and unproven header decoration. The
+declaration and a derived Make registration can be accepted and applied
+together.
 
 If the constraint itself requires an implemented and used surface member that
 is not registered, Plan can derive `insert_make_variable_token` without an

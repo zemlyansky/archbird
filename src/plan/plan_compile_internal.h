@@ -50,6 +50,34 @@ typedef struct AbPlanFindingGroups {
   size_t count;
 } AbPlanFindingGroups;
 
+typedef struct AbPlanCDeclarationProof {
+  const AbValue *target_file;
+  const AbValue *implementation_file;
+  const AbValue *implementation_symbol;
+  const AbValue *anchor_symbol;
+  const AbValue *anchor_fact_id;
+  uint64_t anchor_start;
+  uint64_t anchor_end;
+} AbPlanCDeclarationProof;
+
+typedef struct AbPlanCDeclarationPlacement {
+  size_t line_start;
+  size_t newline_length;
+} AbPlanCDeclarationPlacement;
+
+int ab_plan_c_declaration_analyze(const AbValue *map, const AbString *path,
+                                  const AbString *symbol,
+                                  AbPlanCDeclarationProof *out,
+                                  const char **out_reason);
+ArchbirdStatus ab_plan_c_declaration_signature(
+    ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
+    const AbString *symbol, const AbPlanCDeclarationProof *proof,
+    AbBuffer *signature, const char **out_reason);
+int ab_plan_c_declaration_place(const AbPlanCDeclarationProof *proof,
+                                const ArchbirdSourceView *source,
+                                AbPlanCDeclarationPlacement *out,
+                                const char **out_reason);
+
 ArchbirdStatus
 ab_plan_item_builder_init(AbPlanItemBuilder *builder, ArchbirdEngine *engine,
                           const AbVerificationArtifact *verification);

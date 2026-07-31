@@ -720,8 +720,8 @@ archbird apply .archbird/patch.json
 
 An executable Plan item contains one exact `replace_range`, `create_file`,
 `delete_file`, `move_file`, `edit_json_pointer`,
-`edit_make_variable_token`, `insert_make_variable_token`, or evidence-bound
-`rename_symbol` operation. A
+`edit_make_variable_token`, `insert_make_variable_token`,
+`insert_c_declaration`, or evidence-bound `rename_symbol` operation. A
 one-extra/one-missing symbol constraint may suggest a rename, but that does not
 establish intent: the derived candidate stays non-executable until a developer
 or agent supplies `--rename OLD=NEW`. The reviewed command evaluates one
@@ -775,6 +775,19 @@ provider, Plan emits one item per obligation and Act composes their distinct
 insertions into one source-locked file transition. Composition is limited to
 the same variable, anchor, and side; tokens are ordered canonically.
 Duplicate or otherwise coincident edits remain conflicts.
+
+For a `required_symbols` constraint scoped to one exact C header, Plan can
+derive `insert_c_declaration` when the Map contains one implementation
+signature and an existing declaration/implementation peer proves the header's
+signature convention. The inserted signature is copied from the exact
+single-line implementation source, not reconstructed from the Map's normalized
+display signature. Act rederives that proof from the source-bound Map, requires
+the same declaration fact and source signature, and preserves the peer's
+indentation and line endings. Globs, multiple implementations, missing peers,
+multiline or internal definitions, header-only decoration differences, source
+comments at the insertion anchor, and edited signatures remain manual or are
+rejected. This can be combined with a missing Make registration in one Plan
+and accepted as one two-file architecture change.
 
 An unresolved, unused registration can likewise become a derived removal when
 the Map proves zero implementation candidates, zero uses, one exact Make
