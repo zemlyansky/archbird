@@ -31,6 +31,18 @@ const observedRoot = fs.mkdtempSync(
 const redirectRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-redirect-"),
 );
+const ecmascriptRedirectRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-ecmascript-redirect-"),
+);
+const ecmascriptUnobservedRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-ecmascript-unobserved-"),
+);
+const ecmascriptMultiRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-ecmascript-multi-"),
+);
+const ecmascriptReferenceRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-ecmascript-reference-"),
+);
 const cli = path.join(repository, "js/src/cli.js");
 
 function run(arguments_, expected = 0) {
@@ -65,6 +77,107 @@ function git(arguments_, cwd) {
       `stderr:\n${Buffer.from(completed.stderr || []).toString("utf8")}`,
   );
   return Buffer.from(completed.stdout || []);
+}
+
+function configureEcmascriptRedirect(
+  projectRoot,
+  {
+    observed = true,
+    multiple = false,
+    referenceOnly = false,
+    typescript = false,
+  } = {},
+) {
+  for (const directory of ["app", "service", "storage"]) {
+    fs.mkdirSync(path.join(projectRoot, directory), { recursive: true });
+  }
+  const imported = multiple ? "rawValue, other" : "rawValue";
+  fs.writeFileSync(
+    path.join(projectRoot, "app/main.js"),
+    `import { ${imported} } from "../storage/raw.js";\n\n` +
+      "export function render() {\n  return rawValue();\n}\n",
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "app/alias.js"),
+    "import { rawValue as read } from \"../storage/raw.js\";\n\n" +
+      "export function aliasRender() {\n  return read();\n}\n",
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "app/self-alias.js"),
+    "import { rawValue as rawValue } from \"../storage/raw.js\";\n\n" +
+      "export function selfAliasRender() {\n  return rawValue();\n}\n",
+  );
+  if (observed) {
+    fs.writeFileSync(
+      path.join(projectRoot, "app/peer.js"),
+      "import { serviceValue } from \"../service/api.js\";\n\n" +
+      "export function peer() {\n  return serviceValue();\n}\n",
+    );
+  }
+  if (referenceOnly) {
+    fs.writeFileSync(
+      path.join(projectRoot, "app/reference.js"),
+      "import { rawValue as selected } from \"../storage/raw.js\";\n\n" +
+        "export { selected };\n",
+    );
+  }
+  if (typescript) {
+    fs.writeFileSync(
+      path.join(projectRoot, "app/typed.ts"),
+      "import { rawValue } from \"../storage/raw.js\";\n\n" +
+      "export function typed(): number {\n  return rawValue();\n}\n",
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "app/typed.tsx"),
+      "import { rawValue } from \"../storage/raw.js\";\n\n" +
+        "export function typedTsx(): number {\n  return rawValue();\n}\n",
+    );
+  }
+  fs.writeFileSync(
+    path.join(projectRoot, "service/api.js"),
+    "import { rawValue } from \"../storage/raw.js\";\n\n" +
+      "export function serviceValue() {\n  return rawValue();\n}\n",
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "storage/raw.js"),
+    "export function rawValue() {\n  return 7;\n}\n\n" +
+      "export function other() {\n  return 8;\n}\n",
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "package.json"),
+    JSON.stringify({ private: true, type: "module" }),
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "archbird.json"),
+    JSON.stringify({
+      project: "ecmascript-dependency-redirect",
+      layers: [{
+        name: "javascript",
+        language: "javascript",
+        globs: ["**/*.js"],
+        import_roots: ["."],
+      }, ...(typescript ? [{
+        name: "typescript",
+        language: "typescript",
+        globs: ["**/*.ts", "**/*.tsx"],
+        import_roots: ["."],
+      }] : [])],
+      components: [
+        { name: "app", paths: ["app/**"] },
+        { name: "service", paths: ["service/**"] },
+        { name: "storage", paths: ["storage/**"] },
+      ],
+      constraints: {
+        "APP-STORAGE-BOUNDARY": {
+          kind: "forbidden_component_edges",
+          edges: [{ source: "app", kind: "import", target: "storage" }],
+          kinds: ["import"],
+          owner: "architecture",
+          rationale: "Application code reaches storage through service.",
+        },
+      },
+    }),
+  );
 }
 
 try {
@@ -463,6 +576,141 @@ try {
   run(["apply", redirectAct, "--root", redirectRoot]);
   run(["verify", "--root", redirectRoot, "--check"]);
 
+  configureEcmascriptRedirect(ecmascriptRedirectRoot, { typescript: true });
+  const ecmascriptPlan = path.join(
+    artifacts,
+    "ecmascript-redirect-plan.json",
+  );
+  const ecmascriptAct = path.join(artifacts, "ecmascript-redirect-act.json");
+  run([
+    "plan", "APP-STORAGE-BOUNDARY", "--root", ecmascriptRedirectRoot,
+    "--redirect", "rawValue=serviceValue", "--output", ecmascriptPlan,
+  ]);
+  const ecmascriptDocument = JSON.parse(
+    fs.readFileSync(ecmascriptPlan, "utf8"),
+  );
+  assert.equal(
+    ecmascriptDocument.items[0].operation.action,
+    "redirect_dependency",
+  );
+  assert.deepEqual(
+    ecmascriptDocument.items[0].operation.source_paths,
+    [
+      "app/alias.js",
+      "app/main.js",
+      "app/self-alias.js",
+      "app/typed.ts",
+      "app/typed.tsx",
+    ],
+  );
+  assert.equal(
+    Object.hasOwn(ecmascriptDocument.items[0].operation, "replacement"),
+    false,
+  );
+  const ecmascriptPreview = run([
+    "act", ecmascriptPlan, "--root", ecmascriptRedirectRoot,
+    "--format", "patch",
+  ]).stdout.toString("utf8");
+  assert.match(
+    ecmascriptPreview,
+    /\+import \{ serviceValue as read \} from "\.\.\/service\/api\.js";/,
+  );
+  assert.match(
+    ecmascriptPreview,
+    /\+import \{ serviceValue as rawValue \} from "\.\.\/service\/api\.js";/,
+  );
+  assert.match(
+    ecmascriptPreview,
+    /\+import \{ serviceValue \} from "\.\.\/service\/api\.js";/,
+  );
+  assert.match(ecmascriptPreview, /\+\s+return serviceValue\(\);/);
+  assert.doesNotMatch(ecmascriptPreview, /-\s+return read\(\);/);
+  run([
+    "act", ecmascriptPlan, "--root", ecmascriptRedirectRoot,
+    "--format", "json", "--output", ecmascriptAct,
+  ]);
+  const acceptedEcmascript = JSON.parse(
+    fs.readFileSync(ecmascriptAct, "utf8"),
+  );
+  assert.equal(acceptedEcmascript.artifact, "act");
+  assert.deepEqual(
+    acceptedEcmascript.transitions.map((row) => row.path),
+    [
+      "app/alias.js",
+      "app/main.js",
+      "app/self-alias.js",
+      "app/typed.ts",
+      "app/typed.tsx",
+    ],
+  );
+  run(["apply", ecmascriptAct, "--root", ecmascriptRedirectRoot]);
+  run(["verify", "--root", ecmascriptRedirectRoot, "--check"]);
+  const behavior = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      "import { render } from './app/main.js'; " +
+        "import { aliasRender } from './app/alias.js'; " +
+        "import { selfAliasRender } from './app/self-alias.js'; " +
+        "if (render() !== 7 || aliasRender() !== 7 || " +
+        "selfAliasRender() !== 7) process.exit(1);",
+    ],
+    { cwd: ecmascriptRedirectRoot, encoding: null },
+  );
+  assert.equal(
+    behavior.status,
+    0,
+    Buffer.from(behavior.stderr || []).toString("utf8"),
+  );
+
+  configureEcmascriptRedirect(ecmascriptUnobservedRoot, { observed: false });
+  const unobservedPlan = path.join(
+    artifacts,
+    "ecmascript-unobserved-plan.json",
+  );
+  run([
+    "plan", "APP-STORAGE-BOUNDARY", "--root", ecmascriptUnobservedRoot,
+    "--redirect", "rawValue=serviceValue", "--output", unobservedPlan,
+  ]);
+  assert.match(
+    run([
+      "act", unobservedPlan, "--root", ecmascriptUnobservedRoot,
+      "--format", "patch",
+    ], 2).stderr.toString("utf8"),
+    /no unique observed ECMAScript module in the source directory/,
+  );
+
+  configureEcmascriptRedirect(ecmascriptMultiRoot, { multiple: true });
+  const multiPlan = path.join(artifacts, "ecmascript-multi-plan.json");
+  run([
+    "plan", "APP-STORAGE-BOUNDARY", "--root", ecmascriptMultiRoot,
+    "--redirect", "rawValue=serviceValue", "--output", multiPlan,
+  ]);
+  assert.match(
+    run([
+      "act", multiPlan, "--root", ecmascriptMultiRoot, "--format", "patch",
+    ], 2).stderr.toString("utf8"),
+    /requires one exact named import/,
+  );
+
+  configureEcmascriptRedirect(
+    ecmascriptReferenceRoot,
+    { referenceOnly: true },
+  );
+  const referencePlan = path.join(artifacts, "ecmascript-reference-plan.json");
+  run([
+    "plan", "APP-STORAGE-BOUNDARY", "--root", ecmascriptReferenceRoot,
+    "--redirect", "rawValue=serviceValue", "--output", referencePlan,
+  ]);
+  assert.match(
+    run([
+      "act", referencePlan, "--root", ecmascriptReferenceRoot,
+      "--format", "patch",
+    ], 2).stderr.toString("utf8"),
+    /no matching exact symbol call|non-call symbol reference|unhandled semantic reference/,
+  );
+
   process.stdout.write("node Plan/Act CLI lifecycle passed\n");
 } finally {
   fs.rmSync(root, { force: true, recursive: true });
@@ -472,4 +720,8 @@ try {
   fs.rmSync(coordinatedRoot, { force: true, recursive: true });
   fs.rmSync(observedRoot, { force: true, recursive: true });
   fs.rmSync(redirectRoot, { force: true, recursive: true });
+  fs.rmSync(ecmascriptRedirectRoot, { force: true, recursive: true });
+  fs.rmSync(ecmascriptUnobservedRoot, { force: true, recursive: true });
+  fs.rmSync(ecmascriptMultiRoot, { force: true, recursive: true });
+  fs.rmSync(ecmascriptReferenceRoot, { force: true, recursive: true });
 }

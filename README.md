@@ -731,9 +731,16 @@ evidence by mapped source language. The native C executor resolves exact
 declarations, definitions, include spelling, and call sites. The native Python
 executor resolves one exact imported binding and its CPython-AST calls, uses an
 already observed import-module spelling for the replacement, and preserves an
-explicit local alias. Incomplete projections, ambiguous definitions, missing
-observed include/import routes, multi-name Python imports, and non-unique call
-sites block Act instead of producing partial edits.
+explicit local alias. The native ECMAScript executor supports JavaScript,
+TypeScript, and TSX named imports when Tree-sitter proves the binding and the
+TypeScript compiler proves every redirected call. It uses a replacement module
+spelling already observed from the same source directory and preserves explicit
+aliases, including aliases whose local name equals the old imported name. The
+Node frontend supplies the required TypeScript evidence by default; a
+syntax-only Map is rejected. Incomplete projections, ambiguous definitions,
+missing observed include/import routes, multi-name imports, non-call
+references, and non-unique call sites block Act instead of producing partial
+edits.
 
 Older operators currently include `replace_range`, `create_file`,
 `delete_file`, `move_file`, `edit_json_pointer`,

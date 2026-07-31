@@ -479,9 +479,14 @@ once and dispatches its typed evidence by mapped source language. The native C
 executor resolves exact declaration, definition, include, and call evidence.
 The native Python executor requires one exact imported binding, exact
 CPython-AST call evidence, and an already observed import-module spelling for
-the replacement; it preserves explicit local aliases. Incomplete evidence,
-ambiguous definitions, missing observed include/import routes, multi-name
-Python imports, and non-unique calls block execution.
+the replacement; it preserves explicit local aliases. The native ECMAScript
+executor supports JavaScript, TypeScript, and TSX named imports when
+Tree-sitter proves each binding and this frontend's TypeScript provider proves
+every redirected call. It uses a replacement module spelling already observed
+from the same source directory and preserves explicit aliases, including
+self-aliases. Incomplete evidence, ambiguous definitions, missing observed
+include/import routes, multi-name imports, non-call references, and non-unique
+calls block execution.
 
 Older exact `replace_range`, `create_file`, `delete_file`, `move_file`,
 `edit_json_pointer`, `edit_make_variable_token`,

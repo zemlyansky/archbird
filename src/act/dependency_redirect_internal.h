@@ -27,5 +27,9 @@ ArchbirdStatus
 ab_act_python_dependency_redirect(AbActContext *context,
                                   const AbActDependencyRedirect *redirect,
                                   const AbString *item_id);
+ArchbirdStatus
+ab_act_ecmascript_dependency_redirect(AbActContext *context,
+                                      const AbActDependencyRedirect *redirect,
+                                      const AbString *item_id);
 
 #endif

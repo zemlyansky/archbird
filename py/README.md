@@ -499,9 +499,13 @@ once and dispatches its typed evidence by mapped source language. The native C
 executor resolves exact declaration, definition, include, and call evidence.
 The native Python executor requires one exact imported binding, exact
 CPython-AST call evidence, and an already observed import-module spelling for
-the replacement; it preserves explicit local aliases. Incomplete evidence,
-ambiguous definitions, missing observed include/import routes, multi-name
-Python imports, and non-unique calls block execution.
+the replacement; it preserves explicit local aliases. Native Act also contains
+an ECMAScript grounding executor, but it requires exact TypeScript-compiler
+reference evidence. This frontend's default JavaScript/TypeScript providers are
+syntax-only, so it rejects such a redirect unless the evaluated Map carries the
+required semantic evidence. Incomplete evidence, ambiguous definitions,
+missing observed include/import routes, multi-name imports, and non-unique
+calls block execution.
 
 Older exact `replace_range`, `create_file`, `delete_file`, `move_file`,
 `edit_json_pointer`, `edit_make_variable_token`,

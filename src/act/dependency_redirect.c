@@ -11,6 +11,13 @@ typedef struct AbActRedirectPath {
   const AbString *value;
 } AbActRedirectPath;
 
+enum {
+  AB_ACT_REDIRECT_LANGUAGE_NONE = 0u,
+  AB_ACT_REDIRECT_LANGUAGE_C = 1u,
+  AB_ACT_REDIRECT_LANGUAGE_PYTHON = 2u,
+  AB_ACT_REDIRECT_LANGUAGE_ECMASCRIPT = 3u,
+};
+
 static const AbValue *field(const AbValue *object, const char *name) {
   return object && object->kind == AB_VALUE_OBJECT
              ? ab_value_member(object, name)
@@ -39,6 +46,17 @@ static int string_is(const AbString *value, const char *literal) {
   size_t length = strlen(literal);
   return value && value->length == length &&
          memcmp(value->data, literal, length) == 0;
+}
+
+static unsigned redirect_language(const AbValue *value) {
+  if (text_is(value, "c"))
+    return AB_ACT_REDIRECT_LANGUAGE_C;
+  if (text_is(value, "python"))
+    return AB_ACT_REDIRECT_LANGUAGE_PYTHON;
+  if (text_is(value, "javascript") || text_is(value, "typescript") ||
+      text_is(value, "tsx"))
+    return AB_ACT_REDIRECT_LANGUAGE_ECMASCRIPT;
+  return AB_ACT_REDIRECT_LANGUAGE_NONE;
 }
 
 static ArchbirdStatus reject(AbActContext *context, ArchbirdStatus status,
@@ -98,13 +116,13 @@ static ArchbirdStatus validate_source_scope(AbActContext *context,
                                             const AbValue *map,
                                             const AbValue *relation_sites,
                                             const AbValue *expected_paths,
-                                            const AbValue **out_language) {
+                                            unsigned *out_language) {
   ArchbirdEngine *engine = ab_act_executor_engine(context);
   AbActRedirectPath *paths = NULL;
   size_t path_count = 0;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
-  *out_language = NULL;
+  *out_language = AB_ACT_REDIRECT_LANGUAGE_NONE;
   if (!relation_sites || relation_sites->kind != AB_VALUE_ARRAY ||
       relation_sites->as.array.count > AB_ACT_MAX_TRANSITIONS)
     return reject(context, ARCHBIRD_LIMIT_EXCEEDED,
@@ -122,6 +140,7 @@ static ArchbirdStatus validate_source_scope(AbActContext *context,
     const AbValue *path = field(&relation_sites->as.array.items[index], "path");
     const AbValue *file;
     const AbValue *language;
+    unsigned family;
     if (!ab_artifact_repository_path(path)) {
       status = reject(context, ARCHBIRD_POLICY_REJECTED,
                       "the relation contains an invalid source path");
@@ -129,17 +148,18 @@ static ArchbirdStatus validate_source_scope(AbActContext *context,
     }
     file = map_file(map, &path->as.text);
     language = file ? field(file, "language") : NULL;
-    if (!file || !language || language->kind != AB_VALUE_STRING) {
+    family = redirect_language(language);
+    if (!file || !family) {
       status = reject(context, ARCHBIRD_CONFLICT,
-                      "a relation source is not one current mapped file");
+                      "a relation source has no supported mapped language");
       break;
     }
-    if (*out_language && !ab_value_equal(*out_language, language)) {
+    if (*out_language && *out_language != family) {
       status = reject(context, ARCHBIRD_POLICY_REJECTED,
-                      "one redirect cannot mix source languages");
+                      "one redirect cannot mix executor language families");
       break;
     }
-    *out_language = language;
+    *out_language = family;
     paths[path_count++].value = &path->as.text;
   }
   if (status == ARCHBIRD_OK && path_count > 1)
@@ -216,7 +236,7 @@ ArchbirdStatus ab_act_dependency_redirect(AbActContext *context,
   const AbValue *expected_sha = field(operation, "projection_content_sha256");
   const AbValue *relation_label = field(operation, "relation");
   const AbValue *source_paths = field(operation, "source_paths");
-  const AbValue *language = NULL;
+  unsigned language = AB_ACT_REDIRECT_LANGUAGE_NONE;
   AbProjectionPlan plan = {0};
   AbProjectionResult result = {0};
   AbActDependencyRedirect redirect = {0};
@@ -267,10 +287,13 @@ ArchbirdStatus ab_act_dependency_redirect(AbActContext *context,
   if (status == ARCHBIRD_OK)
     status = validate_source_scope(context, map, redirect.relation_sites,
                                    source_paths, &language);
-  if (status == ARCHBIRD_OK && text_is(language, "c"))
+  if (status == ARCHBIRD_OK && language == AB_ACT_REDIRECT_LANGUAGE_C)
     status = ab_act_c_dependency_redirect(context, &redirect, item_id);
-  else if (status == ARCHBIRD_OK && text_is(language, "python"))
+  else if (status == ARCHBIRD_OK && language == AB_ACT_REDIRECT_LANGUAGE_PYTHON)
     status = ab_act_python_dependency_redirect(context, &redirect, item_id);
+  else if (status == ARCHBIRD_OK &&
+           language == AB_ACT_REDIRECT_LANGUAGE_ECMASCRIPT)
+    status = ab_act_ecmascript_dependency_redirect(context, &redirect, item_id);
   else if (status == ARCHBIRD_OK)
     status = reject(context, ARCHBIRD_POLICY_REJECTED,
                     "no language executor supports the mapped source language");
