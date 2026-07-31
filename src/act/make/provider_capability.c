@@ -8,6 +8,7 @@
 #include <string.h>
 
 typedef struct AbActMakeProvider {
+  const AbString *definition_sha256;
   const AbString *surface;
   const AbString *path;
   const AbString *variable;
@@ -74,16 +75,20 @@ static const AbValue *find_named_row(const AbValue *rows,
   return NULL;
 }
 
-static int parse_mapped_provider(const AbValue *value, const AbString **path,
-                                 AbString *variable) {
+static int parse_mapped_provider(const AbValue *value,
+                                 const AbString **definition_sha256,
+                                 const AbString **path, AbString *variable) {
   static const char prefix[] = "make-variable:";
+  const AbValue *mapped_definition = field(value, "definition_sha256");
   const AbValue *mapped_path = field(value, "path");
   const AbValue *source = field(value, "source");
-  if (!mapped_path || mapped_path->kind != AB_VALUE_STRING || !source ||
+  if (!ab_artifact_sha256(mapped_definition) || !mapped_path ||
+      mapped_path->kind != AB_VALUE_STRING || !source ||
       source->kind != AB_VALUE_STRING ||
       source->as.text.length <= sizeof(prefix) - 1 ||
       memcmp(source->as.text.data, prefix, sizeof(prefix) - 1) != 0)
     return 0;
+  *definition_sha256 = &mapped_definition->as.text;
   *path = &mapped_path->as.text;
   variable->data = source->as.text.data + sizeof(prefix) - 1;
   variable->length = source->as.text.length - (sizeof(prefix) - 1);
@@ -93,8 +98,10 @@ static int parse_mapped_provider(const AbValue *value, const AbString **path,
 static int mapped_provider_equal(const AbValue *value,
                                  const AbActMakeProvider *provider) {
   const AbString *path = NULL;
+  const AbString *definition_sha256 = NULL;
   AbString variable = {0};
-  return parse_mapped_provider(value, &path, &variable) &&
+  return parse_mapped_provider(value, &definition_sha256, &path, &variable) &&
+         ab_string_equal(definition_sha256, provider->definition_sha256) &&
          ab_string_equal(path, provider->path) &&
          ab_string_equal(&variable, provider->variable);
 }
@@ -162,7 +169,8 @@ static int provider_has_resolved_declaration(const AbValue *surface,
 
 static const AbConfigProvider *
 find_configured_provider(const AbMapConfig *config, const AbString *surface,
-                         const AbString *path, const AbString *variable) {
+                         const AbString *path, const AbString *variable,
+                         const AbString *definition_sha256) {
   const AbConfigProvider *matched = NULL;
   size_t bridge_index;
   if (!config)
@@ -175,9 +183,14 @@ find_configured_provider(const AbMapConfig *config, const AbString *surface,
     for (provider_index = 0; provider_index < bridge->provider_count;
          provider_index++) {
       const AbConfigProvider *provider = &bridge->providers[provider_index];
+      char candidate_sha256[65];
       if (!string_is(&provider->kind, "make_variable") ||
           !ab_string_equal(&provider->path, path) ||
-          !ab_string_equal(&provider->variable, variable))
+          !ab_string_equal(&provider->variable, variable) ||
+          ab_config_provider_definition_sha256(provider, candidate_sha256) !=
+              ARCHBIRD_OK ||
+          definition_sha256->length != 64 ||
+          memcmp(candidate_sha256, definition_sha256->data, 64) != 0)
         continue;
       if (matched)
         return NULL;
@@ -191,6 +204,7 @@ static ArchbirdStatus load_provider(AbActContext *context,
                                     const AbValue *operation,
                                     AbActMakeProvider *out) {
   const AbValue *provider = field(operation, "provider");
+  const AbValue *definition_sha256 = field(provider, "definition_sha256");
   const AbValue *kind = field(provider, "kind");
   const AbValue *path = field(provider, "path");
   const AbValue *variable = field(provider, "variable");
@@ -199,17 +213,20 @@ static ArchbirdStatus load_provider(AbActContext *context,
   size_t index;
   size_t matched = 0;
   memset(out, 0, sizeof(*out));
-  if (!text_is(kind, "make_variable") || !ab_artifact_repository_path(path) ||
-      !variable || variable->kind != AB_VALUE_STRING || !surface ||
+  if (!text_is(kind, "make_variable") ||
+      !ab_artifact_sha256(definition_sha256) ||
+      !ab_artifact_repository_path(path) || !variable ||
+      variable->kind != AB_VALUE_STRING || !surface ||
       surface->kind != AB_VALUE_STRING)
     return reject(context, ARCHBIRD_INVALID_SCHEMA,
                   "operation has no valid configured provider identity");
+  out->definition_sha256 = &definition_sha256->as.text;
   out->surface = &surface->as.text;
   out->path = &path->as.text;
   out->variable = &variable->as.text;
   out->configuration = find_configured_provider(
       ab_project_config(ab_act_executor_project(context)), out->surface,
-      out->path, out->variable);
+      out->path, out->variable, out->definition_sha256);
   out->mapped_surface = find_named_row(
       field(ab_act_executor_map(context), "surfaces"), out->surface);
   if (!out->configuration || !out->mapped_surface)

@@ -1,6 +1,8 @@
 #include "c/declaration.h"
 
 #include "artifact_validation.h"
+#include "config.h"
+#include "project_internal.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -17,6 +19,14 @@ typedef struct AbActCDeclarationPlacement {
   size_t newline_length;
 } AbActCDeclarationPlacement;
 
+typedef struct AbActCProvider {
+  const AbString *definition_sha256;
+  const AbString *surface;
+  const AbString *path;
+  const AbConfigProvider *configuration;
+  const AbValue *mapped_surface;
+} AbActCProvider;
+
 static const AbValue *field(const AbValue *object, const char *name) {
   return object && object->kind == AB_VALUE_OBJECT
              ? ab_value_member(object, name)
@@ -28,6 +38,140 @@ static ArchbirdStatus reject(AbActContext *context, ArchbirdStatus status,
   return archbird_error_set(ab_act_executor_engine(context), status,
                             ARCHBIRD_NO_OFFSET,
                             "act C declaration executor: %s", message);
+}
+
+static int string_is(const AbString *value, const char *literal) {
+  size_t length = strlen(literal);
+  return value && value->length == length &&
+         memcmp(value->data, literal, length) == 0;
+}
+
+static const AbValue *find_named_row(const AbValue *rows,
+                                     const AbString *name) {
+  size_t index;
+  if (!rows || rows->kind != AB_VALUE_ARRAY)
+    return NULL;
+  for (index = 0; index < rows->as.array.count; index++) {
+    const AbValue *row = &rows->as.array.items[index];
+    const AbValue *candidate = field(row, "name");
+    if (candidate && candidate->kind == AB_VALUE_STRING &&
+        ab_string_equal(&candidate->as.text, name))
+      return row;
+  }
+  return NULL;
+}
+
+static const AbConfigProvider *
+find_configured_file_provider(const AbMapConfig *config,
+                              const AbString *surface, const AbString *path,
+                              const AbString *definition_sha256) {
+  const AbConfigProvider *matched = NULL;
+  size_t bridge_index;
+  if (!config)
+    return NULL;
+  for (bridge_index = 0; bridge_index < config->bridge_count; bridge_index++) {
+    const AbConfigBridge *bridge = &config->bridges[bridge_index];
+    size_t provider_index;
+    if (!ab_string_equal(&bridge->name, surface))
+      continue;
+    for (provider_index = 0; provider_index < bridge->provider_count;
+         provider_index++) {
+      const AbConfigProvider *provider = &bridge->providers[provider_index];
+      char candidate_sha256[65];
+      if (!string_is(&provider->kind, "file_pattern") ||
+          !ab_string_equal(&provider->path, path) ||
+          ab_config_provider_definition_sha256(provider, candidate_sha256) !=
+              ARCHBIRD_OK ||
+          definition_sha256->length != 64 ||
+          memcmp(candidate_sha256, definition_sha256->data, 64) != 0)
+        continue;
+      if (matched)
+        return NULL;
+      matched = provider;
+    }
+  }
+  return matched;
+}
+
+static int mapped_file_provider_equal(const AbValue *value,
+                                      const AbActCProvider *provider) {
+  const AbValue *definition_sha256 = field(value, "definition_sha256");
+  const AbValue *path = field(value, "path");
+  return ab_artifact_sha256(definition_sha256) && path &&
+         path->kind == AB_VALUE_STRING &&
+         ab_artifact_text_is(field(value, "source"), "file-pattern") &&
+         ab_string_equal(&definition_sha256->as.text,
+                         provider->definition_sha256) &&
+         ab_string_equal(&path->as.text, provider->path);
+}
+
+static int row_has_file_provider(const AbValue *row,
+                                 const AbActCProvider *provider) {
+  const AbValue *declarations = field(row, "declarations");
+  size_t index;
+  if (!declarations || declarations->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < declarations->as.array.count; index++)
+    if (mapped_file_provider_equal(&declarations->as.array.items[index],
+                                   provider))
+      return 1;
+  return 0;
+}
+
+static int surface_target_is_groundable(const AbValue *row) {
+  const AbValue *candidates = field(row, "candidates");
+  const AbValue *uses = field(row, "uses");
+  int declared = ab_artifact_text_is(field(row, "declaration"), "declared");
+  return row && ab_artifact_text_is(field(row, "resolution"), "unique") &&
+         candidates && candidates->kind == AB_VALUE_ARRAY &&
+         candidates->as.array.count == 1 &&
+         (declared ||
+          (ab_artifact_text_is(field(row, "declaration"), "undeclared") &&
+           uses && uses->kind == AB_VALUE_ARRAY && uses->as.array.count));
+}
+
+static ArchbirdStatus load_file_provider(AbActContext *context,
+                                         const AbValue *operation,
+                                         AbActCProvider *out) {
+  const AbValue *provider = field(operation, "provider");
+  const AbValue *definition_sha256 = field(provider, "definition_sha256");
+  const AbValue *kind = field(provider, "kind");
+  const AbValue *path = field(provider, "path");
+  const AbValue *surface = field(operation, "surface");
+  const AbValue *mapped_providers;
+  size_t index;
+  size_t matched = 0;
+  memset(out, 0, sizeof(*out));
+  if (!ab_artifact_text_is(kind, "file_pattern") ||
+      !ab_artifact_sha256(definition_sha256) ||
+      !ab_artifact_repository_path(path) || !surface ||
+      surface->kind != AB_VALUE_STRING)
+    return reject(context, ARCHBIRD_INVALID_SCHEMA,
+                  "the operation has no valid file provider identity");
+  out->definition_sha256 = &definition_sha256->as.text;
+  out->surface = &surface->as.text;
+  out->path = &path->as.text;
+  out->configuration = find_configured_file_provider(
+      ab_project_config(ab_act_executor_project(context)), out->surface,
+      out->path, out->definition_sha256);
+  out->mapped_surface = find_named_row(
+      field(ab_act_executor_map(context), "surfaces"), out->surface);
+  if (!out->configuration || !out->mapped_surface)
+    return reject(context, ARCHBIRD_CONFLICT,
+                  "the configured file provider differs from the current Map");
+  mapped_providers = field(out->mapped_surface, "providers");
+  for (index = 0;
+       mapped_providers && mapped_providers->kind == AB_VALUE_ARRAY &&
+       index < mapped_providers->as.array.count;
+       index++)
+    if (mapped_file_provider_equal(&mapped_providers->as.array.items[index],
+                                   out))
+      matched++;
+  if (matched != 1)
+    return reject(
+        context, ARCHBIRD_CONFLICT,
+        "the file provider identity is not unique in the current Map");
+  return ARCHBIRD_OK;
 }
 
 static int signature_token_count(const AbString *signature,
@@ -365,13 +509,11 @@ static int source_paths_match(const AbValue *paths, const AbString *target,
   return target_seen == 1 && implementation_seen == 1;
 }
 
-ArchbirdStatus ab_act_c_declare_symbol(AbActContext *context,
-                                       const AbValue *operation,
-                                       const AbString *item_id) {
+static ArchbirdStatus
+ground_declaration(AbActContext *context, const AbString *path,
+                   const AbString *symbol, const AbValue *source_paths,
+                   const AbString *item_id, const char *executor_capability) {
   ArchbirdEngine *engine = ab_act_executor_engine(context);
-  const AbValue *path = field(operation, "path");
-  const AbValue *symbol = field(operation, "symbol");
-  const AbValue *source_paths = field(operation, "source_paths");
   const AbValue *implementation_path;
   AbActCDeclarationProof proof;
   AbActCDeclarationPlacement placement;
@@ -383,26 +525,24 @@ ArchbirdStatus ab_act_c_declare_symbol(AbActContext *context,
   memset(&proof, 0, sizeof(proof));
   ab_buffer_init(&signature, engine);
   ab_buffer_init(&replacement, engine);
-  status = ab_act_executor_begin(context, item_id,
-                                 "archbird.native.c.declare-symbol@1");
+  status = ab_act_executor_begin(context, item_id, executor_capability);
   if (status == ARCHBIRD_OK)
-    status = ab_act_executor_source(context, &path->as.text, &source);
+    status = ab_act_executor_source(context, path, &source);
   if (status == ARCHBIRD_OK &&
-      !analyze_declaration(ab_act_executor_map(context), &path->as.text,
-                           &symbol->as.text, &proof, &reason))
+      !analyze_declaration(ab_act_executor_map(context), path, symbol, &proof,
+                           &reason))
     status = reject(context, ARCHBIRD_POLICY_REJECTED,
                     reason ? reason
                            : "the mapped declaration objective is unsupported");
   implementation_path =
       status == ARCHBIRD_OK ? field(proof.implementation_file, "path") : NULL;
-  if (status == ARCHBIRD_OK &&
+  if (status == ARCHBIRD_OK && source_paths &&
       (!implementation_path || implementation_path->kind != AB_VALUE_STRING ||
-       !source_paths_match(source_paths, &path->as.text,
-                           &implementation_path->as.text)))
+       !source_paths_match(source_paths, path, &implementation_path->as.text)))
     status = reject(context, ARCHBIRD_CONFLICT,
                     "the declared source closure differs from the Map proof");
   if (status == ARCHBIRD_OK)
-    status = extract_signature(context, &symbol->as.text, &proof, &signature);
+    status = extract_signature(context, symbol, &proof, &signature);
   if (status == ARCHBIRD_OK)
     status = place_declaration(context, &proof, &source, &placement);
   if (status == ARCHBIRD_OK && placement.newline_length == 2)
@@ -418,10 +558,46 @@ ArchbirdStatus ab_act_c_declare_symbol(AbActContext *context,
     status = ab_buffer_append(&replacement, ";", 1);
   if (status == ARCHBIRD_OK)
     status = ab_act_executor_replace_exact(
-        context, item_id, &path->as.text, (size_t)proof.anchor_end,
+        context, item_id, path, (size_t)proof.anchor_end,
         (size_t)proof.anchor_end, source.bytes + proof.anchor_end, 0,
         replacement.data, replacement.length);
   ab_buffer_free(&signature);
   ab_buffer_free(&replacement);
   return status;
+}
+
+ArchbirdStatus ab_act_c_declare_symbol(AbActContext *context,
+                                       const AbValue *operation,
+                                       const AbString *item_id) {
+  const AbValue *path = field(operation, "path");
+  const AbValue *symbol = field(operation, "symbol");
+  return ground_declaration(context, &path->as.text, &symbol->as.text,
+                            field(operation, "source_paths"), item_id,
+                            "archbird.native.c.declare-symbol@1");
+}
+
+ArchbirdStatus ab_act_c_provider_capability(AbActContext *context,
+                                            const AbValue *operation,
+                                            const AbString *item_id) {
+  const AbValue *action = field(operation, "action");
+  const AbValue *capability = field(operation, "capability");
+  AbActCProvider provider;
+  const AbValue *row;
+  ArchbirdStatus status;
+  if (!ab_artifact_text_is(action, "add_provider_capability"))
+    return reject(context, ARCHBIRD_INVALID_SCHEMA,
+                  "file providers support only capability addition");
+  status = load_file_provider(context, operation, &provider);
+  if (status != ARCHBIRD_OK)
+    return status;
+  row = find_named_row(field(provider.mapped_surface, "names"),
+                       &capability->as.text);
+  if (!surface_target_is_groundable(row) ||
+      row_has_file_provider(row, &provider))
+    return reject(context, ARCHBIRD_CONFLICT,
+                  "the current Map does not require this file provider "
+                  "capability");
+  return ground_declaration(context, provider.path, &capability->as.text,
+                            field(operation, "source_paths"), item_id,
+                            "archbird.native.c.provider-capability@1");
 }

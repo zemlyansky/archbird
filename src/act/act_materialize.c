@@ -669,9 +669,18 @@ static ArchbirdStatus collect_operation(AbActContext *context,
   }
   if (ab_artifact_text_is(action, "add_provider_capability") ||
       ab_artifact_text_is(action, "remove_provider_capability") ||
-      ab_artifact_text_is(action, "rename_provider_capability"))
-    return ab_act_make_provider_capability(context, operation,
-                                           &item_id->as.text);
+      ab_artifact_text_is(action, "rename_provider_capability")) {
+    const AbValue *provider = object_field(operation, "provider");
+    const AbValue *kind = object_field(provider, "kind");
+    if (ab_artifact_text_is(kind, "make_variable"))
+      return ab_act_make_provider_capability(context, operation,
+                                             &item_id->as.text);
+    if (ab_artifact_text_is(kind, "file_pattern"))
+      return ab_act_c_provider_capability(context, operation,
+                                          &item_id->as.text);
+    return act_error(context->engine, ARCHBIRD_INVALID_SCHEMA,
+                     "provider capability has no native executor");
+  }
   if (ab_artifact_text_is(action, "declare_symbol"))
     return ab_act_c_declare_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "rename_symbol"))

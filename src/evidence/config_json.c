@@ -4,6 +4,7 @@
 
 #include "json_internal.h"
 #include "pattern.h"
+#include "sha256.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,49 @@ static ArchbirdStatus config_error(ArchbirdEngine *engine,
                                    const char *message) {
   return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
                             "%s", message);
+}
+
+static ArchbirdStatus provider_digest_string(ArchbirdSha256Context *context,
+                                             const AbString *value) {
+  uint8_t length[8];
+  uint64_t remaining = value ? (uint64_t)value->length : 0;
+  size_t index;
+  ArchbirdStatus status;
+  for (index = 0; index < sizeof(length); index++) {
+    length[sizeof(length) - index - 1] = (uint8_t)(remaining & 0xffu);
+    remaining >>= 8;
+  }
+  status = archbird_sha256_update(context, length, sizeof(length));
+  if (status == ARCHBIRD_OK && value && value->length)
+    status = archbird_sha256_update(context, (const uint8_t *)value->data,
+                                    value->length);
+  return status;
+}
+
+ArchbirdStatus
+ab_config_provider_definition_sha256(const AbConfigProvider *provider,
+                                     char out[65]) {
+  static const uint8_t domain[] = "archbird-provider-definition-v1";
+  ArchbirdSha256Context context;
+  uint8_t digest[32];
+  ArchbirdStatus status;
+  if (!provider || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  archbird_sha256_init(&context);
+  status = archbird_sha256_update(&context, domain, sizeof(domain) - 1);
+  if (status == ARCHBIRD_OK)
+    status = provider_digest_string(&context, &provider->kind);
+  if (status == ARCHBIRD_OK)
+    status = provider_digest_string(&context, &provider->path);
+  if (status == ARCHBIRD_OK)
+    status = provider_digest_string(&context, &provider->variable);
+  if (status == ARCHBIRD_OK)
+    status = provider_digest_string(&context, &provider->pattern);
+  if (status == ARCHBIRD_OK) {
+    archbird_sha256_final(&context, digest);
+    archbird_sha256_hex(digest, out);
+  }
+  return status;
 }
 
 static yyjson_val *member(yyjson_val *object, const char *name) {

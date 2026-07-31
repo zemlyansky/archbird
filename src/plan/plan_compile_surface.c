@@ -7,9 +7,17 @@
 #include <string.h>
 
 typedef struct SurfaceMakeProvider {
+  const AbValue *definition_sha256;
   const AbValue *path;
   AbString variable;
 } SurfaceMakeProvider;
+
+typedef struct SurfaceProvider {
+  const AbValue *definition_sha256;
+  const AbValue *path;
+  const char *kind;
+  AbString variable;
+} SurfaceProvider;
 
 typedef struct SurfaceRewrite {
   const AbValue *finding;
@@ -25,8 +33,9 @@ typedef struct SurfaceInsertion {
   const AbValue *key;
   const AbValue **findings;
   size_t finding_count;
+  const AbValue *implementation_path;
   const AbValue *surface_name;
-  SurfaceMakeProvider provider;
+  SurfaceProvider provider;
 } SurfaceInsertion;
 
 static const AbValue *field(const AbValue *object, const char *name) {
@@ -38,6 +47,8 @@ static const AbValue *field(const AbValue *object, const char *name) {
 static int text_is(const AbValue *value, const char *literal) {
   return ab_artifact_text_is(value, literal);
 }
+
+static int portable_identifier(const AbString *value);
 
 static int find_rename(const AbValue *renames, const AbString *old_name,
                        const AbValue **out_new_name, size_t *out_index) {
@@ -78,25 +89,126 @@ static const AbValue *find_surface(const AbValue *map,
 static int parse_make_provider(const AbValue *declaration,
                                SurfaceMakeProvider *out) {
   static const char prefix[] = "make-variable:";
+  const AbValue *definition_sha256 = field(declaration, "definition_sha256");
   const AbValue *path = field(declaration, "path");
   const AbValue *source = field(declaration, "source");
-  if (!path || path->kind != AB_VALUE_STRING || !source ||
+  if (!ab_artifact_sha256(definition_sha256) || !path ||
+      path->kind != AB_VALUE_STRING || !source ||
       source->kind != AB_VALUE_STRING ||
       source->as.text.length <= sizeof(prefix) - 1 ||
       memcmp(source->as.text.data, prefix, sizeof(prefix) - 1) != 0)
     return 0;
+  out->definition_sha256 = definition_sha256;
   out->path = path;
   out->variable.data = source->as.text.data + sizeof(prefix) - 1;
   out->variable.length = source->as.text.length - (sizeof(prefix) - 1);
   return 1;
 }
 
+static int parse_provider(const AbValue *declaration, SurfaceProvider *out) {
+  static const char make_prefix[] = "make-variable:";
+  const AbValue *definition_sha256 = field(declaration, "definition_sha256");
+  const AbValue *path = field(declaration, "path");
+  const AbValue *source = field(declaration, "source");
+  memset(out, 0, sizeof(*out));
+  if (!ab_artifact_sha256(definition_sha256) || !path ||
+      path->kind != AB_VALUE_STRING || !source ||
+      source->kind != AB_VALUE_STRING)
+    return 0;
+  out->definition_sha256 = definition_sha256;
+  out->path = path;
+  if (text_is(source, "file-pattern")) {
+    out->kind = "file_pattern";
+    return 1;
+  }
+  if (source->as.text.length <= sizeof(make_prefix) - 1 ||
+      memcmp(source->as.text.data, make_prefix, sizeof(make_prefix) - 1) != 0)
+    return 0;
+  out->kind = "make_variable";
+  out->variable.data = source->as.text.data + sizeof(make_prefix) - 1;
+  out->variable.length = source->as.text.length - (sizeof(make_prefix) - 1);
+  return portable_identifier(&out->variable);
+}
+
 static int same_provider(const SurfaceMakeProvider *provider,
                          const AbValue *declaration) {
   SurfaceMakeProvider candidate;
   return parse_make_provider(declaration, &candidate) &&
+         ab_value_equal(provider->definition_sha256,
+                        candidate.definition_sha256) &&
          ab_value_equal(provider->path, candidate.path) &&
          ab_string_equal(&provider->variable, &candidate.variable);
+}
+
+static int row_has_declaring_provider(const AbValue *row,
+                                      const AbValue *provider);
+
+static const AbValue *find_file(const AbValue *map, const AbString *path) {
+  const AbValue *files = field(map, "files");
+  size_t index;
+  if (!files || files->kind != AB_VALUE_ARRAY)
+    return NULL;
+  for (index = 0; index < files->as.array.count; index++) {
+    const AbValue *row = &files->as.array.items[index];
+    const AbValue *candidate = field(row, "path");
+    if (candidate && candidate->kind == AB_VALUE_STRING &&
+        ab_string_equal(&candidate->as.text, path))
+      return row;
+  }
+  return NULL;
+}
+
+static int path_has_suffix(const AbString *path, const char *suffix) {
+  size_t length = strlen(suffix);
+  return path && path->length >= length &&
+         memcmp(path->data + path->length - length, suffix, length) == 0;
+}
+
+static int provider_has_executor(const AbValue *map,
+                                 const SurfaceProvider *provider) {
+  const AbValue *file;
+  if (strcmp(provider->kind, "make_variable") == 0)
+    return 1;
+  file = find_file(map, &provider->path->as.text);
+  return file && text_is(field(file, "language"), "c") &&
+         path_has_suffix(&provider->path->as.text, ".h");
+}
+
+static int same_grounding_target(const SurfaceProvider *left,
+                                 const SurfaceProvider *right) {
+  if (strcmp(left->kind, right->kind) != 0 ||
+      !ab_value_equal(left->path, right->path))
+    return 0;
+  if (strcmp(left->kind, "make_variable") == 0)
+    return ab_string_equal(&left->variable, &right->variable);
+  return 1;
+}
+
+static int missing_providers_have_distinct_targets(const AbValue *map,
+                                                   const AbValue *providers,
+                                                   const AbValue *target) {
+  size_t index;
+  for (index = 0; index < providers->as.array.count; index++) {
+    const AbValue *row = &providers->as.array.items[index];
+    SurfaceProvider provider;
+    size_t previous;
+    if (row_has_declaring_provider(target, row))
+      continue;
+    if (!parse_provider(row, &provider) ||
+        !provider_has_executor(map, &provider))
+      return 0;
+    for (previous = 0; previous < index; previous++) {
+      const AbValue *candidate = &providers->as.array.items[previous];
+      SurfaceProvider parsed;
+      if (row_has_declaring_provider(target, candidate))
+        continue;
+      if (!parse_provider(candidate, &parsed) ||
+          !provider_has_executor(map, &parsed) ||
+          same_grounding_target(&provider, &parsed))
+        return 0;
+    }
+  }
+  return 1;
 }
 
 static int row_has_declaring_provider(const AbValue *row,
@@ -109,27 +221,6 @@ static int row_has_declaring_provider(const AbValue *row,
     if (ab_value_equal(&declarations->as.array.items[index], provider))
       return 1;
   return 0;
-}
-
-static int unique_missing_make_provider(const AbValue *surface,
-                                        const AbValue *row,
-                                        SurfaceMakeProvider *out) {
-  const AbValue *providers = field(surface, "providers");
-  size_t index;
-  int found = 0;
-  if (!providers || providers->kind != AB_VALUE_ARRAY)
-    return 0;
-  for (index = 0; index < providers->as.array.count; index++) {
-    const AbValue *provider = &providers->as.array.items[index];
-    SurfaceMakeProvider candidate;
-    if (row_has_declaring_provider(row, provider))
-      continue;
-    if (!parse_make_provider(provider, &candidate) || found)
-      return 0;
-    *out = candidate;
-    found = 1;
-  }
-  return found;
 }
 
 static int row_has_provider(const AbValue *row,
@@ -447,20 +538,48 @@ static void rewrites_free(ArchbirdEngine *engine, SurfaceRewrite *rewrites) {
 static void insertions_free(ArchbirdEngine *engine,
                             SurfaceInsertion *insertions, size_t count) {
   size_t index;
+  if (!insertions)
+    return;
   for (index = 0; index < count; index++)
     ab_free(engine, insertions[index].findings);
   ab_free(engine, insertions);
 }
 
-static ArchbirdStatus render_provider(AbBuffer *out,
-                                      const SurfaceMakeProvider *provider) {
-  ArchbirdStatus status =
-      ab_buffer_literal(out, "{\"kind\":\"make_variable\",\"path\":");
+static ArchbirdStatus
+render_make_provider(AbBuffer *out, const SurfaceMakeProvider *provider) {
+  ArchbirdStatus status = ab_buffer_literal(out, "{\"definition_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(out, provider->definition_sha256);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, ",\"kind\":\"make_variable\",\"path\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(out, provider->path);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(out, ",\"variable\":");
   if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(out, provider->variable.data,
+                                   provider->variable.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, "}");
+  return status;
+}
+
+static ArchbirdStatus
+render_insertion_provider(AbBuffer *out, const SurfaceProvider *provider) {
+  ArchbirdStatus status = ab_buffer_literal(out, "{\"definition_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(out, provider->definition_sha256);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, ",\"kind\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(out, provider->kind, strlen(provider->kind));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, ",\"path\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(out, provider->path);
+  if (status == ARCHBIRD_OK && strcmp(provider->kind, "make_variable") == 0)
+    status = ab_buffer_literal(out, ",\"variable\":");
+  if (status == ARCHBIRD_OK && strcmp(provider->kind, "make_variable") == 0)
     status = ab_buffer_json_string(out, provider->variable.data,
                                    provider->variable.length);
   if (status == ARCHBIRD_OK)
@@ -490,7 +609,7 @@ static ArchbirdStatus render_rewrite_operation(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(out, ",\"provider\":");
   if (status == ARCHBIRD_OK)
-    status = render_provider(out, &rewrite->provider);
+    status = render_make_provider(out, &rewrite->provider);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(out, ",\"surface\":");
   if (status == ARCHBIRD_OK)
@@ -512,7 +631,26 @@ render_insertion_operation(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(out, ",\"provider\":");
   if (status == ARCHBIRD_OK)
-    status = render_provider(out, &insertion->provider);
+    status = render_insertion_provider(out, &insertion->provider);
+  if (status == ARCHBIRD_OK)
+    if (strcmp(insertion->provider.kind, "file_pattern") == 0) {
+      const AbValue *first = insertion->provider.path;
+      const AbValue *second = insertion->implementation_path;
+      if (ab_string_compare(&first->as.text, &second->as.text) > 0) {
+        const AbValue *swapped = first;
+        first = second;
+        second = swapped;
+      }
+      status = ab_buffer_literal(out, ",\"source_paths\":[");
+      if (status == ARCHBIRD_OK)
+        status = ab_value_render(out, first);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(out, ",");
+      if (status == ARCHBIRD_OK)
+        status = ab_value_render(out, second);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(out, "]");
+    }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(out, ",\"surface\":");
   if (status == ARCHBIRD_OK)
@@ -530,32 +668,51 @@ static int insertion_comparison(const AbValue *finding) {
 static ArchbirdStatus
 analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
                    const AbValue *definition, const AbPlanFindingGroups *groups,
-                   SurfaceInsertion *insertions, size_t *out_count,
+                   SurfaceInsertion **out_insertions, size_t *out_count,
                    int *out_supported) {
   const AbValue *surface_value = field(definition, "name");
   const AbValue *surface;
+  const AbValue *providers;
+  SurfaceInsertion *insertions = NULL;
   uint8_t *consumed = NULL;
+  size_t capacity = 0;
   size_t insertion_count = 0;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   *out_count = 0;
+  *out_insertions = NULL;
   *out_supported = 0;
   if (!surface_value || surface_value->kind != AB_VALUE_STRING ||
       !groups->count)
     return ARCHBIRD_OK;
   surface = find_surface(map, &surface_value->as.text);
+  providers = field(surface, "providers");
+  if (!providers || providers->kind != AB_VALUE_ARRAY ||
+      !providers->as.array.count ||
+      groups->count > SIZE_MAX / providers->as.array.count)
+    return ARCHBIRD_OK;
+  capacity = groups->count * providers->as.array.count;
+  insertions =
+      (SurfaceInsertion *)ab_calloc(engine, capacity, sizeof(*insertions));
+  if (!insertions)
+    return archbird_error_set(
+        engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+        "plan compilation: out of memory deriving provider-surface "
+        "insertions");
   consumed = (uint8_t *)ab_calloc(engine, groups->count, sizeof(*consumed));
-  if (!consumed)
+  if (!consumed) {
+    ab_free(engine, insertions);
     return archbird_error_set(
         engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
         "plan compilation: out of memory grouping provider-surface issues");
+  }
   for (index = 0; status == ARCHBIRD_OK && index < groups->count; index++) {
-    SurfaceInsertion *insertion;
     const AbValue *finding;
     const AbValue *key;
     const AbValue *target;
-    SurfaceMakeProvider provider;
     size_t group_index;
+    size_t provider_index;
+    size_t insertion_start;
     size_t finding_count = 0;
     size_t finding_index = 0;
     int has_missing = 0;
@@ -583,22 +740,44 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
     if (group_index != groups->count || !has_missing)
       break;
     target = find_named_row(field(surface, "names"), &key->as.text);
-    if ((!target_is_resolved(target) && !target_is_implemented(target)) ||
-        !unique_missing_make_provider(surface, target, &provider))
+    if (!target_is_resolved(target) && !target_is_implemented(target))
       break;
-    insertion = &insertions[insertion_count];
-    insertion->findings = (const AbValue **)ab_calloc(
-        engine, finding_count, sizeof(*insertion->findings));
-    if (!insertion->findings) {
-      status = archbird_error_set(
-          engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
-          "plan compilation: out of memory retaining provider-surface issues");
+    if (!missing_providers_have_distinct_targets(map, providers, target))
+      break;
+    insertion_start = insertion_count;
+    for (provider_index = 0; provider_index < providers->as.array.count;
+         provider_index++) {
+      const AbValue *provider = &providers->as.array.items[provider_index];
+      SurfaceProvider parsed;
+      SurfaceInsertion *insertion;
+      if (row_has_declaring_provider(target, provider))
+        continue;
+      if (!parse_provider(provider, &parsed)) {
+        status = ARCHBIRD_OK;
+        break;
+      }
+      insertion = &insertions[insertion_count];
+      insertion->findings = (const AbValue **)ab_calloc(
+          engine, finding_count, sizeof(*insertion->findings));
+      if (!insertion->findings) {
+        status = archbird_error_set(
+            engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+            "plan compilation: out of memory retaining provider-surface "
+            "issues");
+        break;
+      }
+      insertion->key = key;
+      insertion->finding_count = finding_count;
+      insertion->implementation_path =
+          &field(target, "candidates")->as.array.items[0];
+      insertion->surface_name = surface_value;
+      insertion->provider = parsed;
+      insertion_count++;
+    }
+    if (status != ARCHBIRD_OK || provider_index != providers->as.array.count) {
+      insertion_count = 0;
       break;
     }
-    insertion->key = key;
-    insertion->finding_count = finding_count;
-    insertion->surface_name = surface_value;
-    insertion->provider = provider;
     for (group_index = index; group_index < groups->count; group_index++) {
       const AbPlanFindingGroup *group = &groups->groups[group_index];
       const AbValue *candidate_key = field(group->representative, "key");
@@ -607,15 +786,23 @@ analyze_insertions(ArchbirdEngine *engine, const AbValue *map,
           !ab_string_equal(&candidate_key->as.text, &key->as.text))
         continue;
       consumed[group_index] = 1;
-      for (row_index = 0; row_index < group->count; row_index++)
-        insertion->findings[finding_index++] = group->rows[row_index];
+      for (provider_index = insertion_start; provider_index < insertion_count;
+           provider_index++) {
+        SurfaceInsertion *insertion = &insertions[provider_index];
+        for (row_index = 0; row_index < group->count; row_index++)
+          insertion->findings[finding_index + row_index] =
+              group->rows[row_index];
+      }
+      finding_index += group->count;
     }
-    insertion_count++;
   }
   if (status == ARCHBIRD_OK && index == groups->count) {
+    *out_insertions = insertions;
     *out_count = insertion_count;
     *out_supported = insertion_count != 0;
+    insertions = NULL;
   }
+  insertions_free(engine, insertions, capacity);
   ab_free(engine, consumed);
   return status;
 }
@@ -776,18 +963,10 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
     return status;
   if (!renames ||
       (renames->kind == AB_VALUE_OBJECT && !renames->as.object.count)) {
-    SurfaceInsertion *insertions = (SurfaceInsertion *)ab_calloc(
-        engine, groups.count, sizeof(*insertions));
+    SurfaceInsertion *insertions = NULL;
     size_t insertion_count = 0;
     int supported = 0;
-    if (!insertions) {
-      ab_plan_finding_groups_free(engine, &groups);
-      return archbird_error_set(
-          engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
-          "plan compilation: out of memory deriving provider-surface "
-          "insertions");
-    }
-    status = analyze_insertions(engine, map, definition, &groups, insertions,
+    status = analyze_insertions(engine, map, definition, &groups, &insertions,
                                 &insertion_count, &supported);
     if (status == ARCHBIRD_OK && supported) {
       status = append_insertions(engine, builder, constraint, insertions,
@@ -795,7 +974,7 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
       if (status == ARCHBIRD_OK)
         *out_handled = 1;
     }
-    insertions_free(engine, insertions, groups.count);
+    insertions_free(engine, insertions, insertion_count);
     if (status == ARCHBIRD_OK && !supported) {
       SurfaceRewrite *observed =
           (SurfaceRewrite *)ab_calloc(engine, groups.count, sizeof(*observed));

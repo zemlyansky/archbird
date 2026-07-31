@@ -569,6 +569,13 @@ static int same_text_fields(const AbValue *left, const char *left_name,
          ab_string_equal(&left_value->as.text, &right_value->as.text);
 }
 
+static int provider_kind_is(const AbValue *operation, const char *kind) {
+  const AbValue *provider = field(operation, "provider");
+  const AbValue *value = field(provider, "kind");
+  return value && value->kind == AB_VALUE_STRING &&
+         string_is(&value->as.text, kind);
+}
+
 static int operation_dependency(const AbValue *prerequisite,
                                 const AbValue *dependent) {
   const AbValue *prerequisite_action = field(prerequisite, "action");
@@ -579,6 +586,13 @@ static int operation_dependency(const AbValue *prerequisite,
   if (string_is(&prerequisite_action->as.text, "declare_symbol") &&
       string_is(&dependent_action->as.text, "add_provider_capability"))
     return same_text_fields(prerequisite, "symbol", dependent, "capability");
+  if (string_is(&prerequisite_action->as.text, "add_provider_capability") &&
+      string_is(&dependent_action->as.text, "add_provider_capability") &&
+      provider_kind_is(prerequisite, "file_pattern") &&
+      provider_kind_is(dependent, "make_variable"))
+    return same_text_fields(prerequisite, "capability", dependent,
+                            "capability") &&
+           same_text_fields(prerequisite, "surface", dependent, "surface");
   if (string_is(&prerequisite_action->as.text, "rename_symbol") &&
       string_is(&dependent_action->as.text, "rename_provider_capability"))
     return same_text_fields(prerequisite, "from", dependent, "from") &&

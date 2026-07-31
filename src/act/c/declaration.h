@@ -6,5 +6,8 @@
 ArchbirdStatus ab_act_c_declare_symbol(AbActContext *context,
                                        const AbValue *operation,
                                        const AbString *item_id);
+ArchbirdStatus ab_act_c_provider_capability(AbActContext *context,
+                                            const AbValue *operation,
+                                            const AbString *item_id);
 
 #endif

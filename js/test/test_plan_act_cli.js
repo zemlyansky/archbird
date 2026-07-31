@@ -21,6 +21,9 @@ const surfaceRoot = fs.mkdtempSync(
 const registrationRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-registration-"),
 );
+const providerParityRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-provider-parity-"),
+);
 const coordinatedRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-coordinated-"),
 );
@@ -44,6 +47,8 @@ const ecmascriptReferenceRoot = fs.mkdtempSync(
 );
 const cli = path.join(repository, "js/src/cli.js");
 const makeProvider = {
+  definition_sha256:
+    "a9d5a1c18d33c5c63cd34ced178608b7bb184126a4a9aeda6ad9c057c2e98fa3",
   kind: "make_variable",
   path: "Makefile",
   variable: "WASM_EXPORTS",
@@ -460,6 +465,85 @@ try {
     repository,
     "test/fixtures/plan_act/surface_registration",
   );
+  fs.cpSync(registrationFixture, providerParityRoot, { recursive: true });
+  const providerParityConfigurationPath = path.join(
+    providerParityRoot,
+    "archbird.json",
+  );
+  const providerParityConfiguration = JSON.parse(
+    fs.readFileSync(providerParityConfigurationPath, "utf8"),
+  );
+  providerParityConfiguration.bridges[0].providers.push({
+    kind: "file_pattern",
+    path: "src/core.h",
+    pattern: "\\b(core_[A-Za-z0-9_]+)\\s*\\(",
+  });
+  providerParityConfiguration.constraints["FFI-SURFACE"]
+    .require_all_providers = true;
+  fs.writeFileSync(
+    providerParityConfigurationPath,
+    JSON.stringify(providerParityConfiguration),
+  );
+  const providerParityHeader = path.join(providerParityRoot, "src/core.h");
+  fs.writeFileSync(
+    providerParityHeader,
+    fs.readFileSync(providerParityHeader, "utf8").replace(
+      "int core_sum(int left, int right);\n",
+      "",
+    ),
+  );
+  const providerParityPlan = path.join(
+    artifacts,
+    "provider-parity-plan.json",
+  );
+  const providerParityAct = path.join(
+    artifacts,
+    "provider-parity-act.json",
+  );
+  run([
+    "plan", "FFI-SURFACE", "--root", providerParityRoot,
+    "--output", providerParityPlan,
+  ]);
+  const providerParityDocument = JSON.parse(
+    fs.readFileSync(providerParityPlan, "utf8"),
+  );
+  const providerParityByKind = Object.fromEntries(
+    providerParityDocument.items.map(
+      (item) => [item.operation.provider.kind, item],
+    ),
+  );
+  assert.deepEqual(
+    Object.keys(providerParityByKind).sort(),
+    ["file_pattern", "make_variable"],
+  );
+  assert.deepEqual(providerParityByKind.file_pattern.depends_on, []);
+  assert.deepEqual(
+    providerParityByKind.make_variable.depends_on,
+    [providerParityByKind.file_pattern.id],
+  );
+  assert.deepEqual(
+    providerParityByKind.file_pattern.operation.source_paths,
+    ["src/core.c", "src/core.h"],
+  );
+  run([
+    "act", providerParityPlan, "--root", providerParityRoot,
+    "--format", "json", "--output", providerParityAct,
+  ]);
+  const providerParityAccepted = JSON.parse(
+    fs.readFileSync(providerParityAct, "utf8"),
+  );
+  assert.deepEqual(
+    providerParityAccepted.executors
+      .map((row) => row.capability)
+      .sort(),
+    [
+      "archbird.native.c.provider-capability@1",
+      "archbird.native.make.provider-capability@1",
+    ],
+  );
+  run(["apply", providerParityAct, "--root", providerParityRoot]);
+  run(["verify", "FFI-SURFACE", "--root", providerParityRoot, "--check"]);
+
   fs.cpSync(registrationFixture, coordinatedRoot, { recursive: true });
   const coordinatedHeader = path.join(coordinatedRoot, "src/core.h");
   fs.writeFileSync(
@@ -606,7 +690,7 @@ try {
     "Git-derived planning mutated the working tree",
   );
   const observedDocument = JSON.parse(fs.readFileSync(observedPlan, "utf8"));
-  assert.equal(observedDocument.schema_version, 2);
+  assert.equal(observedDocument.schema_version, 3);
   assert.equal(observedDocument.items.length, 1);
   assert.equal(observedDocument.items[0].provenance, "derived");
   assert.equal(observedDocument.items[0].executable, true);
@@ -796,6 +880,7 @@ try {
   fs.rmSync(artifacts, { force: true, recursive: true });
   fs.rmSync(surfaceRoot, { force: true, recursive: true });
   fs.rmSync(registrationRoot, { force: true, recursive: true });
+  fs.rmSync(providerParityRoot, { force: true, recursive: true });
   fs.rmSync(coordinatedRoot, { force: true, recursive: true });
   fs.rmSync(observedRoot, { force: true, recursive: true });
   fs.rmSync(redirectRoot, { force: true, recursive: true });

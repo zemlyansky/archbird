@@ -18,7 +18,7 @@
     "unknowns"
   ],
   "properties": {
-    "schema_version": {"const": 2},
+    "schema_version": {"const": 3},
     "artifact": {"const": "plan"},
     "provenance": {"$ref": "#/$defs/provenance"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -315,19 +315,34 @@
       ]
     },
     "providerIdentity": {
-      "type": "object",
-      "additionalProperties": false,
       "$comment": "Configuration-derived provider identity. Language-specific token spelling, source anchors, byte ranges, and replacement text are grounded by Act.",
-      "required": ["kind", "path", "variable"],
-      "properties": {
-        "kind": {"const": "make_variable"},
-        "path": {"$ref": "#/$defs/repositoryPath"},
-        "variable": {
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-          "maxLength": 256
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["definition_sha256", "kind", "path", "variable"],
+          "properties": {
+            "definition_sha256": {"$ref": "#/$defs/sha256"},
+            "kind": {"const": "make_variable"},
+            "path": {"$ref": "#/$defs/repositoryPath"},
+            "variable": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "maxLength": 256
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["definition_sha256", "kind", "path"],
+          "properties": {
+            "definition_sha256": {"$ref": "#/$defs/sha256"},
+            "kind": {"const": "file_pattern"},
+            "path": {"$ref": "#/$defs/repositoryPath"}
+          }
         }
-      }
+      ]
     },
     "providerCapability": {
       "type": "object",
@@ -347,12 +362,37 @@
           "maxLength": 256
         },
         "provider": {"$ref": "#/$defs/providerIdentity"},
+        "source_paths": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/repositoryPath"}
+        },
         "surface": {
           "type": "string",
           "minLength": 1,
           "maxLength": 65536
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "properties": {"kind": {"const": "file_pattern"}},
+                "required": ["kind"]
+              }
+            },
+            "required": ["provider"]
+          },
+          "then": {
+            "required": ["source_paths"],
+            "properties": {"action": {"const": "add_provider_capability"}}
+          },
+          "else": {"not": {"required": ["source_paths"]}}
+        }
+      ]
     },
     "providerCapabilityRename": {
       "type": "object",
@@ -377,7 +417,17 @@
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
           "maxLength": 256
         }
-      }
+      },
+      "allOf": [
+        {
+          "properties": {
+            "provider": {
+              "properties": {"kind": {"const": "make_variable"}},
+              "required": ["kind"]
+            }
+          }
+        }
+      ]
     },
     "declareSymbol": {
       "type": "object",

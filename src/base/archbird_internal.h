@@ -34,9 +34,9 @@
 #endif
 
 #define ARCHBIRD_MAP_SCHEMA_MIN 4u
-#define ARCHBIRD_MAP_SCHEMA_CURRENT 11u
-#define ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT "11"
-#define ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT "4, 5, 6, 7, 8, 9, 10, or 11"
+#define ARCHBIRD_MAP_SCHEMA_CURRENT 12u
+#define ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT "12"
+#define ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT "4, 5, 6, 7, 8, 9, 10, 11, or 12"
 
 /* Query artifacts have an independent compatibility namespace. The initial
  * wire version intentionally remains 7 for backward compatibility. */

@@ -21,6 +21,10 @@ SURFACE_FIXTURE = ROOT / "test/fixtures/plan_act/surface_closure"
 REGISTRATION_FIXTURE = ROOT / "test/fixtures/plan_act/surface_registration"
 REDIRECT_FIXTURE = ROOT / "test/fixtures/plan_act/dependency_redirect"
 MAKE_PROVIDER = {
+    "definition_sha256": (
+        "a9d5a1c18d33c5c63cd34ced178608b7"
+        "bb184126a4a9aeda6ad9c057c2e98fa3"
+    ),
     "kind": "make_variable",
     "path": "Makefile",
     "variable": "WASM_EXPORTS",
@@ -578,7 +582,7 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
         )
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 2)
+        self.assertEqual(plan["schema_version"], 3)
         canonical_before_map = json.dumps(
             json.loads(before_map),
             allow_nan=False,
@@ -813,6 +817,213 @@ class PlanActCliTest(unittest.TestCase):
         )
 
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
+
+    def test_provider_parity_plans_c_declaration_before_make_registration(
+        self,
+    ) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        configuration_path = self.root / "archbird.json"
+        configuration = json.loads(configuration_path.read_text())
+        configuration["bridges"][0]["providers"].append(
+            {
+                "kind": "file_pattern",
+                "path": "src/core.h",
+                "pattern": r"\b(core_[A-Za-z0-9_]+)\s*\(",
+            }
+        )
+        configuration["constraints"]["FFI-SURFACE"][
+            "require_all_providers"
+        ] = True
+        configuration_path.write_text(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+        )
+        header = self.root / "src/core.h"
+        header.write_text(
+            header.read_text().replace(
+                "int core_sum(int left, int right);\n", ""
+            )
+        )
+
+        plan_path = self.plan_path("provider-parity-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 2)
+        by_kind = {
+            item["operation"]["provider"]["kind"]: item
+            for item in plan["items"]
+        }
+        self.assertEqual(set(by_kind), {"file_pattern", "make_variable"})
+        c_item = by_kind["file_pattern"]
+        make_item = by_kind["make_variable"]
+        self.assertEqual(c_item["depends_on"], [])
+        self.assertEqual(make_item["depends_on"], [c_item["id"]])
+        self.assertEqual(
+            c_item["operation"],
+            {
+                "action": "add_provider_capability",
+                "capability": "core_sum",
+                "provider": {
+                    "definition_sha256": (
+                        "1b929f6f0a328ebc5f8c3fc497ade7ec"
+                        "b6722440ad7af15fe455c27bf5133e40"
+                    ),
+                    "kind": "file_pattern",
+                    "path": "src/core.h",
+                },
+                "source_paths": ["src/core.c", "src/core.h"],
+                "surface": "ffi",
+            },
+        )
+        self.assertEqual(make_item["operation"]["provider"], MAKE_PROVIDER)
+
+        act_path, act = self.accepted_act(
+            plan_path, "provider-parity-act.json"
+        )
+        self.assertEqual(len(act["transitions"]), 2)
+        self.assertEqual(
+            {row["capability"] for row in act["executors"]},
+            {
+                "archbird.native.c.provider-capability@1",
+                "archbird.native.make.provider-capability@1",
+            },
+        )
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertIn(
+            "int core_sum(int left, int right);", header.read_text()
+        )
+        self.assertIn(
+            "WASM_EXPORTS = _core_peer _core_sum",
+            (self.root / "Makefile").read_text(),
+        )
+        run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
+        self.run_surface_gates()
+
+    def test_distinct_providers_sharing_one_edit_target_remain_manual(
+        self,
+    ) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        configuration_path = self.root / "archbird.json"
+        configuration = json.loads(configuration_path.read_text())
+        configuration["bridges"][0]["providers"].extend(
+            [
+                {
+                    "kind": "file_pattern",
+                    "path": "src/core.h",
+                    "pattern": r"\b(core_[A-Za-z0-9_]+)\s*\(",
+                },
+                {
+                    "kind": "file_pattern",
+                    "path": "src/core.h",
+                    "pattern": r"\b(core_(?:peer|sum))\s*\(",
+                },
+            ]
+        )
+        configuration["constraints"]["FFI-SURFACE"][
+            "require_all_providers"
+        ] = True
+        configuration_path.write_text(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+        )
+        makefile = self.root / "Makefile"
+        makefile.write_text(
+            makefile.read_text().replace(
+                "WASM_EXPORTS = _core_peer",
+                "WASM_EXPORTS = _core_peer _core_sum",
+            )
+        )
+        header = self.root / "src/core.h"
+        header.write_text(
+            header.read_text().replace(
+                "int core_sum(int left, int right);\n", ""
+            )
+        )
+
+        mapped = json.loads(
+            run(
+                "map",
+                "--root",
+                str(self.root),
+                "--format",
+                "json",
+            ).stdout
+        )
+        file_providers = [
+            provider
+            for provider in mapped["surfaces"][0]["providers"]
+            if provider["source"] == "file-pattern"
+        ]
+        self.assertEqual(len(file_providers), 2)
+        self.assertEqual(
+            len({provider["definition_sha256"] for provider in file_providers}),
+            2,
+        )
+
+        plan_path = self.plan_path("shared-provider-target-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertTrue(plan["items"])
+        self.assertTrue(all(not item["executable"] for item in plan["items"]))
+        self.assertNotIn(
+            "add_provider_capability",
+            {item["operation"]["action"] for item in plan["items"]},
+        )
+
+    def test_file_provider_without_native_executor_remains_manual(self) -> None:
+        shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
+        configuration_path = self.root / "archbird.json"
+        configuration = json.loads(configuration_path.read_text())
+        configuration["bridges"][0]["providers"].append(
+            {
+                "kind": "file_pattern",
+                "path": "provider.txt",
+                "pattern": r"\b(core_[A-Za-z0-9_]+)\s*\(",
+            }
+        )
+        configuration["constraints"]["FFI-SURFACE"][
+            "require_all_providers"
+        ] = True
+        configuration_path.write_text(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+        )
+        (self.root / "provider.txt").write_text("core_peer();\n")
+        makefile = self.root / "Makefile"
+        makefile.write_text(
+            makefile.read_text().replace(
+                "WASM_EXPORTS = _core_peer",
+                "WASM_EXPORTS = _core_peer _core_sum",
+            )
+        )
+
+        plan_path = self.plan_path("unsupported-provider-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertTrue(plan["items"])
+        self.assertTrue(all(not item["executable"] for item in plan["items"]))
+        self.assertNotIn(
+            "add_provider_capability",
+            {item["operation"]["action"] for item in plan["items"]},
+        )
 
     def test_required_c_declaration_and_registration_form_one_plan(self) -> None:
         shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)

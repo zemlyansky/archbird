@@ -105,6 +105,15 @@ static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
       ab_artifact_text_is(action, "remove_provider_capability") ||
       ab_artifact_text_is(action, "rename_provider_capability")) {
     const AbValue *provider = field(operation, "provider");
+    const AbValue *paths = field(operation, "source_paths");
+    ArchbirdStatus status = ARCHBIRD_OK;
+    if (paths) {
+      for (index = 0; status == ARCHBIRD_OK && index < paths->as.array.count;
+           index++)
+        status = add_path(engine, present, present_count,
+                          &paths->as.array.items[index]);
+      return status;
+    }
     path = field(provider, "path");
     if (!path)
       return reject(engine, ARCHBIRD_INVALID_SCHEMA,

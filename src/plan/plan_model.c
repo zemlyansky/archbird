@@ -395,20 +395,46 @@ static int validate_operation(const AbValue *value, int *out_manual,
       text_is(action, "rename_provider_capability")) {
     static const char *const capability_fields[] = {"action", "capability",
                                                     "provider", "surface"};
+    static const char *const file_capability_fields[] = {
+        "action", "capability", "provider", "source_paths", "surface"};
     static const char *const rename_fields[] = {"action", "from", "provider",
                                                 "surface", "to"};
-    static const char *const provider_fields[] = {"kind", "path", "variable"};
+    static const char *const file_provider_fields[] = {"definition_sha256",
+                                                       "kind", "path"};
+    static const char *const make_provider_fields[] = {
+        "definition_sha256", "kind", "path", "variable"};
     const AbValue *provider = ab_value_member(value, "provider");
+    const AbValue *provider_kind = ab_value_member(provider, "kind");
+    const AbValue *source_paths = ab_value_member(value, "source_paths");
     int rename = text_is(action, "rename_provider_capability");
-    if (!object_exact(value, rename ? rename_fields : capability_fields,
-                      rename ? 5 : 4) ||
-        !provider || !object_exact(provider, provider_fields, 3) ||
-        !text_is(ab_value_member(provider, "kind"), "make_variable") ||
+    int file_provider = text_is(provider_kind, "file_pattern");
+    if (!object_exact(value,
+                      rename          ? rename_fields
+                      : file_provider ? file_capability_fields
+                                      : capability_fields,
+                      rename || file_provider ? 5 : 4) ||
+        !provider ||
+        ((!text_is(provider_kind, "make_variable") ||
+          !object_exact(provider, make_provider_fields, 4) ||
+          !portable_identifier(ab_value_member(provider, "variable"))) &&
+         (!text_is(provider_kind, "file_pattern") ||
+          !object_exact(provider, file_provider_fields, 3))) ||
+        !lowercase_sha256(ab_value_member(provider, "definition_sha256")) ||
         !repository_path(ab_value_member(provider, "path")) ||
-        !portable_identifier(ab_value_member(provider, "variable")) ||
         !bounded_text(ab_value_member(value, "surface"), AB_PLAN_MAX_METADATA,
                       1))
       return 0;
+    if (!text_is(provider_kind, "make_variable") &&
+        (rename || text_is(action, "remove_provider_capability")))
+      return 0;
+    if (file_provider) {
+      size_t index;
+      if (!unique_rows(source_paths) || source_paths->as.array.count != 2)
+        return 0;
+      for (index = 0; index < source_paths->as.array.count; index++)
+        if (!repository_path(&source_paths->as.array.items[index]))
+          return 0;
+    }
     if (rename)
       return portable_identifier(ab_value_member(value, "from")) &&
              portable_identifier(ab_value_member(value, "to")) &&
@@ -706,7 +732,7 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
     return ARCHBIRD_OK;
   schema = ab_value_member(&plan->document, "schema_version");
   provenance = ab_value_member(&plan->document, "provenance");
-  if (!safe_integer(schema, &schema_number) || schema_number != 2 ||
+  if (!safe_integer(schema, &schema_number) || schema_number != 3 ||
       !text_is(ab_value_member(&plan->document, "artifact"), "plan") ||
       (!text_is(provenance, "derived") && !text_is(provenance, "asserted")) ||
       !validate_tool(ab_value_member(&plan->document, "tool")) ||

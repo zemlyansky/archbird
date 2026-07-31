@@ -916,7 +916,7 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
             ? "\"asserted\""
             : "\"derived\"");
   if (status == ARCHBIRD_OK)
-    status = literal(&rendered, ",\"schema_version\":2,\"source\":");
+    status = literal(&rendered, ",\"schema_version\":3,\"source\":");
   if (status == ARCHBIRD_OK)
     status = render_source_identity(context, &rendered, map_json, map_length,
                                     before_map_json, before_map_length);

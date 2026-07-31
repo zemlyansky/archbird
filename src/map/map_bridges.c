@@ -549,7 +549,9 @@ static int declaration_compare(const void *left_raw, const void *right_raw) {
       (const AbMapSurfaceDeclaration *)left_raw;
   const AbMapSurfaceDeclaration *right =
       (const AbMapSurfaceDeclaration *)right_raw;
-  int compared = ab_string_compare(&left->path, &right->path);
+  int compared = strcmp(left->definition_sha256, right->definition_sha256);
+  if (!compared)
+    compared = ab_string_compare(&left->path, &right->path);
   return compared ? compared : ab_string_compare(&left->source, &right->source);
 }
 
@@ -600,17 +602,17 @@ static ArchbirdStatus surface_name(AbMapState *state, AbMapSurface *surface,
   return status;
 }
 
-static ArchbirdStatus append_declaration(AbMapState *state,
-                                         AbMapSurfaceDeclaration **rows,
-                                         size_t *count, const AbString *path,
-                                         const char *source,
-                                         size_t source_length) {
+static ArchbirdStatus
+append_declaration(AbMapState *state, AbMapSurfaceDeclaration **rows,
+                   size_t *count, const AbString *path, const char *source,
+                   size_t source_length, const char definition_sha256[65]) {
   AbMapSurfaceDeclaration *resized;
   AbMapSurfaceDeclaration *row;
   size_t index;
   ArchbirdStatus status;
   for (index = 0; index < *count; index++) {
-    if (ab_string_equal(&(*rows)[index].path, path) &&
+    if (strcmp((*rows)[index].definition_sha256, definition_sha256) == 0 &&
+        ab_string_equal(&(*rows)[index].path, path) &&
         (*rows)[index].source.length == source_length &&
         memcmp((*rows)[index].source.data, source, source_length) == 0)
       return ARCHBIRD_OK;
@@ -624,6 +626,7 @@ static ArchbirdStatus append_declaration(AbMapState *state,
   *rows = resized;
   row = &(*rows)[*count];
   memset(row, 0, sizeof(*row));
+  memcpy(row->definition_sha256, definition_sha256, 65);
   status = ab_string_copy(state->engine, &row->path, path->data, path->length);
   if (status == ARCHBIRD_OK)
     status = ab_string_copy(state->engine, &row->source, source, source_length);
@@ -689,6 +692,7 @@ typedef struct ProviderCapture {
   const AbString *path;
   const char *source;
   size_t source_length;
+  const char *definition_sha256;
   const uint8_t *subject;
   size_t names;
 } ProviderCapture;
@@ -710,7 +714,8 @@ static ArchbirdStatus capture_provider_name(void *user_data,
   if (status == ARCHBIRD_OK)
     status = append_declaration(capture->state, &name->declarations,
                                 &name->declaration_count, capture->path,
-                                capture->source, capture->source_length);
+                                capture->source, capture->source_length,
+                                capture->definition_sha256);
   if (status == ARCHBIRD_OK)
     capture->names++;
   return status;
@@ -722,7 +727,9 @@ static ArchbirdStatus exports_provider(AbMapState *state,
                                        AbMapSurface *surface) {
   size_t file_index;
   size_t matched = 0;
-  ArchbirdStatus status = ARCHBIRD_OK;
+  char definition_sha256[65];
+  ArchbirdStatus status =
+      ab_config_provider_definition_sha256(provider, definition_sha256);
   for (file_index = 0;
        status == ARCHBIRD_OK && file_index < state->manifest->file_count;
        file_index++) {
@@ -735,7 +742,7 @@ static ArchbirdStatus exports_provider(AbMapState *state,
     matched++;
     status =
         append_declaration(state, &surface->providers, &surface->provider_count,
-                           &file->path, "exports", 7);
+                           &file->path, "exports", 7, definition_sha256);
     for (fact_index = 0;
          status == ARCHBIRD_OK &&
          fact_index < ab_project_merged_fact_count(state->project);
@@ -751,7 +758,7 @@ static ArchbirdStatus exports_provider(AbMapState *state,
       if (status == ARCHBIRD_OK)
         status = append_declaration(state, &name->declarations,
                                     &name->declaration_count, &file->path,
-                                    "exports", 7);
+                                    "exports", 7, definition_sha256);
     }
   }
   if (status == ARCHBIRD_OK && !matched) {
@@ -778,12 +785,15 @@ static ArchbirdStatus pattern_provider(AbMapState *state,
   AbString source = {0};
   AbPattern *pattern = NULL;
   ProviderCapture capture;
+  char definition_sha256[65];
   size_t matches = 0;
   int found = 0;
   int present = 0;
   static const uint8_t empty[] = "";
   ArchbirdStatus status =
-      provider_source(state, provider, &text, &text_length, &present);
+      ab_config_provider_definition_sha256(provider, definition_sha256);
+  if (status == ARCHBIRD_OK)
+    status = provider_source(state, provider, &text, &text_length, &present);
   if (status == ARCHBIRD_OK && !present) {
     status =
         ab_map_add_diagnostic(state, "error", "provider-source-missing",
@@ -840,9 +850,9 @@ static ArchbirdStatus pattern_provider(AbMapState *state,
     status = ab_string_copy(state->engine, &source, "file-pattern", 12);
   }
   if (status == ARCHBIRD_OK)
-    status =
-        append_declaration(state, &surface->providers, &surface->provider_count,
-                           &provider->path, source.data, source.length);
+    status = append_declaration(state, &surface->providers,
+                                &surface->provider_count, &provider->path,
+                                source.data, source.length, definition_sha256);
   if (status == ARCHBIRD_OK)
     status = ab_pattern_compile(state->engine, &provider->pattern, 1, &pattern);
   memset(&capture, 0, sizeof(capture));
@@ -852,6 +862,7 @@ static ArchbirdStatus pattern_provider(AbMapState *state,
   capture.path = &provider->path;
   capture.source = source.data;
   capture.source_length = source.length;
+  capture.definition_sha256 = definition_sha256;
   capture.subject = subject;
   if (status == ARCHBIRD_OK)
     status = ab_pattern_scan(state->engine, pattern, subject, subject_length, 1,
@@ -1126,7 +1137,11 @@ static ArchbirdStatus render_declarations(AbBuffer *buffer,
     if (index)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer, "{\"path\":");
+      status = ab_buffer_literal(buffer, "{\"definition_sha256\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, rows[index].definition_sha256, 64);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"path\":");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_json_string(buffer, rows[index].path.data,
                                      rows[index].path.length);

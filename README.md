@@ -764,16 +764,20 @@ and lets the native Python or ECMAScript executor validate and materialize
 exact declaration, import, export, binding, and reference edits. Unrelated
 same-name declarations outside the selected scope are not renamed.
 
-For an exact `provider_surface` issue, Plan can add a uniquely missing Make
-registration or use reviewed `--rename OLD=NEW` intent to replace a stale one
-when the target resolves uniquely. Plan records the neutral provider objective
-and configured provider identity; it stores no Make token, anchor, source
-hash, byte range, or replacement text. Act/Make validates that identity
-against the current configuration and Map, derives the direct or
-leading-underscore spelling from the locked source, and requires exactly one
-token match before producing an edit. Ambiguous providers, zero or multiple
-matches, active uses of the old entry, unresolved targets, and missing
-non-Make provider kinds remain manual or are rejected by Act.
+For an exact `provider_surface` issue, Plan can add a missing configured Make
+registration or C header `file_pattern` declaration, or use reviewed
+`--rename OLD=NEW` intent to replace a stale Make entry when the target
+resolves uniquely. Each provider definition has a canonical digest in Map and
+Plan, so distinct patterns over one path do not collapse into one identity.
+Plan records the neutral provider objective and bounded source scope; it
+stores no Make token, C signature, anchor, source hash, byte range, or
+replacement text. Act validates the provider digest against the current
+configuration and Map. Act/Make derives the token spelling and requires one
+registration anchor. Act/C rederives a single-line declaration from the exact
+implementation and an existing declaration peer. Active uses of stale
+entries, unresolved targets, ambiguous implementations, missing anchors,
+multiple token matches, and distinct provider definitions that would require
+one coincident source edit remain manual or are rejected by Act.
 If the replacement is already registered by that provider, Plan normalizes
 the target state to removal of the stale old registration instead of
 proposing a duplicate.
@@ -799,15 +803,14 @@ after its canonical Map is built; unchanged provider facts remain eligible for
 the normal content-addressed cache.
 
 When a constraint itself requires a missing surface member, that reviewed
-policy supplies the intent: if the member has one implementation candidate and
-current uses, and the surface has exactly one configured `make_variable`
-provider, Plan derives `add_provider_capability` without another flag. Both
-the `missing` and `unregistered` findings remain origins, and the generated
-item is explicitly `derived`. Act/Make then proves the current token
-convention, selects a unique editable registration by canonical-name locality,
-and materializes the insertion. Missing anchors, duplicate tokens, multiple
-providers, incomplete evidence, and ambiguous implementations remain manual
-or block Act.
+policy supplies the intent. If the member has one implementation candidate
+and is already declared by another provider or has current uses, Plan derives
+one `add_provider_capability` item per missing supported provider without
+another flag. A C declaration item precedes its Make registration for the same
+surface member. Both the `missing` and `unregistered` findings remain origins,
+and every generated item is explicitly `derived`. Incomplete evidence,
+ambiguous implementations, unsupported provider kinds, or colliding edit
+targets remain manual.
 
 When several reviewed surface members are missing from the same Make
 provider, Plan emits one item per obligation and Act composes their distinct

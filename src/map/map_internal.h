@@ -188,6 +188,7 @@ typedef struct AbMapArtifact {
 } AbMapArtifact;
 
 typedef struct AbMapSurfaceDeclaration {
+  char definition_sha256[65];
   AbString path;
   AbString source;
 } AbMapSurfaceDeclaration;

@@ -84,6 +84,10 @@ typedef struct AbConfigProvider {
   AbString pattern;
 } AbConfigProvider;
 
+ArchbirdStatus
+ab_config_provider_definition_sha256(const AbConfigProvider *provider,
+                                     char out[65]);
+
 typedef struct AbConfigBridge {
   AbString name;
   AbString kind;
