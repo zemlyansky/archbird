@@ -135,9 +135,10 @@ function observeSourceRequirements(rootValue, requirementsJson) {
   if (
     !document ||
     Array.isArray(document) ||
-    Object.keys(document).sort().join(",") !== "absent,files" ||
+    Object.keys(document).sort().join(",") !== "absent,files,observe" ||
     !Array.isArray(document.files) ||
-    !Array.isArray(document.absent)
+    !Array.isArray(document.absent) ||
+    !Array.isArray(document.observe)
   ) {
     throw new Error("native source requirements have an invalid shape");
   }
@@ -158,6 +159,28 @@ function observeSourceRequirements(rootValue, requirementsJson) {
     requireAbsent(root, filePath);
     return filePath;
   }).sort((left, right) => Buffer.compare(
+    Buffer.from(left),
+    Buffer.from(right),
+  ));
+  for (const rawPath of document.observe) {
+    const filePath = relativePath(rawPath);
+    try {
+      const state = readRegular(root, filePath);
+      files.push({
+        path: filePath,
+        sha256: crypto.createHash("sha256").update(state.data).digest("hex"),
+        executable: Boolean(state.mode & 0o111),
+      });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      absent.push(filePath);
+    }
+  }
+  files.sort((left, right) => Buffer.compare(
+    Buffer.from(left.path),
+    Buffer.from(right.path),
+  ));
+  absent.sort((left, right) => Buffer.compare(
     Buffer.from(left),
     Buffer.from(right),
   ));

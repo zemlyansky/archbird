@@ -61,12 +61,10 @@ static void sort_unique(PathRequirement *paths, size_t *count) {
   *count = output;
 }
 
-static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
-                                   AbActSubmissions *submissions,
-                                   PathRequirement *present,
-                                   size_t *present_count,
-                                   PathRequirement *absent,
-                                   size_t *absent_count) {
+static ArchbirdStatus collect_item(
+    ArchbirdEngine *engine, const AbValue *item, AbActSubmissions *submissions,
+    PathRequirement *present, size_t *present_count, PathRequirement *absent,
+    size_t *absent_count, PathRequirement *observe, size_t *observe_count) {
   const AbValue *operation = field(item, "operation");
   const AbValue *action = field(operation, "action");
   const AbValue *path;
@@ -75,7 +73,7 @@ static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
     path = ab_act_submission_path(operation);
     if (path &&
         ab_act_submission_take(submissions, &field(item, "id")->as.text))
-      return add_path(engine, present, present_count, path);
+      return add_path(engine, observe, observe_count, path);
     return reject(engine, ARCHBIRD_POLICY_REJECTED,
                   "Plan contains a manual or blocked item");
   }
@@ -171,8 +169,10 @@ ArchbirdStatus archbird_plan_source_requirements(
   AbActSubmissions submissions = {0};
   PathRequirement present[AB_ACT_MAX_TRANSITIONS];
   PathRequirement absent[AB_ACT_MAX_TRANSITIONS];
+  PathRequirement observe[AB_ACT_MAX_TRANSITIONS];
   size_t present_count = 0;
   size_t absent_count = 0;
+  size_t observe_count = 0;
   size_t index;
   AbBuffer document;
   ArchbirdStatus status;
@@ -188,19 +188,29 @@ ArchbirdStatus archbird_plan_source_requirements(
                                      executor_submissions_length, &submissions);
   for (index = 0; status == ARCHBIRD_OK && index < plan.items->as.array.count;
        index++)
-    status =
-        collect_item(engine, &plan.items->as.array.items[index], &submissions,
-                     present, &present_count, absent, &absent_count);
+    status = collect_item(engine, &plan.items->as.array.items[index],
+                          &submissions, present, &present_count, absent,
+                          &absent_count, observe, &observe_count);
   if (status == ARCHBIRD_OK)
     status = ab_act_submissions_require_consumed(engine, &submissions);
   if (status == ARCHBIRD_OK) {
     sort_unique(present, &present_count);
     sort_unique(absent, &absent_count);
+    sort_unique(observe, &observe_count);
     for (index = 0; index < present_count; index++)
       if (bsearch(&present[index], absent, absent_count, sizeof(*absent),
+                  path_compare) ||
+          bsearch(&present[index], observe, observe_count, sizeof(*observe),
                   path_compare)) {
         status = reject(engine, ARCHBIRD_CONFLICT,
-                        "one path is required present and absent");
+                        "one path has incompatible source requirements");
+        break;
+      }
+    for (index = 0; status == ARCHBIRD_OK && index < absent_count; index++)
+      if (bsearch(&absent[index], observe, observe_count, sizeof(*observe),
+                  path_compare)) {
+        status = reject(engine, ARCHBIRD_CONFLICT,
+                        "one path has incompatible source requirements");
         break;
       }
   }
@@ -212,6 +222,10 @@ ArchbirdStatus archbird_plan_source_requirements(
     status = ab_buffer_literal(&document, ",\"files\":");
   if (status == ARCHBIRD_OK)
     status = render_paths(&document, present, present_count);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&document, ",\"observe\":");
+  if (status == ARCHBIRD_OK)
+    status = render_paths(&document, observe, observe_count);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&document, "}");
   if (status == ARCHBIRD_OK)

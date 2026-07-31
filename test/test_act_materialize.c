@@ -152,20 +152,23 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
   if (empty == 1) {
     memcpy(items, "[]", 3);
     items_length = 2;
-  } else if (empty == 2) {
+  } else if (empty == 2 || empty == 3) {
+    const char *item_id = empty == 2 ? "item:add-symbol" : "item:create-symbol";
+    const char *path = empty == 2 ? "src/a.c" : "src/new.c";
     items_length = snprintf(
         items, sizeof(items),
         "[{\"acceptance\":{\"constraints\":[\"UNCHANGED\"]},"
         "\"depends_on\":[],\"evidence\":[],\"executable\":false,"
-        "\"id\":\"item:add-symbol\",\"non_executable_reasons\":"
+        "\"id\":\"%s\",\"non_executable_reasons\":"
         "[\"Implementation semantics require review.\"],\"operation\":{"
         "\"action\":\"add_symbol\",\"kinds\":[\"function\"],"
-        "\"path\":\"src/a.c\",\"symbol\":\"future_api\"},"
+        "\"path\":\"%s\",\"symbol\":\"future_api\"},"
         "\"origins\":[{\"constraint_id\":\"UNCHANGED\","
         "\"constraint_result_sha256\":\"" VERIFY_SHA
         "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
         "\"provenance\":\"derived\",\"statement\":\"Implement future_api.\","
-        "\"unknowns\":[]}]");
+        "\"unknowns\":[]}]",
+        item_id, path);
   } else {
     items_length = snprintf(
         items, sizeof(items),
@@ -248,7 +251,7 @@ static int make_metadata(AbBuffer *out, const char *a_sha, const char *b_sha,
   char body[2048];
   int length = snprintf(
       body, sizeof(body),
-      "{\"absent\":[\"src/c.c\",\"src/z.c\"],\"files\":[{"
+      "{\"absent\":[\"src/c.c\",\"src/new.c\",\"src/z.c\"],\"files\":[{"
       "\"executable\":false,\"path\":\"config.json\",\"sha256\":\"%s\"},{"
       "\"executable\":false,\"path\":\"src/a.c\",\"sha256\":\"%s\"},{"
       "\"executable\":false,\"path\":\"src/b.c\",\"sha256\":\"%s\"}]}",
@@ -276,13 +279,16 @@ int main(void) {
   AbBuffer plan;
   AbBuffer empty_plan;
   AbBuffer submitted_plan;
+  AbBuffer submitted_create_plan;
   AbBuffer source_requirements;
   AbBuffer empty_source_requirements;
   AbBuffer submitted_source_requirements;
+  AbBuffer submitted_create_requirements;
   AbBuffer metadata;
   AbBuffer act;
   AbBuffer empty_act;
   AbBuffer submitted_act;
+  AbBuffer submitted_create_act;
   AbBuffer accepted_act;
   AbBuffer act_requirements;
   AbBuffer failing_plan;
@@ -301,13 +307,16 @@ int main(void) {
   ab_buffer_init(&plan, engine);
   ab_buffer_init(&empty_plan, engine);
   ab_buffer_init(&submitted_plan, engine);
+  ab_buffer_init(&submitted_create_plan, engine);
   ab_buffer_init(&source_requirements, engine);
   ab_buffer_init(&empty_source_requirements, engine);
   ab_buffer_init(&submitted_source_requirements, engine);
+  ab_buffer_init(&submitted_create_requirements, engine);
   ab_buffer_init(&metadata, engine);
   ab_buffer_init(&act, engine);
   ab_buffer_init(&empty_act, engine);
   ab_buffer_init(&submitted_act, engine);
+  ab_buffer_init(&submitted_create_act, engine);
   ab_buffer_init(&accepted_act, engine);
   ab_buffer_init(&act_requirements, engine);
   ab_buffer_init(&failing_plan, engine);
@@ -329,6 +338,8 @@ int main(void) {
                  "UNCHANGED", &empty_plan) ||
       !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 2,
                  "UNCHANGED", &submitted_plan) ||
+      !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 3,
+                 "UNCHANGED", &submitted_create_plan) ||
       !make_metadata(&metadata, a_sha, b_sha, json_sha)) {
     fprintf(stderr, "FAIL fixture construction\n");
     failures++;
@@ -342,7 +353,8 @@ int main(void) {
       (!find_bytes(&source_requirements,
                    "\"absent\":[\"src/c.c\",\"src/z.c\"]") ||
        !find_bytes(&source_requirements,
-                   "\"files\":[\"config.json\",\"src/a.c\",\"src/b.c\"]"))) {
+                   "\"files\":[\"config.json\",\"src/a.c\",\"src/b.c\"]") ||
+       !find_bytes(&source_requirements, "\"observe\":[]"))) {
     fprintf(stderr, "FAIL source requirements content/order\n");
     failures++;
   }
@@ -353,7 +365,8 @@ int main(void) {
                 engine);
   if (status == ARCHBIRD_OK &&
       (!find_bytes(&empty_source_requirements, "\"absent\":[]") ||
-       !find_bytes(&empty_source_requirements, "\"files\":[]"))) {
+       !find_bytes(&empty_source_requirements, "\"files\":[]") ||
+       !find_bytes(&empty_source_requirements, "\"observe\":[]"))) {
     fprintf(stderr, "FAIL empty source requirements shape\n");
     failures++;
   }
@@ -361,16 +374,20 @@ int main(void) {
     static const uint8_t submissions[] =
         "{\"items\":[{\"content_base64\":\""
         "aW50IGZ1dHVyZV9hcGkodm9pZCkgeyByZXR1cm4gMTsgfQo=\","
-        "\"item_id\":\"item:add-symbol\",\"kind\":\"replace_file\"}]}";
+        "\"item_id\":\"item:add-symbol\",\"kind\":\"write_file\"}]}";
     static const uint8_t duplicate_submissions[] =
         "{\"items\":[{\"content_base64\":\""
         "aW50IGZ1dHVyZV9hcGkodm9pZCkgeyByZXR1cm4gMTsgfQo=\","
-        "\"item_id\":\"item:add-symbol\",\"kind\":\"replace_file\"},"
+        "\"item_id\":\"item:add-symbol\",\"kind\":\"write_file\"},"
         "{\"content_base64\":\"YWxwaGEK\","
-        "\"item_id\":\"item:add-symbol\",\"kind\":\"replace_file\"}]}";
+        "\"item_id\":\"item:add-symbol\",\"kind\":\"write_file\"}]}";
     static const uint8_t unchanged_submission[] =
         "{\"items\":[{\"content_base64\":\"YWxwaGEK\","
-        "\"item_id\":\"item:add-symbol\",\"kind\":\"replace_file\"}]}";
+        "\"item_id\":\"item:add-symbol\",\"kind\":\"write_file\"}]}";
+    static const uint8_t create_submission[] =
+        "{\"items\":[{\"content_base64\":\""
+        "aW50IGZ1dHVyZV9hcGkodm9pZCkgeyByZXR1cm4gMTsgfQo=\","
+        "\"item_id\":\"item:create-symbol\",\"kind\":\"write_file\"}]}";
     expect_status("reject missing executor submission",
                   archbird_plan_source_requirements(
                       engine, submitted_plan.data, submitted_plan.length, NULL,
@@ -389,7 +406,7 @@ int main(void) {
     expect_status("collect submitted source requirement", status, ARCHBIRD_OK,
                   engine);
     if (!find_bytes(&submitted_source_requirements,
-                    "\"files\":[\"src/a.c\"]")) {
+                    "\"observe\":[\"src/a.c\"]")) {
       fprintf(stderr, "FAIL submitted source requirement content\n");
       failures++;
     }
@@ -420,6 +437,33 @@ int main(void) {
         ARCHBIRD_POLICY_REJECTED, engine);
     if (submitted_act.length) {
       fprintf(stderr, "FAIL rejected submission emitted an Act\n");
+      failures++;
+    }
+    status = archbird_plan_source_requirements(
+        engine, submitted_create_plan.data, submitted_create_plan.length,
+        create_submission, sizeof(create_submission) - 1, 0, collect,
+        &submitted_create_requirements);
+    expect_status("collect submitted create requirement", status, ARCHBIRD_OK,
+                  engine);
+    if (!find_bytes(&submitted_create_requirements,
+                    "\"observe\":[\"src/new.c\"]")) {
+      fprintf(stderr, "FAIL submitted create requirement content\n");
+      failures++;
+    }
+    status = archbird_act_materialize(
+        engine, project, submitted_create_plan.data,
+        submitted_create_plan.length, map.data, map.length, verification.data,
+        verification.length, metadata.data, metadata.length, create_submission,
+        sizeof(create_submission) - 1, 0, collect, &submitted_create_act);
+    expect_status("materialize asserted file creation", status, ARCHBIRD_OK,
+                  engine);
+    if (!find_bytes(
+            &submitted_create_act,
+            "\"capability\":\"archbird.asserted.source.create-file@1\"") ||
+        !find_bytes(&submitted_create_act,
+                    "\"kind\":\"create\",\"path\":\"src/new.c\"") ||
+        find_bytes(&submitted_create_act, "\"reads\":[\"src/new.c\"]")) {
+      fprintf(stderr, "FAIL asserted creation Act content\n");
       failures++;
     }
   }
@@ -578,13 +622,16 @@ cleanup:
   ab_buffer_free(&act_requirements);
   ab_buffer_free(&accepted_act);
   ab_buffer_free(&empty_act);
+  ab_buffer_free(&submitted_create_act);
   ab_buffer_free(&submitted_act);
   ab_buffer_free(&act);
   ab_buffer_free(&metadata);
   ab_buffer_free(&empty_source_requirements);
+  ab_buffer_free(&submitted_create_requirements);
   ab_buffer_free(&submitted_source_requirements);
   ab_buffer_free(&source_requirements);
   ab_buffer_free(&empty_plan);
+  ab_buffer_free(&submitted_create_plan);
   ab_buffer_free(&submitted_plan);
   ab_buffer_free(&plan);
   ab_buffer_free(&verification);

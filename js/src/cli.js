@@ -231,7 +231,7 @@ function actExecutorSubmissions(values) {
     return {
       content_base64: content.toString("base64"),
       item_id: itemId,
-      kind: "replace_file",
+      kind: "write_file",
     };
   });
   if (!items.length) {

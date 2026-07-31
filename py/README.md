@@ -483,10 +483,11 @@ An exact missing symbol or test route whose code is not derivable remains a
 structured non-executable `add_symbol` or `add_test_route` operation. Plan can
 order implementation before declaration and tests; Act still refuses the Plan
 until a reviewed executor or agent supplies the unresolved semantics.
-Supply reviewed full-file content for one exact `add_symbol` item, or for an
-`add_test_route` item with one exact mapped test file, with
-repeatable `act --submit ITEM=FILE`. This is Act executor input, not a Plan
-rewrite: native Act source-locks the mapped files, records the exact executor
+Supply reviewed full-file content for one exact `add_symbol` destination, or
+for an `add_test_route` item with one exact mapped test file, with repeatable
+`act --submit ITEM=FILE`. The symbol destination may already exist or may be
+absent. This is Act executor input, not a Plan rewrite: native Act observes the
+destination, emits an exact create or replace transition, records the executor
 ledger, builds one isolated after-Map, and accepts only when fresh Verify
 closes every item constraint and preserves the rest of the policy.
 `plan --format markdown` renders the canonical Plan as a review packet.
@@ -752,8 +753,9 @@ packet; it does not create or modify an artifact.
 `materialize_act_json()` produces exact binary-safe transitions from a Plan.
 Its optional `executor_submissions_json` input supplies reviewed full-file
 content for exact unresolved symbol or test-route items; the corresponding
-`plan_source_requirements()` input keeps path interpretation in the native
-core. Submissions are ephemeral executor input and never mutate Plan.
+`plan_source_requirements()` input asks the host to observe an exact
+destination without presuming that it exists. Native Act then chooses create
+or replace. Submissions are ephemeral executor input and never mutate Plan.
 `accept_act_json()` seals them only after callers supply the fresh isolated
 after-Map and Verification. `preflight_act_apply()` returns `ready` or
 `already_satisfied` after comparing newly observed sources with the complete

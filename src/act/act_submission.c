@@ -37,7 +37,7 @@ static ArchbirdStatus validate_row(ArchbirdEngine *engine, const AbValue *row,
   kind = field(row, "kind");
   content = field(row, "content_base64");
   if (!ab_artifact_stable_id(item_id) ||
-      !ab_artifact_text_is(kind, "replace_file") || !content ||
+      !ab_artifact_text_is(kind, "write_file") || !content ||
       content->kind != AB_VALUE_STRING ||
       content->as.text.length > AB_ACT_MAX_SUBMITTED_BASE64_BYTES)
     return invalid(engine, ARCHBIRD_INVALID_SCHEMA,

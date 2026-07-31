@@ -3077,6 +3077,117 @@ class PlanActCliTest(unittest.TestCase):
             unknown.stderr.decode(),
         )
 
+    def test_asserted_file_submission_can_create_an_exact_missing_destination(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "IMPLEMENT-API": {
+                    "kind": "required_symbols",
+                    "symbols": ["future_api"],
+                    "paths": ["future_api.py"],
+                    "kinds": ["function"],
+                    "owner": "architecture",
+                    "rationale": "The reviewed API implementation exists.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["**/*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+        )
+        (self.root / "current.py").write_text(
+            "def current_api():\n    return 1\n"
+        )
+        destination = self.root / "future_api.py"
+        plan_path = self.plan_path("create-api-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan_bytes = plan_path.read_bytes()
+        item = json.loads(plan_bytes)["items"][0]
+        self.assertEqual(
+            item["operation"],
+            {
+                "action": "add_symbol",
+                "kinds": ["function"],
+                "path": "future_api.py",
+                "symbol": "future_api",
+            },
+        )
+        self.assertFalse(item["executable"])
+
+        submitted = self.plan_path("future_api.py")
+        content = "def future_api():\n    return 2\n"
+        submitted.write_text(content)
+        act_path = self.plan_path("create-api-act.json")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={submitted}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["state"], "accepted")
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(
+            act["executors"][0]["capability"],
+            "archbird.asserted.source.create-file@1",
+        )
+        self.assertEqual(act["executors"][0]["item_ids"], [item["id"]])
+        self.assertEqual(act["executors"][0]["matches"], 1)
+        self.assertEqual(act["executors"][0]["reads"], [])
+        self.assertEqual(act["executors"][0]["writes"], ["future_api.py"])
+        self.assertEqual(act["transitions"][0]["kind"], "create")
+        self.assertEqual(act["transitions"][0]["path"], "future_api.py")
+        self.assertFalse(destination.exists())
+        self.assertEqual(plan_path.read_bytes(), plan_bytes)
+
+        destination.write_text("def unexpected():\n    return 0\n")
+        drift = run(
+            "apply",
+            str(act_path),
+            "--root",
+            str(self.root),
+            expected=2,
+        )
+        self.assertIn("future_api.py", drift.stderr.decode())
+        self.assertIn("neither the Act before-state nor after-state", drift.stderr.decode())
+        destination.unlink()
+
+        applied = run(
+            "apply", str(act_path), "--root", str(self.root)
+        ).stdout.decode()
+        self.assertEqual(
+            applied, "Result: applied-transitions=1; state=applied\n"
+        )
+        self.assertEqual(destination.read_text(), content)
+        verification = json.loads(
+            run(
+                "verify",
+                "--root",
+                str(self.root),
+                "--format",
+                "json",
+                "--check",
+            ).stdout
+        )
+        self.assertEqual(verification["summary"]["constraints"]["pass"], 1)
+        self.assertEqual(
+            run(
+                "apply", str(act_path), "--root", str(self.root)
+            ).stdout.decode(),
+            "Result: applied-transitions=0; state=already-satisfied\n",
+        )
+
     def test_asserted_test_submission_uses_one_exact_mapped_test_file(
         self,
     ) -> None:

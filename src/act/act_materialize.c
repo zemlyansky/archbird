@@ -532,27 +532,52 @@ add_asserted_file_submission(AbActContext *context, const AbValue *operation,
                              const AbActSubmission *submission) {
   const AbValue *path = object_field(operation, "path");
   size_t work_index;
-  const AbActWork *work;
-  ArchbirdStatus status = ab_act_executor_begin(
-      context, item_id, "archbird.asserted.source.replace-file@1");
+  ArchbirdStatus status;
+  if (ab_act_source_file(context->metadata, &path->as.text)) {
+    const AbActWork *work;
+    status = ab_act_executor_begin(context, item_id,
+                                   "archbird.asserted.source.replace-file@1");
+    if (status == ARCHBIRD_OK)
+      status = source_work(context, &path->as.text, &work_index);
+    if (status != ARCHBIRD_OK)
+      return status;
+    work = &context->works[work_index];
+    if (work->before_length == submission->replacement_length &&
+        (!work->before_length || memcmp(work->before, submission->replacement,
+                                        work->before_length) == 0))
+      return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                       "asserted replacement does not change the source");
+    status =
+        ab_utf8_validate(context->engine, work->before, work->before_length);
+    if (status != ARCHBIRD_OK)
+      return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                       "asserted full-file replacement requires UTF-8 source");
+    return add_edit(context, work_index, item_id, 0, work->before_length,
+                    submission->replacement, submission->replacement_length,
+                    NULL);
+  }
+  if (!ab_act_source_path_absent(context->metadata, &path->as.text))
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     "asserted destination state was not observed");
+  status = ab_act_executor_begin(context, item_id,
+                                 "archbird.asserted.source.create-file@1");
+  if (status == ARCHBIRD_OK)
+    status = absent_work(context, &path->as.text, &work_index);
   if (status != ARCHBIRD_OK)
     return status;
-  status = source_work(context, &path->as.text, &work_index);
-  if (status != ARCHBIRD_OK)
-    return status;
-  work = &context->works[work_index];
-  if (work->before_length == submission->replacement_length &&
-      (!work->before_length ||
-       memcmp(work->before, submission->replacement, work->before_length) == 0))
-    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
-                     "asserted replacement does not change the source");
-  status = ab_utf8_validate(context->engine, work->before, work->before_length);
-  if (status != ARCHBIRD_OK)
-    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
-                     "asserted full-file replacement requires UTF-8 source");
-  return add_edit(context, work_index, item_id, 0, work->before_length,
-                  submission->replacement, submission->replacement_length,
-                  NULL);
+  if (context->works[work_index].create ||
+      context->works[work_index].before_exists)
+    return act_error(context->engine, ARCHBIRD_CONFLICT,
+                     "asserted create destination is claimed more than once");
+  context->works[work_index].create = 1;
+  context->works[work_index].action_item_id = item_id;
+  context->works[work_index].created_bytes = submission->replacement;
+  context->works[work_index].created_length = submission->replacement_length;
+  context->works[work_index].executable = 0;
+  status = executor_write(context, &context->works[work_index].path);
+  if (status == ARCHBIRD_OK)
+    context->active_executor->matches++;
+  return status;
 }
 
 static ArchbirdStatus locked_source_work(AbActContext *context,

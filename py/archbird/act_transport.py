@@ -112,11 +112,20 @@ def observe_source_requirements(
 ) -> bytes:
     root = root.resolve()
     document = json.loads(requirements_json)
-    if not isinstance(document, dict) or set(document) != {"files", "absent"}:
+    if not isinstance(document, dict) or set(document) != {
+        "files",
+        "absent",
+        "observe",
+    }:
         raise ValueError("native source requirements have an invalid shape")
     files = document["files"]
     absent = document["absent"]
-    if not isinstance(files, list) or not isinstance(absent, list):
+    observe = document["observe"]
+    if (
+        not isinstance(files, list)
+        or not isinstance(absent, list)
+        or not isinstance(observe, list)
+    ):
         raise ValueError("native source requirements must contain arrays")
     rows: list[dict[str, object]] = []
     for raw_path in files:
@@ -134,6 +143,20 @@ def observe_source_requirements(
         path = _relative_path(raw_path)
         _require_absent(root, path)
         absent_paths.append(path)
+    for raw_path in observe:
+        path = _relative_path(raw_path)
+        try:
+            data, mode = _read_regular(root, path)
+        except FileNotFoundError:
+            absent_paths.append(path)
+            continue
+        rows.append(
+            {
+                "path": path,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "executable": bool(mode & 0o111),
+            }
+        )
     metadata = {
         "files": sorted(rows, key=lambda row: str(row["path"])),
         "absent": sorted(absent_paths),

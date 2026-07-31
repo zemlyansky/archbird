@@ -39,6 +39,9 @@ const observedRoot = fs.mkdtempSync(
 const assertedRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-asserted-"),
 );
+const assertedCreateRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-asserted-create-"),
+);
 const redirectRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-redirect-"),
 );
@@ -324,6 +327,88 @@ try {
     /function futureApi/,
   );
   run(["verify", "--root", assertedRoot, "--check"]);
+
+  fs.writeFileSync(
+    path.join(assertedCreateRoot, "archbird.json"),
+    JSON.stringify({
+      project: "node-plan-act-asserted-create",
+      layers: [{
+        name: "javascript",
+        language: "javascript",
+        globs: ["**/*.js"],
+        import_roots: ["."],
+      }],
+      constraints: {
+        "IMPLEMENT-API": {
+          kind: "required_symbols",
+          symbols: ["futureApi"],
+          paths: ["future-api.js"],
+          kinds: ["function"],
+          owner: "architecture",
+          rationale: "The reviewed API implementation exists.",
+        },
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(assertedCreateRoot, "current.js"),
+    "export function currentApi() {\n  return 1;\n}\n",
+  );
+  const assertedCreatePlan = path.join(artifacts, "asserted-create-plan.json");
+  const assertedCreateAct = path.join(artifacts, "asserted-create-act.json");
+  const assertedCreateInput = path.join(artifacts, "future-api.js");
+  const assertedCreateDestination = path.join(
+    assertedCreateRoot,
+    "future-api.js",
+  );
+  fs.writeFileSync(
+    assertedCreateInput,
+    "export function futureApi() {\n  return 2;\n}\n",
+  );
+  run([
+    "plan", "--root", assertedCreateRoot, "--output", assertedCreatePlan,
+  ]);
+  const assertedCreateItem =
+    JSON.parse(fs.readFileSync(assertedCreatePlan)).items[0];
+  assert.equal(assertedCreateItem.operation.action, "add_symbol");
+  assert.equal(assertedCreateItem.operation.path, "future-api.js");
+  assert.equal(assertedCreateItem.executable, false);
+  run([
+    "act", assertedCreatePlan, "--root", assertedCreateRoot,
+    "--submit", `${assertedCreateItem.id}=${assertedCreateInput}`,
+    "--format", "json", "--output", assertedCreateAct,
+  ]);
+  const assertedCreateDocument =
+    JSON.parse(fs.readFileSync(assertedCreateAct));
+  assert.equal(assertedCreateDocument.state, "accepted");
+  assert.equal(
+    assertedCreateDocument.executors[0].capability,
+    "archbird.asserted.source.create-file@1",
+  );
+  assert.deepEqual(assertedCreateDocument.executors[0].reads, []);
+  assert.deepEqual(
+    assertedCreateDocument.executors[0].writes,
+    ["future-api.js"],
+  );
+  assert.equal(assertedCreateDocument.transitions[0].kind, "create");
+  assert.equal(fs.existsSync(assertedCreateDestination), false);
+  assert.equal(
+    run([
+      "apply", assertedCreateAct, "--root", assertedCreateRoot,
+    ]).stdout.toString("utf8"),
+    "Result: applied-transitions=1; state=applied\n",
+  );
+  assert.match(
+    fs.readFileSync(assertedCreateDestination, "utf8"),
+    /function futureApi/,
+  );
+  run(["verify", "--root", assertedCreateRoot, "--check"]);
+  assert.equal(
+    run([
+      "apply", assertedCreateAct, "--root", assertedCreateRoot,
+    ]).stdout.toString("utf8"),
+    "Result: applied-transitions=0; state=already-satisfied\n",
+  );
 
   fs.writeFileSync(
     path.join(root, "api.js"),
@@ -1038,6 +1123,7 @@ try {
   fs.rmSync(napiRoot, { force: true, recursive: true });
   fs.rmSync(observedRoot, { force: true, recursive: true });
   fs.rmSync(assertedRoot, { force: true, recursive: true });
+  fs.rmSync(assertedCreateRoot, { force: true, recursive: true });
   fs.rmSync(redirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptRedirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptUnobservedRoot, { force: true, recursive: true });

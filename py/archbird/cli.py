@@ -1185,7 +1185,7 @@ def _act_executor_submissions(
             {
                 "content_base64": base64.b64encode(content).decode("ascii"),
                 "item_id": item_id,
-                "kind": "replace_file",
+                "kind": "write_file",
             }
         )
         files.append(replacement_path)
