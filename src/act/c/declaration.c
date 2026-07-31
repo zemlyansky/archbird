@@ -1,9 +1,21 @@
-#include "plan_compile_internal.h"
+#include "c/declaration.h"
 
 #include "artifact_validation.h"
 
 #include <ctype.h>
 #include <string.h>
+
+typedef struct AbActCDeclarationProof {
+  const AbValue *implementation_file;
+  const AbValue *implementation_symbol;
+  uint64_t anchor_start;
+  uint64_t anchor_end;
+} AbActCDeclarationProof;
+
+typedef struct AbActCDeclarationPlacement {
+  size_t line_start;
+  size_t newline_length;
+} AbActCDeclarationPlacement;
 
 static const AbValue *field(const AbValue *object, const char *name) {
   return object && object->kind == AB_VALUE_OBJECT
@@ -11,10 +23,11 @@ static const AbValue *field(const AbValue *object, const char *name) {
              : NULL;
 }
 
-static int path_has_suffix(const AbString *path, const char *suffix) {
-  size_t length = strlen(suffix);
-  return path && path->length >= length &&
-         memcmp(path->data + path->length - length, suffix, length) == 0;
+static ArchbirdStatus reject(AbActContext *context, ArchbirdStatus status,
+                             const char *message) {
+  return archbird_error_set(ab_act_executor_engine(context), status,
+                            ARCHBIRD_NO_OFFSET,
+                            "act C declaration executor: %s", message);
 }
 
 static int signature_token_count(const AbString *signature,
@@ -75,6 +88,12 @@ static int bytes_contain(const char *bytes, size_t length, const char *needle) {
     if (memcmp(bytes + index, needle, needle_length) == 0)
       return 1;
   return 0;
+}
+
+static int path_has_suffix(const AbString *path, const char *suffix) {
+  size_t length = strlen(suffix);
+  return path && path->length >= length &&
+         memcmp(path->data + path->length - length, suffix, length) == 0;
 }
 
 static const AbValue *map_file(const AbValue *map, const AbString *path) {
@@ -146,17 +165,16 @@ static const AbValue *unique_function_symbol(const AbValue *map,
   return match;
 }
 
-int ab_plan_c_declaration_analyze(const AbValue *map, const AbString *path,
-                                  const AbString *symbol,
-                                  AbPlanCDeclarationProof *out,
-                                  const char **out_reason) {
+static int analyze_declaration(const AbValue *map, const AbString *path,
+                               const AbString *symbol,
+                               AbActCDeclarationProof *out,
+                               const char **out_reason) {
   const AbValue *target;
   const AbValue *target_symbols;
   const AbValue *implementation;
   const AbValue *implementation_file;
   const AbValue *signature;
   const AbValue *anchor = NULL;
-  const AbValue *anchor_fact_id = NULL;
   uint64_t anchor_start = 0;
   uint64_t anchor_end = 0;
   size_t index;
@@ -212,7 +230,6 @@ int ab_plan_c_declaration_analyze(const AbValue *map, const AbString *path,
       continue;
     if (!anchor || end > anchor_end) {
       anchor = candidate;
-      anchor_fact_id = fact_id;
       anchor_start = start;
       anchor_end = end;
     }
@@ -222,23 +239,20 @@ int ab_plan_c_declaration_analyze(const AbValue *map, const AbString *path,
         "No peer declaration proves the destination's C signature style.";
     return 0;
   }
-  out->target_file = target;
   out->implementation_file = implementation_file;
   out->implementation_symbol = implementation;
-  out->anchor_symbol = anchor;
-  out->anchor_fact_id = anchor_fact_id;
   out->anchor_start = anchor_start;
   out->anchor_end = anchor_end;
   return 1;
 }
 
-ArchbirdStatus ab_plan_c_declaration_signature(
-    ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
-    const AbString *symbol, const AbPlanCDeclarationProof *proof,
-    AbBuffer *signature, const char **out_reason) {
+static ArchbirdStatus extract_signature(AbActContext *context,
+                                        const AbString *symbol,
+                                        const AbActCDeclarationProof *proof,
+                                        AbBuffer *signature) {
   const AbValue *path = field(proof->implementation_file, "path");
   const AbValue *extent = field(proof->implementation_symbol, "extent");
-  AbPlanSourceLock lock;
+  ArchbirdSourceView source;
   AbString exact;
   uint64_t start;
   uint64_t end;
@@ -246,98 +260,165 @@ ArchbirdStatus ab_plan_c_declaration_signature(
   size_t signature_start;
   size_t signature_end;
   ArchbirdStatus status;
-  *out_reason = NULL;
   if (!path || path->kind != AB_VALUE_STRING || !extent ||
       extent->kind != AB_VALUE_OBJECT ||
       !ab_artifact_safe_integer(field(extent, "start"), &start) ||
-      !ab_artifact_safe_integer(field(extent, "end"), &end) || start >= end) {
-    *out_reason = "The C implementation has no exact source extent.";
-    return ARCHBIRD_OK;
-  }
-  status = ab_plan_source_lock(engine, project, map, &path->as.text, &lock);
+      !ab_artifact_safe_integer(field(extent, "end"), &end) || start >= end)
+    return reject(context, ARCHBIRD_POLICY_REJECTED,
+                  "the C implementation has no exact source extent");
+  status = ab_act_executor_source(context, &path->as.text, &source);
   if (status != ARCHBIRD_OK)
     return status;
-  if (end > lock.source.byte_length) {
-    *out_reason = "The C implementation extent exceeds its source.";
-    return ARCHBIRD_OK;
-  }
+  if (end > source.byte_length)
+    return reject(context, ARCHBIRD_CONFLICT,
+                  "the C implementation extent exceeds its source");
   signature_start = (size_t)start;
   while (signature_start < (size_t)end &&
-         (lock.source.bytes[signature_start] == ' ' ||
-          lock.source.bytes[signature_start] == '\t'))
+         (source.bytes[signature_start] == ' ' ||
+          source.bytes[signature_start] == '\t'))
     signature_start++;
   signature_end = signature_start;
   for (cursor = signature_start; cursor < (size_t)end; cursor++) {
-    uint8_t byte = lock.source.bytes[cursor];
-    if (byte == '\n' || byte == '\r') {
-      *out_reason =
-          "The C implementation signature is not one exact source line.";
-      return ARCHBIRD_OK;
-    }
+    uint8_t byte = source.bytes[cursor];
+    if (byte == '\n' || byte == '\r')
+      return reject(
+          context, ARCHBIRD_POLICY_REJECTED,
+          "the C implementation signature is not one exact source line");
     if (byte == '{') {
       signature_end = cursor;
       break;
     }
   }
-  if (cursor == (size_t)end) {
-    *out_reason = "The C implementation has no exact opening brace.";
-    return ARCHBIRD_OK;
-  }
+  if (cursor == (size_t)end)
+    return reject(context, ARCHBIRD_POLICY_REJECTED,
+                  "the C implementation has no exact opening brace");
   while (signature_end > signature_start &&
-         (lock.source.bytes[signature_end - 1] == ' ' ||
-          lock.source.bytes[signature_end - 1] == '\t'))
+         (source.bytes[signature_end - 1] == ' ' ||
+          source.bytes[signature_end - 1] == '\t'))
     signature_end--;
-  exact.data = (char *)lock.source.bytes + signature_start;
+  exact.data = (char *)source.bytes + signature_start;
   exact.length = signature_end - signature_start;
   if (signature_token_count(&exact, symbol) != 1 ||
       signature_has_word(&exact, "static") ||
       signature_has_word(&exact, "inline") ||
       memchr(exact.data, '#', exact.length) ||
       bytes_contain(exact.data, exact.length, "/*") ||
-      bytes_contain(exact.data, exact.length, "//")) {
-    *out_reason =
-        "The C implementation signature is not a safe external declaration.";
-    return ARCHBIRD_OK;
-  }
+      bytes_contain(exact.data, exact.length, "//"))
+    return reject(
+        context, ARCHBIRD_POLICY_REJECTED,
+        "the C implementation signature is not a safe external declaration");
   return ab_buffer_append(signature, exact.data, exact.length);
 }
 
-int ab_plan_c_declaration_place(const AbPlanCDeclarationProof *proof,
-                                const ArchbirdSourceView *source,
-                                AbPlanCDeclarationPlacement *out,
-                                const char **out_reason) {
+static ArchbirdStatus place_declaration(AbActContext *context,
+                                        const AbActCDeclarationProof *proof,
+                                        const ArchbirdSourceView *source,
+                                        AbActCDeclarationPlacement *out) {
   size_t line_start;
   size_t index;
   memset(out, 0, sizeof(*out));
-  *out_reason = NULL;
   if (!source || !source->bytes || proof->anchor_start >= proof->anchor_end ||
-      proof->anchor_end >= source->byte_length) {
-    *out_reason = "The peer declaration has no exact source extent.";
-    return 0;
-  }
+      proof->anchor_end >= source->byte_length)
+    return reject(context, ARCHBIRD_CONFLICT,
+                  "the peer declaration has no exact source extent");
   if (source->bytes[proof->anchor_end] == '\r') {
     if (proof->anchor_end + 1 >= source->byte_length ||
-        source->bytes[proof->anchor_end + 1] != '\n') {
-      *out_reason = "The C header has malformed line endings.";
-      return 0;
-    }
+        source->bytes[proof->anchor_end + 1] != '\n')
+      return reject(context, ARCHBIRD_CONFLICT,
+                    "the C header has malformed line endings");
     out->newline_length = 2;
   } else if (source->bytes[proof->anchor_end] == '\n') {
     out->newline_length = 1;
   } else {
-    *out_reason =
-        "The peer declaration does not end before a source line boundary.";
-    return 0;
+    return reject(
+        context, ARCHBIRD_CONFLICT,
+        "the peer declaration does not end before a source line boundary");
   }
   line_start = (size_t)proof->anchor_start;
   while (line_start && source->bytes[line_start - 1] != '\n' &&
          source->bytes[line_start - 1] != '\r')
     line_start--;
   for (index = line_start; index < (size_t)proof->anchor_start; index++)
-    if (source->bytes[index] != ' ' && source->bytes[index] != '\t') {
-      *out_reason = "The peer declaration has a non-whitespace source prefix.";
-      return 0;
-    }
+    if (source->bytes[index] != ' ' && source->bytes[index] != '\t')
+      return reject(context, ARCHBIRD_CONFLICT,
+                    "the peer declaration has a non-whitespace source prefix");
   out->line_start = line_start;
-  return 1;
+  return ARCHBIRD_OK;
+}
+
+static int source_paths_match(const AbValue *paths, const AbString *target,
+                              const AbString *implementation) {
+  int target_seen = 0;
+  int implementation_seen = 0;
+  size_t index;
+  if (!paths || paths->kind != AB_VALUE_ARRAY || paths->as.array.count != 2)
+    return 0;
+  for (index = 0; index < paths->as.array.count; index++) {
+    const AbValue *path = &paths->as.array.items[index];
+    if (path->kind != AB_VALUE_STRING)
+      return 0;
+    if (ab_string_equal(&path->as.text, target))
+      target_seen++;
+    if (ab_string_equal(&path->as.text, implementation))
+      implementation_seen++;
+  }
+  return target_seen == 1 && implementation_seen == 1;
+}
+
+ArchbirdStatus ab_act_c_declare_symbol(AbActContext *context,
+                                       const AbValue *operation,
+                                       const AbString *item_id) {
+  ArchbirdEngine *engine = ab_act_executor_engine(context);
+  const AbValue *path = field(operation, "path");
+  const AbValue *symbol = field(operation, "symbol");
+  const AbValue *source_paths = field(operation, "source_paths");
+  const AbValue *implementation_path;
+  AbActCDeclarationProof proof;
+  AbActCDeclarationPlacement placement;
+  ArchbirdSourceView source;
+  const char *reason = NULL;
+  AbBuffer signature;
+  AbBuffer replacement;
+  ArchbirdStatus status;
+  memset(&proof, 0, sizeof(proof));
+  ab_buffer_init(&signature, engine);
+  ab_buffer_init(&replacement, engine);
+  status = ab_act_executor_source(context, &path->as.text, &source);
+  if (status == ARCHBIRD_OK &&
+      !analyze_declaration(ab_act_executor_map(context), &path->as.text,
+                           &symbol->as.text, &proof, &reason))
+    status = reject(context, ARCHBIRD_POLICY_REJECTED,
+                    reason ? reason
+                           : "the mapped declaration objective is unsupported");
+  implementation_path =
+      status == ARCHBIRD_OK ? field(proof.implementation_file, "path") : NULL;
+  if (status == ARCHBIRD_OK &&
+      (!implementation_path || implementation_path->kind != AB_VALUE_STRING ||
+       !source_paths_match(source_paths, &path->as.text,
+                           &implementation_path->as.text)))
+    status = reject(context, ARCHBIRD_CONFLICT,
+                    "the declared source closure differs from the Map proof");
+  if (status == ARCHBIRD_OK)
+    status = extract_signature(context, &symbol->as.text, &proof, &signature);
+  if (status == ARCHBIRD_OK)
+    status = place_declaration(context, &proof, &source, &placement);
+  if (status == ARCHBIRD_OK && placement.newline_length == 2)
+    status = ab_buffer_append(&replacement, "\r\n", 2);
+  else if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&replacement, "\n", 1);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&replacement, source.bytes + placement.line_start,
+                              proof.anchor_start - placement.line_start);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&replacement, signature.data, signature.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&replacement, ";", 1);
+  if (status == ARCHBIRD_OK)
+    status = ab_act_executor_replace_exact(
+        context, item_id, &path->as.text, (size_t)proof.anchor_end,
+        (size_t)proof.anchor_end, source.bytes + proof.anchor_end, 0,
+        replacement.data, replacement.length);
+  ab_buffer_free(&signature);
+  ab_buffer_free(&replacement);
+  return status;
 }

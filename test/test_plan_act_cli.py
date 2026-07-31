@@ -747,16 +747,39 @@ class PlanActCliTest(unittest.TestCase):
             item["operation"]["action"]: item["operation"]
             for item in plan["items"]
         }
-        declaration = operations["insert_c_declaration"]
-        self.assertEqual(declaration["path"], "src/core.h")
-        self.assertEqual(declaration["symbol"], "core_sum")
         self.assertEqual(
-            declaration["signature"], "int core_sum(int left,int right)"
+            operations["declare_symbol"],
+            {
+                "action": "declare_symbol",
+                "path": "src/core.h",
+                "symbol": "core_sum",
+                "source_paths": ["src/core.c", "src/core.h"],
+            },
         )
-        self.assertTrue(declaration["anchor_fact_id"].startswith("f:"))
-        self.assertEqual(
-            declaration["source_sha256"],
-            hashlib.sha256(original_header).hexdigest(),
+        tampered = json.loads(json.dumps(plan))
+        declaration_item = next(
+            item
+            for item in tampered["items"]
+            if item["operation"]["action"] == "declare_symbol"
+        )
+        declaration_item["operation"]["source_paths"] = [
+            "js/decoy.js",
+            "src/core.h",
+        ]
+        tampered_path = self.plan_path("tampered-source-closure-plan.json")
+        tampered_path.write_text(json.dumps(tampered, sort_keys=True))
+        rejected = run(
+            "act",
+            str(tampered_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn(
+            "declared source closure differs from the Map proof",
+            rejected.stderr.decode(),
         )
         registration = operations["insert_make_variable_token"]
         self.assertEqual(registration["token"], "_core_sum")
@@ -812,11 +835,22 @@ class PlanActCliTest(unittest.TestCase):
         )
         manual = json.loads(manual_path.read_bytes())
         self.assertEqual(len(manual["items"]), 1)
-        self.assertFalse(manual["items"][0]["executable"])
-        self.assertEqual(manual["items"][0]["operation"]["action"], "manual")
+        self.assertTrue(manual["items"][0]["executable"])
+        self.assertEqual(
+            manual["items"][0]["operation"]["action"], "declare_symbol"
+        )
+        style_rejected = run(
+            "act",
+            str(manual_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
         self.assertIn(
             "signature style",
-            " ".join(manual["items"][0]["non_executable_reasons"]),
+            style_rejected.stderr.decode(),
         )
 
         header.write_text(
@@ -847,7 +881,7 @@ class PlanActCliTest(unittest.TestCase):
             expected=2,
         )
         self.assertIn(
-            "insert_c_declaration differs from its Map proof",
+            "does not satisfy the Plan contract",
             rejected.stderr.decode(),
         )
 
@@ -868,10 +902,19 @@ class PlanActCliTest(unittest.TestCase):
             str(static_path),
         )
         static_plan = json.loads(static_path.read_bytes())
-        self.assertFalse(static_plan["items"][0]["executable"])
+        self.assertTrue(static_plan["items"][0]["executable"])
+        static_rejected = run(
+            "act",
+            str(static_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
         self.assertIn(
             "safe external declaration",
-            " ".join(static_plan["items"][0]["non_executable_reasons"]),
+            static_rejected.stderr.decode(),
         )
 
     def test_multiple_required_registrations_compose_one_file_transition(

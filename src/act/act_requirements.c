@@ -92,6 +92,15 @@ static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
                         &paths->as.array.items[index]);
     return status;
   }
+  if (ab_artifact_text_is(action, "declare_symbol")) {
+    const AbValue *paths = field(operation, "source_paths");
+    ArchbirdStatus status = ARCHBIRD_OK;
+    for (index = 0; status == ARCHBIRD_OK && index < paths->as.array.count;
+         index++)
+      status = add_path(engine, present, present_count,
+                        &paths->as.array.items[index]);
+    return status;
+  }
   path = field(operation, "path");
   if (!path)
     return reject(engine, ARCHBIRD_INVALID_SCHEMA,
@@ -205,9 +214,8 @@ ArchbirdStatus archbird_act_source_requirements(
   if (status == ARCHBIRD_OK) {
     sort_unique(present, &present_count);
     sort_unique(absent, &absent_count);
-  }
-  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&document, "{\"absent\":");
+  }
   if (status == ARCHBIRD_OK)
     status = render_paths(&document, absent, absent_count);
   if (status == ARCHBIRD_OK)

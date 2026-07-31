@@ -385,36 +385,30 @@
         "position": {"enum": ["before", "after"]}
       }
     },
-    "cDeclarationInsert": {
+    "declareSymbol": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Act rederives one exact single-line external implementation signature and peer declaration style from the source-bound Map before inserting after the named declaration fact.",
+      "$comment": "Language-neutral declaration objective. Act selects an executor from the mapped destination language and grounds exact syntax and placement.",
       "required": [
         "action",
         "path",
-        "source_sha256",
         "symbol",
-        "signature",
-        "anchor_fact_id"
+        "source_paths"
       ],
       "properties": {
-        "action": {"const": "insert_c_declaration"},
+        "action": {"const": "declare_symbol"},
         "path": {"$ref": "#/$defs/repositoryPath"},
-        "source_sha256": {"$ref": "#/$defs/sha256"},
         "symbol": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
           "maxLength": 256
         },
-        "signature": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 65536
-        },
-        "anchor_fact_id": {
-          "type": "string",
-          "pattern": "^f:.+$",
-          "maxLength": 65536
+        "source_paths": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/repositoryPath"}
         }
       }
     },
@@ -698,7 +692,7 @@
         {"$ref": "#/$defs/jsonPointerEdit"},
         {"$ref": "#/$defs/makeVariableTokenEdit"},
         {"$ref": "#/$defs/makeVariableTokenInsert"},
-        {"$ref": "#/$defs/cDeclarationInsert"},
+        {"$ref": "#/$defs/declareSymbol"},
         {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/redirectDependency"},
         {"$ref": "#/$defs/manual"}

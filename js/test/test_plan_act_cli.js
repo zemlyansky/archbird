@@ -325,7 +325,18 @@ try {
     coordinatedDocument.items
       .map((item) => item.operation.action)
       .sort(),
-    ["insert_c_declaration", "insert_make_variable_token"],
+    ["declare_symbol", "insert_make_variable_token"],
+  );
+  assert.deepEqual(
+    coordinatedDocument.items.find(
+      (item) => item.operation.action === "declare_symbol",
+    ).operation,
+    {
+      action: "declare_symbol",
+      path: "src/core.h",
+      source_paths: ["src/core.c", "src/core.h"],
+      symbol: "core_sum",
+    },
   );
   run([
     "act", coordinatedPlan, "--root", coordinatedRoot, "--format", "json",

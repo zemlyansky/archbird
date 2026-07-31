@@ -78,6 +78,106 @@ static int repository_path_without_pattern(const AbValue *value) {
   return 1;
 }
 
+static const AbValue *map_file(const AbValue *map, const AbString *path) {
+  const AbValue *files = field(map, "files");
+  const AbValue *match = NULL;
+  size_t index;
+  if (!files || files->kind != AB_VALUE_ARRAY)
+    return NULL;
+  for (index = 0; index < files->as.array.count; index++) {
+    const AbValue *candidate = &files->as.array.items[index];
+    const AbValue *candidate_path = field(candidate, "path");
+    if (!candidate_path || candidate_path->kind != AB_VALUE_STRING ||
+        !ab_string_equal(&candidate_path->as.text, path))
+      continue;
+    if (match)
+      return NULL;
+    match = candidate;
+  }
+  return match;
+}
+
+static const AbValue *unique_definition_file(const AbValue *map,
+                                             const AbString *name,
+                                             const AbString *language,
+                                             const AbString *excluded_path) {
+  const AbValue *files = field(map, "files");
+  const AbValue *match = NULL;
+  size_t file_index;
+  if (!files || files->kind != AB_VALUE_ARRAY)
+    return NULL;
+  for (file_index = 0; file_index < files->as.array.count; file_index++) {
+    const AbValue *file = &files->as.array.items[file_index];
+    const AbValue *path = field(file, "path");
+    const AbValue *file_language = field(file, "language");
+    const AbValue *symbols = field(file, "symbols");
+    size_t symbol_index;
+    if (!repository_path_without_pattern(path) || !file_language ||
+        file_language->kind != AB_VALUE_STRING ||
+        !ab_string_equal(&file_language->as.text, language) ||
+        (excluded_path && ab_string_equal(&path->as.text, excluded_path)) ||
+        !symbols || symbols->kind != AB_VALUE_ARRAY)
+      continue;
+    for (symbol_index = 0; symbol_index < symbols->as.array.count;
+         symbol_index++) {
+      const AbValue *symbol = &symbols->as.array.items[symbol_index];
+      const AbValue *symbol_name = field(symbol, "name");
+      if (!symbol_name || symbol_name->kind != AB_VALUE_STRING ||
+          !ab_string_equal(&symbol_name->as.text, name) ||
+          !ab_artifact_text_is(field(symbol, "kind"), "function") ||
+          field(symbol, "syntax_recovery"))
+        continue;
+      if (match)
+        return NULL;
+      match = file;
+    }
+  }
+  return match;
+}
+
+static int declaration_objective_scope(const AbValue *map, const AbString *path,
+                                       const AbString *symbol,
+                                       const AbValue **out_implementation_file,
+                                       const char **out_reason) {
+  const AbValue *target = map_file(map, path);
+  const AbValue *language;
+  const AbValue *symbols;
+  size_t index;
+  *out_implementation_file = NULL;
+  *out_reason = NULL;
+  if (!target) {
+    *out_reason = "The declaration destination is not one exact mapped file.";
+    return 0;
+  }
+  language = field(target, "language");
+  if (!language || language->kind != AB_VALUE_STRING) {
+    *out_reason = "The declaration destination has no mapped language.";
+    return 0;
+  }
+  symbols = field(target, "symbols");
+  if (!symbols || symbols->kind != AB_VALUE_ARRAY) {
+    *out_reason =
+        "The declaration destination has no complete mapped symbol ledger.";
+    return 0;
+  }
+  for (index = 0; index < symbols->as.array.count; index++) {
+    const AbValue *name = field(&symbols->as.array.items[index], "name");
+    if (name && name->kind == AB_VALUE_STRING &&
+        ab_string_equal(&name->as.text, symbol)) {
+      *out_reason = "The declaration destination already contains the symbol.";
+      return 0;
+    }
+  }
+  *out_implementation_file =
+      unique_definition_file(map, symbol, &language->as.text, path);
+  if (!*out_implementation_file) {
+    *out_reason =
+        "No unique exact mapped definition establishes the declaration scope.";
+    return 0;
+  }
+  return 1;
+}
+
 static AbString symbol_leaf(const AbString *symbol) {
   size_t start = symbol ? symbol->length : 0;
   while (start && symbol->data[start - 1] != '.' &&
@@ -732,10 +832,12 @@ static ArchbirdStatus append_manual_finding(ArchbirdEngine *engine,
   return status;
 }
 
-static ArchbirdStatus append_required_declaration(
-    ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
-    AbPlanItemBuilder *builder, const AbValue *constraint,
-    const AbValue *definition, const AbPlanFindingGroup *group) {
+static ArchbirdStatus append_required_symbol(ArchbirdEngine *engine,
+                                             const AbValue *map,
+                                             AbPlanItemBuilder *builder,
+                                             const AbValue *constraint,
+                                             const AbValue *definition,
+                                             const AbPlanFindingGroup *group) {
   const AbValue *finding = group->representative;
   const AbValue *key = field(finding, "key");
   const AbValue *paths = field(definition, "paths");
@@ -743,72 +845,65 @@ static ArchbirdStatus append_required_declaration(
       paths && paths->kind == AB_VALUE_ARRAY && paths->as.array.count == 1
           ? &paths->as.array.items[0]
           : NULL;
-  AbPlanCDeclarationProof proof;
-  AbPlanCDeclarationPlacement placement;
-  AbPlanSourceLock lock;
   const char *reason = NULL;
   const char *reasons[1];
-  AbBuffer signature;
   AbBuffer operation;
   AbPlanItemSpec spec;
   char statement[1024];
   int supported = 0;
   int length;
   ArchbirdStatus status = ARCHBIRD_OK;
-  memset(&lock, 0, sizeof(lock));
-  ab_buffer_init(&signature, engine);
+  const AbValue *implementation_path = NULL;
+  const AbValue *implementation_file = NULL;
   if (!key || key->kind != AB_VALUE_STRING ||
       !portable_identifier(&key->as.text))
-    reason = "The required symbol is not one portable C identifier.";
+    reason = "The required symbol is not one portable identifier.";
   else if (!repository_path_without_pattern(path))
     reason = "The required symbol projection does not name one exact file.";
   else
-    supported = ab_plan_c_declaration_analyze(map, &path->as.text,
-                                              &key->as.text, &proof, &reason);
-  if (supported)
-    status = ab_plan_source_lock(engine, project, map, &path->as.text, &lock);
-  if (status == ARCHBIRD_OK && supported &&
-      !ab_plan_c_declaration_place(&proof, &lock.source, &placement, &reason))
-    supported = 0;
-  if (status == ARCHBIRD_OK && supported)
-    status = ab_plan_c_declaration_signature(
-        engine, project, map, &key->as.text, &proof, &signature, &reason);
-  if (status == ARCHBIRD_OK && supported && reason)
-    supported = 0;
+    supported = declaration_objective_scope(map, &path->as.text, &key->as.text,
+                                            &implementation_file, &reason);
+  if (supported) {
+    implementation_path = field(implementation_file, "path");
+    if (!repository_path_without_pattern(implementation_path)) {
+      supported = 0;
+      reason = "The required declaration has no exact mapped definition path.";
+    }
+  }
   ab_buffer_init(&operation, engine);
-  if (status == ARCHBIRD_OK && supported) {
-    status = literal(&operation, "{\"action\":\"insert_c_declaration\","
-                                 "\"anchor_fact_id\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(&operation, proof.anchor_fact_id);
-    if (status == ARCHBIRD_OK)
-      status = literal(&operation, ",\"path\":");
+  if (supported) {
+    const AbValue *first = path;
+    const AbValue *second = implementation_path;
+    if (ab_string_compare(&first->as.text, &second->as.text) > 0) {
+      first = implementation_path;
+      second = path;
+    }
+    status = literal(&operation, "{\"action\":\"declare_symbol\",\"path\":");
     if (status == ARCHBIRD_OK)
       status = ab_value_render(&operation, path);
-    if (status == ARCHBIRD_OK)
-      status = literal(&operation, ",\"signature\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_json_string(&operation, (const char *)signature.data,
-                                     signature.length);
-    if (status == ARCHBIRD_OK)
-      status = literal(&operation, ",\"source_sha256\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(&operation, lock.sha256);
     if (status == ARCHBIRD_OK)
       status = literal(&operation, ",\"symbol\":");
     if (status == ARCHBIRD_OK)
       status = ab_value_render(&operation, key);
     if (status == ARCHBIRD_OK)
-      status = literal(&operation, "}");
-  } else if (status == ARCHBIRD_OK) {
+      status = literal(&operation, ",\"source_paths\":[");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&operation, first);
+    if (status == ARCHBIRD_OK)
+      status = literal(&operation, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&operation, second);
+    if (status == ARCHBIRD_OK)
+      status = literal(&operation, "]}");
+  } else {
     status = manual_operation(
         engine, path && path->kind == AB_VALUE_STRING ? &path->as.text : NULL,
-        "Provide the reviewed declaration syntax and exact destination.",
-        &operation);
+        "Provide the reviewed declaration and exact destination.", &operation);
   }
   length = snprintf(
-      statement, sizeof(statement), "%s required C declaration %.*s%s%.*s.",
-      supported ? "Insert" : "Review",
+      statement, sizeof(statement),
+      "%s required symbol declaration %.*s%s%.*s.",
+      supported ? "Declare" : "Review",
       key && key->kind == AB_VALUE_STRING ? (int)key->as.text.length : 0,
       key && key->kind == AB_VALUE_STRING ? key->as.text.data : "",
       path && path->kind == AB_VALUE_STRING ? " in " : "",
@@ -831,7 +926,6 @@ static ArchbirdStatus append_required_declaration(
   spec.reason_count = supported ? 0 : 1;
   if (status == ARCHBIRD_OK)
     status = ab_plan_item_builder_append(builder, &spec);
-  ab_buffer_free(&signature);
   ab_buffer_free(&operation);
   return status;
 }
@@ -894,9 +988,8 @@ ArchbirdStatus ab_plan_compile_symbol_constraint(
       const AbValue *row = groups.groups[index].representative;
       if (ab_plan_finding_current(row) &&
           ab_artifact_text_is(field(row, "comparison"), "missing"))
-        status = append_required_declaration(engine, project, map, builder,
-                                             constraint, definition,
-                                             &groups.groups[index]);
+        status = append_required_symbol(engine, map, builder, constraint,
+                                        definition, &groups.groups[index]);
       else
         status = append_manual_finding(
             engine, builder, constraint, &groups.groups[index],

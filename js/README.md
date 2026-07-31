@@ -481,10 +481,10 @@ evidence blocks execution.
 
 Older exact `replace_range`, `create_file`, `delete_file`, `move_file`,
 `edit_json_pointer`, `edit_make_variable_token`,
-`insert_make_variable_token`, `insert_c_declaration`, and evidence-bound
-`rename_symbol` operations remain executable while their grounded details are
-migrated behind Act executors. They are compatibility operations, not the model
-for new Plan operators. An asserted `edit_json_pointer`
+`insert_make_variable_token`, and evidence-bound `rename_symbol` operations
+remain executable while their grounded details are migrated behind Act
+executors. They are compatibility operations, not the model for new Plan
+operators. An asserted `edit_json_pointer`
 operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
 expected old JSON value without reformatting the complete file. An asserted
@@ -526,10 +526,11 @@ reuses content-addressed provider facts. Revision ranges, saved-current-Map
 mode, and simultaneous `--before-map` are rejected.
 
 A `required_symbols` constraint naming one exact C header can derive
-`insert_c_declaration` from one unique implementation only when an existing
-declaration/implementation peer proves the header's signature style. Act
-rederives the exact single-line implementation source rather than rendering a
-normalized Map signature, and rejects edited signatures, stale anchors, globs,
+the language-neutral `declare_symbol` objective from one unique implementation
+that establishes a bounded same-language evidence scope. Plan stores only the
+symbol, destination, and exact source paths the executor may read. Act/C then
+requires a declaration/definition peer, rederives the exact single-line
+implementation source and placement, and rejects source-closure drift, globs,
 ambiguous or internal implementations, and unproven header decoration. The
 declaration and a derived Make registration can be accepted and applied
 together.

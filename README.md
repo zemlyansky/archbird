@@ -722,9 +722,9 @@ archbird apply .archbird/act.json
 
 Plan's target contract is language-neutral: it names architectural objectives,
 operators, exhaustive applicability, dependencies, executor capability, and
-acceptance without embedding source syntax or replacement bytes. The first
-operator that follows this boundary end to end is
-`redirect_dependency`. Given reviewed `--redirect OLD=NEW` intent, Plan stores
+acceptance without embedding source syntax or replacement bytes.
+`redirect_dependency` and `declare_symbol` currently follow this boundary end
+to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores
 the exhaustive edge ProjectionPlan, exact relation, affected source paths, and
 symbol identities. Act reevaluates that projection and dispatches to the native
 C executor, which resolves exact declarations, definitions, include spelling,
@@ -734,10 +734,9 @@ ambiguous definitions, missing observed includes, or non-unique call sites.
 Older operators currently include `replace_range`, `create_file`,
 `delete_file`, `move_file`, `edit_json_pointer`,
 `edit_make_variable_token`, `insert_make_variable_token`,
-`insert_c_declaration`, and evidence-bound `rename_symbol`. They predate the
-neutral Plan boundary and still carry some grounded source details. They remain
-supported while they are migrated behind Act executors; they are not the model
-for new Plan operators.
+and evidence-bound `rename_symbol`. They predate the neutral Plan boundary and
+still carry some grounded source details. They remain supported while they are
+migrated behind Act executors; they are not the model for new Plan operators.
 
 A one-extra/one-missing symbol constraint may suggest a rename, but that does
 not establish intent: the derived candidate stays non-executable until a
@@ -794,15 +793,15 @@ the same variable, anchor, and side; tokens are ordered canonically.
 Duplicate or otherwise coincident edits remain conflicts.
 
 For a `required_symbols` constraint scoped to one exact C header, Plan can
-derive `insert_c_declaration` when the Map contains one implementation
-signature and an existing declaration/implementation peer proves the header's
-signature convention. The inserted signature is copied from the exact
-single-line implementation source, not reconstructed from the Map's normalized
-display signature. Act rederives that proof from the source-bound Map, requires
-the same declaration fact and source signature, and preserves the peer's
-indentation and line endings. Globs, multiple implementations, missing peers,
-multiline or internal definitions, header-only decoration differences, source
-comments at the insertion anchor, and edited signatures remain manual or are
+derive the neutral `declare_symbol` objective when one same-language mapped
+definition establishes a bounded two-file evidence scope. Plan records only
+the destination, symbol, and source paths that the executor may read. Act/C
+then requires an existing declaration/definition peer and rederives the exact
+single-line implementation signature and placement from those hash-checked
+sources; no C syntax, byte range, source hash, or anchor is stored in Plan. It
+preserves indentation and line endings. Globs, multiple implementations,
+missing peers, multiline or internal definitions, header-only decoration
+differences, and source comments at the insertion anchor remain manual or are
 rejected. This can be combined with a missing Make registration in one Plan
 and accepted as one two-file architecture change.
 

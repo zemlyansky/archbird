@@ -68,12 +68,6 @@ static int portable_identifier(const AbValue *value) {
   return 1;
 }
 
-static int fact_id(const AbValue *value) {
-  return bounded_text(value, AB_PLAN_MAX_METADATA, 1) &&
-         value->as.text.length > 2 && value->as.text.data[0] == 'f' &&
-         value->as.text.data[1] == ':';
-}
-
 static int repository_path(const AbValue *value) {
   return ab_artifact_repository_path(value);
 }
@@ -477,17 +471,20 @@ static int validate_operation(const AbValue *value, int *out_manual,
            token_value(ab_value_member(value, "anchor_token"), 1) &&
            (text_is(position, "before") || text_is(position, "after"));
   }
-  if (text_is(action, "insert_c_declaration")) {
-    static const char *const fields[] = {"action",        "path",
-                                         "source_sha256", "symbol",
-                                         "signature",     "anchor_fact_id"};
-    return object_exact(value, fields, 6) &&
-           repository_path(ab_value_member(value, "path")) &&
-           lowercase_sha256(ab_value_member(value, "source_sha256")) &&
-           portable_identifier(ab_value_member(value, "symbol")) &&
-           bounded_text(ab_value_member(value, "signature"),
-                        AB_PLAN_MAX_METADATA, 1) &&
-           fact_id(ab_value_member(value, "anchor_fact_id"));
+  if (text_is(action, "declare_symbol")) {
+    static const char *const fields[] = {"action", "path", "symbol",
+                                         "source_paths"};
+    const AbValue *paths = ab_value_member(value, "source_paths");
+    size_t index;
+    if (!object_exact(value, fields, 4) ||
+        !repository_path(ab_value_member(value, "path")) ||
+        !portable_identifier(ab_value_member(value, "symbol")) ||
+        !unique_rows(paths) || paths->as.array.count != 2)
+      return 0;
+    for (index = 0; index < paths->as.array.count; index++)
+      if (!repository_path(&paths->as.array.items[index]))
+        return 0;
+    return 1;
   }
   if (text_is(action, "rename_symbol")) {
     static const char *const fields[] = {"action",
@@ -803,7 +800,6 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
 ArchbirdStatus ab_plan_load(ArchbirdEngine *engine, const uint8_t *json,
                             size_t length, AbPlan *out) {
   PlanDigestWriter writer;
-  uint8_t digest[32];
   ArchbirdStatus status;
   int valid = 0;
   if (!engine || !json || !length || !out)
@@ -822,6 +818,7 @@ ArchbirdStatus ab_plan_load(ArchbirdEngine *engine, const uint8_t *json,
     if (status == ARCHBIRD_OK)
       status = writer.status;
     if (status == ARCHBIRD_OK) {
+      uint8_t digest[32];
       archbird_sha256_final(&writer.context, digest);
       archbird_sha256_hex(digest, out->sha256);
     }

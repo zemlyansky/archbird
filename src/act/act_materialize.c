@@ -4,10 +4,10 @@
 #include "act_source.h"
 #include "artifact_validation.h"
 #include "base64.h"
+#include "c/declaration.h"
 #include "c/dependency_redirect.h"
 #include "json_value.h"
 #include "model.h"
-#include "plan_compile_internal.h"
 #include "plan_internal.h"
 #include "project_internal.h"
 #include "projection_internal.h"
@@ -108,7 +108,6 @@ static ArchbirdStatus digest_bytes(const uint8_t *bytes, size_t length,
 static ArchbirdStatus digest_json(ArchbirdEngine *engine, const uint8_t *json,
                                   size_t length, char out[65]) {
   AbDigestWriter writer;
-  uint8_t digest[32];
   ArchbirdStatus status;
   archbird_sha256_init(&writer.context);
   writer.status = ARCHBIRD_OK;
@@ -117,6 +116,7 @@ static ArchbirdStatus digest_json(ArchbirdEngine *engine, const uint8_t *json,
   if (status == ARCHBIRD_OK)
     status = writer.status;
   if (status == ARCHBIRD_OK) {
+    uint8_t digest[32];
     archbird_sha256_final(&writer.context, digest);
     archbird_sha256_hex(digest, out);
   }
@@ -244,12 +244,43 @@ const AbValue *ab_act_executor_map(const AbActContext *context) {
   return context ? context->map : NULL;
 }
 
+ArchbirdStatus ab_act_executor_source(AbActContext *context,
+                                      const AbString *path,
+                                      ArchbirdSourceView *out) {
+  const AbSourceManifest *manifest;
+  const AbValue *metadata;
+  size_t source_index;
+  char source_sha[65];
+  if (!context || !path || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memset(out, 0, sizeof(*out));
+  out->struct_size = sizeof(*out);
+  manifest = ab_project_manifest(context->project);
+  source_index = project_source_index(context->project, path);
+  if (source_index == SIZE_MAX)
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     "executor read path is outside the mapped project");
+  metadata = ab_act_source_file(context->metadata, path);
+  if (!metadata)
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     "executor read path has no host metadata");
+  archbird_sha256_hex(manifest->files[source_index].sha256, source_sha);
+  if (memcmp(source_sha, object_field(metadata, "sha256")->as.text.data, 64) !=
+      0)
+    return act_error(context->engine, ARCHBIRD_CONFLICT,
+                     "executor read metadata is stale");
+  out->bytes = ab_project_source_bytes(context->project, source_index);
+  out->byte_length = manifest->files[source_index].byte_length;
+  return ARCHBIRD_OK;
+}
+
 ArchbirdStatus ab_act_executor_replace_exact(
     AbActContext *context, const AbString *item_id, const AbString *path,
     size_t start, size_t end, const uint8_t *expected, size_t expected_length,
     const uint8_t *replacement, size_t replacement_length) {
   size_t work_index;
-  AbActWork *work;
+  const AbActWork *work;
+  uint8_t *owned_replacement = NULL;
   ArchbirdStatus status;
   if (!context || !item_id || !path || !expected ||
       (replacement_length && !replacement))
@@ -266,20 +297,26 @@ ArchbirdStatus ab_act_executor_replace_exact(
   status = ab_utf8_validate(context->engine, work->before, work->before_length);
   if (status == ARCHBIRD_OK)
     status = ab_utf8_validate(context->engine, work->before, start);
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && end > start)
     status =
         ab_utf8_validate(context->engine, work->before + start, end - start);
   if (status != ARCHBIRD_OK)
     return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
                      "executor edit must align to UTF-8 byte boundaries");
-  return add_edit(context, work_index, item_id, start, end, replacement,
-                  replacement_length, NULL);
+  if (replacement_length) {
+    owned_replacement =
+        (uint8_t *)ab_calloc(context->engine, replacement_length, 1);
+    if (!owned_replacement)
+      return ARCHBIRD_OUT_OF_MEMORY;
+    memcpy(owned_replacement, replacement, replacement_length);
+  }
+  return add_edit(context, work_index, item_id, start, end, owned_replacement,
+                  replacement_length, owned_replacement);
 }
 
 static int edit_compare(const void *left, const void *right) {
   const AbActEdit *a = (const AbActEdit *)left;
   const AbActEdit *b = (const AbActEdit *)right;
-  int compared;
   if (a->work_index != b->work_index)
     return (a->work_index > b->work_index) - (a->work_index < b->work_index);
   if (a->start != b->start)
@@ -287,6 +324,7 @@ static int edit_compare(const void *left, const void *right) {
   if (a->end != b->end)
     return (a->end > b->end) - (a->end < b->end);
   if (a->make_variable && b->make_variable) {
+    int compared;
     compared = ab_string_compare(a->make_variable, b->make_variable);
     if (compared)
       return compared;
@@ -338,7 +376,7 @@ static ArchbirdStatus add_replace_range(AbActContext *context,
   uint64_t start;
   uint64_t end;
   size_t work_index;
-  AbActWork *work;
+  const AbActWork *work;
   ArchbirdStatus status = source_work(context, &path->as.text, &work_index);
   if (status != ARCHBIRD_OK)
     return status;
@@ -536,78 +574,6 @@ static ArchbirdStatus add_make_token_insert(AbActContext *context,
   if (status == ARCHBIRD_OK)
     status = classify_make_insertion(context, work_index, variable, anchor,
                                      token, options.position);
-  ab_buffer_free(&replacement);
-  return status;
-}
-
-static ArchbirdStatus add_c_declaration(AbActContext *context,
-                                        const AbValue *operation,
-                                        const AbString *item_id) {
-  const AbValue *path = object_field(operation, "path");
-  const AbValue *symbol = object_field(operation, "symbol");
-  const AbValue *signature = object_field(operation, "signature");
-  const AbValue *anchor_fact_id = object_field(operation, "anchor_fact_id");
-  AbPlanCDeclarationProof proof;
-  AbPlanCDeclarationPlacement placement;
-  ArchbirdSourceView source_view;
-  const char *reason = NULL;
-  AbBuffer proved_signature;
-  AbBuffer replacement;
-  size_t work_index = 0;
-  size_t line_start;
-  ArchbirdStatus status = locked_source_work(context, operation, &work_index);
-  ab_buffer_init(&proved_signature, context->engine);
-  ab_buffer_init(&replacement, context->engine);
-  memset(&proof, 0, sizeof(proof));
-  memset(&placement, 0, sizeof(placement));
-  memset(&source_view, 0, sizeof(source_view));
-  source_view.struct_size = sizeof(source_view);
-  source_view.bytes = context->works[work_index].before;
-  source_view.byte_length = context->works[work_index].before_length;
-  if (status == ARCHBIRD_OK &&
-      !ab_plan_c_declaration_analyze(context->map, &path->as.text,
-                                     &symbol->as.text, &proof, &reason))
-    status =
-        act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
-                  reason ? reason : "C declaration proof is not available");
-  if (status == ARCHBIRD_OK)
-    status = ab_plan_c_declaration_signature(
-        context->engine, context->project, context->map, &symbol->as.text,
-        &proof, &proved_signature, &reason);
-  if (status == ARCHBIRD_OK && reason)
-    status = act_error(context->engine, ARCHBIRD_POLICY_REJECTED, reason);
-  if (status == ARCHBIRD_OK &&
-      (signature->as.text.length != proved_signature.length ||
-       memcmp(signature->as.text.data, proved_signature.data,
-              proved_signature.length) != 0 ||
-       !ab_value_equal(anchor_fact_id, proof.anchor_fact_id)))
-    status = act_error(context->engine, ARCHBIRD_CONFLICT,
-                       "insert_c_declaration differs from its Map proof");
-  if (status == ARCHBIRD_OK &&
-      !ab_plan_c_declaration_place(&proof, &source_view, &placement, &reason))
-    status = act_error(context->engine, ARCHBIRD_CONFLICT,
-                       reason ? reason : "C declaration placement is invalid");
-  line_start = placement.line_start;
-  if (status == ARCHBIRD_OK) {
-    const uint8_t *source = context->works[work_index].before;
-    if (placement.newline_length == 2)
-      status = ab_buffer_append(&replacement, "\r\n", 2);
-    else
-      status = ab_buffer_append(&replacement, "\n", 1);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_append(&replacement, source + line_start,
-                                proof.anchor_start - line_start);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_append(&replacement, proved_signature.data,
-                                proved_signature.length);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_append(&replacement, ";", 1);
-  }
-  if (status == ARCHBIRD_OK)
-    status =
-        take_edit_buffer(context, work_index, item_id, (size_t)proof.anchor_end,
-                         (size_t)proof.anchor_end, &replacement);
-  ab_buffer_free(&proved_signature);
   ab_buffer_free(&replacement);
   return status;
 }
@@ -813,7 +779,7 @@ static ArchbirdStatus add_rename_symbol(AbActContext *context,
     uint64_t start;
     uint64_t end;
     size_t work_index;
-    AbActWork *work;
+    const AbActWork *work;
     status = source_work(context, &path->as.text, &work_index);
     if (status != ARCHBIRD_OK)
       break;
@@ -859,8 +825,8 @@ static ArchbirdStatus collect_operation(AbActContext *context,
     return add_make_token_edit(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "insert_make_variable_token"))
     return add_make_token_insert(context, operation, &item_id->as.text);
-  if (ab_artifact_text_is(action, "insert_c_declaration"))
-    return add_c_declaration(context, operation, &item_id->as.text);
+  if (ab_artifact_text_is(action, "declare_symbol"))
+    return ab_act_c_declare_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "rename_symbol"))
     return add_rename_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "redirect_dependency"))
