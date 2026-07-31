@@ -262,50 +262,6 @@ static int token_value(const AbValue *value, int nonempty) {
   return 1;
 }
 
-static int validate_rename_site(const AbValue *value) {
-  static const char *const fields[] = {
-      "path",   "source_sha256", "start_byte", "end_byte",
-      "before", "role",          "fact_ids",   "providers"};
-  const AbValue *role;
-  uint64_t start;
-  uint64_t end;
-  if (!object_exact(value, fields, 8))
-    return 0;
-  role = ab_value_member(value, "role");
-  return repository_path(ab_value_member(value, "path")) &&
-         lowercase_sha256(ab_value_member(value, "source_sha256")) &&
-         safe_integer(ab_value_member(value, "start_byte"), &start) &&
-         safe_integer(ab_value_member(value, "end_byte"), &end) &&
-         end > start &&
-         bounded_text(ab_value_member(value, "before"), AB_PLAN_MAX_METADATA,
-                      1) &&
-         (text_is(role, "binding") || text_is(role, "declaration") ||
-          text_is(role, "export") || text_is(role, "import") ||
-          text_is(role, "reference")) &&
-         string_array(ab_value_member(value, "fact_ids"), 0, 0) &&
-         string_array(ab_value_member(value, "providers"), 0, 0);
-}
-
-static int validate_rename_coverage(const AbValue *value, size_t site_count) {
-  static const char *const fields[] = {"classification", "exhaustive",
-                                       "selected", "unknown", "unsupported"};
-  const AbValue *classification;
-  uint64_t selected;
-  uint64_t unknown;
-  uint64_t unsupported;
-  if (!object_exact(value, fields, 5))
-    return 0;
-  classification = ab_value_member(value, "classification");
-  return (text_is(classification, "complete") ||
-          text_is(classification, "incomplete") ||
-          text_is(classification, "unknown")) &&
-         boolean_value(ab_value_member(value, "exhaustive")) &&
-         safe_integer(ab_value_member(value, "selected"), &selected) &&
-         selected == site_count &&
-         safe_integer(ab_value_member(value, "unknown"), &unknown) &&
-         safe_integer(ab_value_member(value, "unsupported"), &unsupported);
-}
-
 static int validate_edge_projection(const AbValue *value) {
   static const char *const fields[] = {
       "id",    "select",        "from_paths",   "to_paths",
@@ -487,14 +443,11 @@ static int validate_operation(const AbValue *value, int *out_manual,
     return 1;
   }
   if (text_is(action, "rename_symbol")) {
-    static const char *const fields[] = {"action",
-                                         "symbol",
-                                         "new_name",
-                                         "projection",
-                                         "projection_result_sha256",
-                                         "sites",
-                                         "coverage"};
-    const AbValue *sites;
+    static const char *const fields[] = {
+        "action",      "symbol",        "new_name",
+        "projection",  "projection_id", "projection_content_sha256",
+        "source_paths"};
+    const AbValue *paths;
     size_t index;
     *out_requires_asserted = 1;
     if (!object_exact(value, fields, 7) ||
@@ -502,16 +455,16 @@ static int validate_operation(const AbValue *value, int *out_manual,
                       1) ||
         !portable_identifier(ab_value_member(value, "new_name")) ||
         !validate_symbol_projection(ab_value_member(value, "projection")) ||
-        !lowercase_sha256(ab_value_member(value, "projection_result_sha256")))
+        !stable_id(ab_value_member(value, "projection_id")) ||
+        !lowercase_sha256(ab_value_member(value, "projection_content_sha256")))
       return 0;
-    sites = ab_value_member(value, "sites");
-    if (!unique_rows(sites) || sites->as.array.count == 0)
+    paths = ab_value_member(value, "source_paths");
+    if (!unique_rows(paths) || paths->as.array.count == 0)
       return 0;
-    for (index = 0; index < sites->as.array.count; index++)
-      if (!validate_rename_site(&sites->as.array.items[index]))
+    for (index = 0; index < paths->as.array.count; index++)
+      if (!repository_path(&paths->as.array.items[index]))
         return 0;
-    return validate_rename_coverage(ab_value_member(value, "coverage"),
-                                    sites->as.array.count);
+    return 1;
   }
   if (text_is(action, "redirect_dependency")) {
     static const char *const fields[] = {

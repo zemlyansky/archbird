@@ -227,11 +227,10 @@ static ArchbirdStatus reason_add(ArchbirdEngine *engine, AbPlanReasons *reasons,
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus evaluate_occurrences(ArchbirdEngine *engine,
-                                           const AbValue *map,
-                                           const AbString *symbol,
-                                           AbProjectionPlan *plan,
-                                           AbProjectionResult *result) {
+static ArchbirdStatus
+evaluate_occurrences(ArchbirdEngine *engine, const AbValue *map,
+                     const AbString *symbol, const AbValue *seed_paths,
+                     AbProjectionPlan *plan, AbProjectionResult *result) {
   AbBuffer definition_json;
   AbValue definition = {0};
   const AbValue *id;
@@ -242,7 +241,14 @@ static ArchbirdStatus evaluate_occurrences(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = json_string(&definition_json, symbol);
   if (status == ARCHBIRD_OK)
-    status = literal(&definition_json, "],\"select\":\"symbol_occurrences\"}");
+    status = literal(&definition_json, "]");
+  if (status == ARCHBIRD_OK && seed_paths) {
+    status = literal(&definition_json, ",\"paths\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&definition_json, seed_paths);
+  }
+  if (status == ARCHBIRD_OK)
+    status = literal(&definition_json, ",\"select\":\"symbol_occurrences\"}");
   if (status == ARCHBIRD_OK)
     status = ab_json_value_decode(engine, definition_json.data,
                                   definition_json.length, &definition);
@@ -257,173 +263,77 @@ static ArchbirdStatus evaluate_occurrences(ArchbirdEngine *engine,
   return status;
 }
 
-static ArchbirdStatus render_string_array(AbBuffer *output,
-                                          const AbValue *array) {
-  size_t index;
-  ArchbirdStatus status = literal(output, "[");
-  if (!array || array->kind != AB_VALUE_ARRAY)
-    return literal(output, "]");
-  for (index = 0; status == ARCHBIRD_OK && index < array->as.array.count;
-       index++) {
-    if (index)
-      status = literal(output, ",");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(output, &array->as.array.items[index]);
-  }
-  if (status == ARCHBIRD_OK)
-    status = literal(output, "]");
-  return status;
-}
+typedef struct AbPlanPathRef {
+  const AbValue *value;
+} AbPlanPathRef;
 
-static int fact_ids_valid(const AbValue *values) {
-  size_t index;
-  if (!values || values->kind != AB_VALUE_ARRAY || !values->as.array.count)
-    return 0;
-  for (index = 0; index < values->as.array.count; index++) {
-    const AbValue *value = &values->as.array.items[index];
-    if (value->kind != AB_VALUE_STRING || value->as.text.length <= 2 ||
-        value->as.text.data[0] != 'f' || value->as.text.data[1] != ':')
-      return 0;
-  }
-  return 1;
-}
-
-static int strings_valid(const AbValue *values) {
-  size_t index;
-  if (!values)
-    return 1;
-  if (values->kind != AB_VALUE_ARRAY)
-    return 0;
-  for (index = 0; index < values->as.array.count; index++)
-    if (values->as.array.items[index].kind != AB_VALUE_STRING)
-      return 0;
-  return 1;
+static int path_ref_compare(const void *left, const void *right) {
+  const AbPlanPathRef *a = (const AbPlanPathRef *)left;
+  const AbPlanPathRef *b = (const AbPlanPathRef *)right;
+  return ab_string_compare(&a->value->as.text, &b->value->as.text);
 }
 
 static ArchbirdStatus render_rename_operation(
-    ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
-    const AbString *symbol, const AbString *new_name,
-    const AbProjectionResult *occurrences, AbBuffer *operation,
-    AbPlanReasons *reasons, size_t *out_site_count) {
+    ArchbirdEngine *engine, const AbString *symbol, const AbString *new_name,
+    const AbProjectionPlan *projection, const AbProjectionResult *occurrences,
+    AbBuffer *operation, AbPlanReasons *reasons, size_t *out_path_count) {
   const AbProjectionData *fact = &occurrences->data;
-  AbString leaf = symbol_leaf(symbol);
-  AbBuffer sites;
+  AbPlanPathRef *paths = NULL;
   size_t index;
-  size_t site_count = 0;
+  size_t path_count = 0;
   size_t invalid_count = 0;
   ArchbirdStatus status = ARCHBIRD_OK;
-  ab_buffer_init(&sites, engine);
   ab_buffer_init(operation, engine);
+  if (fact->item_count) {
+    paths =
+        (AbPlanPathRef *)ab_calloc(engine, fact->item_count, sizeof(*paths));
+    if (!paths)
+      status = invalid(engine, ARCHBIRD_OUT_OF_MEMORY,
+                       "out of memory collecting rename source scope");
+  }
   for (index = 0; status == ARCHBIRD_OK && index < fact->item_count; index++) {
     const AbProjectionItem *item = &fact->items[index];
     const AbValue *path = item_attribute(item, "path");
-    const AbValue *sha = item_attribute(item, "source_sha256");
-    const AbValue *start_value = item_attribute(item, "start_byte");
-    const AbValue *end_value = item_attribute(item, "end_byte");
-    const AbValue *role = item_attribute(item, "role");
-    const AbValue *fact_ids = item_attribute(item, "fact_ids");
-    const AbValue *providers = item_attribute(item, "providers");
-    uint64_t start;
-    uint64_t end;
-    AbPlanSourceLock lock;
     if (!string_is(&item->state, "current") ||
-        !ab_artifact_repository_path(path) || !ab_artifact_sha256(sha) ||
-        !ab_artifact_safe_integer(start_value, &start) ||
-        !ab_artifact_safe_integer(end_value, &end) || start >= end || !role ||
-        role->kind != AB_VALUE_STRING || !fact_ids_valid(fact_ids) ||
-        !strings_valid(providers)) {
+        !ab_artifact_repository_path(path)) {
       invalid_count++;
       continue;
     }
-    status = ab_plan_source_lock(engine, project, map, &path->as.text, &lock);
-    if (status != ARCHBIRD_OK)
-      break;
-    if (!ab_value_equal(sha, lock.sha256) || end > lock.source.byte_length ||
-        end - start != leaf.length ||
-        memcmp(lock.source.bytes + start, leaf.data, leaf.length) != 0) {
-      invalid_count++;
-      continue;
-    }
-    if (site_count)
-      status = literal(&sites, ",");
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, "{\"before\":");
-    if (status == ARCHBIRD_OK)
-      status = json_string(&sites, &leaf);
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, ",\"end_byte\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_u64(&sites, end);
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, ",\"fact_ids\":");
-    if (status == ARCHBIRD_OK)
-      status = render_string_array(&sites, fact_ids);
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, ",\"path\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(&sites, path);
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, ",\"providers\":");
-    if (status == ARCHBIRD_OK)
-      status = render_string_array(&sites, providers);
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, ",\"role\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(&sites, role);
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, ",\"source_sha256\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(&sites, sha);
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, ",\"start_byte\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_u64(&sites, start);
-    if (status == ARCHBIRD_OK)
-      status = literal(&sites, "}");
-    site_count++;
+    paths[path_count++].value = path;
+  }
+  if (path_count > 1)
+    qsort(paths, path_count, sizeof(*paths), path_ref_compare);
+  if (path_count > 1) {
+    size_t output = 1;
+    for (index = 1; index < path_count; index++)
+      if (!ab_value_equal(paths[output - 1].value, paths[index].value))
+        paths[output++] = paths[index];
+    path_count = output;
   }
   if (status == ARCHBIRD_OK)
-    status = literal(operation, "{\"action\":\"rename_symbol\",\"coverage\":{"
-                                "\"classification\":");
-  if (status == ARCHBIRD_OK)
-    status = json_cstring(operation, ab_projection_data_classification(fact));
-  if (status == ARCHBIRD_OK)
-    status = literal(operation, ",\"exhaustive\":");
-  if (status == ARCHBIRD_OK)
-    status =
-        literal(operation, projection_complete(fact, "set") ? "true" : "false");
-  if (status == ARCHBIRD_OK)
-    status = literal(operation, ",\"selected\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_u64(operation, site_count);
-  if (status == ARCHBIRD_OK)
-    status = literal(operation, ",\"unknown\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_u64(
-        operation, fact->selection.has_unknown ? fact->selection.unknown : 0);
-  if (status == ARCHBIRD_OK)
-    status = literal(operation, ",\"unsupported\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_u64(operation, fact->selection.has_unsupported
-                                          ? fact->selection.unsupported
-                                          : 0);
-  if (status == ARCHBIRD_OK)
-    status = literal(operation, "},\"new_name\":");
+    status = literal(operation, "{\"action\":\"rename_symbol\",\"new_name\":");
   if (status == ARCHBIRD_OK)
     status = json_string(operation, new_name);
   if (status == ARCHBIRD_OK)
-    status = literal(operation, ",\"projection\":{\"names\":[");
+    status = literal(operation, ",\"projection\":");
   if (status == ARCHBIRD_OK)
-    status = json_string(operation, symbol);
+    status = ab_value_render(operation, &projection->definition);
   if (status == ARCHBIRD_OK)
-    status = literal(operation, "],\"select\":\"symbol_occurrences\"},"
-                                "\"projection_result_sha256\":");
+    status = literal(operation, ",\"projection_content_sha256\":");
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(operation, occurrences->result_sha256, 64);
+    status = ab_buffer_json_string(operation, fact->sha256, 64);
   if (status == ARCHBIRD_OK)
-    status = literal(operation, ",\"sites\":[");
+    status = literal(operation, ",\"projection_id\":");
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_append(operation, sites.data, sites.length);
+    status = json_string(operation, &projection->id);
+  if (status == ARCHBIRD_OK)
+    status = literal(operation, ",\"source_paths\":[");
+  for (index = 0; status == ARCHBIRD_OK && index < path_count; index++) {
+    if (index)
+      status = literal(operation, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(operation, paths[index].value);
+  }
   if (status == ARCHBIRD_OK)
     status = literal(operation, "],\"symbol\":");
   if (status == ARCHBIRD_OK)
@@ -432,18 +342,18 @@ static ArchbirdStatus render_rename_operation(
     status = literal(operation, "}");
   if (status == ARCHBIRD_OK && invalid_count)
     status = reason_add(engine, reasons,
-                        "%zu symbol occurrence(s) are not exact, current, "
-                        "source-locked edits.",
+                        "%zu symbol occurrence(s) have no current repository "
+                        "source scope.",
                         invalid_count);
   if (status == ARCHBIRD_OK && !projection_complete(fact, "set"))
     status = reason_add(
         engine, reasons,
         "Symbol occurrence evidence is not complete and exhaustive.");
-  if (status == ARCHBIRD_OK && !site_count)
+  if (status == ARCHBIRD_OK && !path_count)
     status = reason_add(engine, reasons,
-                        "No exact source sites are available for the rename.");
-  *out_site_count = site_count;
-  ab_buffer_free(&sites);
+                        "No source paths are available for the rename.");
+  *out_path_count = path_count;
+  ab_free(engine, paths);
   return status;
 }
 
@@ -559,8 +469,8 @@ append_removal(ArchbirdEngine *engine, const ArchbirdProject *project,
         engine, &reasons,
         "The unexpected symbol has no unique source declaration in the Map.");
   if (status == ARCHBIRD_OK && key && key->kind == AB_VALUE_STRING) {
-    status = evaluate_occurrences(engine, map, &key->as.text, &occurrence_plan,
-                                  &occurrences);
+    status = evaluate_occurrences(engine, map, &key->as.text, NULL,
+                                  &occurrence_plan, &occurrences);
     if (status == ARCHBIRD_OK)
       occurrences_ready = 1;
   }
@@ -710,7 +620,8 @@ static int rename_value(const AbValue *renames, const AbString *symbol,
 static ArchbirdStatus
 append_rename(ArchbirdEngine *engine, const ArchbirdProject *project,
               const AbValue *map, AbPlanItemBuilder *builder,
-              const AbValue *constraint, const AbPlanFindingGroup *source_group,
+              const AbValue *constraint, const AbValue *definition,
+              const AbPlanFindingGroup *source_group,
               const AbPlanFindingGroup *target_group, const AbString *new_name,
               int asserted) {
   const AbValue *source_finding = source_group->representative;
@@ -724,19 +635,20 @@ append_rename(ArchbirdEngine *engine, const ArchbirdProject *project,
   const AbValue **findings = NULL;
   AbPlanItemSpec spec;
   char statement[1024];
-  size_t site_count = 0;
+  size_t path_count = 0;
   int statement_length;
   ArchbirdStatus status;
+  const AbValue *seed_paths = field(definition, "paths");
   if (!portable_identifier(&leaf) || !portable_identifier(new_name) ||
       ab_string_equal(&leaf, new_name))
     return invalid(
         engine, ARCHBIRD_INVALID_SCHEMA,
         "rename directives require distinct portable identifier leaves");
-  status = evaluate_occurrences(engine, map, symbol, &plan, &result);
+  status =
+      evaluate_occurrences(engine, map, symbol, seed_paths, &plan, &result);
   if (status == ARCHBIRD_OK)
-    status =
-        render_rename_operation(engine, project, map, symbol, new_name, &result,
-                                &operation, &reasons, &site_count);
+    status = render_rename_operation(engine, symbol, new_name, &plan, &result,
+                                     &operation, &reasons, &path_count);
   else
     ab_buffer_init(&operation, engine);
   if (status == ARCHBIRD_OK && !asserted)
@@ -744,7 +656,7 @@ append_rename(ArchbirdEngine *engine, const ArchbirdProject *project,
         engine, &reasons,
         "The extra and missing symbols suggest a rename, but automatic "
         "execution requires asserted rename intent.");
-  if (status == ARCHBIRD_OK && !site_count) {
+  if (status == ARCHBIRD_OK && !path_count) {
     ab_buffer_free(&operation);
     status = manual_operation(
         engine, NULL,
@@ -779,7 +691,7 @@ append_rename(ArchbirdEngine *engine, const ArchbirdProject *project,
   spec.statement = statement;
   spec.provenance = asserted ? "asserted" : "derived";
   spec.operation = &operation;
-  spec.executable = asserted && reasons.count == 0 && site_count != 0;
+  spec.executable = asserted && reasons.count == 0 && path_count != 0;
   spec.reasons = reasons.values;
   spec.reason_count = reasons.count;
   if (status == ARCHBIRD_OK)
@@ -788,6 +700,7 @@ append_rename(ArchbirdEngine *engine, const ArchbirdProject *project,
   ab_buffer_free(&operation);
   ab_projection_result_free(engine, &result);
   ab_projection_plan_free(engine, &plan);
+  (void)project;
   return status;
 }
 
@@ -1030,7 +943,7 @@ ArchbirdStatus ab_plan_compile_symbol_constraint(
           "asserted rename does not match one current extra/missing pair");
     }
     status = append_rename(
-        engine, project, map, builder, constraint, extra, missing,
+        engine, project, map, builder, constraint, definition, extra, missing,
         requested ? requested_name : &new_value->as.text, requested != 0);
     if (status == ARCHBIRD_OK && requested)
       rename_used[rename_index] = 1;

@@ -74,12 +74,12 @@ static ArchbirdStatus collect_item(ArchbirdEngine *engine, const AbValue *item,
     return status;
   }
   if (ab_artifact_text_is(action, "rename_symbol")) {
-    const AbValue *sites = field(operation, "sites");
+    const AbValue *paths = field(operation, "source_paths");
     ArchbirdStatus status = ARCHBIRD_OK;
-    for (index = 0; status == ARCHBIRD_OK && index < sites->as.array.count;
+    for (index = 0; status == ARCHBIRD_OK && index < paths->as.array.count;
          index++) {
-      path = field(&sites->as.array.items[index], "path");
-      status = add_path(engine, present, present_count, path);
+      status = add_path(engine, present, present_count,
+                        &paths->as.array.items[index]);
     }
     return status;
   }

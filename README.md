@@ -734,17 +734,20 @@ ambiguous definitions, missing observed includes, or non-unique call sites.
 Older operators currently include `replace_range`, `create_file`,
 `delete_file`, `move_file`, `edit_json_pointer`,
 `edit_make_variable_token`, `insert_make_variable_token`,
-and evidence-bound `rename_symbol`. They predate the neutral Plan boundary and
+and source-bound file deletion. They predate the neutral Plan boundary and
 still carry some grounded source details. They remain supported while they are
 migrated behind Act executors; they are not the model for new Plan operators.
 
 A one-extra/one-missing symbol constraint may suggest a rename, but that does
 not establish intent: the derived candidate stays non-executable until a
 developer or agent supplies `--rename OLD=NEW`. The reviewed command evaluates
-one exhaustive `symbol_occurrences` projection and locks every declaration,
-definition, import origin, export, and proven reference span. Act reevaluates
-the same ProjectionPlan and requires an identical result digest, completeness
-ledger, and site set before producing transitions.
+one exhaustive `symbol_occurrences` projection seeded by the constraint's
+selected declaration paths. Plan stores only the language-independent symbol
+objective, normalized ProjectionPlan identity, and repository-relative source
+scope. Act reevaluates the projection, requires identical complete evidence,
+and lets the native Python or ECMAScript executor validate and materialize
+exact declaration, import, export, binding, and reference edits. Unrelated
+same-name declarations outside the selected scope are not renamed.
 
 The same reviewed `--rename OLD=NEW` intent can close an exact stale
 `provider_surface` registration when `NEW` already resolves uniquely on that
@@ -831,12 +834,12 @@ direct token immediately before or after one uniquely matched anchor token.
 The explicit anchor avoids guessing among assignments, appends, or
 continuation lines.
 
-The CPython provider can establish direct imported-name references. The
-TypeScript compiler provider covers JavaScript, TypeScript, and TSX references,
+The CPython provider establishes Python declaration, binding, and reference
+sites. Tree-sitter establishes ECMAScript declarations and import/export
+bindings; the TypeScript compiler must establish ECMAScript reference targets,
 including aliased import origins without rewriting their local aliases.
 Candidate or unresolved calls, duplicate targets, unsupported inputs, and
-lexical-only C/C++ call binding make the rename non-executable rather than
-allowing a partial edit.
+lexical-only C/C++ call binding prevent Act from producing a partial edit.
 
 Existing sources are locked by SHA-256; ranges use UTF-8 byte offsets and
 include the expected text. Multiple range edits to one file become one atomic

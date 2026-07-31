@@ -124,6 +124,10 @@ try {
     "import { oldApi } from \"./api.js\";\nexport const result = oldApi(1);\n",
   );
   fs.writeFileSync(
+    path.join(root, "unrelated.js"),
+    "export function oldApi(value) {\n  return value - 1;\n}\n",
+  );
+  fs.writeFileSync(
     path.join(root, "archbird.json"),
     JSON.stringify({
       project: "node-plan-act-rename",
@@ -161,11 +165,20 @@ try {
   assert.equal(renameDocument.items[0].operation.action, "rename_symbol");
   assert.equal(renameDocument.items[0].executable, true);
   assert.deepEqual(
-    [...new Set(renameDocument.items[0].operation.sites.map(
-      (site) => site.path,
-    ))].sort(),
+    renameDocument.items[0].operation.source_paths,
     ["api.js", "consumer.js"],
   );
+  assert.equal(
+    renameDocument.items[0].operation.projection_id,
+    "plan-symbol-occurrences",
+  );
+  assert.match(
+    renameDocument.items[0].operation.projection_content_sha256,
+    /^[0-9a-f]{64}$/,
+  );
+  assert.equal("sites" in renameDocument.items[0].operation, false);
+  assert.equal("coverage" in renameDocument.items[0].operation, false);
+  assert.deepEqual(renameDocument.items[0].operation.projection.paths, ["api.js"]);
   run([
     "act", renamePlan, "--root", root, "--format", "json",
     "--output", renameAct,
@@ -177,6 +190,10 @@ try {
   assert.doesNotMatch(fs.readFileSync(path.join(root, "api.js"), "utf8"), /oldApi/);
   assert.doesNotMatch(
     fs.readFileSync(path.join(root, "consumer.js"), "utf8"),
+    /oldApi/,
+  );
+  assert.match(
+    fs.readFileSync(path.join(root, "unrelated.js"), "utf8"),
     /oldApi/,
   );
   run(["verify", "--root", root, "--check"]);

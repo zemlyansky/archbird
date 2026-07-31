@@ -481,11 +481,10 @@ evidence blocks execution.
 
 Older exact `replace_range`, `create_file`, `delete_file`, `move_file`,
 `edit_json_pointer`, `edit_make_variable_token`,
-`insert_make_variable_token`, and evidence-bound `rename_symbol` operations
-remain executable while their grounded details are migrated behind Act
-executors. They are compatibility operations, not the model for new Plan
-operators. An asserted `edit_json_pointer`
-operation changes one reviewed
+`insert_make_variable_token`, and source-bound file deletion operations remain
+executable while their grounded details are migrated behind Act executors.
+They are compatibility operations, not the model for new Plan operators. An
+asserted `edit_json_pointer` operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
 expected old JSON value without reformatting the complete file. An asserted
 `edit_make_variable_token` operation replaces or removes one exact direct
@@ -495,12 +494,14 @@ missing, or duplicate matches block execution. An asserted
 one unique anchor without guessing between assignments. A derived
 one-extra/one-missing rename candidate is review evidence, not intent; it
 remains non-executable until `--rename OLD=NEW` is supplied. The reviewed Plan
-locks the exhaustive declaration/import/export/reference projection, and Act
-requires the same result digest, completeness ledger, and sites against the
-current Map. The TypeScript compiler provider proves JavaScript, TypeScript,
-and TSX references while preserving aliased local names. Candidate or
-unresolved calls, duplicate targets, and unsupported inputs block execution
-instead of producing a partial rename.
+stores only the language-independent symbol objective, exhaustive
+`symbol_occurrences` ProjectionPlan identity, and repository-relative source
+scope. Act reevaluates the same complete evidence. Tree-sitter establishes
+ECMAScript declarations and import/export bindings; the TypeScript compiler
+must establish reference targets while preserving aliased local names.
+Unrelated same-name declarations outside the selected projection scope are not
+renamed. Candidate or unresolved calls, duplicate targets, and unsupported
+inputs block Act instead of producing a partial rename.
 
 For a `provider_surface` issue, the same reviewed rename can replace one stale
 registration with a uniquely resolved surface member when the declaration

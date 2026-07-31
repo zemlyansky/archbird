@@ -412,82 +412,6 @@
         }
       }
     },
-    "renameSite": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "path",
-        "source_sha256",
-        "start_byte",
-        "end_byte",
-        "before",
-        "role",
-        "fact_ids",
-        "providers"
-      ],
-      "properties": {
-        "path": {"$ref": "#/$defs/repositoryPath"},
-        "source_sha256": {"$ref": "#/$defs/sha256"},
-        "start_byte": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "end_byte": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
-        },
-        "before": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 65536
-        },
-        "role": {
-          "enum": [
-            "binding",
-            "declaration",
-            "export",
-            "import",
-            "reference"
-          ]
-        },
-        "fact_ids": {"$ref": "#/$defs/nonEmptyStrings"},
-        "providers": {"$ref": "#/$defs/nonEmptyStrings"}
-      }
-    },
-    "renameCoverage": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "classification",
-        "exhaustive",
-        "selected",
-        "unknown",
-        "unsupported"
-      ],
-      "properties": {
-        "classification": {
-          "enum": ["complete", "incomplete", "unknown"]
-        },
-        "exhaustive": {"type": "boolean"},
-        "selected": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "unknown": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "unsupported": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        }
-      }
-    },
     "symbolOccurrenceProjection": {
       "type": "object",
       "additionalProperties": false,
@@ -515,15 +439,15 @@
     "renameSymbol": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Act requires complete exhaustive coverage, unique non-overlapping sites, selected equal to the site count, exact source locks, and every site before value to equal the renamed declaration leaf.",
+      "$comment": "A language-independent reviewed rename objective. Act re-evaluates the exhaustive occurrence projection and grounds exact source edits through a language executor.",
       "required": [
         "action",
         "symbol",
         "new_name",
         "projection",
-        "projection_result_sha256",
-        "sites",
-        "coverage"
+        "projection_id",
+        "projection_content_sha256",
+        "source_paths"
       ],
       "properties": {
         "action": {"const": "rename_symbol"},
@@ -538,15 +462,15 @@
           "maxLength": 256
         },
         "projection": {"$ref": "#/$defs/symbolOccurrenceProjection"},
-        "projection_result_sha256": {"$ref": "#/$defs/sha256"},
-        "sites": {
+        "projection_id": {"$ref": "#/$defs/id"},
+        "projection_content_sha256": {"$ref": "#/$defs/sha256"},
+        "source_paths": {
           "type": "array",
           "minItems": 1,
           "maxItems": 4096,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/renameSite"}
-        },
-        "coverage": {"$ref": "#/$defs/renameCoverage"}
+          "items": {"$ref": "#/$defs/repositoryPath"}
+        }
       }
     },
     "edgeProjection": {

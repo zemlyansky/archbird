@@ -1084,6 +1084,9 @@ class PlanActCliTest(unittest.TestCase):
             "from api import old_api\n"
             "result = old_api(1)\n"
         )
+        (self.root / "unrelated.py").write_text(
+            "def old_api(value):\n    return value - 1\n"
+        )
         (self.root / "archbird.json").write_text(
             json.dumps(
                 {
@@ -1179,11 +1182,76 @@ class PlanActCliTest(unittest.TestCase):
             item["operation"]["projection"]["select"],
             "symbol_occurrences",
         )
+        self.assertEqual(item["operation"]["projection"]["paths"], ["api.py"])
         self.assertEqual(
-            {row["path"] for row in item["operation"]["sites"]},
-            {"api.py", "consumer.py"},
+            item["operation"]["source_paths"],
+            ["api.py", "consumer.py"],
         )
-        self.assertEqual(len(item["operation"]["sites"]), 3)
+        self.assertEqual(
+            item["operation"]["projection_id"], "plan-symbol-occurrences"
+        )
+        self.assertRegex(
+            item["operation"]["projection_content_sha256"], r"^[0-9a-f]{64}$"
+        )
+        self.assertNotIn("sites", item["operation"])
+        self.assertNotIn("coverage", item["operation"])
+        self.assertNotIn("projection_result_sha256", item["operation"])
+
+        narrowed = json.loads(json.dumps(plan_document))
+        narrowed["items"][0]["operation"]["source_paths"] = ["api.py"]
+        narrowed_path = self.plan_path("narrowed-rename-plan.json")
+        narrowed_path.write_text(json.dumps(narrowed, sort_keys=True))
+        rejected = run(
+            "act",
+            str(narrowed_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn(
+            "Plan source scope differs from the current projection",
+            rejected.stderr.decode(),
+        )
+
+        stale_projection = json.loads(json.dumps(plan_document))
+        stale_projection["items"][0]["operation"][
+            "projection_content_sha256"
+        ] = "0" * 64
+        stale_path = self.plan_path("stale-rename-projection-plan.json")
+        stale_path.write_text(json.dumps(stale_projection, sort_keys=True))
+        rejected = run(
+            "act",
+            str(stale_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn(
+            "occurrence projection differs from the Plan",
+            rejected.stderr.decode(),
+        )
+
+        legacy_grounding = json.loads(json.dumps(plan_document))
+        legacy_grounding["items"][0]["operation"]["sites"] = []
+        legacy_path = self.plan_path("legacy-grounded-rename-plan.json")
+        legacy_path.write_text(json.dumps(legacy_grounding, sort_keys=True))
+        rejected = run(
+            "act",
+            str(legacy_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn(
+            "document does not satisfy the Plan contract",
+            rejected.stderr.decode(),
+        )
 
         patch = run(
             "act",
@@ -1202,6 +1270,7 @@ class PlanActCliTest(unittest.TestCase):
         run("apply", str(act_path), "--root", str(self.root))
         self.assertNotIn("old_api", (self.root / "api.py").read_text())
         self.assertNotIn("old_api", (self.root / "consumer.py").read_text())
+        self.assertIn("old_api", (self.root / "unrelated.py").read_text())
         run("verify", "--root", str(self.root), "--check")
         after_query = run(
             "query",
@@ -1214,6 +1283,69 @@ class PlanActCliTest(unittest.TestCase):
             "--check",
         )
         self.assertIn(b'"new_api"', after_query.stdout)
+
+    def test_act_rejects_rename_without_a_language_executor(self) -> None:
+        (self.root / "api.c").write_text(
+            "int old_api(void) { return 1; }\n"
+        )
+        (self.root / "archbird.json").write_text(
+            json.dumps(
+                {
+                    "project": "plan-act-c-rename",
+                    "layers": [
+                        {
+                            "name": "c",
+                            "language": "c",
+                            "globs": ["*.c"],
+                        }
+                    ],
+                    "projections": {
+                        "api-symbols": {
+                            "select": "symbols",
+                            "paths": ["api.c"],
+                        }
+                    },
+                    "constraints": {
+                        "API-SURFACE": {
+                            "assert": "set_equal",
+                            "actual": {"projection": "api-symbols"},
+                            "expected": {"literal": ["new_api"]},
+                            "owner": "architecture",
+                            "rationale": "The reviewed C API rename is complete.",
+                        }
+                    },
+                },
+                sort_keys=True,
+            )
+        )
+        plan_path = self.plan_path("unsupported-c-rename-plan.json")
+        run(
+            "plan",
+            "API-SURFACE",
+            "--root",
+            str(self.root),
+            "--rename",
+            "old_api=new_api",
+            "--output",
+            str(plan_path),
+        )
+        operation = json.loads(plan_path.read_bytes())["items"][0]["operation"]
+        self.assertEqual(operation["action"], "rename_symbol")
+        self.assertNotIn("sites", operation)
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn(
+            "no language executor supports the mapped source language",
+            rejected.stderr.decode(),
+        )
+        self.assertIn("old_api", (self.root / "api.c").read_text())
 
     def test_neutral_plan_is_grounded_by_the_c_dependency_executor(self) -> None:
         shutil.copytree(REDIRECT_FIXTURE, self.root, dirs_exist_ok=True)

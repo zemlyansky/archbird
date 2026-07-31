@@ -10,7 +10,7 @@
 #include "model.h"
 #include "plan_internal.h"
 #include "project_internal.h"
-#include "projection_internal.h"
+#include "rename.h"
 #include "render_internal.h"
 #include "sha256.h"
 #include "utf8.h"
@@ -578,232 +578,6 @@ static ArchbirdStatus add_make_token_insert(AbActContext *context,
   return status;
 }
 
-static const AbValue *projection_attribute(const AbProjectionItem *item,
-                                           const char *name) {
-  size_t index;
-  size_t length = strlen(name);
-  for (index = 0; index < item->attribute_count; index++)
-    if (item->attributes[index].name.length == length &&
-        memcmp(item->attributes[index].name.data, name, length) == 0)
-      return &item->attributes[index].value;
-  return NULL;
-}
-
-static int projection_item_current(const AbProjectionItem *item) {
-  return item->state.length == 7 && memcmp(item->state.data, "current", 7) == 0;
-}
-
-static int string_array_set_equal(const AbValue *left, const AbValue *right) {
-  size_t left_index;
-  size_t right_index;
-  if (!left || left->kind != AB_VALUE_ARRAY)
-    return !right ||
-           (right->kind == AB_VALUE_ARRAY && right->as.array.count == 0);
-  if (!right)
-    return left->as.array.count == 0;
-  if (right->kind != AB_VALUE_ARRAY ||
-      left->as.array.count != right->as.array.count)
-    return 0;
-  for (left_index = 0; left_index < left->as.array.count; left_index++) {
-    int found = 0;
-    for (right_index = 0; right_index < right->as.array.count; right_index++)
-      if (ab_value_equal(&left->as.array.items[left_index],
-                         &right->as.array.items[right_index])) {
-        found = 1;
-        break;
-      }
-    if (!found)
-      return 0;
-  }
-  return 1;
-}
-
-static int symbol_leaf(const AbValue *symbol, AbString *out) {
-  size_t start;
-  size_t index;
-  if (!symbol || symbol->kind != AB_VALUE_STRING || !symbol->as.text.length)
-    return 0;
-  start = symbol->as.text.length;
-  while (start && (((unsigned char)symbol->as.text.data[start - 1] >= 'A' &&
-                    (unsigned char)symbol->as.text.data[start - 1] <= 'Z') ||
-                   ((unsigned char)symbol->as.text.data[start - 1] >= 'a' &&
-                    (unsigned char)symbol->as.text.data[start - 1] <= 'z') ||
-                   ((unsigned char)symbol->as.text.data[start - 1] >= '0' &&
-                    (unsigned char)symbol->as.text.data[start - 1] <= '9') ||
-                   symbol->as.text.data[start - 1] == '_'))
-    start--;
-  if (start == symbol->as.text.length)
-    return 0;
-  *out =
-      (AbString){symbol->as.text.data + start, symbol->as.text.length - start};
-  if (!((out->data[0] >= 'A' && out->data[0] <= 'Z') ||
-        (out->data[0] >= 'a' && out->data[0] <= 'z') || out->data[0] == '_'))
-    return 0;
-  for (index = 1; index < out->length; index++)
-    if (!((out->data[index] >= 'A' && out->data[index] <= 'Z') ||
-          (out->data[index] >= 'a' && out->data[index] <= 'z') ||
-          (out->data[index] >= '0' && out->data[index] <= '9') ||
-          out->data[index] == '_'))
-      return 0;
-  return 1;
-}
-
-static int rename_site_matches(const AbValue *site,
-                               const AbProjectionItem *item,
-                               const AbString *leaf) {
-  const AbValue *path = object_field(site, "path");
-  const AbValue *sha = object_field(site, "source_sha256");
-  const AbValue *before = object_field(site, "before");
-  const AbValue *role = object_field(site, "role");
-  const AbValue *actual_path = projection_attribute(item, "path");
-  const AbValue *actual_sha = projection_attribute(item, "source_sha256");
-  const AbValue *actual_role = projection_attribute(item, "role");
-  uint64_t start;
-  uint64_t end;
-  uint64_t actual_start;
-  uint64_t actual_end;
-  return projection_item_current(item) &&
-         before->as.text.length == leaf->length &&
-         memcmp(before->as.text.data, leaf->data, leaf->length) == 0 &&
-         actual_path && actual_path->kind == AB_VALUE_STRING &&
-         ab_value_equal(path, actual_path) && actual_sha &&
-         actual_sha->kind == AB_VALUE_STRING &&
-         ab_value_equal(sha, actual_sha) && actual_role &&
-         actual_role->kind == AB_VALUE_STRING &&
-         ab_value_equal(role, actual_role) &&
-         ab_artifact_safe_integer(object_field(site, "start_byte"), &start) &&
-         ab_artifact_safe_integer(object_field(site, "end_byte"), &end) &&
-         ab_artifact_safe_integer(projection_attribute(item, "start_byte"),
-                                  &actual_start) &&
-         ab_artifact_safe_integer(projection_attribute(item, "end_byte"),
-                                  &actual_end) &&
-         start == actual_start && end == actual_end &&
-         string_array_set_equal(object_field(site, "fact_ids"),
-                                projection_attribute(item, "fact_ids")) &&
-         string_array_set_equal(object_field(site, "providers"),
-                                projection_attribute(item, "providers"));
-}
-
-static int rename_coverage_matches(const AbValue *coverage,
-                                   const AbProjectionData *data,
-                                   size_t current_count) {
-  const char *classification = ab_projection_data_classification(data);
-  const AbValue *expected_classification =
-      object_field(coverage, "classification");
-  const AbValue *expected_exhaustive = object_field(coverage, "exhaustive");
-  uint64_t selected;
-  uint64_t unknown;
-  uint64_t unsupported;
-  if (!expected_classification ||
-      expected_classification->kind != AB_VALUE_STRING ||
-      expected_classification->as.text.length != strlen(classification) ||
-      memcmp(expected_classification->as.text.data, classification,
-             strlen(classification)) != 0 ||
-      !expected_exhaustive || expected_exhaustive->kind != AB_VALUE_BOOL ||
-      expected_exhaustive->as.boolean !=
-          (strcmp(classification, "complete") == 0) ||
-      !ab_artifact_safe_integer(object_field(coverage, "selected"),
-                                &selected) ||
-      !ab_artifact_safe_integer(object_field(coverage, "unknown"), &unknown) ||
-      !ab_artifact_safe_integer(object_field(coverage, "unsupported"),
-                                &unsupported))
-    return 0;
-  return selected == current_count && data->selection.has_unknown &&
-         unknown == data->selection.unknown &&
-         data->selection.has_unsupported &&
-         unsupported == data->selection.unsupported;
-}
-
-static ArchbirdStatus add_rename_symbol(AbActContext *context,
-                                        const AbValue *operation,
-                                        const AbString *item_id) {
-  const AbValue *definition = object_field(operation, "projection");
-  const AbValue *sites = object_field(operation, "sites");
-  const AbValue *new_name = object_field(operation, "new_name");
-  const AbValue *coverage = object_field(operation, "coverage");
-  AbProjectionPlan projection = {0};
-  AbProjectionResult result = {0};
-  AbString projection_id = {(char *)"act-symbol-occurrences", 22};
-  AbString leaf = {0};
-  size_t current_count = 0;
-  size_t site_index;
-  size_t item_index;
-  ArchbirdStatus status;
-  if (!symbol_leaf(object_field(operation, "symbol"), &leaf))
-    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
-                     "rename_symbol has no stable source leaf");
-  status = ab_projection_plan_compile(context->engine, definition,
-                                      &projection_id, &projection);
-  if (status == ARCHBIRD_OK)
-    status = ab_projection_plan_evaluate(context->engine, &projection,
-                                         context->map, NULL, &result);
-  if (status == ARCHBIRD_OK &&
-      memcmp(result.result_sha256,
-             object_field(operation, "projection_result_sha256")->as.text.data,
-             64) != 0)
-    status = act_error(context->engine, ARCHBIRD_CONFLICT,
-                       "rename_symbol ProjectionResult is stale");
-  for (item_index = 0;
-       status == ARCHBIRD_OK && item_index < result.data.item_count;
-       item_index++)
-    if (projection_item_current(&result.data.items[item_index]))
-      current_count++;
-  if (status == ARCHBIRD_OK &&
-      (current_count != sites->as.array.count ||
-       !rename_coverage_matches(coverage, &result.data, current_count) ||
-       strcmp(ab_projection_data_classification(&result.data), "complete") ||
-       !object_field(coverage, "exhaustive")->as.boolean))
-    status = act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
-                       "rename_symbol projection is not exhaustive");
-  for (site_index = 0;
-       status == ARCHBIRD_OK && site_index < sites->as.array.count;
-       site_index++) {
-    int found = 0;
-    for (item_index = 0; item_index < result.data.item_count; item_index++)
-      if (rename_site_matches(&sites->as.array.items[site_index],
-                              &result.data.items[item_index], &leaf)) {
-        found = 1;
-        break;
-      }
-    if (!found)
-      status = act_error(context->engine, ARCHBIRD_CONFLICT,
-                         "rename_symbol sites differ from the current Map");
-  }
-  for (site_index = 0;
-       status == ARCHBIRD_OK && site_index < sites->as.array.count;
-       site_index++) {
-    const AbValue *site = &sites->as.array.items[site_index];
-    const AbValue *path = object_field(site, "path");
-    const AbValue *source_sha = object_field(site, "source_sha256");
-    const AbValue *before = object_field(site, "before");
-    uint64_t start;
-    uint64_t end;
-    size_t work_index;
-    const AbActWork *work;
-    status = source_work(context, &path->as.text, &work_index);
-    if (status != ARCHBIRD_OK)
-      break;
-    work = &context->works[work_index];
-    if (!ab_artifact_safe_integer(object_field(site, "start_byte"), &start) ||
-        !ab_artifact_safe_integer(object_field(site, "end_byte"), &end) ||
-        end > work->before_length ||
-        memcmp(work->before_sha256, source_sha->as.text.data, 64) != 0 ||
-        before->as.text.length != end - start ||
-        memcmp(work->before + (size_t)start, before->as.text.data,
-               before->as.text.length) != 0) {
-      status = act_error(context->engine, ARCHBIRD_CONFLICT,
-                         "rename_symbol source site is stale");
-      break;
-    }
-    status = add_edit(context, work_index, item_id, (size_t)start, (size_t)end,
-                      (const uint8_t *)new_name->as.text.data,
-                      new_name->as.text.length, NULL);
-  }
-  ab_projection_result_free(context->engine, &result);
-  ab_projection_plan_free(context->engine, &projection);
-  return status;
-}
-
 static ArchbirdStatus collect_operation(AbActContext *context,
                                         const AbValue *item) {
   const AbValue *item_id = object_field(item, "id");
@@ -812,7 +586,7 @@ static ArchbirdStatus collect_operation(AbActContext *context,
   const AbValue *executable = object_field(item, "executable");
   const AbValue *path;
   const AbValue *source_sha;
-  size_t work_index;
+  size_t work_index = 0;
   ArchbirdStatus status;
   if (!executable->as.boolean || ab_artifact_text_is(action, "manual"))
     return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
@@ -828,7 +602,7 @@ static ArchbirdStatus collect_operation(AbActContext *context,
   if (ab_artifact_text_is(action, "declare_symbol"))
     return ab_act_c_declare_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "rename_symbol"))
-    return add_rename_symbol(context, operation, &item_id->as.text);
+    return ab_act_rename_symbol(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "redirect_dependency"))
     return ab_act_c_dependency_redirect(context, operation, &item_id->as.text);
   if (ab_artifact_text_is(action, "create_file")) {
