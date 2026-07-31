@@ -79,7 +79,7 @@ function usage(command = "map") {
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
     verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
-    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--before-map OLD.json | --git-diff REVISION] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--redirect FROM=TO] [--output PLAN.json]",
+    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--before-map OLD.json | --git-diff REVISION] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--redirect FROM=TO] [--format json|markdown] [--output PLAN.json]",
     act: "archbird act PLAN.json [--root PROJECT] [--submit ITEM=FILE] [--format markdown|json|patch] [--output ACT.json]",
     apply: "archbird apply ACT.json [--root PROJECT]",
     export: "archbird export graphml|json|mermaid --map MAP_OR_QUERY.json [--output FILE]",
@@ -1690,8 +1690,15 @@ function planMain(argv) {
     objective: { type: "string" },
     rename: { type: "multiple" },
     redirect: { type: "multiple" },
+    format: { default: "json", type: "string" },
   }, { positionals: Number.POSITIVE_INFINITY });
   if (options.help) { process.stdout.write(usage("plan")); return 0; }
+  if (!["json", "markdown"].includes(options.format)) {
+    throw new Error("--format must be json or markdown");
+  }
+  if (options.pretty && options.format !== "json") {
+    throw new Error("--pretty requires --format json");
+  }
   const positionals = [...options._];
   const positionalRoot = queryPositionalIsRoot(positionals[0])
     ? positionals.shift()
@@ -1820,7 +1827,12 @@ function planMain(argv) {
     },
   );
   const generated = JSON.parse(encoded.toString("utf8"));
-  write(encoded, options.output);
+  write(
+    options.format === "markdown"
+      ? archbird.renderPlanMarkdown(encoded)
+      : encoded,
+    options.output,
+  );
   if (options.output !== "-") {
     const executable = generated.items.filter((item) => item.executable).length;
     process.stdout.write(

@@ -9,6 +9,21 @@
 
 static int failures;
 
+typedef struct Output {
+  char bytes[16384];
+  size_t length;
+} Output;
+
+static int write_output(void *user_data, const uint8_t *bytes, size_t length) {
+  Output *output = (Output *)user_data;
+  if (length > sizeof(output->bytes) - output->length - 1)
+    return 1;
+  memcpy(output->bytes + output->length, bytes, length);
+  output->length += length;
+  output->bytes[output->length] = '\0';
+  return 0;
+}
+
 static void expect_status(ArchbirdEngine *engine, const char *name,
                           const char *json, ArchbirdStatus expected) {
   ArchbirdStatus actual =
@@ -79,6 +94,21 @@ int main(void) {
     return 2;
   expect_status(engine, "empty", empty, ARCHBIRD_OK);
   expect_status(engine, "manual", manual, ARCHBIRD_OK);
+  {
+    Output report = {{0}, 0};
+    ArchbirdStatus status = archbird_plan_render_markdown(
+        engine, (const uint8_t *)manual, strlen(manual), write_output, &report);
+    if (status != ARCHBIRD_OK || !strstr(report.bytes, "# Change Plan: demo") ||
+        !strstr(report.bytes, "### 1. INPUT REQUIRED `item:manual`") ||
+        !strstr(report.bytes, "- Depends on: none") ||
+        !strstr(report.bytes, "- Acceptance: `NO-EDGE`") ||
+        !strstr(report.bytes,
+                "Result: items=1; executable=0; input-required=1; "
+                "unknowns=1; preserved-constraints=0; plan=`")) {
+      fprintf(stderr, "FAIL markdown report: status %d\n", status);
+      failures++;
+    }
+  }
   expect_status(engine, "dangling", dangling, ARCHBIRD_INVALID_SCHEMA);
   expect_status(engine, "not-object", "[]", ARCHBIRD_INVALID_SCHEMA);
   expect_status(engine, "duplicate-key",

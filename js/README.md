@@ -465,13 +465,15 @@ order implementation before declaration and tests; Act still refuses the Plan
 until a reviewed executor or agent supplies the unresolved semantics.
 Supply reviewed full-file content for one exact `add_symbol` item, or for an
 `add_test_route` item with one exact mapped test file, with
-`act --submit ITEM=FILE`. This is Act executor input, not a Plan rewrite:
-native Act source-locks the mapped file, records the exact executor ledger,
-builds the isolated after-Map, and accepts only when fresh Verify closes the
-item's constraint and preserves the rest of the policy. Absent or ambiguous
-test locations remain manual.
+repeatable `act --submit ITEM=FILE`. This is Act executor input, not a Plan
+rewrite: native Act source-locks the mapped files, records the exact executor
+ledger, builds one isolated after-Map, and accepts only when fresh Verify
+closes every item constraint and preserves the rest of the policy.
+`plan --format markdown` renders the canonical Plan as a review packet.
+Absent or ambiguous test locations remain manual.
 
 ```bash
+npx archbird plan --format markdown
 npx archbird plan --output .archbird/plan.json
 npx archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 npx archbird plan CORE-PUBLIC-API --rename oldApi=newApi \
@@ -483,7 +485,9 @@ npx archbird map --format json --output .archbird/before-map.json
 npx archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
   --output .archbird/plan.json
 npx archbird act .archbird/plan.json
-npx archbird act .archbird/plan.json --submit ITEM_ID=reviewed-module.js
+npx archbird act .archbird/plan.json \
+  --submit IMPLEMENT_ITEM=reviewed-module.js \
+  --submit TEST_ITEM=reviewed-test.js
 npx archbird act .archbird/plan.json --format patch
 npx archbird act .archbird/plan.json --format json \
   --output .archbird/act.json
@@ -659,8 +663,9 @@ npx archbird export mermaid --map .archbird/map.json \
 Canonical Archbird JSON is authoritative. Graph-view JSON drives the app;
 GraphML and Mermaid are deterministic projections. Node exposes normalized OKF
 publication primitives, but the filesystem OKF CLI is Python-only. SCIP is an
-input evidence provider. Verification results can render SARIF or JUnit; Plan
-and Act remain canonical JSON artifacts.
+input evidence provider. Verification results can render SARIF or JUnit. Plan
+and Act remain canonical JSON artifacts; Plan additionally has a native
+Markdown task-packet view.
 
 <!-- archbird-node-cli:start -->
 The CLI command names are `map`, `config`, `query`, `impact`, `diff`,
@@ -682,6 +687,7 @@ const {
   Project,
   auditMapFreshness,
   compilePlan,
+  renderPlanMarkdown,
 } = require("archbird");
 
 const project = Project.fromRepository(".");
@@ -708,7 +714,7 @@ try {
       project.mapJson(),
       verificationJson,
     );
-    console.log(JSON.parse(planJson.toString("utf8")).artifact);
+    console.log(renderPlanMarkdown(planJson).toString("utf8"));
   }
 } finally {
   project.dispose();
@@ -723,6 +729,8 @@ are presentation views.
 `compilePlan()` delegates Plan derivation to the native core. Its optional
 `beforeMapJson` input enables identity-checked residual planning; Node performs
 no Map comparison or action inference.
+`renderPlanMarkdown()` presents the same validated Plan as a concise task
+packet; it does not create or modify an artifact.
 `materializeAct()` produces exact binary-safe transitions from a Plan. Its
 optional `executorSubmissionsJson` option supplies reviewed full-file content
 for exact unresolved symbol or test-route items; the corresponding
@@ -743,7 +751,7 @@ remain in the native core.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
-| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `validateAct`, `validatePlan` |
+| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
 | Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
 | Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |

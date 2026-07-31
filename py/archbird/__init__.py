@@ -62,6 +62,7 @@ _NATIVE_EXPORTS = (
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",
+    "render_plan_markdown",
     "render_source_markdown",
     "resolve_discovery",
     "validate_act",

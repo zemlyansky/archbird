@@ -485,13 +485,15 @@ order implementation before declaration and tests; Act still refuses the Plan
 until a reviewed executor or agent supplies the unresolved semantics.
 Supply reviewed full-file content for one exact `add_symbol` item, or for an
 `add_test_route` item with one exact mapped test file, with
-`act --submit ITEM=FILE`. This is Act executor input, not a Plan rewrite:
-native Act source-locks the mapped file, records the exact executor ledger,
-builds the isolated after-Map, and accepts only when fresh Verify closes the
-item's constraint and preserves the rest of the policy. Absent or ambiguous
-test locations remain manual.
+repeatable `act --submit ITEM=FILE`. This is Act executor input, not a Plan
+rewrite: native Act source-locks the mapped files, records the exact executor
+ledger, builds one isolated after-Map, and accepts only when fresh Verify
+closes every item constraint and preserves the rest of the policy.
+`plan --format markdown` renders the canonical Plan as a review packet.
+Absent or ambiguous test locations remain manual.
 
 ```bash
+archbird plan --format markdown
 archbird plan --output .archbird/plan.json
 archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 archbird plan CORE-PUBLIC-API --rename old_api=new_api \
@@ -503,7 +505,9 @@ archbird map --format json --output .archbird/before-map.json
 archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
   --output .archbird/plan.json
 archbird act .archbird/plan.json
-archbird act .archbird/plan.json --submit ITEM_ID=reviewed-module.py
+archbird act .archbird/plan.json \
+  --submit IMPLEMENT_ITEM=reviewed-module.py \
+  --submit TEST_ITEM=reviewed-test.py
 archbird act .archbird/plan.json --format patch
 archbird act .archbird/plan.json --format json \
   --output .archbird/act.json
@@ -695,12 +699,11 @@ timeout are host execution policy and cannot change canonical output.
 Use `Project` for the normal repository workflow:
 
 ```python
-import json
-
 from archbird import (
     Project,
     audit_map_freshness,
     compile_plan_json,
+    render_plan_markdown,
 )
 
 project = Project.from_repository(".")
@@ -733,7 +736,7 @@ if project.verification_configured:
         project.map_json(),
         verification_json,
     )
-    print(json.loads(plan_json)["artifact"])
+    print(render_plan_markdown(plan_json).decode())
 ```
 
 `Project.from_repository()` applies discovery, project configuration, and
@@ -744,6 +747,8 @@ are presentation views.
 `compile_plan_json()` delegates Plan derivation to the native core. Its optional
 `before_map_json` input enables identity-checked residual planning; Python
 performs no Map comparison or action inference.
+`render_plan_markdown()` presents the same validated Plan as a concise task
+packet; it does not create or modify an artifact.
 `materialize_act_json()` produces exact binary-safe transitions from a Plan.
 Its optional `executor_submissions_json` input supplies reviewed full-file
 content for exact unresolved symbol or test-route items; the corresponding
@@ -779,7 +784,7 @@ remain shared with Node and C.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
-| Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `validate_act`, `validate_plan` |
+| Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `render_plan_markdown`, `validate_act`, `validate_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
 | Runtime and schemas | `__version__`, `implementation_digest`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `read_schema`, `schema_names` |
 <!-- archbird-python-api:end -->

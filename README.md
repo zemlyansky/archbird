@@ -699,6 +699,8 @@ artifact. Omit the constraint name to include every current issue, or scope
 generation by existing constraint ID:
 
 ```bash
+# Inspect the current task DAG without saving a second artifact.
+archbird plan --format markdown
 archbird plan --output .archbird/plan.json
 archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 # Review a derived rename candidate, then assert the intended transformation.
@@ -718,9 +720,10 @@ archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
 
 # Ground, verify, and inspect the exact Act without writing.
 archbird act .archbird/plan.json
-# Supply reviewed implementation semantics for one exact unresolved item.
+# Supply reviewed implementation semantics for exact unresolved items.
 archbird act .archbird/plan.json \
-  --submit ITEM_ID=reviewed-module.py
+  --submit IMPLEMENT_ITEM=reviewed-module.py \
+  --submit TEST_ITEM=reviewed-test.py
 archbird act .archbird/plan.json --format patch
 archbird act .archbird/plan.json --format json \
   --output .archbird/act.json
@@ -740,13 +743,15 @@ implementation before its declaration and its tests while continuing to state
 that Act has no authorized source transformation. A developer or agent may
 submit reviewed full-file content for one exact `add_symbol` item, or for an
 `add_test_route` item when Map identifies exactly one file in its reviewed test
-group, with `act --submit ITEM=FILE`. The Plan remains byte-identical and
-language-neutral; the native Act core binds the submission to the item and
-mapped source, records exact read/write/match evidence, builds a real isolated
-after-Map, and rejects the Act unless the original and preserved constraints
-pass. A missing definition, declaration, and test route can therefore form one
-useful agent/developer task DAG without Archbird inventing a signature, body,
-or test. Absent or ambiguous test locations remain manual.
+group, with repeatable `act --submit ITEM=FILE`. The Plan remains
+byte-identical and language-neutral; the native Act core binds each submission
+to its item and mapped source, records exact read/write/match evidence, builds
+one real isolated after-Map, and rejects the entire Act unless the original
+and preserved constraints pass. A missing definition, declaration, and test
+route can therefore form one useful agent/developer task DAG without Archbird
+inventing a signature, body, or test. `plan --format markdown` renders that
+same canonical Plan as a review packet; it does not create another artifact.
+Absent or ambiguous test locations remain manual.
 `redirect_dependency` and `declare_symbol` currently follow this boundary end
 to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores the exhaustive
 edge ProjectionPlan, exact relation, affected source paths, and symbol
@@ -976,9 +981,7 @@ unresolved targets remain explicit.
 ### Python
 
 ```python
-import json
-
-from archbird import Project, compile_plan_json
+from archbird import Project, compile_plan_json, render_plan_markdown
 
 project = Project.from_repository(".")
 map_json = project.map_json(pretty=True)
@@ -993,7 +996,7 @@ if project.verification_configured:
     plan_json = compile_plan_json(
         project, project.map_json(), verification_json
     )
-    print(json.loads(plan_json)["artifact"])
+    print(render_plan_markdown(plan_json).decode())
 print(project.query_markdown(
     symbols=["runtime_start"], depth=1, view="changes", detail="compact"
 ).decode())
@@ -1002,7 +1005,7 @@ print(project.query_markdown(
 ### JavaScript / Node
 
 ```js
-const { Project, compilePlan } = require("archbird");
+const { Project, compilePlan, renderPlanMarkdown } = require("archbird");
 
 const project = Project.fromRepository(".");
 try {
@@ -1017,7 +1020,7 @@ try {
     const mapJson = project.mapJson();
     const verificationJson = project.verifyJson();
     const planJson = compilePlan(project, mapJson, verificationJson);
-    console.log(JSON.parse(planJson.toString("utf8")).artifact);
+    console.log(renderPlanMarkdown(planJson).toString("utf8"));
   }
   console.log(project.queryMarkdown({
     symbols: ["runtime_start"], depth: 1, view: "changes", detail: "compact",
@@ -1080,7 +1083,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
-| Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `validate_act`, `validate_plan` |
+| Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `render_plan_markdown`, `validate_act`, `validate_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
 | Runtime and schemas | `__version__`, `implementation_digest`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `read_schema`, `schema_names` |
 <!-- archbird-python-api:end -->
@@ -1091,7 +1094,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
-| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `validateAct`, `validatePlan` |
+| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
 | Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
 | Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |
@@ -1131,7 +1134,7 @@ The complete C ABI is declared in
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
 | Map, Query, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_unified_diff` |
 | Workspace | `archbird_workspace_analyze`, `archbird_workspace_plan` |
-| Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_source_requirements`, `archbird_plan_validate` |
+| Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_render_markdown`, `archbird_plan_source_requirements`, `archbird_plan_validate` |
 <!-- archbird-c-api:end -->
 
 ## Interchange and command surface

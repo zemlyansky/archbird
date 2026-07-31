@@ -2111,6 +2111,12 @@ def validate_plan(plan_json: bytes) -> None:
     _native.plan_validate(plan_json)
 
 
+def render_plan_markdown(plan_json: bytes) -> bytes:
+    """Render one canonical Plan as a concise task packet."""
+
+    return _native.plan_render_markdown(plan_json)
+
+
 def compile_plan_json(
     project: Project,
     map_json: bytes,
@@ -2945,6 +2951,7 @@ __all__ = [
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",
+    "render_plan_markdown",
     "render_source_markdown",
     "resolve_discovery",
     "validate_act",

@@ -45,6 +45,7 @@ from .native import (
     query_map_markdown,
     query_map_json,
     render_map_markdown,
+    render_plan_markdown,
     render_source_markdown,
     resolve_discovery,
 )
@@ -951,6 +952,12 @@ def plan_parser() -> argparse.ArgumentParser:
             "constraint"
         ),
     )
+    result.add_argument(
+        "--format",
+        choices=("json", "markdown"),
+        default="json",
+        help="canonical editable Plan JSON or a native Markdown task packet",
+    )
     result.add_argument("--pretty", action="store_true", help="pretty JSON")
     result.add_argument("-o", "--output", default="-")
     return result
@@ -1006,8 +1013,8 @@ def act_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="ITEM=FILE",
         help=(
-            "submit reviewed full-file content for one exact unresolved "
-            "Plan item"
+            "submit reviewed full-file content for an exact unresolved Plan "
+            "item; repeat for coordinated items"
         ),
     )
     result.add_argument(
@@ -2566,6 +2573,8 @@ def _plan_main(argv: Sequence[str]) -> int:
     args = plan_parser().parse_args(argv)
     progress = _Progress(args.progress)
     try:
+        if args.pretty and args.format != "json":
+            raise ValueError("--pretty requires --format json")
         if args.constraint_ids and _query_positional_is_root(
             args.constraint_ids[0]
         ):
@@ -2707,7 +2716,12 @@ def _plan_main(argv: Sequence[str]) -> int:
             pretty=args.pretty,
         )
         plan = json.loads(encoded)
-        _write(encoded, args.output)
+        rendered = (
+            render_plan_markdown(encoded)
+            if args.format == "markdown"
+            else encoded
+        )
+        _write(rendered, args.output)
         if args.output != "-":
             executable = sum(
                 1

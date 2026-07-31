@@ -11,6 +11,9 @@ if (process.argv.length !== 4) {
 
 const addon = path.resolve(process.argv[2]);
 const repository = path.resolve(process.argv[3]);
+process.env.ARCHBIRD_ENGINE = "native";
+process.env.ARCHBIRD_NATIVE_ADDON = addon;
+const archbird = require(path.join(repository, "js/src/index.js"));
 const root = fs.mkdtempSync(path.join(repository, "build/node-plan-act-"));
 const artifacts = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-artifacts-"),
@@ -216,6 +219,20 @@ try {
   const act = path.join(artifacts, "act.json");
 
   run(["plan", "NO-LEGACY", "--root", root, "--output", plan]);
+  const planMarkdown = archbird
+    .renderPlanMarkdown(fs.readFileSync(plan))
+    .toString("utf8");
+  const cliPlanMarkdown = run([
+    "plan", "NO-LEGACY", "--root", root, "--format", "markdown",
+  ]).stdout.toString("utf8");
+  assert.equal(cliPlanMarkdown, planMarkdown);
+  assert.match(planMarkdown, /^# Change Plan: node-plan-act/m);
+  assert.match(planMarkdown, /### 1\. EXECUTABLE/);
+  assert.match(planMarkdown, /- Acceptance: `NO-LEGACY`/);
+  assert.match(
+    planMarkdown,
+    /Result: items=1; executable=1; input-required=0; unknowns=0;/,
+  );
   const preview = run([
     "act", plan, "--root", root, "--format", "patch",
   ]).stdout.toString("utf8");

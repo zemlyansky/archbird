@@ -418,6 +418,14 @@ ARCHBIRD_API ArchbirdStatus archbird_plan_validate(ArchbirdEngine *engine,
                                                    size_t plan_length);
 
 /*
+ * Render one validated Plan as a concise human- and agent-readable Markdown
+ * task packet. The canonical JSON Plan remains the editable source of truth.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_plan_render_markdown(
+    ArchbirdEngine *engine, const uint8_t *plan_json, size_t plan_length,
+    ArchbirdWriteFn write_fn, void *user_data);
+
+/*
  * Compile one editable Plan from a complete Verification and its exact current
  * Map. before_map_json is optional historical evidence for residual planning;
  * when present it must describe the same project, configuration, and producer

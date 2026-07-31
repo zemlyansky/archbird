@@ -2741,6 +2741,206 @@ class PlanActCliTest(unittest.TestCase):
         self.assertFalse(completed.stdout)
         self.assertIn("manual or blocked item", completed.stderr.decode())
 
+    def test_reviewed_api_and_test_submissions_complete_one_plan_dag(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "IMPLEMENT-API": {
+                    "kind": "required_symbols",
+                    "symbols": ["future_api"],
+                    "paths": ["src/api.c"],
+                    "kinds": ["function"],
+                    "owner": "architecture",
+                    "rationale": "The implementation exists.",
+                },
+                "DECLARE-API": {
+                    "kind": "required_symbols",
+                    "symbols": ["future_api"],
+                    "paths": ["include/api.h"],
+                    "kinds": ["declaration"],
+                    "owner": "architecture",
+                    "rationale": "The public declaration exists.",
+                },
+                "TEST-API": {
+                    "kind": "required_test_route",
+                    "group": "c",
+                    "target": "src/api.c",
+                    "selectors": ["test_future"],
+                    "owner": "architecture",
+                    "rationale": "The implementation has a focused test.",
+                },
+            },
+            layers=[
+                {
+                    "name": "core",
+                    "language": "c",
+                    "globs": ["src/**/*.c"],
+                    "import_roots": ["include"],
+                },
+                {
+                    "name": "api",
+                    "language": "c",
+                    "globs": ["include/**/*.h"],
+                    "import_roots": ["include"],
+                },
+                {
+                    "name": "native-tests",
+                    "language": "c",
+                    "globs": ["test/**/*.c"],
+                    "import_roots": ["include"],
+                },
+            ],
+            tests=[
+                {
+                    "name": "c",
+                    "language": "c",
+                    "globs": ["test/test_*.c"],
+                    "route_to": ["core"],
+                }
+            ],
+        )
+        (self.root / "src").mkdir()
+        (self.root / "include").mkdir()
+        (self.root / "test").mkdir()
+        implementation = self.root / "src/api.c"
+        declaration = self.root / "include/api.h"
+        test_source = self.root / "test/test_api.c"
+        original_implementation = (
+            '#include "api.h"\n\n'
+            "int current_api(void) { return 1; }\n"
+        )
+        original_declaration = "int current_api(void);\n"
+        original_test = (
+            '#include "api.h"\n\n'
+            "int test_current(void) { return current_api() != 1; }\n"
+        )
+        implementation.write_text(original_implementation)
+        declaration.write_text(original_declaration)
+        test_source.write_text(original_test)
+
+        plan_path = self.plan_path("reviewed-api-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan_bytes = plan_path.read_bytes()
+        plan = json.loads(plan_bytes)
+        by_constraint = {
+            item["acceptance"]["constraints"][0]: item
+            for item in plan["items"]
+        }
+        implementation_item = by_constraint["IMPLEMENT-API"]
+        declaration_item = by_constraint["DECLARE-API"]
+        test_item = by_constraint["TEST-API"]
+        self.assertEqual(
+            declaration_item["depends_on"], [implementation_item["id"]]
+        )
+        self.assertEqual(
+            test_item["depends_on"], [implementation_item["id"]]
+        )
+        self.assertEqual(
+            test_item["operation"]["path"], "test/test_api.c"
+        )
+        markdown = run(
+            "plan",
+            "--root",
+            str(self.root),
+            "--format",
+            "markdown",
+        ).stdout.decode()
+        self.assertIn("# Change Plan: plan-act-fixture", markdown)
+        self.assertIn("### 1.", markdown)
+        self.assertIn("- Depends on:", markdown)
+        self.assertIn("- Acceptance:", markdown)
+        self.assertIn(
+            "Result: items=3; executable=0; input-required=3; unknowns=3;",
+            markdown,
+        )
+
+        completed_implementation = (
+            original_implementation
+            + "\nint future_api(void) { return 2; }\n"
+        )
+        completed_declaration = (
+            original_declaration + "int future_api(void);\n"
+        )
+        completed_test = (
+            original_test
+            + "\nint test_future(void) { return future_api() != 2; }\n"
+        )
+        implementation_input = self.plan_path("api.c")
+        declaration_input = self.plan_path("api.h")
+        test_input = self.plan_path("test_api.c")
+        implementation_input.write_text(completed_implementation)
+        declaration_input.write_text(completed_declaration)
+        test_input.write_text(completed_test)
+
+        act_path = self.plan_path("reviewed-api-act.json")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{implementation_item['id']}={implementation_input}",
+            "--submit",
+            f"{declaration_item['id']}={declaration_input}",
+            "--submit",
+            f"{test_item['id']}={test_input}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(len(act["executors"]), 3)
+        self.assertEqual(
+            {row["capability"] for row in act["executors"]},
+            {"archbird.asserted.source.replace-file@1"},
+        )
+        self.assertEqual(
+            {row["item_ids"][0] for row in act["executors"]},
+            {
+                implementation_item["id"],
+                declaration_item["id"],
+                test_item["id"],
+            },
+        )
+        self.assertEqual(
+            {row["path"] for row in act["transitions"]},
+            {"src/api.c", "include/api.h", "test/test_api.c"},
+        )
+        self.assertEqual(implementation.read_text(), original_implementation)
+        self.assertEqual(declaration.read_text(), original_declaration)
+        self.assertEqual(test_source.read_text(), original_test)
+        self.assertEqual(plan_path.read_bytes(), plan_bytes)
+
+        applied = run(
+            "apply", str(act_path), "--root", str(self.root)
+        ).stdout.decode()
+        self.assertEqual(
+            applied, "Result: applied-transitions=3; state=applied\n"
+        )
+        self.assertEqual(implementation.read_text(), completed_implementation)
+        self.assertEqual(declaration.read_text(), completed_declaration)
+        self.assertEqual(test_source.read_text(), completed_test)
+        verification = json.loads(
+            run(
+                "verify",
+                "--root",
+                str(self.root),
+                "--format",
+                "json",
+                "--check",
+            ).stdout
+        )
+        self.assertEqual(verification["summary"]["constraints"]["pass"], 3)
+        self.assertEqual(
+            run(
+                "apply", str(act_path), "--root", str(self.root)
+            ).stdout.decode(),
+            "Result: applied-transitions=0; state=already-satisfied\n",
+        )
+
     def test_asserted_file_submission_grounds_plan_only_at_act_boundary(
         self,
     ) -> None:

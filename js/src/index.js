@@ -1649,6 +1649,10 @@ function validatePlan(planJson) {
   native.planValidate(Buffer.from(planJson));
 }
 
+function renderPlanMarkdown(planJson) {
+  return native.planRenderMarkdown(Buffer.from(planJson));
+}
+
 function compilePlan(
   project,
   mapJson,
@@ -1905,6 +1909,7 @@ module.exports = {
   queryMapMarkdown,
   reportConstraints,
   renderMapMarkdown,
+  renderPlanMarkdown,
   renderSourceMarkdown,
   freezeConstraints,
   materializeAct,

@@ -653,6 +653,26 @@ static PyObject *py_plan_validate(PyObject *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
+static PyObject *py_plan_render_markdown(PyObject *self, PyObject *args) {
+  const char *input;
+  Py_ssize_t input_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTuple(args, "y#:plan_render_markdown", &input, &input_length))
+    return NULL;
+  status = saved_artifact_engine((size_t)input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_plan_render_markdown(engine, (const uint8_t *)input,
+                                           (size_t)input_length, output_write,
+                                           &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_plan_compile(PyObject *self, PyObject *args,
                                  PyObject *kwargs) {
   static char *keywords[] = {"project",
@@ -2298,6 +2318,8 @@ static PyMethodDef archbird_methods[] = {
      "Validate strict project-owned test-to-symbol observations."},
     {"plan_validate", py_plan_validate, METH_VARARGS,
      "Validate one canonical editable Plan."},
+    {"plan_render_markdown", py_plan_render_markdown, METH_VARARGS,
+     "Render one canonical Plan as a Markdown task packet."},
     {"plan_compile", (PyCFunction)py_plan_compile, METH_VARARGS | METH_KEYWORDS,
      "Compile one native editable Plan from a Project, Map, and Verification."},
     {"act_validate", py_act_validate, METH_VARARGS,

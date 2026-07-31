@@ -776,6 +776,27 @@ static napi_value plan_validate(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value plan_render_markdown(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  const uint8_t *input;
+  size_t input_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 1 || !get_buffer(env, argv[0], &input, &input_length))
+    return NULL;
+  status = saved_artifact_engine(input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_plan_render_markdown(engine, input, input_length,
+                                           output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value plan_compile(napi_env env, napi_callback_info info) {
   size_t argc = 6;
   napi_value argv[6];
@@ -2438,6 +2459,8 @@ static napi_value init(napi_env env, napi_value exports) {
        test_symbol_observations_validate, NULL, NULL, NULL, napi_default, NULL},
       {"planValidate", NULL, plan_validate, NULL, NULL, NULL, napi_default,
        NULL},
+      {"planRenderMarkdown", NULL, plan_render_markdown, NULL, NULL, NULL,
+       napi_default, NULL},
       {"planCompile", NULL, plan_compile, NULL, NULL, NULL, napi_default, NULL},
       {"actValidate", NULL, act_validate, NULL, NULL, NULL, napi_default, NULL},
       {"planSourceRequirements", NULL, plan_source_requirements, NULL, NULL,

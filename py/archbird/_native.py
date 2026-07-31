@@ -1098,6 +1098,16 @@ def plan_validate(input: bytes) -> None:
     )
 
 
+def plan_render_markdown(input: bytes) -> bytes:
+    data = _bytes(input, "Plan")
+    return _simple_render(
+        "archbird_plan_render_markdown",
+        (data,),
+        include_flags=False,
+        saved_artifact=True,
+    )
+
+
 def plan_compile(
     project: _Project,
     map_json: bytes,
