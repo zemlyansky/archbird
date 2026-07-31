@@ -2827,7 +2827,8 @@ def _apply_main(argv: Sequence[str]) -> int:
         transitions = apply_accepted_act(
             Path(args.root_override or "."), act_bytes
         )
-        print(f"Result: applied-transitions={transitions}")
+        state = "applied" if transitions else "already-satisfied"
+        print(f"Result: applied-transitions={transitions}; state={state}")
         return 0
     except (json.JSONDecodeError, OSError, ValueError, _native.Error) as error:
         print(f"archbird: error: {error}", file=sys.stderr)

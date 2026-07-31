@@ -155,7 +155,42 @@ def observe_plan_sources(root: Path, plan_json: bytes) -> bytes:
 
 def observe_act_sources(root: Path, act_json: bytes) -> bytes:
     requirements = _native.act_source_requirements(act_json)
-    return observe_source_requirements(root, requirements)
+    root = root.resolve()
+    document = json.loads(requirements)
+    if not isinstance(document, dict) or set(document) != {"paths"}:
+        raise ValueError("native Act source requirements have an invalid shape")
+    paths = document["paths"]
+    if not isinstance(paths, list):
+        raise ValueError("native Act source requirements must contain paths")
+    rows: list[dict[str, object]] = []
+    absent: list[str] = []
+    for raw_path in paths:
+        path = _relative_path(raw_path)
+        try:
+            data, mode = _read_regular(root, path)
+        except FileNotFoundError:
+            absent.append(path)
+            continue
+        rows.append(
+            {
+                "path": path,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "executable": bool(mode & 0o111),
+            }
+        )
+    metadata = {
+        "files": sorted(rows, key=lambda row: str(row["path"])),
+        "absent": sorted(absent),
+    }
+    return _native.json_canonicalize(
+        json.dumps(
+            metadata,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
 
 
 def act_overlay(act_json: bytes) -> Mapping[str, bytes | None]:
@@ -330,7 +365,8 @@ def _commit_act(root: Path, act_json: bytes) -> None:
                 _write_stage_file(backup, data, stat.S_IMODE(mode))
                 staged_old[path] = backup
         metadata = observe_act_sources(root, act_json)
-        _native.act_preflight_apply(act_json, metadata)
+        if _native.act_preflight_apply(act_json, metadata) != 0:
+            raise OSError("Act became already satisfied during commit")
         for path in sorted(staged_new):
             _make_parents(root, path, created_directories)
             _check_parents(root, path)
@@ -386,7 +422,8 @@ def _commit_act(root: Path, act_json: bytes) -> None:
 def apply_accepted_act(root: Path, act_json: bytes) -> int:
     root = root.resolve()
     metadata = observe_act_sources(root, act_json)
-    _native.act_preflight_apply(act_json, metadata)
+    if _native.act_preflight_apply(act_json, metadata) == 1:
+        return 0
     lock_path = root / ".archbird-apply.lock"
     descriptor = os.open(
         lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
@@ -394,6 +431,9 @@ def apply_accepted_act(root: Path, act_json: bytes) -> int:
     try:
         os.write(descriptor, f"{os.getpid()}\n".encode("ascii"))
         os.fsync(descriptor)
+        metadata = observe_act_sources(root, act_json)
+        if _native.act_preflight_apply(act_json, metadata) == 1:
+            return 0
         _commit_act(root, act_json)
     finally:
         os.close(descriptor)

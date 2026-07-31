@@ -1260,9 +1260,10 @@ def act_accept(
 
 def act_preflight_apply(
     act_json: bytes, source_metadata_json: bytes
-) -> None:
+) -> int:
     act = _bytes(act_json, "Act")
     metadata = _bytes(source_metadata_json, "source metadata")
+    state = ctypes.c_int()
     function = _declare(
         "archbird_act_preflight_apply",
         [
@@ -1271,15 +1272,22 @@ def act_preflight_apply(
             ctypes.c_size_t,
             ctypes.c_char_p,
             ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int),
         ],
     )
     _one_shot(
         lambda engine, _write: function(
-            engine, act, len(act), metadata, len(metadata)
+            engine,
+            act,
+            len(act),
+            metadata,
+            len(metadata),
+            ctypes.byref(state),
         ),
         input_budget=max(len(act), len(metadata)),
         saved_artifact=True,
     )
+    return state.value
 
 
 def discovery_plan(config: bytes, paths: Sequence[str], pretty=False) -> bytes:

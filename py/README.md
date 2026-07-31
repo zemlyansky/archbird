@@ -733,9 +733,10 @@ are presentation views.
 performs no Map comparison or action inference.
 `materialize_act_json()` produces exact binary-safe transitions from a Plan;
 `accept_act_json()` seals them only after callers supply the fresh isolated
-after-Map and Verification. `preflight_act_apply()` checks the accepted Act
-against newly observed source preimages immediately before a host replays its
-stored bytes. The explicit filesystem helpers `observe_plan_sources()`,
+after-Map and Verification. `preflight_act_apply()` returns `ready` or
+`already_satisfied` after comparing newly observed sources with the complete
+sealed before/after states; partial application and unrelated drift fail. The
+explicit filesystem helpers `observe_plan_sources()`,
 `act_overlay()`, `render_act()`, and `apply_accepted_act()` provide that
 host transport; all Plan interpretation, edit materialization, and acceptance
 remain in the native core.

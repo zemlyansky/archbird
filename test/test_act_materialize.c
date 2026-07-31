@@ -274,6 +274,7 @@ int main(void) {
   char a_sha[65];
   char b_sha[65];
   char json_sha[65];
+  ArchbirdActApplyState apply_state = ARCHBIRD_ACT_APPLY_READY;
   ArchbirdStatus status;
   if (archbird_engine_create(NULL, &engine) != ARCHBIRD_OK)
     return 2;
@@ -440,9 +441,7 @@ int main(void) {
                                             &act_requirements);
   expect_status("collect accepted Act requirements", status, ARCHBIRD_OK,
                 engine);
-  if (status == ARCHBIRD_OK &&
-      (!find_bytes(&act_requirements, "\"absent\":[]") ||
-       !find_bytes(&act_requirements, "\"files\":[]"))) {
+  if (status == ARCHBIRD_OK && !find_bytes(&act_requirements, "\"paths\":[]")) {
     fprintf(stderr, "FAIL accepted Act requirements shape\n");
     failures++;
   }
@@ -454,12 +453,16 @@ int main(void) {
   expect_status("preflight accepted",
                 archbird_act_preflight_apply(engine, accepted_act.data,
                                              accepted_act.length, metadata.data,
-                                             metadata.length),
+                                             metadata.length, &apply_state),
                 ARCHBIRD_OK, engine);
+  if (apply_state != ARCHBIRD_ACT_APPLY_ALREADY_SATISFIED) {
+    fprintf(stderr, "FAIL empty accepted Act is not already satisfied\n");
+    failures++;
+  }
   expect_status("reject materialized apply",
                 archbird_act_preflight_apply(engine, empty_act.data,
                                              empty_act.length, metadata.data,
-                                             metadata.length),
+                                             metadata.length, &apply_state),
                 ARCHBIRD_POLICY_REJECTED, engine);
   {
     uint8_t *locked_sha = (uint8_t *)find_bytes(&metadata, b_sha);

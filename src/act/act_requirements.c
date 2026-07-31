@@ -39,6 +39,16 @@ static ArchbirdStatus add_path(ArchbirdEngine *engine, PathRequirement *paths,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus add_observed_path(ArchbirdEngine *engine,
+                                        PathRequirement *paths, size_t *count,
+                                        const AbValue *value) {
+  if (*count >= AB_ACT_MAX_TRANSITIONS * 2u)
+    return reject(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                  "Act references too many paths");
+  paths[(*count)++].path = &value->as.text;
+  return ARCHBIRD_OK;
+}
+
 static void sort_unique(PathRequirement *paths, size_t *count) {
   size_t input;
   size_t output = 0;
@@ -196,10 +206,8 @@ ArchbirdStatus archbird_act_source_requirements(
     ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data) {
   AbAct act = {0};
-  PathRequirement present[AB_ACT_MAX_TRANSITIONS];
-  PathRequirement absent[AB_ACT_MAX_TRANSITIONS];
-  size_t present_count = 0;
-  size_t absent_count = 0;
+  PathRequirement paths[AB_ACT_MAX_TRANSITIONS * 2u];
+  size_t path_count = 0;
   size_t index;
   AbBuffer document;
   ArchbirdStatus status;
@@ -216,31 +224,18 @@ ArchbirdStatus archbird_act_source_requirements(
        index++) {
     const AbValue *transition = act.transitions[index].record;
     const AbValue *kind = field(transition, "kind");
-    if (ab_artifact_text_is(kind, "create")) {
-      status =
-          add_path(engine, absent, &absent_count, field(transition, "path"));
-    } else if (ab_artifact_text_is(kind, "move")) {
-      status = add_path(engine, present, &present_count,
-                        field(transition, "source_path"));
-      if (status == ARCHBIRD_OK)
-        status =
-            add_path(engine, absent, &absent_count, field(transition, "path"));
-    } else {
-      status =
-          add_path(engine, present, &present_count, field(transition, "path"));
-    }
+    status = add_observed_path(engine, paths, &path_count,
+                               field(transition, "path"));
+    if (status == ARCHBIRD_OK && ab_artifact_text_is(kind, "move"))
+      status = add_observed_path(engine, paths, &path_count,
+                                 field(transition, "source_path"));
   }
   if (status == ARCHBIRD_OK) {
-    sort_unique(present, &present_count);
-    sort_unique(absent, &absent_count);
-    status = ab_buffer_literal(&document, "{\"absent\":");
+    sort_unique(paths, &path_count);
+    status = ab_buffer_literal(&document, "{\"paths\":");
   }
   if (status == ARCHBIRD_OK)
-    status = render_paths(&document, absent, absent_count);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&document, ",\"files\":");
-  if (status == ARCHBIRD_OK)
-    status = render_paths(&document, present, present_count);
+    status = render_paths(&document, paths, path_count);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&document, "}");
   if (status == ARCHBIRD_OK)

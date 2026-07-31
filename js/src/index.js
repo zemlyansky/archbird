@@ -1722,10 +1722,13 @@ function acceptAct(
 }
 
 function preflightActApply(actJson, sourceMetadataJson) {
-  native.actPreflightApply(
+  const state = native.actPreflightApply(
     Buffer.from(actJson),
     Buffer.from(sourceMetadataJson),
   );
+  if (state === 0) return "ready";
+  if (state === 1) return "already_satisfied";
+  throw new Error(`native Act preflight returned unknown state ${state}`);
 }
 
 function reportConstraints(

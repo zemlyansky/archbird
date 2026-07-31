@@ -712,9 +712,10 @@ are presentation views.
 no Map comparison or action inference.
 `materializeAct()` produces exact binary-safe transitions from a Plan;
 `acceptAct()` seals them only after callers supply the fresh isolated
-after-Map and Verification. `preflightActApply()` checks the accepted Act
-against newly observed source preimages immediately before a host replays its
-stored bytes. The explicit filesystem helpers `observePlanSources()`,
+after-Map and Verification. `preflightActApply()` returns `ready` or
+`already_satisfied` after comparing newly observed sources with the complete
+sealed before/after states; partial application and unrelated drift fail. The
+explicit filesystem helpers `observePlanSources()`,
 `actOverlay()`, `renderAct()`, and `applyAcceptedAct()` provide that host
 transport; all Plan interpretation, edit materialization, and acceptance
 remain in the native core.

@@ -234,11 +234,13 @@ try {
 
   assert.equal(
     run(["apply", act, "--root", root]).stdout.toString("utf8"),
-    "Result: applied-transitions=1\n",
+    "Result: applied-transitions=1; state=applied\n",
   );
   assert.equal(fs.existsSync(legacy), false);
-  const replay = run(["apply", act, "--root", root], 2);
-  assert.match(replay.stderr.toString("utf8"), /legacy\.js/);
+  assert.equal(
+    run(["apply", act, "--root", root]).stdout.toString("utf8"),
+    "Result: applied-transitions=0; state=already-satisfied\n",
+  );
 
   fs.writeFileSync(
     path.join(root, "api.js"),

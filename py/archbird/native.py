@@ -2199,10 +2199,15 @@ def accept_act_json(
 
 def preflight_act_apply(
     act_json: bytes, source_metadata_json: bytes
-) -> None:
-    """Revalidate an accepted Act and its current source preimages."""
+) -> str:
+    """Classify an accepted Act against current source observations."""
 
-    _native.act_preflight_apply(act_json, source_metadata_json)
+    state = _native.act_preflight_apply(act_json, source_metadata_json)
+    if state == 0:
+        return "ready"
+    if state == 1:
+        return "already_satisfied"
+    raise RuntimeError(f"native Act preflight returned unknown state {state}")
 
 
 def _constraint_request_json(

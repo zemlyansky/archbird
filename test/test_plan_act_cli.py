@@ -184,16 +184,24 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("legacy.py", drift.stderr.decode())
         self.assertEqual(legacy.read_text(), "drifted = True\n")
         legacy.write_bytes(original)
-        run("apply", str(act_path), "--root", str(self.root))
+        applied = run(
+            "apply", str(act_path), "--root", str(self.root)
+        ).stdout.decode()
+        self.assertEqual(
+            applied,
+            "Result: applied-transitions=1; state=applied\n",
+        )
         self.assertFalse(legacy.exists())
         replay = run(
             "apply",
             str(act_path),
             "--root",
             str(self.root),
-            expected=2,
+        ).stdout.decode()
+        self.assertEqual(
+            replay,
+            "Result: applied-transitions=0; state=already-satisfied\n",
         )
-        self.assertIn("legacy.py", replay.stderr.decode())
 
     def test_package_entrypoint_plan_uses_lossless_native_json_edits(self) -> None:
         cases = (
@@ -2653,7 +2661,10 @@ class PlanActCliTest(unittest.TestCase):
         applied = run(
             "apply", str(act_path), "--root", str(self.root)
         ).stdout.decode()
-        self.assertEqual(applied, "Result: applied-transitions=0\n")
+        self.assertEqual(
+            applied,
+            "Result: applied-transitions=0; state=already-satisfied\n",
+        )
 
     def test_selected_fix_that_breaks_passing_policy_is_rolled_back(self) -> None:
         self.configure(
@@ -2799,11 +2810,30 @@ class PlanActCliTest(unittest.TestCase):
             {"create", "move"},
         )
         self.assertTrue(old.exists())
+        created = self.root / "created.py"
+        created.write_text("created = True\n")
+        partial = run(
+            "apply",
+            str(act_path),
+            "--root",
+            str(self.root),
+            expected=2,
+        )
+        self.assertIn("partially applied", partial.stderr.decode())
+        created.unlink()
         run("apply", str(act_path), "--root", str(self.root))
         self.assertFalse(old.exists())
         self.assertEqual((self.root / "new/name.py").read_text(), "value = 1\n")
+        self.assertEqual(created.read_text(), "created = True\n")
+        replay = run(
+            "apply",
+            str(act_path),
+            "--root",
+            str(self.root),
+        ).stdout.decode()
         self.assertEqual(
-            (self.root / "created.py").read_text(), "created = True\n"
+            replay,
+            "Result: applied-transitions=0; state=already-satisfied\n",
         )
 
     def test_commit_failure_restores_already_removed_files(self) -> None:

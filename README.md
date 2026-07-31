@@ -914,9 +914,12 @@ bytes, and evaluates the union of item acceptance constraints and preserved
 constraints against that isolated after-Map. A `not_satisfied`, `unknown`, or
 evaluation failure emits no accepted Act and performs no worktree write.
 Satisfied acceptance seals the exact Act bytes and after-state identities.
-Apply performs a second source-lock revalidation and transactional replay of
-those bytes. Commit failures restore only Act-owned paths; concurrent changes
-to those paths are detected and never overwritten.
+Apply observes every affected path and native preflight classifies the whole
+Act as ready, already satisfied, partially applied, or drifted. A complete
+after-state replay succeeds with zero writes; partial application and drift
+fail. Ready bytes are replayed transactionally under an exclusive
+repository-local lock. Commit failures restore only Act-owned paths;
+concurrent changes to those paths are detected and never overwritten.
 Archbird does not run project compilers or tests; configure test observations
 and build evidence when those results must participate in Verify.
 

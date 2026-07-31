@@ -956,6 +956,7 @@ static napi_value act_preflight_apply(napi_env env, napi_callback_info info) {
   size_t act_length;
   size_t metadata_length;
   ArchbirdEngine *engine = NULL;
+  ArchbirdActApplyState apply_state = ARCHBIRD_ACT_APPLY_READY;
   ArchbirdStatus status;
   napi_value result;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
@@ -966,14 +967,14 @@ static napi_value act_preflight_apply(napi_env env, napi_callback_info info) {
       saved_artifact_engine(larger_input(act_length, metadata_length), &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_act_preflight_apply(engine, act, act_length, metadata,
-                                          metadata_length);
+                                          metadata_length, &apply_state);
   if (status != ARCHBIRD_OK) {
     result = throw_status(env, engine, status);
     archbird_engine_destroy(engine);
     return result;
   }
   archbird_engine_destroy(engine);
-  NAPI_TRY(napi_get_undefined(env, &result));
+  NAPI_TRY(napi_create_uint32(env, (uint32_t)apply_state, &result));
   return result;
 }
 

@@ -1986,7 +1986,10 @@ function applyMain(argv) {
     path.resolve(options.root || "."),
     actJson,
   );
-  process.stdout.write(`Result: applied-transitions=${transitions}\n`);
+  const state = transitions ? "applied" : "already-satisfied";
+  process.stdout.write(
+    `Result: applied-transitions=${transitions}; state=${state}\n`,
+  );
   return 0;
 }
 

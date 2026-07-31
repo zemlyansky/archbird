@@ -851,6 +851,7 @@ static PyObject *py_act_preflight_apply(PyObject *self, PyObject *args) {
   Py_ssize_t act_length;
   Py_ssize_t metadata_length;
   ArchbirdEngine *engine = NULL;
+  ArchbirdActApplyState apply_state = ARCHBIRD_ACT_APPLY_READY;
   ArchbirdStatus status;
   (void)self;
   if (!PyArg_ParseTuple(args, "y#y#:act_preflight_apply", &act, &act_length,
@@ -861,14 +862,14 @@ static PyObject *py_act_preflight_apply(PyObject *self, PyObject *args) {
   if (status == ARCHBIRD_OK)
     status = archbird_act_preflight_apply(
         engine, (const uint8_t *)act, (size_t)act_length,
-        (const uint8_t *)metadata, (size_t)metadata_length);
+        (const uint8_t *)metadata, (size_t)metadata_length, &apply_state);
   if (status != ARCHBIRD_OK) {
     PyObject *result = raise_status(engine, status);
     archbird_engine_destroy(engine);
     return result;
   }
   archbird_engine_destroy(engine);
-  Py_RETURN_NONE;
+  return PyLong_FromLong((long)apply_state);
 }
 
 static PyObject *py_discovery_plan(PyObject *self, PyObject *args,

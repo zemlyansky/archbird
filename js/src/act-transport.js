@@ -174,9 +174,44 @@ function observePlanSources(root, planJson) {
 }
 
 function observeActSources(root, actJson) {
-  return observeSourceRequirements(
-    root,
-    native.actSourceRequirements(Buffer.from(actJson), false),
+  const repository = repositoryRoot(root);
+  const requirements = JSON.parse(
+    native.actSourceRequirements(Buffer.from(actJson), false).toString("utf8"),
+  );
+  if (
+    !requirements ||
+    Array.isArray(requirements) ||
+    Object.keys(requirements).join(",") !== "paths" ||
+    !Array.isArray(requirements.paths)
+  ) {
+    throw new Error("native Act source requirements have an invalid shape");
+  }
+  const files = [];
+  const absent = [];
+  for (const rawPath of requirements.paths) {
+    const filePath = relativePath(rawPath);
+    try {
+      const state = readRegular(repository, filePath);
+      files.push({
+        path: filePath,
+        sha256: crypto.createHash("sha256").update(state.data).digest("hex"),
+        executable: Boolean(state.mode & 0o111),
+      });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      absent.push(filePath);
+    }
+  }
+  files.sort((left, right) => Buffer.compare(
+    Buffer.from(left.path),
+    Buffer.from(right.path),
+  ));
+  absent.sort((left, right) => Buffer.compare(
+    Buffer.from(left),
+    Buffer.from(right),
+  ));
+  return native.jsonCanonicalize(
+    Buffer.from(JSON.stringify({ files, absent })),
   );
 }
 
@@ -360,7 +395,9 @@ function commitAct(root, actJson) {
       }
     }
     const metadata = observeActSources(root, actJson);
-    native.actPreflightApply(Buffer.from(actJson), metadata);
+    if (native.actPreflightApply(Buffer.from(actJson), metadata) !== 0) {
+      throw new Error("Act became already satisfied during commit");
+    }
     for (const [filePath, temporary] of stagedNew) {
       makeParents(root, filePath, createdDirectories);
       checkParents(root, filePath);
@@ -432,7 +469,7 @@ function commitAct(root, actJson) {
 function applyAcceptedAct(rootValue, actJson) {
   const root = repositoryRoot(rootValue);
   const metadata = observeActSources(root, actJson);
-  native.actPreflightApply(Buffer.from(actJson), metadata);
+  if (native.actPreflightApply(Buffer.from(actJson), metadata) === 1) return 0;
   const lockPath = path.join(root, ".archbird-apply.lock");
   const descriptor = fs.openSync(
     lockPath,
@@ -446,6 +483,12 @@ function applyAcceptedAct(rootValue, actJson) {
       { encoding: "ascii" },
     );
     fs.fsyncSync(descriptor);
+    const lockedMetadata = observeActSources(root, actJson);
+    if (
+      native.actPreflightApply(Buffer.from(actJson), lockedMetadata) === 1
+    ) {
+      return 0;
+    }
     commitAct(root, actJson);
   } finally {
     fs.closeSync(descriptor);

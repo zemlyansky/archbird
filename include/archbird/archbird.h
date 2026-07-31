@@ -88,6 +88,11 @@ typedef enum ArchbirdInputProfile {
   ARCHBIRD_INPUT_SAVED_ARTIFACT = 1
 } ArchbirdInputProfile;
 
+typedef enum ArchbirdActApplyState {
+  ARCHBIRD_ACT_APPLY_READY = 0,
+  ARCHBIRD_ACT_APPLY_ALREADY_SATISFIED = 1
+} ArchbirdActApplyState;
+
 typedef enum ArchbirdProviderMode {
   ARCHBIRD_PROVIDER_PRIMARY = 0,
   ARCHBIRD_PROVIDER_AUGMENT = 1,
@@ -447,8 +452,10 @@ ARCHBIRD_API ArchbirdStatus archbird_plan_source_requirements(
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
 /*
- * Return the exact sorted present/absent repository paths that a host must
- * re-observe immediately before applying an accepted Act.
+ * Return the exact sorted repository paths that a host must re-observe
+ * immediately before applying an accepted Act. Unlike Plan materialization
+ * requirements, each path may be present or absent because preflight
+ * distinguishes the sealed before-state from an already-satisfied after-state.
  */
 ARCHBIRD_API ArchbirdStatus archbird_act_source_requirements(
     ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
@@ -487,13 +494,15 @@ ARCHBIRD_API ArchbirdStatus archbird_act_accept(
 
 /*
  * Revalidate an accepted Act against source metadata observed immediately
- * before filesystem commit. This checks exact source preimages, executable
- * bits, and destination absence. Hosts may then replay only the Act's
+ * before filesystem commit. This checks the complete transition set against
+ * either its exact before-state or exact after-state. Mixed partial application
+ * and unrelated drift are rejected. Hosts may replay only a READY Act's
  * already-materialized bytes; they must not reevaluate the Plan.
  */
 ARCHBIRD_API ArchbirdStatus archbird_act_preflight_apply(
     ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
-    const uint8_t *source_metadata_json, size_t source_metadata_length);
+    const uint8_t *source_metadata_json, size_t source_metadata_length,
+    ArchbirdActApplyState *out_state);
 
 /*
  * Evaluate project constraints directly over one canonical Map and
