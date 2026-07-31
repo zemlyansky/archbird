@@ -655,31 +655,40 @@ static PyObject *py_plan_validate(PyObject *self, PyObject *args) {
 
 static PyObject *py_plan_compile(PyObject *self, PyObject *args,
                                  PyObject *kwargs) {
-  static char *keywords[] = {"project",      "map_json", "verification_json",
-                             "request_json", "pretty",   NULL};
+  static char *keywords[] = {"project",
+                             "map_json",
+                             "verification_json",
+                             "before_map_json",
+                             "request_json",
+                             "pretty",
+                             NULL};
   PyObject *capsule;
   const char *map;
   const char *verification;
+  const char *before_map = "";
   const char *request = "";
   Py_ssize_t map_length;
   Py_ssize_t verification_length;
+  Py_ssize_t before_map_length = 0;
   Py_ssize_t request_length = 0;
   int pretty = 0;
   PyArchbirdProject *owned;
   PyOutput output = {0};
   ArchbirdStatus status;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Oy#y#|y#p:plan_compile",
-                                   keywords, &capsule, &map, &map_length,
-                                   &verification, &verification_length,
-                                   &request, &request_length, &pretty))
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "Oy#y#|y#y#p:plan_compile", keywords, &capsule, &map,
+          &map_length, &verification, &verification_length, &before_map,
+          &before_map_length, &request, &request_length, &pretty))
     return NULL;
   owned = get_project(capsule);
   if (!owned)
     return NULL;
   status = archbird_plan_compile(
       owned->engine, owned->project, (const uint8_t *)map, (size_t)map_length,
-      (const uint8_t *)verification, (size_t)verification_length,
+      before_map_length ? (const uint8_t *)before_map : NULL,
+      (size_t)before_map_length, (const uint8_t *)verification,
+      (size_t)verification_length,
       request_length ? (const uint8_t *)request : NULL, (size_t)request_length,
       pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   return render_result(owned->engine, status, &output);

@@ -18,6 +18,7 @@ typedef struct AbPlanCompile {
   ArchbirdEngine *engine;
   const ArchbirdProject *project;
   AbValue map;
+  AbValue before_map;
   AbValue request;
   AbVerificationArtifact verification;
   const AbValue *map_project;
@@ -224,6 +225,46 @@ static ArchbirdStatus validate_input_binding(AbPlanCompile *context,
     return fail(context, ARCHBIRD_CONFLICT,
                 "Project, Map, and Verification source bytes differ");
   (void)map_sha;
+  return ARCHBIRD_OK;
+}
+
+static int map_has_error_diagnostic(const AbValue *map) {
+  const AbValue *diagnostics = field(map, "diagnostics");
+  size_t index;
+  if (!diagnostics || diagnostics->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < diagnostics->as.array.count; index++)
+    if (ab_artifact_text_is(
+            field(&diagnostics->as.array.items[index], "severity"), "error"))
+      return 1;
+  return 0;
+}
+
+static ArchbirdStatus validate_before_map(AbPlanCompile *context) {
+  const AbValue *before_project;
+  const AbValue *before_evidence;
+  const AbValue *before_tool;
+  const AbValue *current_evidence;
+  const AbValue *current_tool;
+  if (!context->before_map.kind)
+    return ARCHBIRD_OK;
+  before_project = field(&context->before_map, "project");
+  before_evidence = field(&context->before_map, "evidence");
+  before_tool = field(&context->before_map, "tool");
+  current_evidence = field(&context->map, "evidence");
+  current_tool = field(&context->map, "tool");
+  if (!before_project || !before_evidence || !before_tool ||
+      !value_string_equal(before_project, context->map_project) ||
+      !value_string_equal(field(before_evidence, "config_sha256"),
+                          field(current_evidence, "config_sha256")) ||
+      !value_string_equal(field(before_tool, "implementation_sha256"),
+                          field(current_tool, "implementation_sha256")))
+    return fail(context, ARCHBIRD_CONFLICT,
+                "before and current Maps have incompatible identities");
+  if (map_has_error_diagnostic(&context->before_map) ||
+      map_has_error_diagnostic(&context->map))
+    return fail(context, ARCHBIRD_CONFLICT,
+                "observed planning requires Maps without error diagnostics");
   return ARCHBIRD_OK;
 }
 
@@ -695,7 +736,8 @@ static ArchbirdStatus compile_constraint(AbPlanCompile *context,
   if (status != ARCHBIRD_OK || handled)
     return status;
   status = ab_plan_compile_surface_constraint(
-      context->engine, context->project, &context->map, &context->builder,
+      context->engine, context->project, &context->map,
+      context->before_map.kind ? &context->before_map : NULL, &context->builder,
       constraint, definition, context->renames, context->rename_used, &handled);
   if (status != ARCHBIRD_OK || handled)
     return status;
@@ -722,19 +764,17 @@ static int targeted_contains(const AbPlanCompile *context, const AbString *id) {
   return ab_plan_item_builder_targeted(&context->builder, id);
 }
 
-static ArchbirdStatus render_source_identity(AbPlanCompile *context,
-                                             AbBuffer *output,
-                                             const uint8_t *map_json,
-                                             size_t map_length) {
-  const AbValue *evidence = field(&context->map, "evidence");
-  const AbValue *map_tool = field(&context->map, "tool");
-  const AbValue *policy = context->verification.policy;
-  const AbValue *verification_tool = context->verification.tool;
+static ArchbirdStatus render_map_identity(AbPlanCompile *context,
+                                          AbBuffer *output, const AbValue *map,
+                                          const uint8_t *map_json,
+                                          size_t map_length) {
+  const AbValue *evidence = field(map, "evidence");
+  const AbValue *map_tool = field(map, "tool");
   char map_sha[65];
   ArchbirdStatus status =
       ab_artifact_json_sha256(context->engine, map_json, map_length, map_sha);
   if (status == ARCHBIRD_OK)
-    status = literal(output, "{\"map\":{\"configuration_sha256\":");
+    status = literal(output, "{\"configuration_sha256\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(output, field(evidence, "config_sha256"));
   if (status == ARCHBIRD_OK)
@@ -750,7 +790,33 @@ static ArchbirdStatus render_source_identity(AbPlanCompile *context,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_json_string(output, map_sha, 64);
   if (status == ARCHBIRD_OK)
-    status = literal(output, "},\"project\":");
+    status = literal(output, "}");
+  return status;
+}
+
+static ArchbirdStatus render_source_identity(AbPlanCompile *context,
+                                             AbBuffer *output,
+                                             const uint8_t *map_json,
+                                             size_t map_length,
+                                             const uint8_t *before_map_json,
+                                             size_t before_map_length) {
+  const AbValue *policy = context->verification.policy;
+  const AbValue *verification_tool = context->verification.tool;
+  ArchbirdStatus status = literal(output, "{");
+  if (status == ARCHBIRD_OK && context->before_map.kind)
+    status = literal(output, "\"before_map\":");
+  if (status == ARCHBIRD_OK && context->before_map.kind)
+    status = render_map_identity(context, output, &context->before_map,
+                                 before_map_json, before_map_length);
+  if (status == ARCHBIRD_OK && context->before_map.kind)
+    status = literal(output, ",");
+  if (status == ARCHBIRD_OK)
+    status = literal(output, "\"map\":");
+  if (status == ARCHBIRD_OK)
+    status = render_map_identity(context, output, &context->map, map_json,
+                                 map_length);
+  if (status == ARCHBIRD_OK)
+    status = literal(output, ",\"project\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(output, context->map_project);
   if (status == ARCHBIRD_OK)
@@ -774,8 +840,9 @@ static ArchbirdStatus render_source_identity(AbPlanCompile *context,
 
 static ArchbirdStatus render_plan(AbPlanCompile *context,
                                   const uint8_t *map_json, size_t map_length,
-                                  uint32_t json_flags, ArchbirdWriteFn write_fn,
-                                  void *user_data) {
+                                  const uint8_t *before_map_json,
+                                  size_t before_map_length, uint32_t json_flags,
+                                  ArchbirdWriteFn write_fn, void *user_data) {
   AbBuffer rendered;
   AbBuffer canonical;
   AbPlan validated = {0};
@@ -827,9 +894,10 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
                                ? "\"asserted\""
                                : "\"derived\"");
   if (status == ARCHBIRD_OK)
-    status = literal(&rendered, ",\"schema_version\":1,\"source\":");
+    status = literal(&rendered, ",\"schema_version\":2,\"source\":");
   if (status == ARCHBIRD_OK)
-    status = render_source_identity(context, &rendered, map_json, map_length);
+    status = render_source_identity(context, &rendered, map_json, map_length,
+                                    before_map_json, before_map_length);
   if (status == ARCHBIRD_OK)
     status = literal(&rendered, ",\"tool\":{\"implementation_sha256\":");
   if (status == ARCHBIRD_OK)
@@ -866,6 +934,7 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
 ArchbirdStatus
 archbird_plan_compile(ArchbirdEngine *engine, const ArchbirdProject *project,
                       const uint8_t *map_json, size_t map_length,
+                      const uint8_t *before_map_json, size_t before_map_length,
                       const uint8_t *verification_json,
                       size_t verification_length, const uint8_t *request_json,
                       size_t request_length, uint32_t json_flags,
@@ -873,7 +942,8 @@ archbird_plan_compile(ArchbirdEngine *engine, const ArchbirdProject *project,
   AbPlanCompile context;
   size_t index;
   ArchbirdStatus status;
-  if (!engine || !project || !map_json || !map_length || !verification_json ||
+  if (!engine || !project || !map_json || !map_length ||
+      (!before_map_json && before_map_length) || !verification_json ||
       !verification_length || (!request_json && request_length) || !write_fn ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
@@ -883,6 +953,12 @@ archbird_plan_compile(ArchbirdEngine *engine, const ArchbirdProject *project,
   status = ab_json_value_decode(engine, map_json, map_length, &context.map);
   if (status == ARCHBIRD_OK)
     status = ab_projection_map_validate(engine, &context.map, "Plan Map");
+  if (status == ARCHBIRD_OK && before_map_length)
+    status = ab_json_value_decode(engine, before_map_json, before_map_length,
+                                  &context.before_map);
+  if (status == ARCHBIRD_OK && before_map_length)
+    status = ab_projection_map_validate(engine, &context.before_map,
+                                        "Plan before Map");
   if (status == ARCHBIRD_OK && request_length)
     status = ab_json_value_decode(engine, request_json, request_length,
                                   &context.request);
@@ -897,6 +973,8 @@ archbird_plan_compile(ArchbirdEngine *engine, const ArchbirdProject *project,
       status == ARCHBIRD_OK ? field(&context.map, "files") : NULL;
   if (status == ARCHBIRD_OK)
     status = validate_input_binding(&context, map_json, map_length);
+  if (status == ARCHBIRD_OK)
+    status = validate_before_map(&context);
   if (status == ARCHBIRD_OK)
     status = validate_selected_ids(&context);
   if (status == ARCHBIRD_OK)
@@ -922,14 +1000,15 @@ archbird_plan_compile(ArchbirdEngine *engine, const ArchbirdProject *project,
       status = fail(&context, ARCHBIRD_INVALID_SCHEMA,
                     "asserted rename does not match one selected constraint");
   if (status == ARCHBIRD_OK)
-    status = render_plan(&context, map_json, map_length, json_flags, write_fn,
-                         user_data);
+    status = render_plan(&context, map_json, map_length, before_map_json,
+                         before_map_length, json_flags, write_fn, user_data);
   ab_projection_result_free(engine, &context.destructive_result);
   ab_projection_plan_free(engine, &context.destructive_plan);
   ab_free(engine, context.rename_used);
   ab_plan_item_builder_free(&context.builder);
   ab_verification_artifact_free(&context.verification);
   ab_value_free(engine, &context.request);
+  ab_value_free(engine, &context.before_map);
   ab_value_free(engine, &context.map);
   return status;
 }

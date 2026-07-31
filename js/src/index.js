@@ -1653,7 +1653,11 @@ function compilePlan(
   project,
   mapJson,
   verificationJson,
-  { requestJson = Buffer.alloc(0), pretty = false } = {},
+  {
+    beforeMapJson = Buffer.alloc(0),
+    requestJson = Buffer.alloc(0),
+    pretty = false,
+  } = {},
 ) {
   if (!(project instanceof Project)) {
     throw new TypeError("Plan compilation requires a Project");
@@ -1662,6 +1666,7 @@ function compilePlan(
     project._handle,
     Buffer.from(mapJson),
     Buffer.from(verificationJson),
+    Buffer.from(beforeMapJson),
     Buffer.from(requestJson),
     pretty,
   );

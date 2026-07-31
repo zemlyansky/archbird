@@ -1175,7 +1175,7 @@ static ArchbirdStatus render_patch(AbActContext *context, const AbPlan *plan,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         &document,
-        ",\"provenance\":\"derived\",\"schema_version\":1,\"seal\":null,"
+        ",\"provenance\":\"derived\",\"schema_version\":2,\"seal\":null,"
         "\"source\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&document, plan->source);

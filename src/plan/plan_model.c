@@ -172,9 +172,14 @@ static int validate_identity(const AbValue *value, int map) {
 
 static int validate_source(const AbValue *value) {
   static const char *const fields[] = {"project", "map", "verification"};
-  return object_exact(value, fields, 3) &&
+  static const char *const observed_fields[] = {"before_map", "project", "map",
+                                                "verification"};
+  const AbValue *before = ab_value_member(value, "before_map");
+  return (object_exact(value, fields, 3) ||
+          object_exact(value, observed_fields, 4)) &&
          bounded_text(ab_value_member(value, "project"), AB_PLAN_MAX_METADATA,
                       1) &&
+         (!before || validate_identity(before, 1)) &&
          validate_identity(ab_value_member(value, "map"), 1) &&
          validate_identity(ab_value_member(value, "verification"), 0);
 }
@@ -669,7 +674,7 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
     return ARCHBIRD_OK;
   schema = ab_value_member(&plan->document, "schema_version");
   provenance = ab_value_member(&plan->document, "provenance");
-  if (!safe_integer(schema, &schema_number) || schema_number != 1 ||
+  if (!safe_integer(schema, &schema_number) || schema_number != 2 ||
       !text_is(ab_value_member(&plan->document, "artifact"), "plan") ||
       (!text_is(provenance, "derived") && !text_is(provenance, "asserted")) ||
       !validate_tool(ab_value_member(&plan->document, "tool")) ||

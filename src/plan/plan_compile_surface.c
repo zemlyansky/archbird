@@ -13,11 +13,13 @@ typedef struct SurfaceMakeProvider {
 
 typedef struct SurfaceRewrite {
   const AbValue *finding;
+  const AbValue *replacement_name;
   SurfaceMakeProvider provider;
   AbPlanSourceLock source;
   AbString expected_token;
   AbString replacement_token;
   size_t rename_index;
+  int asserted;
 } SurfaceRewrite;
 
 typedef struct SurfaceInsertion {
@@ -186,6 +188,86 @@ static int target_is_implemented(const AbValue *row) {
          candidates->kind == AB_VALUE_ARRAY &&
          candidates->as.array.count == 1 && uses &&
          uses->kind == AB_VALUE_ARRAY && uses->as.array.count;
+}
+
+static int identifier_byte(uint8_t byte) {
+  return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
+         (byte >= '0' && byte <= '9') || byte == '_';
+}
+
+static int portable_identifier(const AbString *value) {
+  size_t index;
+  if (!value || !value->length ||
+      !((value->data[0] >= 'A' && value->data[0] <= 'Z') ||
+        (value->data[0] >= 'a' && value->data[0] <= 'z') ||
+        value->data[0] == '_'))
+    return 0;
+  for (index = 1; index < value->length; index++)
+    if (!identifier_byte((uint8_t)value->data[index]))
+      return 0;
+  return 1;
+}
+
+static int renamed_text_equal(const AbString *before, const AbString *old_name,
+                              const AbString *new_name,
+                              const AbString *current) {
+  size_t before_offset = 0;
+  size_t current_offset = 0;
+  size_t replaced = 0;
+  while (before_offset < before->length) {
+    size_t candidate = before_offset;
+    while (candidate + old_name->length <= before->length) {
+      int left_boundary =
+          candidate == 0 ||
+          !identifier_byte((uint8_t)before->data[candidate - 1]);
+      int right_boundary =
+          candidate + old_name->length == before->length ||
+          !identifier_byte((uint8_t)before->data[candidate + old_name->length]);
+      if (left_boundary && right_boundary &&
+          memcmp(before->data + candidate, old_name->data, old_name->length) ==
+              0)
+        break;
+      candidate++;
+    }
+    if (candidate + old_name->length > before->length)
+      break;
+    if (candidate - before_offset > current->length - current_offset ||
+        memcmp(before->data + before_offset, current->data + current_offset,
+               candidate - before_offset) != 0)
+      return 0;
+    current_offset += candidate - before_offset;
+    if (new_name->length > current->length - current_offset ||
+        memcmp(current->data + current_offset, new_name->data,
+               new_name->length) != 0)
+      return 0;
+    current_offset += new_name->length;
+    before_offset = candidate + old_name->length;
+    replaced++;
+  }
+  return replaced &&
+         before->length - before_offset == current->length - current_offset &&
+         memcmp(before->data + before_offset, current->data + current_offset,
+                before->length - before_offset) == 0;
+}
+
+static int renamed_text_arrays_equal(const AbValue *before,
+                                     const AbValue *current,
+                                     const AbString *old_name,
+                                     const AbString *new_name) {
+  size_t index;
+  if (!before || !current || before->kind != AB_VALUE_ARRAY ||
+      current->kind != AB_VALUE_ARRAY || !before->as.array.count ||
+      before->as.array.count != current->as.array.count)
+    return 0;
+  for (index = 0; index < before->as.array.count; index++) {
+    const AbValue *left = &before->as.array.items[index];
+    const AbValue *right = &current->as.array.items[index];
+    if (left->kind != AB_VALUE_STRING || right->kind != AB_VALUE_STRING ||
+        !renamed_text_equal(&left->as.text, old_name, new_name,
+                            &right->as.text))
+      return 0;
+  }
+  return 1;
 }
 
 static int old_is_inactive_make_declaration(const AbValue *row,
@@ -498,7 +580,115 @@ analyze_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
                                       &out->replacement_token, out_supported);
   if (status == ARCHBIRD_OK && *out_supported) {
     out->finding = finding;
+    out->replacement_name = new_value;
     out->rename_index = rename_index;
+    out->asserted = 1;
+  }
+  return status;
+}
+
+static int observed_target_matches(const AbValue *before_old,
+                                   const AbValue *current_target,
+                                   const SurfaceMakeProvider *provider,
+                                   const AbString *old_name,
+                                   const AbString *new_name) {
+  return target_is_resolved(current_target) &&
+         !row_has_provider(current_target, provider) &&
+         ab_value_equal(field(before_old, "candidates"),
+                        field(current_target, "candidates")) &&
+         ab_value_equal(field(before_old, "uses"),
+                        field(current_target, "uses")) &&
+         renamed_text_arrays_equal(
+             field(before_old, "declaration_signatures"),
+             field(current_target, "declaration_signatures"), old_name,
+             new_name) &&
+         renamed_text_arrays_equal(
+             field(before_old, "implementation_signatures"),
+             field(current_target, "implementation_signatures"), old_name,
+             new_name);
+}
+
+static const AbValue *find_observed_target(const AbValue *before_surface,
+                                           const AbValue *current_surface,
+                                           const SurfaceMakeProvider *provider,
+                                           const AbString *old_name,
+                                           const AbValue *before_old,
+                                           int *out_ambiguous) {
+  const AbValue *current_names = field(current_surface, "names");
+  const AbValue *matched = NULL;
+  size_t index;
+  *out_ambiguous = 0;
+  if (!current_names || current_names->kind != AB_VALUE_ARRAY)
+    return NULL;
+  for (index = 0; index < current_names->as.array.count; index++) {
+    const AbValue *candidate = &current_names->as.array.items[index];
+    const AbValue *name = field(candidate, "name");
+    if (!name || name->kind != AB_VALUE_STRING ||
+        ab_string_equal(&name->as.text, old_name) ||
+        !portable_identifier(&name->as.text) ||
+        find_named_row(field(before_surface, "names"), &name->as.text) ||
+        !observed_target_matches(before_old, candidate, provider, old_name,
+                                 &name->as.text))
+      continue;
+    if (matched) {
+      *out_ambiguous = 1;
+      return NULL;
+    }
+    matched = candidate;
+  }
+  return matched;
+}
+
+static ArchbirdStatus
+analyze_observed_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
+                         const AbValue *map, const AbValue *before_map,
+                         const AbValue *definition,
+                         const AbPlanFindingGroup *group, SurfaceRewrite *out,
+                         int *out_supported, int *out_ambiguous) {
+  const AbValue *finding = group->representative;
+  const AbValue *old_value = field(finding, "key");
+  const AbValue *surface_value = field(definition, "name");
+  const AbValue *before_surface;
+  const AbValue *current_surface;
+  const AbValue *before_old;
+  const AbValue *current_old;
+  const AbValue *target;
+  const AbValue *target_name;
+  ArchbirdStatus status;
+  *out_supported = 0;
+  *out_ambiguous = 0;
+  memset(out, 0, sizeof(*out));
+  if (!before_map || !ab_plan_finding_current(finding) ||
+      !text_is(field(finding, "comparison"), "unresolved") || !old_value ||
+      old_value->kind != AB_VALUE_STRING ||
+      !portable_identifier(&old_value->as.text) || !surface_value ||
+      surface_value->kind != AB_VALUE_STRING)
+    return ARCHBIRD_OK;
+  before_surface = find_surface(before_map, &surface_value->as.text);
+  current_surface = find_surface(map, &surface_value->as.text);
+  before_old =
+      find_named_row(field(before_surface, "names"), &old_value->as.text);
+  current_old =
+      find_named_row(field(current_surface, "names"), &old_value->as.text);
+  if (!target_is_resolved(before_old) ||
+      !old_is_inactive_make_declaration(current_old, &out->provider) ||
+      !row_has_provider(before_old, &out->provider))
+    return ARCHBIRD_OK;
+  target = find_observed_target(before_surface, current_surface, &out->provider,
+                                &old_value->as.text, before_old, out_ambiguous);
+  target_name = field(target, "name");
+  if (!target_name)
+    return ARCHBIRD_OK;
+  status = ab_plan_source_lock(engine, project, map,
+                               &out->provider.path->as.text, &out->source);
+  if (status == ARCHBIRD_OK)
+    status = resolve_make_replacement(
+        engine, &out->provider, &old_value->as.text, &target_name->as.text,
+        &out->source, &out->expected_token, &out->replacement_token,
+        out_supported);
+  if (status == ARCHBIRD_OK && *out_supported) {
+    out->finding = finding;
+    out->replacement_name = target_name;
   }
   return status;
 }
@@ -813,11 +1003,53 @@ static ArchbirdStatus append_removals(ArchbirdEngine *engine,
   return status;
 }
 
+static ArchbirdStatus
+append_rewrites(ArchbirdEngine *engine, AbPlanItemBuilder *builder,
+                const AbValue *constraint, const AbPlanFindingGroups *groups,
+                SurfaceRewrite *rewrites, uint8_t *rename_used) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0; status == ARCHBIRD_OK && index < groups->count; index++) {
+    const AbValue *key = field(rewrites[index].finding, "key");
+    const AbValue *new_name = rewrites[index].replacement_name;
+    AbBuffer operation;
+    char statement[1024];
+    AbPlanItemSpec spec;
+    int length =
+        snprintf(statement, sizeof(statement),
+                 "Replace stale provider registration %.*s with %.*s in %.*s.",
+                 (int)key->as.text.length, key->as.text.data,
+                 (int)new_name->as.text.length, new_name->as.text.data,
+                 (int)rewrites[index].provider.path->as.text.length,
+                 rewrites[index].provider.path->as.text.data);
+    if (length < 0 || (size_t)length >= sizeof(statement))
+      return archbird_error_set(
+          engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+          "plan compilation: provider-surface statement is too long");
+    status = render_rewrite_operation(engine, &rewrites[index], &operation);
+    if (status == ARCHBIRD_OK) {
+      memset(&spec, 0, sizeof(spec));
+      spec.constraint = constraint;
+      spec.findings = groups->groups[index].rows;
+      spec.finding_count = groups->groups[index].count;
+      spec.statement = statement;
+      spec.provenance = rewrites[index].asserted ? "asserted" : "derived";
+      spec.operation = &operation;
+      spec.executable = 1;
+      status = ab_plan_item_builder_append(builder, &spec);
+    }
+    ab_buffer_free(&operation);
+    if (status == ARCHBIRD_OK && rewrites[index].asserted)
+      rename_used[rewrites[index].rename_index] = 1;
+  }
+  return status;
+}
+
 ArchbirdStatus ab_plan_compile_surface_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
-    AbPlanItemBuilder *builder, const AbValue *constraint,
-    const AbValue *definition, const AbValue *renames, uint8_t *rename_used,
-    int *out_handled) {
+    const AbValue *before_map, AbPlanItemBuilder *builder,
+    const AbValue *constraint, const AbValue *definition,
+    const AbValue *renames, uint8_t *rename_used, int *out_handled) {
   const AbValue *findings = field(constraint, "findings");
   AbPlanFindingGroups groups = {0};
   SurfaceRewrite *rewrites = NULL;
@@ -853,6 +1085,40 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
         *out_handled = 1;
     }
     insertions_free(engine, insertions, groups.count);
+    if (status == ARCHBIRD_OK && !supported) {
+      SurfaceRewrite *observed =
+          (SurfaceRewrite *)ab_calloc(engine, groups.count, sizeof(*observed));
+      int observed_ambiguous = 0;
+      if (!observed) {
+        ab_plan_finding_groups_free(engine, &groups);
+        return archbird_error_set(
+            engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+            "plan compilation: out of memory deriving observed provider-"
+            "surface rewrites");
+      }
+      for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++) {
+        int rewrite_supported = 0;
+        int rewrite_ambiguous = 0;
+        status = analyze_observed_rewrite(
+            engine, project, map, before_map, definition, &groups.groups[index],
+            &observed[index], &rewrite_supported, &rewrite_ambiguous);
+        if (rewrite_ambiguous)
+          observed_ambiguous = 1;
+        if (status == ARCHBIRD_OK && !rewrite_supported)
+          break;
+      }
+      if (status == ARCHBIRD_OK && index == groups.count) {
+        status = append_rewrites(engine, builder, constraint, &groups, observed,
+                                 NULL);
+        if (status == ARCHBIRD_OK) {
+          *out_handled = 1;
+          supported = 1;
+        }
+      }
+      rewrites_free(engine, observed, groups.count);
+      if (observed_ambiguous)
+        supported = 1;
+    }
     if (status == ARCHBIRD_OK && !supported) {
       SurfaceRewrite *removals =
           (SurfaceRewrite *)ab_calloc(engine, groups.count, sizeof(*removals));
@@ -900,43 +1166,8 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
       break;
   }
   if (status == ARCHBIRD_OK && index == groups.count) {
-    for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++) {
-      const AbValue *key = field(rewrites[index].finding, "key");
-      const AbValue *new_name =
-          &renames->as.object.fields[rewrites[index].rename_index].value;
-      const AbValue *rows[] = {rewrites[index].finding};
-      AbBuffer operation;
-      char statement[1024];
-      AbPlanItemSpec spec;
-      int length = snprintf(
-          statement, sizeof(statement),
-          "Replace stale provider registration %.*s with %.*s in %.*s.",
-          (int)key->as.text.length, key->as.text.data,
-          (int)new_name->as.text.length, new_name->as.text.data,
-          (int)rewrites[index].provider.path->as.text.length,
-          rewrites[index].provider.path->as.text.data);
-      if (length < 0 || (size_t)length >= sizeof(statement)) {
-        status = archbird_error_set(
-            engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
-            "plan compilation: provider-surface statement is too long");
-        break;
-      }
-      status = render_rewrite_operation(engine, &rewrites[index], &operation);
-      if (status == ARCHBIRD_OK) {
-        memset(&spec, 0, sizeof(spec));
-        spec.constraint = constraint;
-        spec.findings = rows;
-        spec.finding_count = 1;
-        spec.statement = statement;
-        spec.provenance = "asserted";
-        spec.operation = &operation;
-        spec.executable = 1;
-        status = ab_plan_item_builder_append(builder, &spec);
-      }
-      ab_buffer_free(&operation);
-      if (status == ARCHBIRD_OK)
-        rename_used[rewrites[index].rename_index] = 1;
-    }
+    status = append_rewrites(engine, builder, constraint, &groups, rewrites,
+                             rename_used);
     if (status == ARCHBIRD_OK)
       *out_handled = 1;
   }

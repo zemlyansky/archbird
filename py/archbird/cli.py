@@ -868,6 +868,13 @@ def plan_parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--map", help="saved canonical Map JSON")
     result.add_argument(
+        "--before-map",
+        help=(
+            "previous canonical Map used to derive residual work from an "
+            "observed repository change"
+        ),
+    )
+    result.add_argument(
         "--resolution",
         help="configuration-resolution JSON paired with --map",
     )
@@ -2322,6 +2329,9 @@ def _plan_main(argv: Sequence[str]) -> int:
         encoded = project.plan_json(
             verification_json,
             map_json=map_json,
+            before_map_json=(
+                Path(args.before_map).read_bytes() if args.before_map else b""
+            ),
             request_json=(
                 json.dumps(
                     request,

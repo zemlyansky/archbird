@@ -198,7 +198,7 @@ int main(void) {
   if (status != ARCHBIRD_OK)
     goto cleanup;
 
-  status = archbird_plan_compile(engine, project, map.data, map.length,
+  status = archbird_plan_compile(engine, project, map.data, map.length, NULL, 0,
                                  verification.data, verification.length, NULL,
                                  0, 0, collect, &plan);
   expect_status("compile complete Plan", status, ARCHBIRD_OK, engine);
@@ -227,7 +227,7 @@ int main(void) {
   {
     static const uint8_t request[] = "{\"constraint_ids\":[\"FORBID-UNUSED\"]}";
     status =
-        archbird_plan_compile(engine, project, map.data, map.length,
+        archbird_plan_compile(engine, project, map.data, map.length, NULL, 0,
                               verification.data, verification.length, request,
                               sizeof(request) - 1, 0, collect, &selected_plan);
     expect_status("compile selected Plan", status, ARCHBIRD_OK, engine);

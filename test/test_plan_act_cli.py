@@ -355,6 +355,198 @@ class PlanActCliTest(unittest.TestCase):
         run("verify", "--root", str(self.root), "--check")
         self.run_surface_gates()
 
+    def test_before_map_derives_residual_provider_surface_rename(self) -> None:
+        shutil.copytree(SURFACE_FIXTURE, self.root, dirs_exist_ok=True)
+        before_root = self.artifacts / "before"
+        shutil.copytree(SURFACE_FIXTURE, before_root)
+        for relative in (
+            "src/core.c",
+            "src/core.h",
+            "src/test_core.c",
+            "py/api.py",
+            "py/test_api.py",
+            "js/runtime.js",
+            "js/test_api.js",
+        ):
+            path = before_root / relative
+            path.write_text(path.read_text().replace("core_sum", "core_add"))
+        before_map_path = self.plan_path("observed-before-map.json")
+        run(
+            "map",
+            "--root",
+            str(before_root),
+            "--format",
+            "json",
+            "--output",
+            str(before_map_path),
+            "--check",
+        )
+        before_map = before_map_path.read_bytes()
+
+        incompatible = json.loads(before_map)
+        incompatible["project"] = "different-project"
+        incompatible_path = self.plan_path("incompatible-before-map.json")
+        incompatible_path.write_text(
+            json.dumps(incompatible, sort_keys=True, separators=(",", ":"))
+        )
+        rejected = run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--before-map",
+            str(incompatible_path),
+            "--output",
+            str(self.plan_path("rejected-observed-plan.json")),
+            expected=2,
+        )
+        self.assertIn(
+            "before and current Maps have incompatible identities",
+            rejected.stderr.decode(),
+        )
+
+        ambiguous_root = self.artifacts / "ambiguous"
+        shutil.copytree(SURFACE_FIXTURE, ambiguous_root)
+        core = ambiguous_root / "src/core.c"
+        core.write_text(
+            core.read_text()
+            + "\nint core_total(int left, int right) { return left + right; }\n"
+        )
+        header = ambiguous_root / "src/core.h"
+        header.write_text(
+            header.read_text().replace(
+                "\n#endif", "\nint core_total(int left, int right);\n\n#endif"
+            )
+        )
+        runtime = ambiguous_root / "js/runtime.js"
+        runtime.write_text(
+            runtime.read_text()
+            .replace(
+                "module.exports = { add };",
+                "function total(wasm, left, right) {\n"
+                "  return wasm._core_total(left, right);\n"
+                "}\n\nmodule.exports = { add, total };",
+            )
+        )
+        js_test = ambiguous_root / "js/test_api.js"
+        js_test.write_text(
+            js_test.read_text()
+            .replace(
+                'const { add } = require("./runtime");',
+                'const { add, total } = require("./runtime");',
+            )
+            .replace(
+                "    _core_sum(left, right) {",
+                "    _core_total(left, right) {\n"
+                "      return left + right;\n"
+                "    },\n"
+                "    _core_sum(left, right) {",
+            )
+            .replace(
+                "  assert.equal(add(wasm, 2, 3), 5);",
+                "  assert.equal(add(wasm, 2, 3), 5);\n"
+                "  assert.equal(total(wasm, 2, 3), 5);",
+            )
+        )
+        python_api = ambiguous_root / "py/api.py"
+        python_api.write_text(
+            python_api.read_text()
+            + "\n\ndef total(backend, left, right):\n"
+            "    return backend.core_total(left, right)\n"
+        )
+        python_test = ambiguous_root / "py/test_api.py"
+        python_test.write_text(
+            python_test.read_text()
+            .replace("from api import add", "from api import add, total")
+            .replace(
+                "    def core_sum(left, right):",
+                "    def core_total(left, right):\n"
+                "        return left + right\n\n"
+                "    @staticmethod\n"
+                "    def core_sum(left, right):",
+            )
+            .replace(
+                "        self.assertEqual(add(Backend(), 2, 3), 5)",
+                "        self.assertEqual(add(Backend(), 2, 3), 5)\n"
+                "        self.assertEqual(total(Backend(), 2, 3), 5)",
+            )
+        )
+        ambiguous_plan_path = self.plan_path("ambiguous-observed-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(ambiguous_root),
+            "--before-map",
+            str(before_map_path),
+            "--output",
+            str(ambiguous_plan_path),
+        )
+        ambiguous_plan = json.loads(ambiguous_plan_path.read_bytes())
+        self.assertTrue(ambiguous_plan["items"])
+        self.assertTrue(
+            all(not item["executable"] for item in ambiguous_plan["items"]),
+            "multiple observed rename targets must not authorize an edit",
+        )
+
+        plan_path = self.plan_path("observed-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--before-map",
+            str(before_map_path),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(plan["schema_version"], 2)
+        canonical_before_map = json.dumps(
+            json.loads(before_map),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        self.assertEqual(
+            plan["source"]["before_map"]["sha256"],
+            hashlib.sha256(canonical_before_map).hexdigest(),
+        )
+        self.assertNotEqual(
+            plan["source"]["before_map"]["input_sha256"],
+            plan["source"]["map"]["input_sha256"],
+        )
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertTrue(item["executable"])
+        self.assertEqual(item["provenance"], "derived")
+        self.assertEqual(
+            item["statement"],
+            "Replace stale provider registration core_add with core_sum in "
+            "Makefile.",
+        )
+        self.assertEqual(
+            item["operation"]["action"], "edit_make_variable_token"
+        )
+        self.assertEqual(item["operation"]["expected_token"], "_core_add")
+        self.assertEqual(item["operation"]["replacement_token"], "_core_sum")
+
+        patch_path, patch = self.accepted_patch(
+            plan_path, "observed-patch.json"
+        )
+        self.assertEqual(
+            patch["acceptance"]["constraints"],
+            [{"id": "FFI-SURFACE", "status": "pass"}],
+        )
+        run("apply", str(patch_path), "--root", str(self.root))
+        self.assertIn(
+            "WASM_EXPORTS = _core_sum",
+            (self.root / "Makefile").read_text(),
+        )
+        run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
+        self.run_surface_gates()
+
     def test_required_provider_surface_derives_exact_make_insertion(self) -> None:
         shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
         self.run_surface_gates()

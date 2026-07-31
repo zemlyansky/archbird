@@ -458,6 +458,10 @@ npx archbird plan --output .archbird/plan.json
 npx archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 npx archbird plan CORE-PUBLIC-API --rename oldApi=newApi \
   --output .archbird/plan.json
+npx archbird map --format json --output .archbird/before-map.json
+# After a partial implementation/consumer migration:
+npx archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
+  --output .archbird/plan.json
 npx archbird act .archbird/plan.json
 npx archbird act .archbird/plan.json --format patch
 npx archbird act .archbird/plan.json --format json \
@@ -491,6 +495,15 @@ comes from one Make provider recorded in the canonical Map. The native compiler
 proves one exact source-locked token match before emitting
 `edit_make_variable_token`; it does not reopen project configuration.
 Ambiguous, missing, duplicate, or non-Make cases remain manual.
+
+Supplying `--before-map` allows the native compiler to finish one exact
+observed provider-surface rename without a separate `--rename`. The old member
+must have resolved uniquely before; exactly one new current member must retain
+the same implementation paths and use ledger; and both declaration and
+implementation signatures must differ only at the identifier. Both Maps must
+share project, configuration, and producer identities. Incompatible,
+diagnostic-bearing, signature-poor, or ambiguous histories remain
+non-executable.
 
 If the constraint itself requires an implemented and used surface member that
 is not registered, Plan can derive `insert_make_variable_token` without an
@@ -616,7 +629,11 @@ try {
   console.log(auditMapFreshness(mapJson, project.mapJson()).toString("utf8"));
   if (project.verificationConfigured) {
     const verificationJson = project.verifyJson();
-    const planJson = compilePlan(project, project.mapJson(), verificationJson);
+    const planJson = compilePlan(
+      project,
+      project.mapJson(),
+      verificationJson,
+    );
     console.log(JSON.parse(planJson.toString("utf8")).artifact);
   }
 } finally {
@@ -629,7 +646,9 @@ explicit options. `Project.fromConfig()` requires one reviewed configuration.
 Canonical JSON methods return stable artifact bytes; Markdown and graph outputs
 are presentation views.
 
-`compilePlan()` delegates Plan derivation to the native core.
+`compilePlan()` delegates Plan derivation to the native core. Its optional
+`beforeMapJson` input enables identity-checked residual planning; Node performs
+no Map comparison or action inference.
 `materializePatch()` produces exact binary-safe transitions from a Plan;
 `acceptPatch()` seals them only after callers supply the fresh isolated
 after-Map and Verification. `preflightPatchApply()` checks the accepted Patch

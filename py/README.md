@@ -478,6 +478,10 @@ archbird plan --output .archbird/plan.json
 archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 archbird plan CORE-PUBLIC-API --rename old_api=new_api \
   --output .archbird/plan.json
+archbird map --format json --output .archbird/before-map.json
+# After a partial implementation/consumer migration:
+archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
+  --output .archbird/plan.json
 archbird act .archbird/plan.json
 archbird act .archbird/plan.json --format patch
 archbird act .archbird/plan.json --format json \
@@ -511,6 +515,15 @@ comes from one Make provider recorded in the canonical Map. The native compiler
 proves one exact source-locked token match before emitting
 `edit_make_variable_token`; it does not reopen project configuration.
 Ambiguous, missing, duplicate, or non-Make cases remain manual.
+
+Supplying `--before-map` allows the native compiler to finish one exact
+observed provider-surface rename without a separate `--rename`. The old member
+must have resolved uniquely before; exactly one new current member must retain
+the same implementation paths and use ledger; and both declaration and
+implementation signatures must differ only at the identifier. Both Maps must
+share project, configuration, and producer identities. Incompatible,
+diagnostic-bearing, signature-poor, or ambiguous histories remain
+non-executable.
 
 If the constraint itself requires an implemented and used surface member that
 is not registered, Plan can derive `insert_make_variable_token` without an
@@ -655,7 +668,9 @@ explicit options. `Project.from_config()` requires one reviewed configuration.
 Canonical JSON methods return stable artifact bytes; Markdown and graph outputs
 are presentation views.
 
-`compile_plan_json()` delegates Plan derivation to the native core.
+`compile_plan_json()` delegates Plan derivation to the native core. Its optional
+`before_map_json` input enables identity-checked residual planning; Python
+performs no Map comparison or action inference.
 `materialize_patch_json()` produces exact binary-safe transitions from a Plan;
 `accept_patch_json()` seals them only after callers supply the fresh isolated
 after-Map and Verification. `preflight_patch_apply()` checks the accepted Patch

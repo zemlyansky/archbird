@@ -80,9 +80,14 @@ static int validate_identity(const AbValue *value, int map) {
 
 static int validate_source(const AbValue *value) {
   static const char *const fields[] = {"project", "map", "verification"};
-  return ab_artifact_object_exact(value, fields, 3) &&
+  static const char *const observed_fields[] = {"before_map", "project", "map",
+                                                "verification"};
+  const AbValue *before = ab_value_member(value, "before_map");
+  return (ab_artifact_object_exact(value, fields, 3) ||
+          ab_artifact_object_exact(value, observed_fields, 4)) &&
          ab_artifact_bounded_text(ab_value_member(value, "project"),
                                   AB_PATCH_MAX_METADATA, 1) &&
+         (!before || validate_identity(before, 1)) &&
          validate_identity(ab_value_member(value, "map"), 1) &&
          validate_identity(ab_value_member(value, "verification"), 0);
 }
@@ -331,7 +336,7 @@ static ArchbirdStatus validate_patch(ArchbirdEngine *engine, AbPatch *patch) {
   if (!ab_artifact_object_exact(&patch->document, fields, 12) ||
       !ab_artifact_safe_integer(
           ab_value_member(&patch->document, "schema_version"), &schema) ||
-      schema != 1 ||
+      schema != 2 ||
       !ab_artifact_text_is(ab_value_member(&patch->document, "artifact"),
                            "patch") ||
       !ab_artifact_text_is(ab_value_member(&patch->document, "provenance"),

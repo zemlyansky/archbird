@@ -116,15 +116,15 @@
       "source": "schema/okf-text-normalization.schema.json"
     },
     {
-      "bytes": 10906,
+      "bytes": 10961,
       "path": "patch.schema.json",
-      "sha256": "b09ea84cb4b93c171e95db63cf8ee845d3ee5dd92558c5448134ff5b061960ae",
+      "sha256": "e4feaa9e5c5a71b52d2b9e99900caf79a02d16c33192c3db2fbcbeb7a873168a",
       "source": "schema/patch.schema.json"
     },
     {
-      "bytes": 21254,
+      "bytes": 21309,
       "path": "plan.schema.json",
-      "sha256": "9febdd0eeb0384641a22d9692e8f3ceb7e5fdb90155a914eb2da025627ecbf7d",
+      "sha256": "48844eae8f8aae801acaa92e50886bea37f96fc52a7f7465e54c144b2ba637c3",
       "source": "schema/plan.schema.json"
     },
     {

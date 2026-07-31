@@ -22,6 +22,12 @@ const surfaceRoot = fs.mkdtempSync(
 const registrationRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-patch-registration-"),
 );
+const observedRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-patch-observed-"),
+);
+const observedBeforeRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-patch-observed-before-"),
+);
 const cli = path.join(repository, "js/src/cli.js");
 
 function run(arguments_, expected = 0) {
@@ -274,10 +280,61 @@ try {
   );
   run(["verify", "FFI-SURFACE", "--root", registrationRoot, "--check"]);
 
+  const surfaceFixture = path.join(
+    repository,
+    "test/fixtures/plan_act/surface_closure",
+  );
+  fs.cpSync(surfaceFixture, observedRoot, { recursive: true });
+  fs.cpSync(surfaceFixture, observedBeforeRoot, { recursive: true });
+  for (const relative of [
+    "src/core.c",
+    "src/core.h",
+    "src/test_core.c",
+    "py/api.py",
+    "py/test_api.py",
+    "js/runtime.js",
+    "js/test_api.js",
+  ]) {
+    const source = path.join(observedBeforeRoot, relative);
+    fs.writeFileSync(
+      source,
+      fs.readFileSync(source, "utf8").replaceAll("core_sum", "core_add"),
+    );
+  }
+  const observedBeforeMap = path.join(artifacts, "observed-before-map.json");
+  const observedPlan = path.join(artifacts, "observed-plan.json");
+  const observedPatch = path.join(artifacts, "observed-patch.json");
+  run([
+    "map", "--root", observedBeforeRoot, "--format", "json",
+    "--output", observedBeforeMap, "--check",
+  ]);
+  run([
+    "plan", "FFI-SURFACE", "--root", observedRoot,
+    "--before-map", observedBeforeMap, "--output", observedPlan,
+  ]);
+  const observedDocument = JSON.parse(fs.readFileSync(observedPlan, "utf8"));
+  assert.equal(observedDocument.schema_version, 2);
+  assert.equal(observedDocument.items.length, 1);
+  assert.equal(observedDocument.items[0].provenance, "derived");
+  assert.equal(observedDocument.items[0].executable, true);
+  assert.equal(
+    observedDocument.items[0].operation.replacement_token,
+    "_core_sum",
+  );
+  assert.ok(observedDocument.source.before_map);
+  run([
+    "act", observedPlan, "--root", observedRoot, "--format", "json",
+    "--output", observedPatch,
+  ]);
+  run(["apply", observedPatch, "--root", observedRoot]);
+  run(["verify", "FFI-SURFACE", "--root", observedRoot, "--check"]);
+
   process.stdout.write("node Plan/Patch CLI lifecycle passed\n");
 } finally {
   fs.rmSync(root, { force: true, recursive: true });
   fs.rmSync(artifacts, { force: true, recursive: true });
   fs.rmSync(surfaceRoot, { force: true, recursive: true });
   fs.rmSync(registrationRoot, { force: true, recursive: true });
+  fs.rmSync(observedRoot, { force: true, recursive: true });
+  fs.rmSync(observedBeforeRoot, { force: true, recursive: true });
 }

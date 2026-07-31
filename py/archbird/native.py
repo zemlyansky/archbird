@@ -1191,6 +1191,7 @@ class Project:
         verification_json: bytes,
         *,
         map_json: Optional[bytes] = None,
+        before_map_json: bytes = b"",
         request_json: bytes = b"",
         pretty: bool = False,
     ) -> bytes:
@@ -1200,6 +1201,7 @@ class Project:
             self._capsule,
             self.map_json() if map_json is None else map_json,
             verification_json,
+            before_map_json,
             request_json,
             pretty=pretty,
         )
@@ -2114,6 +2116,7 @@ def compile_plan_json(
     map_json: bytes,
     verification_json: bytes,
     *,
+    before_map_json: bytes = b"",
     request: Optional[Mapping[str, object]] = None,
     pretty: bool = False,
 ) -> bytes:
@@ -2124,6 +2127,7 @@ def compile_plan_json(
     return project.plan_json(
         verification_json,
         map_json=map_json,
+        before_map_json=before_map_json,
         request_json=_canonical(dict(request or {})) if request else b"",
         pretty=pretty,
     )

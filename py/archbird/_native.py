@@ -1102,18 +1102,22 @@ def plan_compile(
     project: _Project,
     map_json: bytes,
     verification_json: bytes,
+    before_map_json: bytes = b"",
     request_json: bytes = b"",
     *,
     pretty: bool = False,
 ) -> bytes:
     map_document = _bytes(map_json, "Map")
     verification = _bytes(verification_json, "Verification")
+    before_map = _bytes(before_map_json, "before Map")
     request = _bytes(request_json, "Plan request")
     function = _declare(
         "archbird_plan_compile",
         [
             _POINTER,
             _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
@@ -1132,6 +1136,8 @@ def plan_compile(
             project.project,
             map_document,
             len(map_document),
+            before_map if before_map else None,
+            len(before_map),
             verification,
             len(verification),
             request if request else None,

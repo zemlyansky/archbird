@@ -697,6 +697,12 @@ archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 archbird plan CORE-PUBLIC-API --rename old_api=new_api \
   --output .archbird/plan.json
 
+# Save a Map before a migration, then derive exact residual work after edits.
+archbird map --format json --output .archbird/before-map.json
+# ...developer or agent changes the implementation and consumers...
+archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
+  --output .archbird/plan.json
+
 # Materialize, verify, and inspect the exact Patch without writing.
 archbird act .archbird/plan.json
 archbird act .archbird/plan.json --format patch
@@ -727,6 +733,17 @@ match in the source-locked Make input, and emits
 `edit_make_variable_token`. It does not reopen project configuration.
 Ambiguous providers, zero or multiple matches, active uses of the old entry,
 unresolved replacement entries, and non-Make provider kinds remain manual.
+
+`--before-map OLD.json` can derive the same provider registration replacement
+without asserted rename intent when an observed partial migration proves it.
+The old surface member must have been uniquely resolved in the before Map; the
+current old registration must be unused and unresolved; and exactly one new
+current member must retain the same implementation paths and use ledger with
+declaration and implementation signatures differing only by the symbol name.
+Both Maps must share project, configuration, and producer identities and have
+no error diagnostics. Plan and Patch retain both Map identities. Missing
+signatures, incompatible histories, or multiple matching targets do not
+authorize an edit.
 
 When a constraint itself requires a missing surface member, that reviewed
 policy supplies the intent: if the member has one implementation candidate and

@@ -777,27 +777,31 @@ static napi_value plan_validate(napi_env env, napi_callback_info info) {
 }
 
 static napi_value plan_compile(napi_env env, napi_callback_info info) {
-  size_t argc = 5;
-  napi_value argv[5];
+  size_t argc = 6;
+  napi_value argv[6];
   NodeProject *owned;
   const uint8_t *map;
+  const uint8_t *before_map;
   const uint8_t *verification;
   const uint8_t *request;
   size_t map_length;
+  size_t before_map_length;
   size_t verification_length;
   size_t request_length;
   int pretty;
   ArchbirdStatus status;
   NodeOutput output = {0};
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 4 || !(owned = get_project(env, argv[0])) ||
+  if (argc < 5 || !(owned = get_project(env, argv[0])) ||
       !get_buffer(env, argv[1], &map, &map_length) ||
       !get_buffer(env, argv[2], &verification, &verification_length) ||
-      !get_buffer(env, argv[3], &request, &request_length) ||
-      !get_optional_bool(env, argc, argv, 4, 0, &pretty))
+      !get_buffer(env, argv[3], &before_map, &before_map_length) ||
+      !get_buffer(env, argv[4], &request, &request_length) ||
+      !get_optional_bool(env, argc, argv, 5, 0, &pretty))
     return NULL;
   status = archbird_plan_compile(
-      owned->engine, owned->project, map, map_length, verification,
+      owned->engine, owned->project, map, map_length,
+      before_map_length ? before_map : NULL, before_map_length, verification,
       verification_length, request_length ? request : NULL, request_length,
       pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   return render_result(env, owned->engine, status, &output);

@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 const sha = (character: string): string => character.repeat(64);
 
 const plan = {
-  schema_version: 1,
+  schema_version: 2,
   artifact: "plan",
   provenance: "derived",
   tool: {
@@ -72,7 +72,7 @@ const plan = {
 };
 
 const patch = {
-  schema_version: 1,
+  schema_version: 2,
   artifact: "patch",
   provenance: "derived",
   tool: {

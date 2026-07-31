@@ -32,7 +32,7 @@ int main(void) {
       "\",\"item_ids\":[\"item:create\"],\"matches\":1,\"reads\":[],"
       "\"skipped\":0,\"unsupported\":0,\"writes\":[\"hello.txt\"]}],"
       "\"plan_sha256\":\"" SHA_A
-      "\",\"provenance\":\"derived\",\"schema_version\":1,\"seal\":null,"
+      "\",\"provenance\":\"derived\",\"schema_version\":2,\"seal\":null,"
       "\"source\":{\"map\":{\"configuration_sha256\":\"" SHA_A
       "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A
@@ -53,7 +53,7 @@ int main(void) {
       "\",\"item_ids\":[\"item:create\"],\"matches\":1,\"reads\":[],"
       "\"skipped\":0,\"unsupported\":0,\"writes\":[\"hello.txt\"]}],"
       "\"plan_sha256\":\"" SHA_A
-      "\",\"provenance\":\"derived\",\"schema_version\":1,\"seal\":null,"
+      "\",\"provenance\":\"derived\",\"schema_version\":2,\"seal\":null,"
       "\"source\":{\"map\":{\"configuration_sha256\":\"" SHA_A
       "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A

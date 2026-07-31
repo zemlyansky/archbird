@@ -413,17 +413,21 @@ ARCHBIRD_API ArchbirdStatus archbird_plan_validate(ArchbirdEngine *engine,
                                                    size_t plan_length);
 
 /*
- * Compile one editable Plan from a complete Verification and its exact Map.
- * The project supplies the source bytes already represented by the Map; the
- * core performs no filesystem I/O. request_json is empty or an object with
- * optional constraint_ids, objective, and asserted renames.
+ * Compile one editable Plan from a complete Verification and its exact current
+ * Map. before_map_json is optional historical evidence for residual planning;
+ * when present it must describe the same project, configuration, and producer
+ * implementation. The project supplies the current source bytes already
+ * represented by map_json; the core performs no filesystem I/O. request_json
+ * is empty or an object with optional constraint_ids, objective, and asserted
+ * renames.
  */
 ARCHBIRD_API ArchbirdStatus archbird_plan_compile(
     ArchbirdEngine *engine, const ArchbirdProject *project,
-    const uint8_t *map_json, size_t map_length,
-    const uint8_t *verification_json, size_t verification_length,
-    const uint8_t *request_json, size_t request_length, uint32_t json_flags,
-    ArchbirdWriteFn write_fn, void *user_data);
+    const uint8_t *map_json, size_t map_length, const uint8_t *before_map_json,
+    size_t before_map_length, const uint8_t *verification_json,
+    size_t verification_length, const uint8_t *request_json,
+    size_t request_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data);
 
 /*
  * Validate one exact Patch. A materialized Patch is a read-only Act preview;

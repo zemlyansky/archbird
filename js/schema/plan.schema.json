@@ -18,7 +18,7 @@
     "unknowns"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "artifact": {"const": "plan"},
     "provenance": {"$ref": "#/$defs/provenance"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -103,6 +103,7 @@
       "additionalProperties": false,
       "required": ["project", "map", "verification"],
       "properties": {
+        "before_map": {"$ref": "#/$defs/mapIdentity"},
         "project": {"type": "string", "minLength": 1, "maxLength": 65536},
         "map": {"$ref": "#/$defs/mapIdentity"},
         "verification": {"$ref": "#/$defs/verificationIdentity"}

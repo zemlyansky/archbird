@@ -284,7 +284,7 @@ render_accepted_document(AbBuffer *buffer, const AbPatch *patch,
     status = ab_value_render(buffer, field(&patch->document, "plan_sha256"));
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
-        buffer, ",\"provenance\":\"derived\",\"schema_version\":1,\"seal\":");
+        buffer, ",\"provenance\":\"derived\",\"schema_version\":2,\"seal\":");
   if (status == ARCHBIRD_OK) {
     if (seal) {
       status = ab_buffer_literal(buffer, "{\"content_sha256\":");
