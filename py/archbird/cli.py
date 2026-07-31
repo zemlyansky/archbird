@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -875,6 +876,14 @@ def plan_parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
+        "--git-diff",
+        metavar="REVISION",
+        help=(
+            "derive the before Map from one Git commit and plan residual work "
+            "against the current working tree"
+        ),
+    )
+    result.add_argument(
         "--resolution",
         help="configuration-resolution JSON paired with --map",
     )
@@ -1403,6 +1412,197 @@ def _git_change_set(repository: Path, revision: str) -> dict[str, object]:
         "entries": entries,
         "source": {"identity": revision, "kind": "git-diff"},
     }
+
+
+def _git_command(
+    repository: Path,
+    arguments: Sequence[str],
+    *,
+    description: str,
+) -> bytes:
+    environment = os.environ.copy()
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    completed = subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"{description} failed: {detail}")
+    return completed.stdout
+
+
+def _git_commit(repository: Path, revision: str) -> str:
+    if (
+        not revision
+        or revision != revision.strip()
+        or revision.startswith("-")
+        or "\0" in revision
+        or "\n" in revision
+        or "\r" in revision
+    ):
+        raise ValueError("--git-diff requires one safe Git commit")
+    encoded = _git_command(
+        repository,
+        ["rev-parse", "--verify", f"{revision}^{{commit}}"],
+        description=f"git revision {revision!r}",
+    )
+    try:
+        commit = encoded.decode("ascii").strip()
+    except UnicodeDecodeError as error:
+        raise ValueError("git rev-parse emitted a non-ASCII object id") from error
+    if len(commit) not in {40, 64} or any(
+        character not in "0123456789abcdef" for character in commit
+    ):
+        raise ValueError("git rev-parse emitted an invalid commit object id")
+    return commit
+
+
+def _git_project_prefix(repository: Path) -> str:
+    encoded = _git_command(
+        repository,
+        ["rev-parse", "--show-prefix"],
+        description="locate project root within Git repository",
+    )
+    try:
+        prefix = encoded.decode("utf-8").rstrip("\n")
+    except UnicodeDecodeError as error:
+        raise ValueError("Git project prefix must be UTF-8") from error
+    if prefix and (
+        not prefix.endswith("/")
+        or prefix.startswith("/")
+        or "\\" in prefix
+        or any(part in {"", ".", ".."} for part in prefix[:-1].split("/"))
+    ):
+        raise ValueError("git rev-parse emitted an unsafe project prefix")
+    return prefix
+
+
+def _git_write_blob(
+    repository: Path, object_id: str, target: Path, relative: str
+) -> None:
+    environment = os.environ.copy()
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    with target.open("wb") as output:
+        completed = subprocess.run(
+            ["git", "-C", str(repository), "cat-file", "blob", object_id],
+            env=environment,
+            stdout=output,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    if completed.returncode:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"read Git blob for {relative!r} failed: {detail}")
+
+
+def _git_materialize_tree(
+    repository: Path,
+    commit: str,
+    destination: Path,
+    *,
+    project_prefix: str = "",
+    depth: int = 0,
+) -> None:
+    if depth > 32:
+        raise ValueError("Git submodule nesting exceeds 32 levels")
+    inventory_arguments = ["ls-tree", "-rz", "--full-tree", commit]
+    if project_prefix:
+        inventory_arguments.extend(["--", f":(literal){project_prefix[:-1]}"])
+    inventory = _git_command(
+        repository,
+        inventory_arguments,
+        description=f"Git tree inventory for {commit}",
+    )
+    if inventory and not inventory.endswith(b"\0"):
+        raise ValueError("git ls-tree emitted an unterminated record")
+    for record in inventory.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, raw_path = record.partition(b"\t")
+        fields = metadata.split(b" ")
+        if not separator or len(fields) != 3:
+            raise ValueError("git ls-tree emitted a malformed record")
+        mode, object_type, raw_object = fields
+        try:
+            committed_path = raw_path.decode("utf-8")
+            object_id = raw_object.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                "Git snapshot paths and object ids must be UTF-8/ASCII"
+            ) from error
+        if not committed_path.startswith(project_prefix):
+            raise ValueError("Git tree entry is outside the project root")
+        relative = committed_path[len(project_prefix) :]
+        parts = relative.split("/")
+        if (
+            not relative
+            or relative.startswith("/")
+            or "\\" in relative
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            raise ValueError(f"Git snapshot contains unsafe path: {relative!r}")
+        if len(object_id) not in {40, 64} or any(
+            character not in "0123456789abcdef" for character in object_id
+        ):
+            raise ValueError("git ls-tree emitted an invalid object id")
+        target = destination.joinpath(*parts)
+        if object_type == b"commit":
+            local_submodule = repository.joinpath(*parts)
+            git_marker = local_submodule / ".git"
+            if (
+                not local_submodule.is_dir()
+                or local_submodule.is_symlink()
+                or not git_marker.exists()
+                or git_marker.is_symlink()
+            ):
+                continue
+            _git_command(
+                local_submodule,
+                ["cat-file", "-e", f"{object_id}^{{commit}}"],
+                description=f"resolve Git submodule {relative!r}",
+            )
+            target.mkdir(parents=True, exist_ok=True)
+            _git_materialize_tree(
+                local_submodule,
+                object_id,
+                target,
+                depth=depth + 1,
+            )
+            continue
+        if mode == b"120000":
+            continue
+        if object_type != b"blob" or mode not in {b"100644", b"100755"}:
+            raise ValueError(
+                f"Git snapshot contains unsupported entry: {relative!r}"
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _git_write_blob(repository, object_id, target, relative)
+        target.chmod(0o755 if mode == b"100755" else 0o644)
+
+
+@contextmanager
+def _git_snapshot(repository: Path, revision: str):
+    commit = _git_commit(repository, revision)
+    project_prefix = _git_project_prefix(repository)
+    temporary_root = default_provider_cache_dir() / "temporary-snapshots"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="git-",
+        dir=temporary_root,
+    ) as raw:
+        snapshot = Path(raw) / (repository.name or "repository")
+        snapshot.mkdir()
+        _git_materialize_tree(
+            repository,
+            commit,
+            snapshot,
+            project_prefix=project_prefix,
+        )
+        yield snapshot
 
 
 def _discover_project_from_args(
@@ -2097,6 +2297,8 @@ def _constraint_auxiliary_inputs(
 def _constraint_evaluation_inputs(
     args: argparse.Namespace,
     progress: _Progress,
+    *,
+    resolved_inputs: Optional[tuple[Path, bytes, Optional[Path]]] = None,
 ) -> tuple[
     Path,
     bytes,
@@ -2113,7 +2315,11 @@ def _constraint_evaluation_inputs(
             "Verify and Plan require constraints from archbird.json; "
             "--no-config is not supported"
         )
-    repository, config_json, _ = _repository_inputs(args)
+    repository, config_json, _ = (
+        resolved_inputs
+        if resolved_inputs is not None
+        else _repository_inputs(args)
+    )
     if not config_json:
         raise ConfigError(
             f"no archbird.json found in {repository}; "
@@ -2266,12 +2472,43 @@ def _plan_main(argv: Sequence[str]) -> int:
                 )
             args.root_override = str(positional_root)
         repository_hint = Path(args.root_override or ".").resolve()
+        if args.before_map and args.git_diff:
+            raise ValueError("--before-map and --git-diff are mutually exclusive")
+        if args.map and args.git_diff:
+            raise ValueError("--git-diff requires a live repository, not --map")
         transient_output = _repository_artifact_path(
             repository_hint, args.output
         )
         args._transient_exclude = (
             (transient_output,) if transient_output is not None else ()
         )
+        resolved_inputs = _repository_inputs(args)
+        repository, config_json, _ = resolved_inputs
+        if not config_json:
+            raise ConfigError(
+                f"no archbird.json found in {repository}; "
+                "Verify and Plan require reviewed constraints"
+            )
+        before_map_json = (
+            Path(args.before_map).read_bytes() if args.before_map else b""
+        )
+        if args.git_diff:
+            progress.emit(
+                {
+                    "phase": "discovery",
+                    "state": "historical",
+                    "revision": args.git_diff,
+                }
+            )
+            with _git_snapshot(repository, args.git_diff) as snapshot:
+                before_project = _project_from_args(
+                    args,
+                    progress,
+                    resolved_repository=snapshot,
+                    resolved_config_json=config_json,
+                )
+                before_map_json = before_project.map_json()
+                del before_project
         (
             repository,
             config_json,
@@ -2282,7 +2519,11 @@ def _plan_main(argv: Sequence[str]) -> int:
             maps,
             observations,
             policy_date,
-        ) = _constraint_evaluation_inputs(args, progress)
+        ) = _constraint_evaluation_inputs(
+            args,
+            progress,
+            resolved_inputs=resolved_inputs,
+        )
         verification_json = evaluate_constraints_json(
             config_json,
             map_json,
@@ -2329,9 +2570,7 @@ def _plan_main(argv: Sequence[str]) -> int:
         encoded = project.plan_json(
             verification_json,
             map_json=map_json,
-            before_map_json=(
-                Path(args.before_map).read_bytes() if args.before_map else b""
-            ),
+            before_map_json=before_map_json,
             request_json=(
                 json.dumps(
                     request,

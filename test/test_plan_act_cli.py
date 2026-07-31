@@ -70,14 +70,19 @@ class PlanActCliTest(unittest.TestCase):
         return self.artifacts / name
 
     def accepted_patch(
-        self, plan_path: Path, name: str = "patch.json"
+        self,
+        plan_path: Path,
+        name: str = "patch.json",
+        *,
+        root: Path | None = None,
     ) -> tuple[Path, dict[str, object]]:
+        repository = root or self.root
         patch_path = self.plan_path(name)
         run(
             "act",
             str(plan_path),
             "--root",
-            str(self.root),
+            str(repository),
             "--format",
             "json",
             "--output",
@@ -89,7 +94,8 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(patch["acceptance"]["status"], "satisfied")
         return patch_path, patch
 
-    def run_surface_gates(self) -> None:
+    def run_surface_gates(self, root: Path | None = None) -> None:
+        repository = root or self.root
         compiler = shutil.which("cc")
         node = shutil.which("node")
         make = shutil.which("make")
@@ -103,7 +109,7 @@ class PlanActCliTest(unittest.TestCase):
                 f"PYTHON={sys.executable}",
                 f"NODE={node}",
             ],
-            cwd=self.root,
+            cwd=repository,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             check=False,
@@ -546,6 +552,87 @@ class PlanActCliTest(unittest.TestCase):
         )
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
+
+    def test_git_diff_derives_residual_plan_without_mutating_worktree(self) -> None:
+        project = self.root / "packages" / "surface"
+        shutil.copytree(SURFACE_FIXTURE, project)
+        renamed_sources = (
+            "src/core.c",
+            "src/core.h",
+            "src/test_core.c",
+            "py/api.py",
+            "py/test_api.py",
+            "js/runtime.js",
+            "js/test_api.js",
+        )
+        for relative in renamed_sources:
+            path = project / relative
+            path.write_text(path.read_text().replace("core_sum", "core_add"))
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        subprocess.run(["git", "add", "."], cwd=self.root, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Archbird Test",
+                "-c",
+                "user.email=archbird@example.invalid",
+                "commit",
+                "-qm",
+                "before migration",
+            ],
+            cwd=self.root,
+            check=True,
+        )
+        for relative in renamed_sources:
+            path = project / relative
+            path.write_text(path.read_text().replace("core_add", "core_sum"))
+        before_status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z"],
+            cwd=self.root,
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+
+        plan_path = self.plan_path("git-residual-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(project),
+            "--git-diff",
+            "HEAD",
+            "--output",
+            str(plan_path),
+        )
+        self.assertEqual(
+            subprocess.run(
+                ["git", "status", "--porcelain=v1", "-z"],
+                cwd=self.root,
+                check=True,
+                stdout=subprocess.PIPE,
+            ).stdout,
+            before_status,
+            "Git-derived planning mutated the working tree",
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        self.assertEqual(plan["items"][0]["provenance"], "derived")
+        self.assertEqual(
+            plan["items"][0]["operation"]["expected_token"],
+            "_core_add",
+        )
+        self.assertEqual(
+            plan["items"][0]["operation"]["replacement_token"],
+            "_core_sum",
+        )
+
+        patch_path, _ = self.accepted_patch(
+            plan_path, "git-residual-patch.json", root=project
+        )
+        run("apply", str(patch_path), "--root", str(project))
+        run("verify", "FFI-SURFACE", "--root", str(project), "--check")
+        self.run_surface_gates(project)
 
     def test_required_provider_surface_derives_exact_make_insertion(self) -> None:
         shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)

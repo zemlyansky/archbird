@@ -697,7 +697,12 @@ archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 archbird plan CORE-PUBLIC-API --rename old_api=new_api \
   --output .archbird/plan.json
 
-# Save a Map before a migration, then derive exact residual work after edits.
+# Derive residual work from a committed base without changing the worktree.
+# ...developer or agent partially changes the implementation and consumers...
+archbird plan FFI-SURFACE --git-diff HEAD \
+  --output .archbird/plan.json
+
+# Or save an explicit Map before work begins.
 archbird map --format json --output .archbird/before-map.json
 # ...developer or agent changes the implementation and consumers...
 archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
@@ -744,6 +749,15 @@ Both Maps must share project, configuration, and producer identities and have
 no error diagnostics. Plan and Patch retain both Map identities. Missing
 signatures, incompatible histories, or multiple matching targets do not
 authorize an edit.
+
+`--git-diff REVISION` constructs that before Map from one verified Git commit
+in an isolated raw-object snapshot under Archbird's cache directory, using the
+current project configuration and ordinary discovery/provider pipeline. It
+does not run checkout filters and never checks out or writes the source
+worktree. The option accepts a commit, not a revision range, and cannot be
+combined with `--map` or `--before-map`. The temporary snapshot is removed
+after its canonical Map is built; unchanged provider facts remain eligible for
+the normal content-addressed cache.
 
 When a constraint itself requires a missing surface member, that reviewed
 policy supplies the intent: if the member has one implementation candidate and

@@ -458,8 +458,10 @@ npx archbird plan --output .archbird/plan.json
 npx archbird plan CORE-PUBLIC-API --output .archbird/plan.json
 npx archbird plan CORE-PUBLIC-API --rename oldApi=newApi \
   --output .archbird/plan.json
+npx archbird plan FFI-SURFACE --git-diff HEAD \
+  --output .archbird/plan.json
 npx archbird map --format json --output .archbird/before-map.json
-# After a partial implementation/consumer migration:
+# Or, after saving an explicit Map before a partial migration:
 npx archbird plan FFI-SURFACE --before-map .archbird/before-map.json \
   --output .archbird/plan.json
 npx archbird act .archbird/plan.json
@@ -504,6 +506,13 @@ implementation signatures must differ only at the identifier. Both Maps must
 share project, configuration, and producer identities. Incompatible,
 diagnostic-bearing, signature-poor, or ambiguous histories remain
 non-executable.
+
+`--git-diff REVISION` builds the before Map from one Git commit through an
+isolated raw-object snapshot and the ordinary discovery/provider pipeline. It
+uses the current project configuration, does not run checkout filters or
+mutate the source worktree, removes the temporary snapshot after mapping, and
+reuses content-addressed provider facts. Revision ranges, saved-current-Map
+mode, and simultaneous `--before-map` are rejected.
 
 If the constraint itself requires an implemented and used surface member that
 is not registered, Plan can derive `insert_make_variable_token` without an

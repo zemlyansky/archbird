@@ -75,7 +75,7 @@ function usage(command = "map") {
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
     verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
-    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--before-map OLD.json] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--output PLAN.json]",
+    plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--before-map OLD.json | --git-diff REVISION] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--output PLAN.json]",
     act: "archbird act PLAN.json [--root PROJECT] [--format markdown|json|patch] [--output PATCH.json]",
     apply: "archbird apply PATCH.json [--root PROJECT]",
     export: "archbird export graphml|json|mermaid --map MAP_OR_QUERY.json [--output FILE]",
@@ -567,7 +567,10 @@ function constraintRequest(
 function constraintContext(
   options,
   progress,
-  { baselinePath = options.baseline || null } = {},
+  {
+    baselinePath = options.baseline || null,
+    resolvedInputs = null,
+  } = {},
 ) {
   if (options.noConfig) {
     throw new Error(
@@ -575,8 +578,8 @@ function constraintContext(
       "--no-config is not supported",
     );
   }
-  const resolvedInputs = repositoryInputs(options);
-  const { repository, configJson } = resolvedInputs;
+  const inputs = resolvedInputs || repositoryInputs(options);
+  const { repository, configJson } = inputs;
   if (!configJson.length) {
     throw new Error(
       `no archbird.json found in ${repository}; ` +
@@ -594,9 +597,9 @@ function constraintContext(
     resolutionJson = options.resolution
       ? read(options.resolution)
       : Buffer.alloc(0);
-    current = discoverProject(options, progress, resolvedInputs);
+    current = discoverProject(options, progress, inputs);
   } else {
-    current = project(options, progress, resolvedInputs);
+    current = project(options, progress, inputs);
     mapJson = current.mapJson();
     resolutionJson = current.resolutionJson || Buffer.alloc(0);
     warnMapCacheStats(current.mapCacheStats);
@@ -847,6 +850,208 @@ function gitChangeSet(repository, revision) {
     entries,
     source: { identity: revision, kind: "git-diff" },
   };
+}
+
+function gitCommand(repository, arguments_, description) {
+  const completed = spawnSync(
+    "git",
+    ["-C", repository, ...arguments_],
+    {
+      encoding: null,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+      maxBuffer: 64 * 1024 * 1024,
+      windowsHide: true,
+    },
+  );
+  if (completed.error) {
+    throw new Error(`${description} failed: ${completed.error.message}`);
+  }
+  if (completed.status !== 0) {
+    const detail = Buffer.from(completed.stderr || []).toString("utf8").trim();
+    throw new Error(`${description} failed: ${detail}`);
+  }
+  return Buffer.from(completed.stdout || []);
+}
+
+function gitWriteBlob(repository, objectId, target, relative) {
+  const descriptor = fs.openSync(target, "wx");
+  let completed;
+  try {
+    completed = spawnSync(
+      "git",
+      ["-C", repository, "cat-file", "blob", objectId],
+      {
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+        stdio: ["ignore", descriptor, "pipe"],
+        windowsHide: true,
+      },
+    );
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  if (completed.error) {
+    throw new Error(
+      `read Git blob for ${JSON.stringify(relative)} failed: ` +
+        completed.error.message,
+    );
+  }
+  if (completed.status !== 0) {
+    const detail = Buffer.from(completed.stderr || []).toString("utf8").trim();
+    throw new Error(
+      `read Git blob for ${JSON.stringify(relative)} failed: ${detail}`,
+    );
+  }
+}
+
+function gitCommit(repository, revision) {
+  if (
+    !revision || revision !== revision.trim() || revision.startsWith("-") ||
+    revision.includes("\0") || revision.includes("\n") || revision.includes("\r")
+  ) {
+    throw new Error("--git-diff requires one safe Git commit");
+  }
+  const commit = gitCommand(
+    repository,
+    ["rev-parse", "--verify", `${revision}^{commit}`],
+    `git revision ${JSON.stringify(revision)}`,
+  ).toString("ascii").trim();
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)) {
+    throw new Error("git rev-parse emitted an invalid commit object id");
+  }
+  return commit;
+}
+
+function gitProjectPrefix(repository) {
+  const prefix = gitCommand(
+    repository,
+    ["rev-parse", "--show-prefix"],
+    "locate project root within Git repository",
+  ).toString("utf8").replace(/\n$/, "");
+  const parts = prefix ? prefix.slice(0, -1).split("/") : [];
+  if (
+    prefix && (
+      !prefix.endsWith("/") || prefix.startsWith("/") ||
+      prefix.includes("\\") ||
+      parts.some((part) => ["", ".", ".."].includes(part))
+    )
+  ) {
+    throw new Error("git rev-parse emitted an unsafe project prefix");
+  }
+  return prefix;
+}
+
+function gitMaterializeTree(
+  repository,
+  commit,
+  destination,
+  { projectPrefix = "", depth = 0 } = {},
+) {
+  if (depth > 32) {
+    throw new Error("Git submodule nesting exceeds 32 levels");
+  }
+  const inventoryArguments = ["ls-tree", "-rz", "--full-tree", commit];
+  if (projectPrefix) {
+    inventoryArguments.push("--", `:(literal)${projectPrefix.slice(0, -1)}`);
+  }
+  const inventory = gitCommand(
+    repository,
+    inventoryArguments,
+    `Git tree inventory for ${commit}`,
+  );
+  if (inventory.length && inventory.at(-1) !== 0) {
+    throw new Error("git ls-tree emitted an unterminated record");
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let start = 0;
+  for (let index = 0; index < inventory.length; index += 1) {
+    if (inventory[index] !== 0) continue;
+    const record = inventory.subarray(start, index);
+    start = index + 1;
+    if (!record.length) continue;
+    const tab = record.indexOf(9);
+    const metadata = tab < 0
+      ? []
+      : record.subarray(0, tab).toString("ascii").split(" ");
+    if (tab < 0 || metadata.length !== 3) {
+      throw new Error("git ls-tree emitted a malformed record");
+    }
+    const [mode, objectType, objectId] = metadata;
+    let committedPath;
+    try {
+      committedPath = decoder.decode(record.subarray(tab + 1));
+    } catch (_) {
+      throw new Error("Git snapshot paths must be UTF-8");
+    }
+    if (!committedPath.startsWith(projectPrefix)) {
+      throw new Error("Git tree entry is outside the project root");
+    }
+    const relative = committedPath.slice(projectPrefix.length);
+    const parts = relative.split("/");
+    if (
+      !relative || relative.startsWith("/") || relative.includes("\\") ||
+      parts.some((part) => ["", ".", ".."].includes(part))
+    ) {
+      throw new Error(
+        `Git snapshot contains unsafe path: ${JSON.stringify(relative)}`,
+      );
+    }
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(objectId)) {
+      throw new Error("git ls-tree emitted an invalid object id");
+    }
+    const target = path.join(destination, ...parts);
+    if (objectType === "commit") {
+      const localSubmodule = path.join(repository, ...parts);
+      const gitMarker = path.join(localSubmodule, ".git");
+      let available = false;
+      try {
+        const directory = fs.lstatSync(localSubmodule);
+        const marker = fs.lstatSync(gitMarker);
+        available = directory.isDirectory() &&
+          !directory.isSymbolicLink() && !marker.isSymbolicLink();
+      } catch (error) {
+        if (!error || error.code !== "ENOENT") throw error;
+      }
+      if (!available) continue;
+      gitCommand(
+        localSubmodule,
+        ["cat-file", "-e", `${objectId}^{commit}`],
+        `resolve Git submodule ${JSON.stringify(relative)}`,
+      );
+      fs.mkdirSync(target, { recursive: true });
+      gitMaterializeTree(localSubmodule, objectId, target, {
+        depth: depth + 1,
+      });
+      continue;
+    }
+    if (mode === "120000") continue;
+    if (objectType !== "blob" || !["100644", "100755"].includes(mode)) {
+      throw new Error(
+        `Git snapshot contains unsupported entry: ${JSON.stringify(relative)}`,
+      );
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    gitWriteBlob(repository, objectId, target, relative);
+    fs.chmodSync(target, mode === "100755" ? 0o755 : 0o644);
+  }
+}
+
+function withGitSnapshot(repository, revision, callback) {
+  const commit = gitCommit(repository, revision);
+  const projectPrefix = gitProjectPrefix(repository);
+  const temporaryRoot = path.join(
+    archbird.defaultProviderCacheDir(),
+    "temporary-snapshots",
+  );
+  fs.mkdirSync(temporaryRoot, { recursive: true });
+  const parent = fs.mkdtempSync(path.join(temporaryRoot, "git-"));
+  const snapshot = path.join(parent, path.basename(repository) || "repository");
+  try {
+    fs.mkdirSync(snapshot);
+    gitMaterializeTree(repository, commit, snapshot, { projectPrefix });
+    return callback(snapshot);
+  } finally {
+    fs.rmSync(parent, { force: true, recursive: true });
+  }
 }
 
 function contextCounts(values, option) {
@@ -1433,6 +1638,7 @@ function planMain(argv) {
     ...DISCOVERY,
     map: { type: "string" },
     beforeMap: { flag: "before-map", type: "string" },
+    gitDiff: { flag: "git-diff", type: "string" },
     resolution: { type: "string" },
     baseline: { type: "string" },
     policyDate: { flag: "policy-date", type: "string" },
@@ -1451,20 +1657,58 @@ function planMain(argv) {
     ...options,
     _: positionalRoot ? [positionalRoot] : [],
   };
+  if (options.beforeMap && options.gitDiff) {
+    throw new Error("--before-map and --git-diff are mutually exclusive");
+  }
+  if (options.map && options.gitDiff) {
+    throw new Error("--git-diff requires a live repository, not --map");
+  }
   const repositoryHint = path.resolve(positionalRoot || options.root || ".");
   const transientOutput = repositoryArtifactPath(repositoryHint, options.output);
   repositoryOptions._transientExclude = transientOutput
     ? [transientOutput]
     : [];
   const progress = new Progress(options.progress);
+  const resolvedInputs = repositoryInputs(repositoryOptions);
+  const { repository, configJson } = resolvedInputs;
+  if (!configJson.length) {
+    throw new Error(
+      `no archbird.json found in ${repository}; ` +
+      "Verify and Plan require reviewed constraints",
+    );
+  }
+  let beforeMapJson = options.beforeMap
+    ? fs.readFileSync(options.beforeMap)
+    : Buffer.alloc(0);
+  if (options.gitDiff) {
+    progress.emit({
+      phase: "discovery",
+      revision: options.gitDiff,
+      state: "historical",
+    });
+    beforeMapJson = withGitSnapshot(
+      repository,
+      options.gitDiff,
+      (snapshot) => {
+        const historical = project(
+          repositoryOptions,
+          progress,
+          { repository: snapshot, configJson },
+        );
+        try {
+          return historical.mapJson();
+        } finally {
+          historical.dispose();
+        }
+      },
+    );
+  }
   const {
-    repository,
-    configJson,
     mapJson,
     resolutionJson,
     project: current,
     request,
-  } = constraintContext(repositoryOptions, progress);
+  } = constraintContext(repositoryOptions, progress, { resolvedInputs });
   const verificationJson = archbird.evaluateConstraints(configJson, mapJson, {
     resolutionJson,
     requestJson: Object.keys(request).length
@@ -1509,9 +1753,7 @@ function planMain(argv) {
       requestJson: Object.keys(planRequest).length
         ? Buffer.from(JSON.stringify(planRequest))
         : Buffer.alloc(0),
-      beforeMapJson: options.beforeMap
-        ? fs.readFileSync(options.beforeMap)
-        : Buffer.alloc(0),
+      beforeMapJson,
       pretty: options.pretty,
     },
   );
