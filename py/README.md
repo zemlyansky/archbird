@@ -520,6 +520,12 @@ proven by that declaration, and the longest canonical-name prefix preserves
 locality. The item is `derived`; incomplete, ambiguous, or multi-provider
 evidence stays manual.
 
+Plan can also derive removal of one unresolved, unused Make registration when
+the Map proves zero candidates, zero uses, one exact declaration, and another
+uniquely resolved declaration from the same provider. It will not empty a
+configured provider, treat two stale entries as proof for each other, or turn
+a mixed replacement into an inferred deletion.
+
 Existing sources use SHA-256 locks; ranges use UTF-8 byte offsets and include
 expected text. Manual items expose missing transformation inputs and block Act
 instead of inventing code. Act evaluates the complete prepared file set

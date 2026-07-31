@@ -150,6 +150,27 @@ static int row_has_provider(const AbValue *row,
   return 0;
 }
 
+static int target_is_resolved(const AbValue *row);
+
+static int
+provider_has_resolved_declaration(const AbValue *surface,
+                                  const SurfaceMakeProvider *provider,
+                                  const AbString *excluded_name) {
+  const AbValue *names = field(surface, "names");
+  size_t index;
+  if (!names || names->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < names->as.array.count; index++) {
+    const AbValue *row = &names->as.array.items[index];
+    const AbValue *name = field(row, "name");
+    if (name && name->kind == AB_VALUE_STRING &&
+        !ab_string_equal(&name->as.text, excluded_name) &&
+        row_has_provider(row, provider) && target_is_resolved(row))
+      return 1;
+  }
+  return 0;
+}
+
 static int target_is_resolved(const AbValue *row) {
   const AbValue *candidates = field(row, "candidates");
   return row && text_is(field(row, "declaration"), "declared") &&
@@ -277,6 +298,46 @@ resolve_make_replacement(ArchbirdEngine *engine,
     ab_string_free(engine, out_expected);
     ab_string_free(engine, out_replacement);
   }
+  return status;
+}
+
+static ArchbirdStatus resolve_make_removal(ArchbirdEngine *engine,
+                                           const SurfaceMakeProvider *provider,
+                                           const AbString *old_name,
+                                           const AbPlanSourceLock *source,
+                                           AbString *out_expected,
+                                           int *out_supported) {
+  AbString empty = {0};
+  size_t form;
+  size_t matches = 0;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  *out_supported = 0;
+  for (form = 0; status == ARCHBIRD_OK && form < 2; form++) {
+    AbString expected = {0};
+    int matched = 0;
+    status = make_token(engine, old_name, (int)form, &expected);
+    if (status == ARCHBIRD_OK)
+      status = try_make_replacement(engine, provider, source, &expected, &empty,
+                                    &matched);
+    if (status == ARCHBIRD_OK && matched) {
+      if (matches) {
+        status = archbird_error_set(
+            engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+            "plan compilation: provider registration has multiple direct "
+            "spellings for %.*s",
+            (int)old_name->length, old_name->data);
+      } else {
+        *out_expected = expected;
+        memset(&expected, 0, sizeof(expected));
+        matches++;
+      }
+    }
+    ab_string_free(engine, &expected);
+  }
+  if (status == ARCHBIRD_OK && matches == 1)
+    *out_supported = 1;
+  else if (status == ARCHBIRD_OK)
+    ab_string_free(engine, out_expected);
   return status;
 }
 
@@ -439,6 +500,42 @@ analyze_rewrite(ArchbirdEngine *engine, const ArchbirdProject *project,
     out->finding = finding;
     out->rename_index = rename_index;
   }
+  return status;
+}
+
+static ArchbirdStatus analyze_removal(ArchbirdEngine *engine,
+                                      const ArchbirdProject *project,
+                                      const AbValue *map,
+                                      const AbValue *definition,
+                                      const AbPlanFindingGroup *group,
+                                      SurfaceRewrite *out, int *out_supported) {
+  const AbValue *finding = group->representative;
+  const AbValue *old_value = field(finding, "key");
+  const AbValue *surface_value = field(definition, "name");
+  const AbValue *surface;
+  const AbValue *old_row;
+  ArchbirdStatus status;
+  *out_supported = 0;
+  memset(out, 0, sizeof(*out));
+  if (!ab_plan_finding_current(finding) ||
+      !text_is(field(finding, "comparison"), "unresolved") || !old_value ||
+      old_value->kind != AB_VALUE_STRING || !surface_value ||
+      surface_value->kind != AB_VALUE_STRING)
+    return ARCHBIRD_OK;
+  surface = find_surface(map, &surface_value->as.text);
+  old_row = find_named_row(field(surface, "names"), &old_value->as.text);
+  if (!old_is_inactive_make_declaration(old_row, &out->provider) ||
+      !provider_has_resolved_declaration(surface, &out->provider,
+                                         &old_value->as.text))
+    return ARCHBIRD_OK;
+  status = ab_plan_source_lock(engine, project, map,
+                               &out->provider.path->as.text, &out->source);
+  if (status == ARCHBIRD_OK)
+    status =
+        resolve_make_removal(engine, &out->provider, &old_value->as.text,
+                             &out->source, &out->expected_token, out_supported);
+  if (status == ARCHBIRD_OK && *out_supported)
+    out->finding = finding;
   return status;
 }
 
@@ -678,6 +775,44 @@ static ArchbirdStatus append_insertions(ArchbirdEngine *engine,
   return status;
 }
 
+static ArchbirdStatus append_removals(ArchbirdEngine *engine,
+                                      AbPlanItemBuilder *builder,
+                                      const AbValue *constraint,
+                                      const AbPlanFindingGroups *groups,
+                                      SurfaceRewrite *removals) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0; status == ARCHBIRD_OK && index < groups->count; index++) {
+    const AbValue *key = field(removals[index].finding, "key");
+    AbBuffer operation;
+    char statement[1024];
+    AbPlanItemSpec spec;
+    int length = snprintf(statement, sizeof(statement),
+                          "Remove stale provider registration %.*s from %.*s.",
+                          (int)key->as.text.length, key->as.text.data,
+                          (int)removals[index].provider.path->as.text.length,
+                          removals[index].provider.path->as.text.data);
+    if (length < 0 || (size_t)length >= sizeof(statement))
+      return archbird_error_set(
+          engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+          "plan compilation: provider-surface statement is too long");
+    status = render_rewrite_operation(engine, &removals[index], &operation);
+    if (status == ARCHBIRD_OK) {
+      memset(&spec, 0, sizeof(spec));
+      spec.constraint = constraint;
+      spec.findings = groups->groups[index].rows;
+      spec.finding_count = groups->groups[index].count;
+      spec.statement = statement;
+      spec.provenance = "derived";
+      spec.operation = &operation;
+      spec.executable = 1;
+      status = ab_plan_item_builder_append(builder, &spec);
+    }
+    ab_buffer_free(&operation);
+  }
+  return status;
+}
+
 ArchbirdStatus ab_plan_compile_surface_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
     AbPlanItemBuilder *builder, const AbValue *constraint,
@@ -718,6 +853,32 @@ ArchbirdStatus ab_plan_compile_surface_constraint(
         *out_handled = 1;
     }
     insertions_free(engine, insertions, groups.count);
+    if (status == ARCHBIRD_OK && !supported) {
+      SurfaceRewrite *removals =
+          (SurfaceRewrite *)ab_calloc(engine, groups.count, sizeof(*removals));
+      if (!removals) {
+        ab_plan_finding_groups_free(engine, &groups);
+        return archbird_error_set(
+            engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+            "plan compilation: out of memory deriving provider-surface "
+            "removals");
+      }
+      for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++) {
+        int removal_supported = 0;
+        status = analyze_removal(engine, project, map, definition,
+                                 &groups.groups[index], &removals[index],
+                                 &removal_supported);
+        if (status == ARCHBIRD_OK && !removal_supported)
+          break;
+      }
+      if (status == ARCHBIRD_OK && index == groups.count) {
+        status =
+            append_removals(engine, builder, constraint, &groups, removals);
+        if (status == ARCHBIRD_OK)
+          *out_handled = 1;
+      }
+      rewrites_free(engine, removals, groups.count);
+    }
     ab_plan_finding_groups_free(engine, &groups);
     return status;
   }

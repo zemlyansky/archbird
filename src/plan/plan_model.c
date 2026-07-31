@@ -400,7 +400,6 @@ static int validate_operation(const AbValue *value, int *out_manual,
     static const char *const fields[] = {"action",         "path",
                                          "source_sha256",  "variable",
                                          "expected_token", "replacement_token"};
-    *out_requires_asserted = 1;
     return object_exact(value, fields, 6) &&
            repository_path(ab_value_member(value, "path")) &&
            lowercase_sha256(ab_value_member(value, "source_sha256")) &&

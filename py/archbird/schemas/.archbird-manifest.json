@@ -122,9 +122,9 @@
       "source": "schema/patch.schema.json"
     },
     {
-      "bytes": 21771,
+      "bytes": 21254,
       "path": "plan.schema.json",
-      "sha256": "5cfd9c151c7de3a9a61c9ff435520fcf3573960ce3c48f5f54f66e1f9aba9fda",
+      "sha256": "9febdd0eeb0384641a22d9692e8f3ceb7e5fdb90155a914eb2da025627ecbf7d",
       "source": "schema/plan.schema.json"
     },
     {

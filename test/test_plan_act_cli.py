@@ -248,6 +248,28 @@ class PlanActCliTest(unittest.TestCase):
         self.assertFalse(manual["items"][0]["executable"])
         self.assertEqual(manual["items"][0]["operation"]["action"], "manual")
 
+        makefile = self.root / "Makefile"
+        original = makefile.read_bytes()
+        makefile.write_bytes(
+            original.replace(b"_core_add", b"_core_add _core_obsolete")
+        )
+        two_stale_path = self.plan_path("two-stale-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(two_stale_path),
+        )
+        two_stale = json.loads(two_stale_path.read_bytes())
+        self.assertTrue(two_stale["items"])
+        self.assertTrue(
+            all(not item["executable"] for item in two_stale["items"]),
+            "unresolved provider entries cannot prove each other safe to remove",
+        )
+        makefile.write_bytes(original)
+
         unknown_target = run(
             "plan",
             "FFI-SURFACE",
@@ -264,8 +286,6 @@ class PlanActCliTest(unittest.TestCase):
             unknown_target.stderr.decode(),
         )
 
-        makefile = self.root / "Makefile"
-        original = makefile.read_bytes()
         makefile.write_bytes(original.replace(b"_core_add", b"_core_add _core_add"))
         duplicate = run(
             "plan",
@@ -402,6 +422,79 @@ class PlanActCliTest(unittest.TestCase):
         )
         run("apply", str(patch_path), "--root", str(self.root))
         self.assertIn("WASM_EXPORTS = _core_peer _core_sum", makefile.read_text())
+        run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
+        self.run_surface_gates()
+
+    def test_unused_provider_registration_derives_exact_make_removal(self) -> None:
+        shutil.copytree(SURFACE_FIXTURE, self.root, dirs_exist_ok=True)
+        makefile = self.root / "Makefile"
+        original = makefile.read_bytes().replace(
+            b"WASM_EXPORTS = _core_add",
+            b"WASM_EXPORTS = _core_sum _core_add",
+        )
+        makefile.write_bytes(original)
+        self.run_surface_gates()
+        failed = run(
+            "verify",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--check",
+            expected=1,
+        )
+        self.assertIn(
+            "provider capability is unresolved: core_add",
+            failed.stdout.decode(),
+        )
+
+        plan_path = self.plan_path("removal-plan.json")
+        run(
+            "plan",
+            "FFI-SURFACE",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertTrue(item["executable"])
+        self.assertEqual(item["provenance"], "derived")
+        self.assertEqual(
+            item["statement"],
+            "Remove stale provider registration core_add from Makefile.",
+        )
+        self.assertEqual(
+            item["operation"],
+            {
+                "action": "edit_make_variable_token",
+                "expected_token": "_core_add",
+                "path": "Makefile",
+                "replacement_token": "",
+                "source_sha256": hashlib.sha256(original).hexdigest(),
+                "variable": "WASM_EXPORTS",
+            },
+        )
+        preview = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn("-WASM_EXPORTS = _core_sum _core_add", preview)
+        self.assertIn("+WASM_EXPORTS = _core_sum", preview)
+        self.assertEqual(makefile.read_bytes(), original)
+
+        patch_path, patch = self.accepted_patch(plan_path, "removal-patch.json")
+        self.assertEqual(
+            patch["acceptance"]["constraints"],
+            [{"id": "FFI-SURFACE", "status": "pass"}],
+        )
+        run("apply", str(patch_path), "--root", str(self.root))
+        self.assertIn("WASM_EXPORTS = _core_sum\n", makefile.read_text())
         run("verify", "FFI-SURFACE", "--root", str(self.root), "--check")
         self.run_surface_gates()
 

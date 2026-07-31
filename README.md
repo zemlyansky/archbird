@@ -739,6 +739,14 @@ findings remain origins, and the generated item is explicitly `derived`.
 Missing anchors, duplicate tokens, multiple providers, incomplete evidence,
 and ambiguous implementations remain manual.
 
+An unresolved, unused registration can likewise become a derived removal when
+the Map proves zero implementation candidates, zero uses, one exact Make
+declaration, and at least one other uniquely resolved declaration from the
+same provider. The last guard prevents Plan from emptying a configured
+provider or treating two stale entries as proof for each other. Mixed
+replacement cases, active or ambiguous entries, duplicate token spellings,
+and removals that do not close the complete constraint remain manual.
+
 An asserted `edit_json_pointer` operation handles reviewed manifest and export
 table changes without replacing or reformatting the whole file. It names one
 source-locked file, one RFC 6901 pointer, the exact expected old JSON value (or

@@ -196,6 +196,37 @@ try {
   );
   run(["verify", "--root", surfaceRoot, "--check"]);
 
+  fs.writeFileSync(
+    path.join(surfaceRoot, "Makefile"),
+    fs.readFileSync(path.join(surfaceRoot, "Makefile"), "utf8")
+      .replace("WASM_EXPORTS = _core_sum", "WASM_EXPORTS = _core_sum _core_add"),
+  );
+  const removalPlan = path.join(artifacts, "surface-removal-plan.json");
+  const removalPatch = path.join(artifacts, "surface-removal-patch.json");
+  run([
+    "plan", "FFI-SURFACE", "--root", surfaceRoot,
+    "--output", removalPlan,
+  ]);
+  const removalDocument = JSON.parse(fs.readFileSync(removalPlan, "utf8"));
+  assert.equal(removalDocument.items.length, 1);
+  assert.equal(removalDocument.items[0].executable, true);
+  assert.equal(removalDocument.items[0].provenance, "derived");
+  assert.equal(
+    removalDocument.items[0].statement,
+    "Remove stale provider registration core_add from Makefile.",
+  );
+  assert.equal(removalDocument.items[0].operation.replacement_token, "");
+  run([
+    "act", removalPlan, "--root", surfaceRoot, "--format", "json",
+    "--output", removalPatch,
+  ]);
+  run(["apply", removalPatch, "--root", surfaceRoot]);
+  assert.doesNotMatch(
+    fs.readFileSync(path.join(surfaceRoot, "Makefile"), "utf8"),
+    /_core_add/,
+  );
+  run(["verify", "FFI-SURFACE", "--root", surfaceRoot, "--check"]);
+
   fs.cpSync(
     path.join(repository, "test/fixtures/plan_act/surface_registration"),
     registrationRoot,
