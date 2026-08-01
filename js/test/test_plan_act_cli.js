@@ -45,6 +45,9 @@ const assertedCreateRoot = fs.mkdtempSync(
 const requiredEdgeRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-required-edge-"),
 );
+const forbiddenEdgeRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-forbidden-edge-"),
+);
 const redirectRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-redirect-"),
 );
@@ -525,6 +528,126 @@ try {
     "VALUE = 1\n",
   );
   run(["verify", "--root", requiredEdgeRoot, "--check"]);
+
+  fs.writeFileSync(
+    path.join(forbiddenEdgeRoot, "archbird.json"),
+    JSON.stringify({
+      project: "node-plan-act-forbidden-edge",
+      layers: [{
+        name: "python",
+        language: "python",
+        globs: ["*.py"],
+        import_roots: ["."],
+      }],
+      constraints: {
+        "FORBIDDEN-IMPORT": {
+          kind: "forbidden_file_edges",
+          edges: [{
+            source: "consumer.py",
+            kind: "import",
+            target: "provider.py",
+          }],
+          from_paths: ["consumer.py"],
+          to_paths: ["provider.py"],
+          kinds: ["import"],
+          owner: "architecture",
+          rationale: "The consumer does not import this provider.",
+        },
+      },
+    }),
+  );
+  const forbiddenEdgeConsumer = path.join(forbiddenEdgeRoot, "consumer.py");
+  const forbiddenEdgeBefore =
+    "import provider\n\n\ndef consume():\n    return provider.VALUE\n";
+  fs.writeFileSync(forbiddenEdgeConsumer, forbiddenEdgeBefore);
+  fs.writeFileSync(
+    path.join(forbiddenEdgeRoot, "provider.py"),
+    "VALUE = 1\n",
+  );
+  const forbiddenEdgePlan = path.join(
+    artifacts,
+    "forbidden-edge-plan.json",
+  );
+  const forbiddenEdgeAct = path.join(artifacts, "forbidden-edge-act.json");
+  const forbiddenEdgeInvalid = path.join(
+    artifacts,
+    "forbidden-edge-invalid.py",
+  );
+  const forbiddenEdgeSubmitted = path.join(
+    artifacts,
+    "forbidden-edge-consumer.py",
+  );
+  run(["plan", "--root", forbiddenEdgeRoot, "--output", forbiddenEdgePlan]);
+  const forbiddenEdgePlanBytes = fs.readFileSync(forbiddenEdgePlan);
+  const forbiddenEdgeDocument = JSON.parse(forbiddenEdgePlanBytes);
+  const forbiddenEdgeItem = forbiddenEdgeDocument.items[0];
+  assert.deepEqual(forbiddenEdgeItem.operation, {
+    action: "remove_dependency",
+    relation: "import",
+    source_path: "consumer.py",
+    target_path: "provider.py",
+  });
+  assert.equal(forbiddenEdgeItem.executable, false);
+  assert.match(
+    run([
+      "act", forbiddenEdgePlan, "--root", forbiddenEdgeRoot,
+    ], 2).stderr.toString("utf8"),
+    /manual or blocked item/,
+  );
+  fs.writeFileSync(
+    forbiddenEdgeInvalid,
+    forbiddenEdgeBefore.replace("VALUE", "VALUE + 0"),
+  );
+  assert.match(
+    run([
+      "act", forbiddenEdgePlan, "--root", forbiddenEdgeRoot,
+      "--submit", `${forbiddenEdgeItem.id}=${forbiddenEdgeInvalid}`,
+    ], 2).stderr.toString("utf8"),
+    /fresh Verification has a failing constraint/,
+  );
+  assert.equal(
+    fs.readFileSync(forbiddenEdgeConsumer, "utf8"),
+    forbiddenEdgeBefore,
+  );
+  fs.writeFileSync(
+    forbiddenEdgeSubmitted,
+    "def consume():\n    return 1\n",
+  );
+  const forbiddenEdgePatch = run([
+    "act", forbiddenEdgePlan, "--root", forbiddenEdgeRoot,
+    "--submit", `${forbiddenEdgeItem.id}=${forbiddenEdgeSubmitted}`,
+    "--format", "patch",
+  ]).stdout.toString("utf8");
+  assert.match(forbiddenEdgePatch, /-import provider/);
+  assert.equal(
+    fs.readFileSync(forbiddenEdgeConsumer, "utf8"),
+    forbiddenEdgeBefore,
+  );
+  run([
+    "act", forbiddenEdgePlan, "--root", forbiddenEdgeRoot,
+    "--submit", `${forbiddenEdgeItem.id}=${forbiddenEdgeSubmitted}`,
+    "--format", "json", "--output", forbiddenEdgeAct,
+  ]);
+  assert.deepEqual(fs.readFileSync(forbiddenEdgePlan), forbiddenEdgePlanBytes);
+  const acceptedForbiddenEdge = JSON.parse(
+    fs.readFileSync(forbiddenEdgeAct, "utf8"),
+  );
+  assert.equal(acceptedForbiddenEdge.acceptance.status, "satisfied");
+  assert.deepEqual(
+    acceptedForbiddenEdge.executors[0].reads,
+    ["consumer.py"],
+  );
+  assert.deepEqual(
+    acceptedForbiddenEdge.executors[0].writes,
+    ["consumer.py"],
+  );
+  assert.equal(acceptedForbiddenEdge.transitions[0].kind, "modify");
+  run(["apply", forbiddenEdgeAct, "--root", forbiddenEdgeRoot]);
+  assert.equal(
+    fs.readFileSync(forbiddenEdgeConsumer, "utf8"),
+    fs.readFileSync(forbiddenEdgeSubmitted, "utf8"),
+  );
+  run(["verify", "--root", forbiddenEdgeRoot, "--check"]);
 
   fs.writeFileSync(
     path.join(root, "api.js"),
@@ -1044,7 +1167,7 @@ try {
     "Git-derived planning mutated the working tree",
   );
   const observedDocument = JSON.parse(fs.readFileSync(observedPlan, "utf8"));
-  assert.equal(observedDocument.schema_version, 6);
+  assert.equal(observedDocument.schema_version, 7);
   assert.equal(observedDocument.items.length, 1);
   assert.equal(observedDocument.items[0].provenance, "derived");
   assert.equal(observedDocument.items[0].executable, true);
@@ -1241,6 +1364,7 @@ try {
   fs.rmSync(assertedRoot, { force: true, recursive: true });
   fs.rmSync(assertedCreateRoot, { force: true, recursive: true });
   fs.rmSync(requiredEdgeRoot, { force: true, recursive: true });
+  fs.rmSync(forbiddenEdgeRoot, { force: true, recursive: true });
   fs.rmSync(redirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptRedirectRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptUnobservedRoot, { force: true, recursive: true });

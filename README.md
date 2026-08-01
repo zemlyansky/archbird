@@ -764,6 +764,13 @@ An exact missing `required_file_edge` similarly becomes an input-required
 relation kind, and optional relation name. A reviewed source-file submission
 must produce that edge in the fresh Map; an unchanged or unrelated edit is
 rejected with zero worktree writes.
+An exact current `forbidden_file_edges` violation between two mapped files
+becomes the symmetric input-required `remove_dependency` objective. Plan
+records the exact source, target, and relation without choosing replacement
+semantics. Reviewed source content must remove the forbidden relation from the
+fresh Map; preserving the edge rejects the complete Act with zero worktree
+writes. Aggregated component edges, incomplete evidence, and external or
+unmapped targets remain on the reviewed redirect/manual path.
 `redirect_dependency` and `declare_symbol` currently follow this boundary end
 to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores the exhaustive
 edge ProjectionPlan, exact relation, affected source paths, and symbol
@@ -786,7 +793,8 @@ edits.
 Low-level asserted operations currently include `replace_range`,
 `delete_file`, `move_file`, and `edit_json_pointer`. They are useful for
 bounded edits supplied by a developer or agent, but are not the model for
-derived Plan operations. `create_file` and `add_dependency` are
+derived Plan operations. `create_file`, `add_dependency`, and
+`remove_dependency` are
 language-neutral, input-required Plan objectives; exact content belongs to Act
 submission.
 
@@ -935,13 +943,14 @@ function body, replacement dependency, package target, or test.
 
 For file and component dependency issues, the exhaustive edge projection also
 retains each exact inducing import, include, call, or semantic-reference site.
-A generated manual item exposes those sites with fact identity, line, UTF-8
-byte range, expected text, and source SHA-256 when the provider supplies a
-nonempty editable span. A zero-width semantic anchor remains explicit evidence
-and a non-executable reason, not a fabricated text edit. This bounds the
-locations a developer, agent, or structured executor must inspect without
-pretending that the observed forbidden edge determines its intended
-replacement route.
+An exact mapped forbidden file edge can therefore retain a neutral removal
+objective. Broader issues produce a manual item exposing sites with fact
+identity, line, UTF-8 byte range, expected text, and source SHA-256 when the
+provider supplies a nonempty editable span. A zero-width semantic anchor
+remains explicit evidence and a non-executable reason, not a fabricated text
+edit. This bounds the locations a developer, agent, or structured executor
+must inspect without pretending that an aggregated forbidden edge determines
+its intended replacement route.
 
 Act first rebuilds the current Map and Verify result. Their project,
 input, configuration, producer, policy, and result identities must match the

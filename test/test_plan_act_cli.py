@@ -702,7 +702,7 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
         )
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 6)
+        self.assertEqual(plan["schema_version"], 7)
         canonical_before_map = json.dumps(
             json.loads(before_map),
             allow_nan=False,
@@ -2262,6 +2262,25 @@ class PlanActCliTest(unittest.TestCase):
         run("verify", "--root", str(self.root), "--check")
         self.run_surface_gates(self.root)
 
+    def test_component_edge_without_replacement_remains_manual(self) -> None:
+        shutil.copytree(REDIRECT_FIXTURE, self.root, dirs_exist_ok=True)
+        plan_path = self.plan_path("component-edge-manual-plan.json")
+        run(
+            "plan",
+            "UI-STORAGE-BOUNDARY",
+            "--root",
+            str(self.root),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        self.assertEqual(plan["items"][0]["operation"]["action"], "manual")
+        self.assertIn(
+            "intended replacement route",
+            " ".join(plan["items"][0]["non_executable_reasons"]),
+        )
+
     def configure_python_dependency_redirect(
         self, *, observed_replacement: bool = True, multiple_imports: bool = False
     ) -> None:
@@ -2687,7 +2706,7 @@ class PlanActCliTest(unittest.TestCase):
         plan_path = self.plan_path("neutral-api-plan.json")
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 6)
+        self.assertEqual(plan["schema_version"], 7)
         self.assertEqual(len(plan["items"]), 3)
         self.assertTrue(all(not item["executable"] for item in plan["items"]))
 
@@ -3214,7 +3233,7 @@ class PlanActCliTest(unittest.TestCase):
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan_bytes = plan_path.read_bytes()
         plan = json.loads(plan_bytes)
-        self.assertEqual(plan["schema_version"], 6)
+        self.assertEqual(plan["schema_version"], 7)
         self.assertEqual(len(plan["items"]), 1)
         item = plan["items"][0]
         self.assertEqual(
@@ -3375,6 +3394,147 @@ class PlanActCliTest(unittest.TestCase):
         ).stdout.decode()
         self.assertIn("+import provider", patch)
         self.assertEqual(consumer.read_text(), "def consume():\n    return 1\n")
+        run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={submitted}",
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+        )
+        self.assertEqual(plan_path.read_bytes(), plan_bytes)
+        act = json.loads(act_path.read_bytes())
+        self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(act["executors"][0]["reads"], ["consumer.py"])
+        self.assertEqual(act["executors"][0]["writes"], ["consumer.py"])
+        self.assertEqual(act["transitions"][0]["kind"], "modify")
+
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertEqual(consumer.read_text(), submitted.read_text())
+        self.assertEqual(provider.read_text(), "VALUE = 1\n")
+        verification = json.loads(
+            run(
+                "verify",
+                "--root",
+                str(self.root),
+                "--format",
+                "json",
+                "--check",
+            ).stdout
+        )
+        self.assertEqual(verification["summary"]["constraints"]["pass"], 1)
+
+    def test_forbidden_file_edge_compiles_to_reviewed_dependency_removal(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "FORBIDDEN-IMPORT": {
+                    "kind": "forbidden_file_edges",
+                    "edges": [
+                        {
+                            "source": "consumer.py",
+                            "kind": "import",
+                            "target": "provider.py",
+                        }
+                    ],
+                    "from_paths": ["consumer.py"],
+                    "to_paths": ["provider.py"],
+                    "kinds": ["import"],
+                    "owner": "architecture",
+                    "rationale": "The consumer does not import this provider.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+        )
+        consumer = self.root / "consumer.py"
+        provider = self.root / "provider.py"
+        before = "import provider\n\n\ndef consume():\n    return provider.VALUE\n"
+        consumer.write_text(before)
+        provider.write_text("VALUE = 1\n")
+        plan_path = self.plan_path("forbidden-edge-plan.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan_bytes = plan_path.read_bytes()
+        plan = json.loads(plan_bytes)
+        self.assertEqual(plan["schema_version"], 7)
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertEqual(
+            item["operation"],
+            {
+                "action": "remove_dependency",
+                "relation": "import",
+                "source_path": "consumer.py",
+                "target_path": "provider.py",
+            },
+        )
+        self.assertFalse(item["executable"])
+        report = run(
+            "plan",
+            "--root",
+            str(self.root),
+            "--format",
+            "markdown",
+        ).stdout.decode()
+        self.assertIn(
+            "Remove forbidden import dependency from consumer.py to "
+            "provider.py.",
+            report,
+        )
+        self.assertIn("- Source path: `consumer.py`", report)
+        self.assertIn("- Target path: `provider.py`", report)
+        self.assertIn("- Relation: `import`", report)
+        blocked = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            expected=2,
+        )
+        self.assertIn(b"manual or blocked item", blocked.stderr)
+
+        unchanged = self.plan_path("forbidden-edge-unchanged.py")
+        unchanged.write_text(before.replace("VALUE", "VALUE + 0"))
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={unchanged}",
+            expected=2,
+        )
+        self.assertIn(
+            b"fresh Verification has a failing constraint", rejected.stderr
+        )
+        self.assertEqual(consumer.read_text(), before)
+
+        submitted = self.plan_path("consumer-without-provider.py")
+        submitted.write_text("def consume():\n    return 1\n")
+        patch = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={submitted}",
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn("-import provider", patch)
+        self.assertEqual(consumer.read_text(), before)
+        act_path = self.plan_path("forbidden-edge-act.json")
         run(
             "act",
             str(plan_path),

@@ -378,6 +378,19 @@ static int validate_operation(const AbValue *value, int *out_manual,
            !ab_value_equal(ab_value_member(value, "source_path"),
                            ab_value_member(value, "target_path"));
   }
+  if (text_is(action, "remove_dependency")) {
+    static const char *const fields[] = {"action", "relation", "source_path",
+                                         "target_path"};
+    *out_manual = 1;
+    return object_exact(value, fields, 4) &&
+           literal_selector(ab_value_member(value, "relation")) &&
+           ab_artifact_repository_literal_path(
+               ab_value_member(value, "source_path")) &&
+           ab_artifact_repository_literal_path(
+               ab_value_member(value, "target_path")) &&
+           !ab_value_equal(ab_value_member(value, "source_path"),
+                           ab_value_member(value, "target_path"));
+  }
   if (text_is(action, "delete_file")) {
     static const char *const fields[] = {"action", "path", "source_sha256"};
     return object_exact(value, fields, 3) &&
@@ -795,7 +808,7 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
     return ARCHBIRD_OK;
   schema = ab_value_member(&plan->document, "schema_version");
   provenance = ab_value_member(&plan->document, "provenance");
-  if (!safe_integer(schema, &schema_number) || schema_number != 6 ||
+  if (!safe_integer(schema, &schema_number) || schema_number != 7 ||
       !text_is(ab_value_member(&plan->document, "artifact"), "plan") ||
       (!text_is(provenance, "derived") && !text_is(provenance, "asserted")) ||
       !validate_tool(ab_value_member(&plan->document, "tool")) ||

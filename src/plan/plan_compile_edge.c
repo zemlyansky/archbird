@@ -605,6 +605,76 @@ static ArchbirdStatus append_missing_edge_item(
   return status;
 }
 
+static ArchbirdStatus append_forbidden_file_edge_item(
+    ArchbirdEngine *engine, const AbValue *map, AbPlanItemBuilder *builder,
+    const AbValue *constraint, const AbPlanFindingGroup *group,
+    const AbProjectionData *actual, int *out_supported) {
+  const AbValue *assertion = field(constraint, "assert");
+  const AbValue *finding = group ? group->representative : NULL;
+  const AbProjectionItem *relation = relation_item(actual, finding);
+  const AbValue *kind = item_attribute(relation, "kind");
+  const AbValue *source = item_attribute(relation, "source");
+  const AbValue *target = item_attribute(relation, "target");
+  AbBuffer operation;
+  AbPlanItemSpec spec;
+  const char *reasons[] = {
+      "The forbidden dependency requires a reviewed source edit."};
+  char statement[1024];
+  int length;
+  ArchbirdStatus status;
+  *out_supported = 0;
+  if (!ab_artifact_text_is(assertion, "forbidden_edges") || !group ||
+      !ab_plan_finding_current(finding) || !projection_complete(actual) ||
+      !relation || !string_is(&relation->state, "current") ||
+      !literal_selector(kind) || !ab_artifact_repository_literal_path(source) ||
+      !ab_artifact_repository_literal_path(target) ||
+      ab_value_equal(source, target) || !map_has_file(map, source) ||
+      !map_has_file(map, target))
+    return ARCHBIRD_OK;
+  ab_buffer_init(&operation, engine);
+  status =
+      literal(&operation, "{\"action\":\"remove_dependency\",\"relation\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&operation, kind);
+  if (status == ARCHBIRD_OK)
+    status = literal(&operation, ",\"source_path\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&operation, source);
+  if (status == ARCHBIRD_OK)
+    status = literal(&operation, ",\"target_path\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&operation, target);
+  if (status == ARCHBIRD_OK)
+    status = literal(&operation, "}");
+  length = snprintf(statement, sizeof(statement),
+                    "Remove forbidden %.*s dependency from %.*s to %.*s.",
+                    (int)kind->as.text.length, kind->as.text.data,
+                    (int)source->as.text.length, source->as.text.data,
+                    (int)target->as.text.length, target->as.text.data);
+  if (status == ARCHBIRD_OK &&
+      (length < 0 || (size_t)length >= sizeof(statement)))
+    status = archbird_error_set(
+        engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+        "plan compilation: forbidden-edge statement is too long");
+  if (status == ARCHBIRD_OK) {
+    memset(&spec, 0, sizeof(spec));
+    spec.constraint = constraint;
+    spec.findings = group->rows;
+    spec.finding_count = group->count;
+    spec.statement = statement;
+    spec.provenance = "derived";
+    spec.operation = &operation;
+    spec.executable = 0;
+    spec.reasons = reasons;
+    spec.reason_count = 1;
+    status = ab_plan_item_builder_append(builder, &spec);
+  }
+  ab_buffer_free(&operation);
+  if (status == ARCHBIRD_OK)
+    *out_supported = 1;
+  return status;
+}
+
 ArchbirdStatus ab_plan_compile_edge_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
     AbPlanItemBuilder *builder, const AbValue *constraint,
@@ -635,10 +705,18 @@ ArchbirdStatus ab_plan_compile_edge_constraint(
       return status;
     }
   }
-  for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++)
+  for (index = 0; status == ARCHBIRD_OK && index < groups.count; index++) {
+    int supported = 0;
+    if (ab_artifact_text_is(select, "file_edges"))
+      status = append_forbidden_file_edge_item(engine, map, builder, constraint,
+                                               &groups.groups[index], actual,
+                                               &supported);
+    if (status != ARCHBIRD_OK || supported)
+      continue;
     status = append_edge_item(engine, project, map, builder, constraint,
                               &groups.groups[index], definition, actual,
                               redirects, redirect_used);
+  }
   ab_plan_finding_groups_free(engine, &groups);
   return status;
 }

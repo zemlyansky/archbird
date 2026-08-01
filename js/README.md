@@ -476,6 +476,10 @@ An exact missing `required_file_edge` becomes a neutral `add_dependency`
 objective over its source, target, relation, and optional name. Submit reviewed
 source-file content with the same `--submit` interface; fresh Map and Verify
 must observe the requested edge before Act is accepted.
+An exact current `forbidden_file_edges` violation between mapped files becomes
+the symmetric neutral `remove_dependency` objective. Reviewed source bytes
+must remove the relation from the fresh after-Map. Component edges, incomplete
+evidence, and external or unmapped targets remain redirect/manual work.
 
 ```bash
 npx archbird plan --format markdown
@@ -520,8 +524,9 @@ Older exact `replace_range`, `delete_file`, `move_file`,
 available for bounded developer- or agent-authored edits. They are not the
 model for derived Plan operators. An exact `required_paths` issue becomes a
 path-only, input-required `create_file` objective; pass reviewed bytes through
-`act --submit ITEM=FILE`, not through Plan. `add_dependency` follows the same
-input-required boundary for one exact existing source file. An asserted
+`act --submit ITEM=FILE`, not through Plan. `add_dependency` and
+`remove_dependency` follow the same input-required boundary for one exact
+existing source file. An asserted
 `edit_json_pointer` operation changes one reviewed
 manifest/export-table value under an exact source hash, RFC 6901 pointer, and
 expected old JSON value without reformatting the complete file. A derived

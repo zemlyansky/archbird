@@ -18,7 +18,7 @@
     "unknowns"
   ],
   "properties": {
-    "schema_version": {"const": 6},
+    "schema_version": {"const": 7},
     "artifact": {"const": "plan"},
     "provenance": {"$ref": "#/$defs/provenance"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -716,6 +716,23 @@
         }
       }
     },
+    "removeDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "A language-independent forbidden file-edge objective. Reviewed source bytes are executor input to Act; fresh Verification proves that the forbidden relation was removed.",
+      "required": ["action", "relation", "source_path", "target_path"],
+      "properties": {
+        "action": {"const": "remove_dependency"},
+        "relation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[^*?\\[\\]{}]+$"
+        },
+        "source_path": {"$ref": "#/$defs/repositoryLiteralPath"},
+        "target_path": {"$ref": "#/$defs/repositoryLiteralPath"}
+      }
+    },
     "candidateSite": {
       "type": "object",
       "additionalProperties": false,
@@ -778,6 +795,7 @@
         {"$ref": "#/$defs/addSymbol"},
         {"$ref": "#/$defs/addTestRoute"},
         {"$ref": "#/$defs/addDependency"},
+        {"$ref": "#/$defs/removeDependency"},
         {"$ref": "#/$defs/renameSymbol"},
         {"$ref": "#/$defs/redirectDependency"},
         {"$ref": "#/$defs/manual"}
@@ -845,7 +863,8 @@
                         "add_symbol",
                         "add_test_route",
                         "create_file",
-                        "manual"
+                        "manual",
+                        "remove_dependency"
                       ]
                     }
                   },
@@ -871,7 +890,8 @@
                       "add_symbol",
                       "add_test_route",
                       "create_file",
-                      "manual"
+                      "manual",
+                      "remove_dependency"
                     ]
                   }
                 },

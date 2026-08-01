@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 const sha = (character: string): string => character.repeat(64);
 
 const plan = {
-  schema_version: 6,
+  schema_version: 7,
   artifact: "plan",
   provenance: "derived",
   tool: {
@@ -263,6 +263,34 @@ test("Plan add_dependency is an exact input-required objective", () => {
   assert.equal(validate(dependency), false);
   dependency.items[0].operation.relation = "import";
   dependency.items[0].operation.source_path = "src/*.py";
+  assert.equal(validate(dependency), false);
+});
+
+test("Plan remove_dependency is an exact input-required objective", () => {
+  const validate = validator("plan");
+  const dependency = structuredClone(plan);
+  dependency.items[0].executable = false;
+  dependency.items[0].non_executable_reasons = [
+    "The forbidden dependency requires a reviewed source edit.",
+  ];
+  dependency.items[0].operation = {
+    action: "remove_dependency",
+    relation: "import",
+    source_path: "src/consumer.py",
+    target_path: "src/provider.py",
+  };
+  assert.equal(
+    validate(dependency),
+    true,
+    JSON.stringify(validate.errors),
+  );
+
+  dependency.items[0].executable = true;
+  dependency.items[0].non_executable_reasons = [];
+  assert.equal(validate(dependency), false);
+  dependency.items[0].executable = false;
+  dependency.items[0].non_executable_reasons = ["review"];
+  dependency.items[0].operation.target_path = "src/*.py";
   assert.equal(validate(dependency), false);
 });
 

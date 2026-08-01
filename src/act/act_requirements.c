@@ -91,7 +91,8 @@ static ArchbirdStatus collect_item(
     if (path && submission)
       return ab_artifact_text_is(action, "create_file")
                  ? add_path(engine, absent, absent_count, path)
-             : ab_artifact_text_is(action, "add_dependency")
+             : ab_artifact_text_is(action, "add_dependency") ||
+                     ab_artifact_text_is(action, "remove_dependency")
                  ? add_path(engine, present, present_count, path)
                  : add_path(engine, observe, observe_count, path);
     return reject(engine, ARCHBIRD_POLICY_REJECTED,
