@@ -387,7 +387,7 @@ setup(
                     )
                     for name, digest in tree_sitter_digests.items()
                 ],
-                ("ARCHBIRD_VERSION", '"0.0.1"'),
+                ("ARCHBIRD_VERSION", f'"{_version()}"'),
                 *[
                     (f"ARCHBIRD_HAVE_TREE_SITTER_{name}", "1")
                     for name, _directory in TREE_SITTER_PACKS

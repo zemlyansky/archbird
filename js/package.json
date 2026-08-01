@@ -1,6 +1,6 @@
 {
   "name": "archbird",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Map codebase architecture, check its rules, and verify coordinated changes",
   "author": "Anton Zemlyansky",
   "license": "Apache-2.0",

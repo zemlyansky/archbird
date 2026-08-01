@@ -10,7 +10,7 @@ from typing import Any
 from .schema import read_schema, schema_names
 
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 
 @lru_cache(maxsize=1)

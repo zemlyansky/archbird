@@ -15,7 +15,7 @@
 #endif
 
 #ifndef ARCHBIRD_VERSION
-#define ARCHBIRD_VERSION "0.0.1"
+#define ARCHBIRD_VERSION "0.0.2"
 #endif
 
 typedef struct WasmOutput {
@@ -47,6 +47,7 @@ static size_t wasm_error_length;
 static size_t wasm_error_offset = ARCHBIRD_NO_OFFSET;
 static ArchbirdStatus wasm_status = ARCHBIRD_OK;
 static int wasm_verification_blocking;
+static ArchbirdActApplyState wasm_act_apply_state;
 static ArchbirdJsonPointerEditResult wasm_json_pointer_edit_result;
 static ArchbirdMakeVariableTokenEditResult wasm_make_variable_token_edit_result;
 static ArchbirdMakeVariableTokenInsertResult
@@ -63,6 +64,7 @@ static void result_reset(void) {
   wasm_error_offset = ARCHBIRD_NO_OFFSET;
   wasm_status = ARCHBIRD_OK;
   wasm_verification_blocking = 0;
+  wasm_act_apply_state = ARCHBIRD_ACT_APPLY_READY;
   archbird_json_pointer_edit_result_init(&wasm_json_pointer_edit_result);
   archbird_make_variable_token_edit_result_init(
       &wasm_make_variable_token_edit_result);
@@ -230,6 +232,10 @@ AB_WASM_EXPORT int ab_wasm_last_status(void) { return (int)wasm_status; }
 
 AB_WASM_EXPORT int ab_wasm_verification_blocking(void) {
   return wasm_verification_blocking;
+}
+
+AB_WASM_EXPORT int ab_wasm_act_apply_state(void) {
+  return (int)wasm_act_apply_state;
 }
 
 AB_WASM_EXPORT size_t ab_wasm_json_pointer_edit_start(void) {
@@ -1129,6 +1135,126 @@ ab_wasm_query_plan_compile(const uint8_t *config, size_t config_length,
         engine, config, config_length, query_id, query_id_length,
         overrides_length ? overrides : NULL, overrides_length, flags,
         output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_plan_validate(const uint8_t *plan,
+                                         size_t plan_length) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(plan_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_plan_validate(engine, plan, plan_length);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_plan_render_markdown(const uint8_t *plan,
+                                                size_t plan_length) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(plan_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_plan_render_markdown(engine, plan, plan_length,
+                                           output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int
+ab_wasm_plan_compile(uintptr_t handle, const uint8_t *map, size_t map_length,
+                     const uint8_t *verification, size_t verification_length,
+                     const uint8_t *before_map, size_t before_map_length,
+                     const uint8_t *request, size_t request_length,
+                     uint32_t flags) {
+  WasmProject *owned = checked_project(handle);
+  ArchbirdStatus status;
+  result_reset();
+  if (!owned)
+    return (int)invalid_argument("invalid Wasm project handle");
+  status = archbird_plan_compile(
+      owned->engine, owned->project, map, map_length,
+      before_map_length ? before_map : NULL, before_map_length, verification,
+      verification_length, request_length ? request : NULL, request_length,
+      flags, output_write, &wasm_output);
+  return (int)result_finish(owned->engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_act_validate(const uint8_t *act, size_t act_length) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(act_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_act_validate(engine, act, act_length);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_plan_source_requirements(const uint8_t *plan,
+                                                    size_t plan_length,
+                                                    const uint8_t *submissions,
+                                                    size_t submissions_length,
+                                                    uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(plan_length, submissions_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_plan_source_requirements(
+        engine, plan, plan_length, submissions, submissions_length, flags,
+        output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_act_source_requirements(const uint8_t *act,
+                                                   size_t act_length,
+                                                   uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(act_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_act_source_requirements(engine, act, act_length, flags,
+                                              output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_act_materialize(
+    uintptr_t handle, const uint8_t *plan, size_t plan_length,
+    const uint8_t *map, size_t map_length, const uint8_t *verification,
+    size_t verification_length, const uint8_t *metadata, size_t metadata_length,
+    const uint8_t *submissions, size_t submissions_length, uint32_t flags) {
+  WasmProject *owned = checked_project(handle);
+  ArchbirdStatus status;
+  result_reset();
+  if (!owned)
+    return (int)invalid_argument("invalid Wasm project handle");
+  status = archbird_act_materialize(
+      owned->engine, owned->project, plan, plan_length, map, map_length,
+      verification, verification_length, metadata, metadata_length, submissions,
+      submissions_length, flags, output_write, &wasm_output);
+  return (int)result_finish(owned->engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_act_accept(
+    const uint8_t *act, size_t act_length, const uint8_t *before_map,
+    size_t before_map_length, const uint8_t *after_map, size_t after_map_length,
+    const uint8_t *verification, size_t verification_length, uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(larger_input(act_length, before_map_length),
+                   larger_input(after_map_length, verification_length)),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_act_accept(engine, act, act_length, before_map,
+                                 before_map_length, after_map, after_map_length,
+                                 verification, verification_length, flags,
+                                 output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int ab_wasm_act_preflight_apply(const uint8_t *act,
+                                               size_t act_length,
+                                               const uint8_t *metadata,
+                                               size_t metadata_length) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_saved_artifact(
+      larger_input(act_length, metadata_length), &engine);
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_act_preflight_apply(engine, act, act_length, metadata,
+                                     metadata_length, &wasm_act_apply_state);
   return stateless_end(engine, status);
 }
 

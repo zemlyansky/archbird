@@ -10,7 +10,7 @@
 #include <string.h>
 
 #ifndef ARCHBIRD_VERSION
-#define ARCHBIRD_VERSION "0.0.1"
+#define ARCHBIRD_VERSION "0.0.2"
 #endif
 
 typedef struct NodeProject {

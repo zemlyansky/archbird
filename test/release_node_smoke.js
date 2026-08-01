@@ -9,8 +9,10 @@ if (process.argv.length !== 5) {
 const packageRoot = path.resolve(process.argv[2]);
 const archbird = require(packageRoot);
 const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json")));
-if (metadata.version !== "0.0.1") {
-  throw new Error(`unexpected version: ${metadata.version}`);
+if (metadata.version !== archbird.VERSION) {
+  throw new Error(
+    `package/native version mismatch: ${metadata.version} != ${archbird.VERSION}`,
+  );
 }
 const project = archbird.Project.fromConfig(path.resolve(process.argv[3]), {
   root: path.resolve(process.argv[4]),

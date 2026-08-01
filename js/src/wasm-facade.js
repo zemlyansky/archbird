@@ -797,8 +797,130 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
             overridesInput.pointer,
             overridesInput.length,
             boolFlags(pretty),
+        )),
+      );
+    },
+    planValidate: (plan) =>
+      oneInput(plan, "_ab_wasm_plan_validate"),
+    planRenderMarkdown: (plan) =>
+      oneInput(plan, "_ab_wasm_plan_render_markdown"),
+    planCompile(
+      handle,
+      map,
+      verification,
+      beforeMap,
+      request,
+      pretty = false,
+    ) {
+      const pointer = checkedProject(handle);
+      return withInputs(
+        [map, verification, beforeMap, request],
+        ([mapInput, verificationInput, beforeMapInput, requestInput]) =>
+          result(module._ab_wasm_plan_compile(
+            pointer,
+            mapInput.pointer,
+            mapInput.length,
+            verificationInput.pointer,
+            verificationInput.length,
+            beforeMapInput.pointer,
+            beforeMapInput.length,
+            requestInput.pointer,
+            requestInput.length,
+            boolFlags(pretty),
           )),
       );
+    },
+    actValidate: (act) =>
+      oneInput(act, "_ab_wasm_act_validate"),
+    planSourceRequirements(plan, submissions, pretty = false) {
+      return withInputs(
+        [plan, submissions],
+        ([planInput, submissionsInput]) =>
+          result(module._ab_wasm_plan_source_requirements(
+            planInput.pointer,
+            planInput.length,
+            submissionsInput.pointer,
+            submissionsInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
+    actSourceRequirements: (act, pretty = false) =>
+      oneInput(
+        act,
+        "_ab_wasm_act_source_requirements",
+        boolFlags(pretty),
+      ),
+    actMaterialize(
+      handle,
+      plan,
+      map,
+      verification,
+      metadata,
+      submissions,
+      pretty = false,
+    ) {
+      const pointer = checkedProject(handle);
+      return withInputs(
+        [plan, map, verification, metadata, submissions],
+        ([
+          planInput,
+          mapInput,
+          verificationInput,
+          metadataInput,
+          submissionsInput,
+        ]) =>
+          result(module._ab_wasm_act_materialize(
+            pointer,
+            planInput.pointer,
+            planInput.length,
+            mapInput.pointer,
+            mapInput.length,
+            verificationInput.pointer,
+            verificationInput.length,
+            metadataInput.pointer,
+            metadataInput.length,
+            submissionsInput.pointer,
+            submissionsInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
+    actAccept(
+      act,
+      beforeMap,
+      afterMap,
+      verification,
+      pretty = false,
+    ) {
+      return withInputs(
+        [act, beforeMap, afterMap, verification],
+        ([actInput, beforeMapInput, afterMapInput, verificationInput]) =>
+          result(module._ab_wasm_act_accept(
+            actInput.pointer,
+            actInput.length,
+            beforeMapInput.pointer,
+            beforeMapInput.length,
+            afterMapInput.pointer,
+            afterMapInput.length,
+            verificationInput.pointer,
+            verificationInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
+    actPreflightApply(act, metadata) {
+      withInputs(
+        [act, metadata],
+        ([actInput, metadataInput]) =>
+          result(module._ab_wasm_act_preflight_apply(
+            actInput.pointer,
+            actInput.length,
+            metadataInput.pointer,
+            metadataInput.length,
+          )),
+      );
+      return module._ab_wasm_act_apply_state();
     },
     constraintsEvaluate(config, map, resolution, request, pretty = false) {
       return withInputs(

@@ -6,14 +6,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
-if (process.argv.length !== 6) {
-  throw new Error("usage: release_node_cli_smoke.js CLI REPOSITORY_ROOT WORK ENGINE");
+if (process.argv.length !== 7) {
+  throw new Error(
+    "usage: release_node_cli_smoke.js CLI REPOSITORY_ROOT WORK ENGINE VERSION",
+  );
 }
 
 const cli = path.resolve(process.argv[2]);
 const repository = path.resolve(process.argv[3]);
 const work = path.resolve(process.argv[4]);
 const engine = process.argv[5];
+const version = process.argv[6];
 fs.mkdirSync(work, { recursive: true });
 
 function run(arguments_, { expected = 0 } = {}) {
@@ -30,7 +33,7 @@ function run(arguments_, { expected = 0 } = {}) {
   return completed.stdout;
 }
 
-assert.equal(run(["--version"]).trim(), "0.0.1");
+assert.equal(run(["--version"]).trim(), version);
 const support = JSON.parse(run(["support"]));
 assert.equal(support.engine.kind, engine);
 assert.equal(support.core_implementation_sha256.length, 64);

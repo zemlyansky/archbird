@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import tempfile
 
@@ -305,7 +306,24 @@ def repository_implementation_digest() -> str:
     return digest
 
 
-def _node_gypi(paths: tuple[str, ...]) -> bytes:
+def _package_version(package: Path, target_name: str) -> str:
+    if target_name == "node":
+        version = json.loads(
+            (package / "package.json").read_text(encoding="utf-8")
+        ).get("version")
+    else:
+        match = re.search(
+            r'^version\s*=\s*"([^"]+)"',
+            (package / "pyproject.toml").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        version = match.group(1) if match else None
+    if not isinstance(version, str) or not version:
+        raise RuntimeError(f"{target_name} package has no version")
+    return version
+
+
+def _node_gypi(paths: tuple[str, ...], version: str) -> bytes:
     implementation, lexical, tree_sitter, scip = _implementation_digests(paths)
     sources = [
         f"csrc/{path}"
@@ -345,7 +363,7 @@ def _node_gypi(paths: tuple[str, ...]) -> bytes:
         [
             f'ARCHBIRD_IMPLEMENTATION_SHA256="{implementation}"',
             f'ARCHBIRD_SCIP_IMPLEMENTATION_SHA256="{scip}"',
-            'ARCHBIRD_VERSION="0.0.1"',
+            f'ARCHBIRD_VERSION="{version}"',
             "TREE_SITTER_REUSE_ALLOCATOR=1",
             "_DEFAULT_SOURCE=1",
             "HAVE_CONFIG_H",
@@ -447,7 +465,12 @@ def sync(target_name: str) -> Path:
     package, binding, artifact = targets[target_name]
     target = package / "csrc"
     paths = _repository_files(binding)
-    generated = {"archbird.gypi": _node_gypi(paths)} if target_name == "node" else {}
+    version = _package_version(package, target_name)
+    generated = (
+        {"archbird.gypi": _node_gypi(paths, version)}
+        if target_name == "node"
+        else {}
+    )
     expected = _manifest(artifact, paths, generated)
     _copy_legal(package)
     if _current(target, expected):

@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 import json
+from importlib.metadata import version
 from pathlib import Path
 import sys
 
 import archbird
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         raise SystemExit("usage: release_python_smoke.py CONFIG ROOT")
     config = Path(sys.argv[1]).resolve()
     root = Path(sys.argv[2]).resolve()
     config_json = config.read_bytes()
-    if archbird.__version__ != "0.0.1":
+    if archbird.__version__ != version("archbird"):
         raise AssertionError(f"unexpected version: {archbird.__version__}")
     if archbird.PATTERN_CONTRACT_VERSION != 1:
         raise AssertionError("unexpected configured-pattern contract version")

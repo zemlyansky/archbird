@@ -10,11 +10,12 @@ const {
   sharedChromium,
 } = require("./browser_harness");
 
-if (process.argv.length !== 3) {
-  throw new Error("usage: run_browser_release.js BROWSER_ROOT");
+if (process.argv.length !== 4) {
+  throw new Error("usage: run_browser_release.js BROWSER_ROOT VERSION");
 }
 
 const root = path.resolve(process.argv[2]);
+const version = process.argv[3];
 async function main() {
   const environment = browserEnvironment(root);
   Object.assign(process.env, environment);
@@ -60,7 +61,7 @@ async function main() {
       project: "browser-release",
       sameLineKinds: ["declaration", "function"],
       semanticEdges: 1,
-      version: "0.0.1",
+      version,
     };
     if (JSON.stringify(parsed) !== JSON.stringify(expected)) {
       throw new Error(`unexpected browser result: ${result}`);

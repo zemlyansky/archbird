@@ -2310,8 +2310,6 @@ writer.commit()
             pass
         else:
             raise AssertionError("native Python OKF replaced a curated bundle")
-    if archbird.__version__ != "0.0.1":
-        raise AssertionError("unexpected Python distribution version")
     if archbird.PATTERN_CONTRACT_VERSION != 1:
         raise AssertionError("unexpected configured-pattern contract version")
     if archbird.PATTERN_CONTRACT != "archbird-pcre2-v1":

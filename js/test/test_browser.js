@@ -16,6 +16,9 @@ const repository = path.resolve(process.argv[3]);
 const wasmBinary = process.argv[4]
   ? path.resolve(process.argv[4])
   : path.join(packageRoot, "wasm/archbird.wasm");
+const packageVersion = JSON.parse(
+  fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+).version;
 const { createBrowserArchbird } = require(path.join(packageRoot, "src/browser.js"));
 
 function markedNames(relative, name) {
@@ -35,7 +38,24 @@ function markedNames(relative, name) {
     wasmBinary: fs.readFileSync(wasmBinary),
   });
   assert.equal(archbird.ENGINE.kind, "wasm");
-  assert.equal(archbird.VERSION, "0.0.1");
+  assert.equal(archbird.VERSION, packageVersion);
+  for (const method of [
+    "planValidate",
+    "planRenderMarkdown",
+    "planCompile",
+    "actValidate",
+    "planSourceRequirements",
+    "actSourceRequirements",
+    "actMaterialize",
+    "actAccept",
+    "actPreflightApply",
+  ]) {
+    assert.equal(
+      typeof archbird.core[method],
+      "function",
+      `Wasm core is missing ${method}`,
+    );
+  }
   assert.deepEqual(
     archbird.core.unifiedDiff(
       Buffer.from("same\nold\n"),

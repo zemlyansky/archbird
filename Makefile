@@ -13,6 +13,8 @@ AUDITWHEEL ?= auditwheel
 TWINE ?= twine
 MANYLINUX_PLATFORM ?= manylinux_2_17_x86_64
 RELEASE_SOURCE_DATE_EPOCH ?= 946684800
+PY_VERSION := $(shell $(PYTHON) tools/check_versions.py --print python)
+JS_VERSION := $(shell $(PYTHON) tools/check_versions.py --print node)
 NATIVE_BUILD ?= build/native
 NATIVE_ASAN_BUILD ?= build/native-asan
 NATIVE_WARNING_BUILD ?= build/native-warnings
@@ -27,10 +29,10 @@ EMSCRIPTEN_CACHE ?= $(CURDIR)/build/emscripten-cache
 PYTHON_NATIVE := $(CURDIR)/py/archbird/_native.py
 NODE_NATIVE := $(CURDIR)/js/build/Release/_native.node
 PY_RELEASE_RAW ?= $(CURDIR)/build/release-py-raw
-PY_RAW_WHEEL = $(PY_RELEASE_RAW)/archbird-0.0.1-*-linux_*.whl
-PY_MANYLINUX_WHEEL = $(RELEASE_DIR)/archbird-0.0.1-*manylinux*.whl
-PY_SDIST = $(RELEASE_DIR)/archbird-0.0.1.tar.gz
-JS_PACKAGE = $(RELEASE_DIR)/archbird-0.0.1.tgz
+PY_RAW_WHEEL = $(PY_RELEASE_RAW)/archbird-$(PY_VERSION)-*-linux_*.whl
+PY_MANYLINUX_WHEEL = $(RELEASE_DIR)/archbird-$(PY_VERSION)-*manylinux*.whl
+PY_SDIST = $(RELEASE_DIR)/archbird-$(PY_VERSION).tar.gz
+JS_PACKAGE = $(RELEASE_DIR)/archbird-$(JS_VERSION).tgz
 JS_RELEASE_SMOKE = $(CURDIR)/build/release-node-smoke
 JS_BROWSER_SMOKE = $(CURDIR)/build/release-browser-smoke
 APP_BROWSER_SMOKE = $(CURDIR)/build/app-browser
@@ -50,12 +52,15 @@ NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Isrc/api -Isrc/base -Isrc/evidence -Isrc
 	-Isrc/evidence/syntax/tree_sitter \
 	-Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter/lib/src \
 	-Ivendor/tree-sitter-c/src
-.PHONY: test verify evaluation-test schema-snapshots build-c build-py editable-install test-py build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
+.PHONY: test verify version-check evaluation-test schema-snapshots build-c build-py editable-install test-py build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
 	native-warnings native-wasm-smoke native-fuzz-smoke native-json-corpus native-sha256-vectors native-analyze \
 	native-boundaries release-py release-js release clean \
 	release-check
 
-test: evaluation-test schema-snapshots native-test test-py test-js app-test app-live-test app-py-live-test
+test: version-check evaluation-test schema-snapshots native-test test-py test-js app-test app-live-test app-py-live-test
+
+version-check:
+	$(PYTHON) tools/check_versions.py
 
 schema-snapshots:
 	$(PYTHON) tools/sync_schemas.py --check python node
@@ -310,7 +315,7 @@ native-boundaries:
 
 release-py: export SOURCE_DATE_EPOCH := $(RELEASE_SOURCE_DATE_EPOCH)
 release-py: export TMPDIR := $(RELEASE_TMP)
-release-py: app-test
+release-py: version-check app-test
 	$(PYTHON) tools/sync_schemas.py python
 	$(PYTHON) tools/sync_csrc.py python
 	$(PYTHON) tools/stage_app.py python
@@ -328,14 +333,14 @@ release-py: app-test
 	$(PYTHON) test/check_python_wheel.py \
 		$(PY_MANYLINUX_WHEEL) py/archbird
 	$(PYTHON) tools/canonicalize_sdist.py \
-		$(PY_RELEASE_RAW)/archbird-0.0.1.tar.gz \
+		$(PY_RELEASE_RAW)/archbird-$(PY_VERSION).tar.gz \
 		--epoch $(RELEASE_SOURCE_DATE_EPOCH)
-	command cp $(PY_RELEASE_RAW)/archbird-0.0.1.tar.gz $(PY_SDIST)
+	command cp $(PY_RELEASE_RAW)/archbird-$(PY_VERSION).tar.gz $(PY_SDIST)
 	$(PYTHON) tools/stage_app.py python --clean
 
 release-js: export SOURCE_DATE_EPOCH := $(RELEASE_SOURCE_DATE_EPOCH)
 release-js: export TMPDIR := $(RELEASE_TMP)
-release-js: app-test
+release-js: version-check app-test
 	command mkdir -p $(RELEASE_TMP)
 	$(PYTHON) tools/sync_schemas.py node
 	$(PYTHON) tools/sync_csrc.py node
@@ -352,7 +357,7 @@ release-js: app-test
 	cd js && $(NODE) scripts/clean-staged.js
 
 release-check: export TMPDIR := $(BUILD_TMP)
-release-check: release-py release-js
+release-check: version-check release-py release-js
 	$(TWINE) check $(PY_MANYLINUX_WHEEL) $(PY_SDIST)
 	$(PYTHON) test/check_release_archives.py \
 		--forbid-prefix "$(CURDIR)" \
@@ -363,12 +368,12 @@ release-check: release-py release-js
 	command rm -rf $(PY_SDIST_SMOKE)
 	command mkdir -p $(PY_SDIST_SMOKE)/wheel
 	$(PYTHON) -m tarfile -e $(PY_SDIST) $(PY_SDIST_SMOKE)
-	cd $(PY_SDIST_SMOKE)/archbird-0.0.1 && \
+	cd $(PY_SDIST_SMOKE)/archbird-$(PY_VERSION) && \
 		$(PYTHON) -m build --wheel \
 		--outdir $(PY_SDIST_SMOKE)/wheel
 	$(PYTHON) test/check_python_wheel.py \
 		$(PY_SDIST_SMOKE)/wheel/*.whl \
-		$(PY_SDIST_SMOKE)/archbird-0.0.1/archbird
+		$(PY_SDIST_SMOKE)/archbird-$(PY_VERSION)/archbird
 	command rm -rf $(PY_RELEASE_SMOKE)
 	$(PYTHON) -m venv $(PY_RELEASE_SMOKE)
 	$(PY_RELEASE_SMOKE)/bin/python -m pip install \
@@ -390,10 +395,10 @@ release-check: release-py release-js
 		test/fixtures/map_base/archbird.json test/fixtures/map_base
 	$(NODE) test/release_node_cli_smoke.js \
 		$(JS_RELEASE_SMOKE)/node_modules/.bin/archbird \
-		$(CURDIR) $(JS_RELEASE_SMOKE)/cli native
+		$(CURDIR) $(JS_RELEASE_SMOKE)/cli native $(JS_VERSION)
 	$(NODE) test/release_node_cli_smoke.js \
 		$(JS_RELEASE_SMOKE)/node_modules/.bin/archbird \
-		$(CURDIR) $(JS_RELEASE_SMOKE)/cli wasm
+		$(CURDIR) $(JS_RELEASE_SMOKE)/cli wasm $(JS_VERSION)
 	$(NODE) test/test_packaged_live_cli.js \
 		$(JS_RELEASE_SMOKE)/node_modules/.bin/archbird \
 		test/fixtures/map_base $(JS_RELEASE_SMOKE)/live
@@ -406,7 +411,7 @@ release-check: release-py release-js
 	command cp test/browser_release.html $(JS_BROWSER_SMOKE)/index.html
 	command cp $(JS_RELEASE_SMOKE)/node_modules/archbird/wasm/archbird.wasm \
 		$(JS_BROWSER_SMOKE)/archbird.wasm
-	$(NODE) test/run_browser_release.js $(JS_BROWSER_SMOKE)
+	$(NODE) test/run_browser_release.js $(JS_BROWSER_SMOKE) $(JS_VERSION)
 	cd $(JS_RELEASE_SMOKE)/node_modules/archbird && \
 		$(NPM) run build:native
 	ARCHBIRD_ENGINE=native \
@@ -417,7 +422,7 @@ release-check: release-py release-js
 
 release: release-check
 
-verify: evaluation-test schema-snapshots native-test test-py test-js app-browser-test native-analyze native-warnings
+verify: version-check evaluation-test schema-snapshots native-test test-py test-js app-browser-test native-analyze native-warnings
 	$(PYTHON) -m compileall -q \
 		-x '(^|/)test/(fixtures|fuzz/corpus)(/|$$)' \
 		py/archbird py/tests test
