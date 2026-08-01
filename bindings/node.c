@@ -214,6 +214,8 @@ static char *get_nullable_string(napi_env env, napi_value value,
                                  size_t *out_length, int *out_is_null) {
   napi_value null_value;
   bool is_null = false;
+  *out_length = 0;
+  *out_is_null = 0;
   if (napi_get_null(env, &null_value) != napi_ok ||
       napi_strict_equals(env, value, null_value, &is_null) != napi_ok) {
     napi_throw_error(env, "ARCHBIRD_NAPI", "could not inspect nullable string");

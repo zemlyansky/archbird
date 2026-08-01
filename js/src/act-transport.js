@@ -30,11 +30,12 @@ function relativePath(value) {
 
 function repositoryRoot(value) {
   const requested = path.resolve(value);
-  const metadata = fs.lstatSync(requested);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-    throw new Error("repository root must be a non-symlink directory");
+  const resolved = fs.realpathSync(requested);
+  const metadata = fs.lstatSync(resolved);
+  if (!metadata.isDirectory()) {
+    throw new Error("repository root must resolve to a directory");
   }
-  return fs.realpathSync(requested);
+  return resolved;
 }
 
 function candidate(root, relative) {

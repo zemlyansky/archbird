@@ -40,6 +40,13 @@ def _candidate(root: Path, relative: str) -> Path:
     return root.joinpath(*PurePosixPath(relative).parts)
 
 
+def _repository_root(root: Path) -> Path:
+    resolved = root.resolve(strict=True)
+    if not resolved.is_dir():
+        raise OSError("repository root must resolve to a directory")
+    return resolved
+
+
 def _check_parents(root: Path, relative: str) -> None:
     cursor = root
     for part in PurePosixPath(relative).parts[:-1]:
@@ -110,7 +117,7 @@ def _require_absent(root: Path, relative: str) -> None:
 def observe_source_requirements(
     root: Path, requirements_json: bytes
 ) -> bytes:
-    root = root.resolve()
+    root = _repository_root(root)
     document = json.loads(requirements_json)
     if not isinstance(document, dict) or set(document) != {
         "files",
@@ -184,7 +191,7 @@ def observe_plan_sources(
 
 def observe_act_sources(root: Path, act_json: bytes) -> bytes:
     requirements = _native.act_source_requirements(act_json)
-    root = root.resolve()
+    root = _repository_root(root)
     document = json.loads(requirements)
     if not isinstance(document, dict) or set(document) != {"paths"}:
         raise ValueError("native Act source requirements have an invalid shape")
@@ -259,6 +266,7 @@ def act_overlay(act_json: bytes) -> Mapping[str, bytes | None]:
 def render_act(
     root: Path, act_json: bytes, *, format: str, pretty: bool = False
 ) -> bytes:
+    root = _repository_root(root)
     _native.act_validate(act_json)
     if format == "json":
         return _native.json_canonicalize(act_json, pretty=pretty)
@@ -449,7 +457,7 @@ def _commit_act(root: Path, act_json: bytes) -> None:
 
 
 def apply_accepted_act(root: Path, act_json: bytes) -> int:
-    root = root.resolve()
+    root = _repository_root(root)
     metadata = observe_act_sources(root, act_json)
     if _native.act_preflight_apply(act_json, metadata) == 1:
         return 0

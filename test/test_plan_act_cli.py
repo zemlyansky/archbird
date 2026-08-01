@@ -4036,6 +4036,19 @@ class PlanActCliTest(unittest.TestCase):
             completed.stderr.decode(),
         )
 
+    def test_act_transport_accepts_a_resolved_repository_root_symlink(
+        self,
+    ) -> None:
+        link = self.artifacts / "repository-root"
+        link.symlink_to(self.root, target_is_directory=True)
+        observed = json.loads(
+            act_transport.observe_source_requirements(
+                link,
+                b'{"files":[],"absent":[],"observe":[]}',
+            )
+        )
+        self.assertEqual(observed, {"absent": [], "files": []})
+
     def test_asserted_create_and_move_apply_as_one_accepted_act(self) -> None:
         self.configure(
             {

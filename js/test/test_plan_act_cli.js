@@ -14,7 +14,9 @@ const repository = path.resolve(process.argv[3]);
 process.env.ARCHBIRD_ENGINE = "native";
 process.env.ARCHBIRD_NATIVE_ADDON = addon;
 const archbird = require(path.join(repository, "js/src/index.js"));
+const actTransport = require(path.join(repository, "js/src/act-transport.js"));
 const root = fs.mkdtempSync(path.join(repository, "build/node-plan-act-"));
+const rootLink = `${root}-link`;
 const artifacts = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-artifacts-"),
 );
@@ -208,6 +210,17 @@ function configureEcmascriptRedirect(
 }
 
 try {
+  fs.symlinkSync(root, rootLink, "dir");
+  assert.deepEqual(
+    JSON.parse(
+      actTransport.observeSourceRequirements(
+        rootLink,
+        Buffer.from('{"files":[],"absent":[],"observe":[]}'),
+      ).toString("utf8"),
+    ),
+    { absent: [], files: [] },
+  );
+
   fs.writeFileSync(
     path.join(root, "archbird.json"),
     JSON.stringify({
@@ -1353,6 +1366,7 @@ try {
 
   process.stdout.write("node Plan/Act CLI lifecycle passed\n");
 } finally {
+  fs.rmSync(rootLink, { force: true });
   fs.rmSync(root, { force: true, recursive: true });
   fs.rmSync(artifacts, { force: true, recursive: true });
   fs.rmSync(surfaceRoot, { force: true, recursive: true });

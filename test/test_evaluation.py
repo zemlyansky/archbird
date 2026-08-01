@@ -108,9 +108,21 @@ command = sys.argv[1]
 variant = os.environ.get('ARCHBIRD_EVAL_TEST_VARIANT')
 out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 out.parent.mkdir(parents=True, exist_ok=True)
+if command in ('plan', 'act'):
+  historical_root = pathlib.Path(
+    sys.argv[sys.argv.index('--root') + 1]
+  ).resolve()
+  assert (historical_root / 'src/a.py').read_text() == (
+    'def target():\\n    return 1\\n\\ndef helper():\\n'
+    '    return target()\\n'
+  )
+  assert not (historical_root / 'tests/test_regression.py').exists()
+  if command == 'act':
+    assert pathlib.Path(
+      sys.argv[sys.argv.index('--config') + 1]
+    ).name == 'archbird.json'
 if command == 'config':
   value = {
-    'schema_version':2,
     'project':'fixture',
     'layers':[{'globs':['**/*.py'],'language':'python','name':'python'}],
   }
@@ -165,11 +177,13 @@ elif command == 'verify':
   }]}
 elif command == 'plan':
   value = {'artifact':'plan','schema_version':7,'items':[{
+    'executable':True,
     'id':'test-regression',
     'origins':[{'issue_fingerprint':'4'*64}],
     'operation':{
-      'action':'manual',
+      'action':'create_file',
       'candidate_paths':['tests/test_regression.py'],
+      'path':'tests/test_regression.py',
     },
     'acceptance':{'constraints':['HISTORICAL-INTRODUCED-TESTS']},
   }]}
@@ -588,6 +602,11 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert second["cases"][0]["metrics"]["verification_false_findings"] == 0
     assert second["cases"][0]["metrics"]["verification_transition_accuracy"] == 1.0
     assert second["cases"][0]["metrics"]["plan_generation_success"] == 1.0
+    assert second["cases"][0]["metrics"]["plan_items"] == 1
+    assert second["cases"][0]["metrics"]["plan_executable_items"] == 1
+    assert second["cases"][0]["metrics"]["plan_non_executable_items"] == 0
+    assert second["cases"][0]["metrics"]["plan_manual_items"] == 0
+    assert second["cases"][0]["metrics"]["plan_executable_fraction"] == 1.0
     assert second["cases"][0]["metrics"]["plan_origin_recall"] == 1.0
     assert second["cases"][0]["metrics"]["plan_after_acceptance_satisfied"] == 1.0
     assert second["cases"][0]["metrics"]["act_preview_available"] == 1.0

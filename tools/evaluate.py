@@ -1511,6 +1511,7 @@ def run_historical_verification(
     introduced: object,
     archbird: Path,
     case_output: Path,
+    before_root: Path,
     before_map: Path,
     after_map: Path,
     project_configuration: Mapping[str, Any],
@@ -1654,7 +1655,7 @@ def run_historical_verification(
             "--map",
             str(verification_root / "before/map.json"),
             "--root",
-            str(act_root),
+            str(before_root),
             "--output",
             str(plan_path),
         ],
@@ -1706,7 +1707,25 @@ def run_historical_verification(
                 for value in acceptance.get("constraints", [])
                 if isinstance(value, str)
             )
+    executable_items = [
+        item for item in plan_items if item.get("executable") is True
+    ]
+    manual_items = [
+        item
+        for item in plan_items
+        if isinstance(item.get("operation"), dict)
+        and item["operation"].get("action") == "manual"
+    ]
     metrics["plan_generation_success"] = float(plan is not None)
+    metrics["plan_items"] = len(plan_items)
+    metrics["plan_executable_items"] = len(executable_items)
+    metrics["plan_non_executable_items"] = (
+        len(plan_items) - len(executable_items)
+    )
+    metrics["plan_manual_items"] = len(manual_items)
+    metrics["plan_executable_fraction"] = (
+        len(executable_items) / len(plan_items) if plan_items else None
+    )
     metrics["plan_origin_recall"] = (
         len(expected_fingerprints.intersection(plan_fingerprints))
         / len(expected_fingerprints)
@@ -1733,7 +1752,9 @@ def run_historical_verification(
                 "act",
                 str(plan_path),
                 "--root",
-                str(act_root),
+                str(before_root),
+                "--config",
+                str(verification_root / "before/archbird.json"),
                 "--format",
                 "json",
                 "--output",
@@ -1761,6 +1782,7 @@ def run_historical_verification(
             if preview is not None
             else {
                 "applicability": "unknown",
+                "observation": preview_observation,
                 "reason": "Act preview was not produced",
             }
         ),
@@ -1774,7 +1796,10 @@ def run_historical_verification(
                 "applicable" if plan is not None else "unknown"
             ),
             "artifact": plan_artifact,
+            "executable_items": len(executable_items),
             "items": len(plan_items),
+            "manual_items": len(manual_items),
+            "non_executable_items": len(plan_items) - len(executable_items),
             "observation": plan_observation,
         },
         "verification": {
@@ -1823,6 +1848,7 @@ def run_case(
     repository_info = case["repository"]
     repository = repository_path(root, str(repository_info["id"]))
     worktree = root / "work/checkouts" / case_id
+    before_action_worktree = root / "work/checkouts" / f"{case_id}-plan-before"
     case_output = stage / "cases" / case_id
     case_output.mkdir(parents=True, exist_ok=True)
     try:
@@ -2111,12 +2137,18 @@ def run_case(
                 "split": entry["split"],
                 "status": "error",
             }
+        checkout(
+            repository,
+            before_action_worktree,
+            str(repository_info["before_revision"]),
+        )
         verification_track, verification_metrics, verification_runtime = (
             run_historical_verification(
                 case_id,
                 truth.get("introduced_tests", []),
                 archbird,
                 case_output,
+                before_action_worktree,
                 map_path,
                 after_map_path,
                 config,
@@ -2155,6 +2187,7 @@ def run_case(
             ),
         }
     finally:
+        remove_checkout(repository, before_action_worktree)
         remove_checkout(repository, worktree)
 
 
@@ -2391,6 +2424,13 @@ def run_evaluation(
 
 
 def metric_direction(name: str) -> str | None:
+    if name in {
+        "act_preview_available",
+        "plan_acceptance_coverage",
+        "plan_executable_fraction",
+        "plan_generation_success",
+    }:
+        return "higher"
     if any(
         token in name
         for token in ("recall", "mrr", "precision", "accuracy", "satisfied")
@@ -2405,6 +2445,13 @@ def metric_direction(name: str) -> str | None:
 
 
 def metric_family(name: str) -> str:
+    if name in {
+        "act_preview_available",
+        "plan_acceptance_coverage",
+        "plan_executable_fraction",
+        "plan_generation_success",
+    }:
+        return "quality"
     if any(token in name for token in ("duration", "rss")):
         return "performance"
     if "distractor" in name:

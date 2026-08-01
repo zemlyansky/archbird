@@ -1345,13 +1345,35 @@ endif()
 endif()
 
 if(ARCHBIRD_BUILD_NODE)
-find_path(ARCHBIRD_NODE_API_INCLUDE_DIR node_api.h
-  HINTS
-    /usr/local/include/node
-    /usr/include/node
-    "$ENV{NODE_INCLUDE_DIR}"
+find_program(ARCHBIRD_NODE_EXECUTABLE node)
+set(ARCHBIRD_NODE_API_HINTS
+  /usr/local/include/node
+  /usr/include/node
+  "$ENV{NODE_INCLUDE_DIR}"
 )
-if(ARCHBIRD_NODE_API_INCLUDE_DIR)
+if(ARCHBIRD_NODE_EXECUTABLE)
+  get_filename_component(ARCHBIRD_NODE_EXECUTABLE_REAL
+    "${ARCHBIRD_NODE_EXECUTABLE}" REALPATH
+  )
+  get_filename_component(ARCHBIRD_NODE_BIN_DIR
+    "${ARCHBIRD_NODE_EXECUTABLE_REAL}" DIRECTORY
+  )
+  get_filename_component(ARCHBIRD_NODE_PREFIX
+    "${ARCHBIRD_NODE_BIN_DIR}" DIRECTORY
+  )
+  list(APPEND ARCHBIRD_NODE_API_HINTS
+    "${ARCHBIRD_NODE_PREFIX}/include/node"
+  )
+endif()
+find_path(ARCHBIRD_NODE_API_INCLUDE_DIR node_api.h
+  HINTS ${ARCHBIRD_NODE_API_HINTS}
+)
+if(NOT ARCHBIRD_NODE_API_INCLUDE_DIR)
+  message(FATAL_ERROR
+    "ARCHBIRD_BUILD_NODE=ON requires Node-API headers; install Node development "
+    "headers or set NODE_INCLUDE_DIR"
+  )
+endif()
   add_library(archbird_node MODULE bindings/node.c)
   target_link_libraries(archbird_node PRIVATE archbird_native)
   target_include_directories(archbird_node PRIVATE
@@ -1360,6 +1382,9 @@ if(ARCHBIRD_NODE_API_INCLUDE_DIR)
   target_compile_definitions(archbird_node PRIVATE
     NAPI_VERSION=8 NODE_GYP_MODULE_NAME=_native
   )
+  if(ARCHBIRD_WARNINGS_AS_ERRORS AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(archbird_node PRIVATE -fanalyzer)
+  endif()
   set_target_properties(archbird_node PROPERTIES
     PREFIX ""
     SUFFIX ".node"
@@ -1372,7 +1397,6 @@ if(ARCHBIRD_NODE_API_INCLUDE_DIR)
     )
     target_link_options(archbird_node PRIVATE -fsanitize=address,undefined)
   endif()
-  find_program(ARCHBIRD_NODE_EXECUTABLE node)
   if(BUILD_TESTING AND ARCHBIRD_NODE_EXECUTABLE)
     set(ARCHBIRD_NODE_TEST_ENV)
     if(ARCHBIRD_ENABLE_SANITIZERS)
@@ -1414,7 +1438,6 @@ if(ARCHBIRD_NODE_API_INCLUDE_DIR)
       )
     endif()
   endif()
-endif()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
