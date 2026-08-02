@@ -3,13 +3,20 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const ts = require("typescript");
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
-function writeBrowserIdentities(packageRoot) {
+function writeBrowserIdentities(packageRoot, { typescriptVersion = null } = {}) {
+  const resolvedTypescriptVersion = typescriptVersion ?? require("typescript").version;
+  if (
+    typeof resolvedTypescriptVersion !== "string" ||
+    resolvedTypescriptVersion.length === 0 ||
+    resolvedTypescriptVersion.includes("\0")
+  ) {
+    throw new TypeError("typescriptVersion must be a non-empty string without NUL bytes");
+  }
   const browserPaths = [
     "src/browser.js",
     "src/providers/typescript.js",
@@ -27,7 +34,7 @@ function writeBrowserIdentities(packageRoot) {
     schema_version: 1,
     typescript_provider_sha256: sha256(Buffer.concat([
       fs.readFileSync(providerPath),
-      Buffer.from(`\0typescript:${ts.version}`),
+      Buffer.from(`\0typescript:${resolvedTypescriptVersion}`),
     ])),
   };
   const generated = path.join(packageRoot, "src/generated");

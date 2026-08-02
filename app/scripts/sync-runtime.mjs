@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
 const { writeBrowserIdentities } = require("../../js/scripts/identities.js");
+const typescriptVersion = require("typescript").version;
 const build = process.env.ARCHBIRD_WASM_BUILD || resolve(root, "build/wasm/wasm");
 const outputs = [
   [resolve(build, "archbird.wasm"), resolve(root, "app/public/archbird.wasm")],
@@ -23,7 +24,7 @@ writeFileSync(
   resolve(root, "js/wasm/.archbird-meta.json"),
   `${JSON.stringify({ artifact: "archbird-wasm-directory" })}\n`,
 );
-const identities = writeBrowserIdentities(resolve(root, "js"));
+const identities = writeBrowserIdentities(resolve(root, "js"), { typescriptVersion });
 if (!statSync(identities).isFile()) {
   throw new Error(`missing staged Archbird browser identities: ${identities}`);
 }

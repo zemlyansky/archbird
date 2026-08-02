@@ -52,7 +52,7 @@ NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Isrc/api -Isrc/base -Isrc/evidence -Isrc
 	-Isrc/evidence/syntax/tree_sitter \
 	-Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter/lib/src \
 	-Ivendor/tree-sitter-c/src
-.PHONY: test verify version-check evaluation-test schema-snapshots build-c build-py editable-install test-py build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
+.PHONY: test verify version-check evaluation-test schema-snapshots build-c build-py editable-install test-py js-dependencies build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
 	native-warnings native-wasm-smoke native-fuzz-smoke native-json-corpus native-sha256-vectors native-analyze \
 	native-boundaries release-py release-js release clean \
 	release-check
@@ -69,8 +69,9 @@ evaluation-test:
 	$(PYTHON) test/test_evaluation.py
 
 app-test: export TMPDIR := $(BUILD_TMP)
-app-test: native-wasm-smoke
+app-test: native-wasm-smoke js-dependencies
 	cd app && $(NPM) ci --ignore-scripts --no-audit --no-fund
+	$(NODE) test/test_js_identity_staging.js $(CURDIR)
 	cd app && $(NPM) test
 	cd app && $(NPM) run build
 	$(NODE) js/test/test_browser.js js $(CURDIR) \
@@ -189,8 +190,11 @@ test-py: build-py
 		$(PYTHON_NATIVE) $(CURDIR)/test/fuzz/corpus
 	$(PYTHON) test/test_self_host_policy.py
 
+js-dependencies:
+	cd js && $(NPM) ci --ignore-scripts --no-audit --no-fund
+
 build-js: export TMPDIR := $(BUILD_TMP)
-build-js:
+build-js: js-dependencies
 	command mkdir -p $(BUILD_TMP)
 	$(PYTHON) tools/sync_schemas.py --check node
 	$(PYTHON) tools/sync_csrc.py node
