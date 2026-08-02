@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 const sha = (character: string): string => character.repeat(64);
 
 const plan = {
-  schema_version: 7,
+  schema_version: 8,
   artifact: "plan",
   provenance: "derived",
   tool: {
@@ -61,7 +61,10 @@ const plan = {
         before: "def legacy():",
         replacement: "",
       } as Record<string, unknown>,
-      acceptance: { constraints: ["NO-LEGACY"] },
+      acceptance: {
+        constraints: ["NO-LEGACY"],
+        projection_deltas: [],
+      },
       unknowns: [],
       executable: true,
       non_executable_reasons: [] as string[],
@@ -72,7 +75,7 @@ const plan = {
 };
 
 const act = {
-  schema_version: 2,
+  schema_version: 4,
   artifact: "act",
   provenance: "derived",
   tool: {
@@ -107,6 +110,7 @@ const act = {
     reads: ["src/api.py"],
     writes: ["src/api.py"],
   }],
+  source_locks: [],
   transitions: [
     {
       item_ids: ["remove-legacy"],
@@ -133,6 +137,7 @@ const act = {
       { id: "NO-LEGACY", status: "pass" },
       { id: "NO-CYCLES", status: "pass" },
     ],
+    projection_deltas: [],
   },
   seal: { content_sha256: sha("0") },
 };
@@ -304,6 +309,7 @@ test("Act state cannot claim acceptance before evaluation", () => {
       status: string;
       verification_sha256: string | null;
       constraints: Array<{ id: string; status: string }>;
+      projection_deltas: unknown[];
     };
   };
   materialized.state = "materialized";
@@ -316,6 +322,7 @@ test("Act state cannot claim acceptance before evaluation", () => {
       { id: "NO-LEGACY", status: "not_evaluated" },
       { id: "NO-CYCLES", status: "not_evaluated" },
     ],
+    projection_deltas: [],
   };
   assert.equal(validate(materialized), true, JSON.stringify(validate.errors));
 

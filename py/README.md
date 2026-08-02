@@ -495,10 +495,12 @@ Absent or ambiguous test locations remain manual.
 An exact missing `required_file_edge` becomes a neutral `add_dependency`
 objective over its source, target, relation, and optional name. Submit reviewed
 source-file content with the same `--submit` interface; fresh Map and Verify
-must observe the requested edge before Act is accepted.
+must observe the requested edge before Act is accepted. Its exhaustive
+source-scoped `file_edges` delta permits only that one addition.
 An exact current `forbidden_file_edges` violation between mapped files becomes
 the symmetric neutral `remove_dependency` objective. Reviewed source bytes
-must remove the relation from the fresh after-Map. Component edges, incomplete
+must remove the relation from the fresh after-Map. Act rejects any unrelated
+edge addition or removal even when Verify passes. Component edges, incomplete
 evidence, and external or unmapped targets remain redirect/manual work.
 
 ```bash

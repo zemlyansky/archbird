@@ -4,6 +4,7 @@
 #include "artifact_validation.h"
 #include "base64.h"
 #include "model.h"
+#include "projection_internal.h"
 #include "render_internal.h"
 #include "sha256.h"
 
@@ -133,19 +134,101 @@ static int validate_constraint_result(const AbValue *value, int accepted) {
          ab_artifact_text_is(status, "not_applicable");
 }
 
-static int validate_acceptance(const AbValue *value, int accepted) {
+static int sorted_unique_strings(const AbValue *value) {
+  size_t index;
+  if (!array_value(value, 0))
+    return 0;
+  for (index = 0; index < value->as.array.count; index++) {
+    const AbValue *row = &value->as.array.items[index];
+    if (!ab_artifact_bounded_text(row, AB_ACT_MAX_METADATA, 1) ||
+        (index && ab_string_compare(&value->as.array.items[index - 1].as.text,
+                                    &row->as.text) >= 0))
+      return 0;
+  }
+  return 1;
+}
+
+static int validate_projection_definition(ArchbirdEngine *engine,
+                                          const AbValue *value) {
+  const AbValue *declared_id = ab_value_member(value, "id");
+  AbString fallback = {(char *)"act.delta", 9};
+  const AbString *id = declared_id && declared_id->kind == AB_VALUE_STRING
+                           ? &declared_id->as.text
+                           : &fallback;
+  AbProjectionPlan plan = {0};
+  ArchbirdStatus status;
+  if (!value || value->kind != AB_VALUE_OBJECT ||
+      !ab_artifact_text_is(ab_value_member(value, "select"), "file_edges"))
+    return 0;
+  status = ab_projection_plan_compile(engine, value, id, &plan);
+  ab_projection_plan_free(engine, &plan);
+  return status == ARCHBIRD_OK;
+}
+
+static int validate_projection_delta(ArchbirdEngine *engine,
+                                     const AbValue *value, int accepted) {
+  static const char *const fields[] = {
+      "projection",     "allowed_added",        "allowed_removed",
+      "status",         "before_result_sha256", "after_result_sha256",
+      "observed_added", "observed_removed"};
+  const AbValue *allowed_added;
+  const AbValue *allowed_removed;
+  const AbValue *observed_added;
+  const AbValue *observed_removed;
+  const AbValue *before_sha;
+  const AbValue *after_sha;
+  const AbValue *status;
+  size_t left;
+  size_t right;
+  if (!ab_artifact_object_exact(value, fields, 8) ||
+      !validate_projection_definition(engine,
+                                      ab_value_member(value, "projection")))
+    return 0;
+  allowed_added = ab_value_member(value, "allowed_added");
+  allowed_removed = ab_value_member(value, "allowed_removed");
+  observed_added = ab_value_member(value, "observed_added");
+  observed_removed = ab_value_member(value, "observed_removed");
+  before_sha = ab_value_member(value, "before_result_sha256");
+  after_sha = ab_value_member(value, "after_result_sha256");
+  status = ab_value_member(value, "status");
+  if (!sorted_unique_strings(allowed_added) ||
+      !sorted_unique_strings(allowed_removed) ||
+      (!allowed_added->as.array.count && !allowed_removed->as.array.count) ||
+      !sorted_unique_strings(observed_added) ||
+      !sorted_unique_strings(observed_removed))
+    return 0;
+  for (left = 0; left < allowed_added->as.array.count; left++)
+    for (right = 0; right < allowed_removed->as.array.count; right++)
+      if (ab_value_equal(&allowed_added->as.array.items[left],
+                         &allowed_removed->as.array.items[right]))
+        return 0;
+  if (!accepted)
+    return ab_artifact_text_is(status, "not_evaluated") &&
+           before_sha->kind == AB_VALUE_NULL &&
+           after_sha->kind == AB_VALUE_NULL &&
+           !observed_added->as.array.count && !observed_removed->as.array.count;
+  return ab_artifact_text_is(status, "satisfied") &&
+         ab_artifact_sha256(before_sha) && ab_artifact_sha256(after_sha) &&
+         ab_value_equal(allowed_added, observed_added) &&
+         ab_value_equal(allowed_removed, observed_removed);
+}
+
+static int validate_acceptance(ArchbirdEngine *engine, const AbValue *value,
+                               int accepted) {
   static const char *const fields[] = {"status", "verification_sha256",
-                                       "constraints"};
+                                       "constraints", "projection_deltas"};
   const AbValue *status;
   const AbValue *verification;
   const AbValue *constraints;
+  const AbValue *projection_deltas;
   size_t index;
-  if (!ab_artifact_object_exact(value, fields, 3))
+  if (!ab_artifact_object_exact(value, fields, 4))
     return 0;
   status = ab_value_member(value, "status");
   verification = ab_value_member(value, "verification_sha256");
   constraints = ab_value_member(value, "constraints");
-  if (!array_value(constraints, 0))
+  projection_deltas = ab_value_member(value, "projection_deltas");
+  if (!array_value(constraints, 0) || !array_value(projection_deltas, 0))
     return 0;
   if (accepted) {
     if (!ab_artifact_text_is(status, "satisfied") ||
@@ -165,6 +248,18 @@ static int validate_acceptance(const AbValue *value, int accepted) {
                  ->as.text,
             &ab_value_member(row, "id")->as.text) >= 0)
       return 0;
+  }
+  for (index = 0; index < projection_deltas->as.array.count; index++) {
+    size_t prior;
+    const AbValue *row = &projection_deltas->as.array.items[index];
+    if (!validate_projection_delta(engine, row, accepted))
+      return 0;
+    for (prior = 0; prior < index; prior++)
+      if (ab_value_equal(
+              ab_value_member(row, "projection"),
+              ab_value_member(&projection_deltas->as.array.items[prior],
+                              "projection")))
+        return 0;
   }
   return 1;
 }
@@ -423,7 +518,7 @@ static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
   if (!ab_artifact_object_exact(&act->document, fields, 13) ||
       !ab_artifact_safe_integer(
           ab_value_member(&act->document, "schema_version"), &schema) ||
-      schema != 3 ||
+      schema != 4 ||
       !ab_artifact_text_is(ab_value_member(&act->document, "artifact"),
                            "act") ||
       !ab_artifact_text_is(ab_value_member(&act->document, "provenance"),
@@ -442,7 +537,7 @@ static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
   if (!validate_after(act->after) ||
       (accepted && act->after->kind == AB_VALUE_NULL) ||
       (!accepted && act->after->kind != AB_VALUE_NULL) ||
-      !validate_acceptance(act->acceptance, accepted))
+      !validate_acceptance(engine, act->acceptance, accepted))
     return invalid(engine, "after-state acceptance is inconsistent");
   if (accepted &&
       !ab_value_equal(

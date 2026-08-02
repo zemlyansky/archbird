@@ -330,8 +330,8 @@ static ArchbirdStatus render_rename_operation(
     status = literal(operation, "}");
   if (status == ARCHBIRD_OK && invalid_count)
     status = reason_add(engine, reasons,
-                        "%zu symbol occurrence(s) have no current repository "
-                        "source scope.",
+                        "%zu symbol occurrence(s) are unresolved, ambiguous, "
+                        "or lack an exact current source span.",
                         invalid_count);
   if (status == ARCHBIRD_OK && !projection_complete(fact, "set"))
     status = reason_add(

@@ -176,7 +176,7 @@ elif command == 'verify':
     'status':'fail' if before else 'pass',
   }]}
 elif command == 'plan':
-  value = {'artifact':'plan','schema_version':7,'items':[{
+  value = {'artifact':'plan','schema_version':8,'items':[{
     'executable':True,
     'id':'test-regression',
     'origins':[{'issue_fingerprint':'4'*64}],
@@ -185,12 +185,15 @@ elif command == 'plan':
       'candidate_paths':['tests/test_regression.py'],
       'path':'tests/test_regression.py',
     },
-    'acceptance':{'constraints':['HISTORICAL-INTRODUCED-TESTS']},
+    'acceptance':{
+      'constraints':['HISTORICAL-INTRODUCED-TESTS'],
+      'projection_deltas':[],
+    },
   }]}
 elif command == 'act':
   value = {
     'artifact':'act',
-    'schema_version':3,
+    'schema_version':4,
     'state':'accepted',
   }
 else:

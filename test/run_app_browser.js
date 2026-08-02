@@ -29,7 +29,7 @@ function browserPlan() {
   const sha = (character) => character.repeat(64);
   const output = path.join(path.dirname(screenshot), "plan.json");
   fs.writeFileSync(output, JSON.stringify({
-    schema_version: 2,
+    schema_version: 8,
     artifact: "plan",
     provenance: "derived",
     tool: {
@@ -68,7 +68,10 @@ function browserPlan() {
         instructions: "Provide reviewed implementation code.",
         candidate_paths: ["js/index.js"],
       },
-      acceptance: { constraints: ["JAVASCRIPT-ENTRY"] },
+      acceptance: {
+        constraints: ["JAVASCRIPT-ENTRY"],
+        projection_deltas: [],
+      },
       unknowns: ["implementation-required"],
       executable: false,
       non_executable_reasons: [

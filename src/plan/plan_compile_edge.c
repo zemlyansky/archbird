@@ -16,6 +16,45 @@ static ArchbirdStatus literal(AbBuffer *buffer, const char *value) {
   return ab_buffer_append(buffer, value, strlen(value));
 }
 
+static ArchbirdStatus render_file_edge_delta(AbBuffer *output,
+                                             const AbValue *source,
+                                             const AbValue *kind,
+                                             const AbValue *target,
+                                             int addition) {
+  AbBuffer key;
+  ArchbirdStatus status;
+  ab_buffer_init(&key, output->engine);
+  status = literal(&key, "{\"kind\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&key, kind);
+  if (status == ARCHBIRD_OK)
+    status = literal(&key, ",\"source\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&key, source);
+  if (status == ARCHBIRD_OK)
+    status = literal(&key, ",\"target\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&key, target);
+  if (status == ARCHBIRD_OK)
+    status = literal(&key, "}");
+  if (status == ARCHBIRD_OK)
+    status = literal(output, "[{\"allowed_added\":[");
+  if (status == ARCHBIRD_OK && addition)
+    status = ab_buffer_json_string(output, (const char *)key.data, key.length);
+  if (status == ARCHBIRD_OK)
+    status = literal(output, "],\"allowed_removed\":[");
+  if (status == ARCHBIRD_OK && !addition)
+    status = ab_buffer_json_string(output, (const char *)key.data, key.length);
+  if (status == ARCHBIRD_OK)
+    status = literal(output, "],\"projection\":{\"from_paths\":[");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(output, source);
+  if (status == ARCHBIRD_OK)
+    status = literal(output, "],\"select\":\"file_edges\"}}]");
+  ab_buffer_free(&key);
+  return status;
+}
+
 static const AbValue *item_attribute(const AbProjectionItem *item,
                                      const char *name) {
   size_t index;
@@ -532,6 +571,7 @@ static ArchbirdStatus append_missing_edge_item(
   const AbValue *finding = group ? group->representative : NULL;
   uint64_t min_count = 0;
   AbBuffer operation;
+  AbBuffer projection_deltas;
   AbPlanItemSpec spec;
   const char *reasons[] = {
       "The required dependency does not define its source edit."};
@@ -550,6 +590,7 @@ static ArchbirdStatus append_missing_edge_item(
       !map_has_file(map, source) || !map_has_file(map, target))
     return ARCHBIRD_OK;
   ab_buffer_init(&operation, engine);
+  ab_buffer_init(&projection_deltas, engine);
   status = literal(&operation, "{\"action\":\"add_dependency\",\"relation\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&operation, relation);
@@ -567,6 +608,9 @@ static ArchbirdStatus append_missing_edge_item(
     status = ab_value_render(&operation, target);
   if (status == ARCHBIRD_OK)
     status = literal(&operation, "}");
+  if (status == ARCHBIRD_OK)
+    status =
+        render_file_edge_delta(&projection_deltas, source, relation, target, 1);
   if (name)
     length = snprintf(statement, sizeof(statement),
                       "Add required %.*s dependency from %.*s to %.*s "
@@ -594,11 +638,13 @@ static ArchbirdStatus append_missing_edge_item(
     spec.statement = statement;
     spec.provenance = "derived";
     spec.operation = &operation;
+    spec.projection_deltas = &projection_deltas;
     spec.executable = 0;
     spec.reasons = reasons;
     spec.reason_count = 1;
     status = ab_plan_item_builder_append(builder, &spec);
   }
+  ab_buffer_free(&projection_deltas);
   ab_buffer_free(&operation);
   if (status == ARCHBIRD_OK)
     *out_supported = 1;
@@ -616,6 +662,7 @@ static ArchbirdStatus append_forbidden_file_edge_item(
   const AbValue *source = item_attribute(relation, "source");
   const AbValue *target = item_attribute(relation, "target");
   AbBuffer operation;
+  AbBuffer projection_deltas;
   AbPlanItemSpec spec;
   const char *reasons[] = {
       "The forbidden dependency requires a reviewed source edit."};
@@ -632,6 +679,7 @@ static ArchbirdStatus append_forbidden_file_edge_item(
       !map_has_file(map, target))
     return ARCHBIRD_OK;
   ab_buffer_init(&operation, engine);
+  ab_buffer_init(&projection_deltas, engine);
   status =
       literal(&operation, "{\"action\":\"remove_dependency\",\"relation\":");
   if (status == ARCHBIRD_OK)
@@ -646,6 +694,9 @@ static ArchbirdStatus append_forbidden_file_edge_item(
     status = ab_value_render(&operation, target);
   if (status == ARCHBIRD_OK)
     status = literal(&operation, "}");
+  if (status == ARCHBIRD_OK)
+    status =
+        render_file_edge_delta(&projection_deltas, source, kind, target, 0);
   length = snprintf(statement, sizeof(statement),
                     "Remove forbidden %.*s dependency from %.*s to %.*s.",
                     (int)kind->as.text.length, kind->as.text.data,
@@ -664,11 +715,13 @@ static ArchbirdStatus append_forbidden_file_edge_item(
     spec.statement = statement;
     spec.provenance = "derived";
     spec.operation = &operation;
+    spec.projection_deltas = &projection_deltas;
     spec.executable = 0;
     spec.reasons = reasons;
     spec.reason_count = 1;
     status = ab_plan_item_builder_append(builder, &spec);
   }
+  ab_buffer_free(&projection_deltas);
   ab_buffer_free(&operation);
   if (status == ARCHBIRD_OK)
     *out_supported = 1;

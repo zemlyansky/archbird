@@ -18,7 +18,7 @@
     "unknowns"
   ],
   "properties": {
-    "schema_version": {"const": 7},
+    "schema_version": {"const": 8},
     "artifact": {"const": "plan"},
     "provenance": {"$ref": "#/$defs/provenance"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -191,7 +191,7 @@
     "acceptance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["constraints"],
+      "required": ["constraints", "projection_deltas"],
       "properties": {
         "constraints": {
           "type": "array",
@@ -199,6 +199,12 @@
           "maxItems": 4096,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/id"}
+        },
+        "projection_deltas": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/projectionDelta"}
         }
       }
     },
@@ -586,6 +592,43 @@
         "kinds": {"$ref": "#/$defs/nonEmptyStrings"},
         "kind_patterns": {"$ref": "#/$defs/nonEmptyStrings"},
         "name_patterns": {"$ref": "#/$defs/nonEmptyStrings"}
+      }
+    },
+    "projectionDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "An exhaustive source-scoped projection whose item-key delta is part of Plan acceptance. At least one allowed set must be nonempty; native validation owns this cross-field invariant and rejects a key present in both sets.",
+      "required": ["projection", "allowed_added", "allowed_removed"],
+      "properties": {
+        "projection": {
+          "allOf": [
+            {"$ref": "#/$defs/edgeProjection"},
+            {
+              "type": "object",
+              "properties": {"select": {"const": "file_edges"}}
+            }
+          ]
+        },
+        "allowed_added": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          }
+        },
+        "allowed_removed": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          }
+        }
       }
     },
     "redirectDependency": {

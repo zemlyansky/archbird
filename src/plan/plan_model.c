@@ -305,6 +305,32 @@ static int validate_edge_projection(const AbValue *value) {
   return 1;
 }
 
+static int validate_projection_delta(const AbValue *value) {
+  static const char *const fields[] = {"projection", "allowed_added",
+                                       "allowed_removed"};
+  const AbValue *projection;
+  const AbValue *added;
+  const AbValue *removed;
+  size_t left;
+  size_t right;
+  if (!object_exact(value, fields, 3))
+    return 0;
+  projection = ab_value_member(value, "projection");
+  added = ab_value_member(value, "allowed_added");
+  removed = ab_value_member(value, "allowed_removed");
+  if (!validate_edge_projection(projection) ||
+      !text_is(ab_value_member(projection, "select"), "file_edges") ||
+      !string_array(added, 0, 0) || !string_array(removed, 0, 0) ||
+      (!added->as.array.count && !removed->as.array.count))
+    return 0;
+  for (left = 0; left < added->as.array.count; left++)
+    for (right = 0; right < removed->as.array.count; right++)
+      if (ab_value_equal(&added->as.array.items[left],
+                         &removed->as.array.items[right]))
+        return 0;
+  return 1;
+}
+
 static int validate_symbol_projection(const AbValue *value) {
   static const char *const base_fields[] = {"select", "names"};
   static const char *const path_fields[] = {"select", "names", "paths"};
@@ -634,13 +660,15 @@ static int validate_item(const AbValue *value) {
                                        "unknowns",
                                        "executable",
                                        "non_executable_reasons"};
-  static const char *const acceptance_fields[] = {"constraints"};
+  static const char *const acceptance_fields[] = {"constraints",
+                                                  "projection_deltas"};
   const AbValue *origins;
   const AbValue *evidence;
   const AbValue *acceptance;
   const AbValue *executable;
   const AbValue *provenance;
   const AbValue *reasons;
+  const AbValue *projection_deltas;
   size_t index;
   int manual;
   int requires_asserted;
@@ -670,9 +698,14 @@ static int validate_item(const AbValue *value) {
                           &requires_asserted))
     return 0;
   acceptance = ab_value_member(value, "acceptance");
-  if (!object_exact(acceptance, acceptance_fields, 1) ||
-      !string_array(ab_value_member(acceptance, "constraints"), 1, 1))
+  projection_deltas = ab_value_member(acceptance, "projection_deltas");
+  if (!object_exact(acceptance, acceptance_fields, 2) ||
+      !string_array(ab_value_member(acceptance, "constraints"), 1, 1) ||
+      !unique_rows(projection_deltas))
     return 0;
+  for (index = 0; index < projection_deltas->as.array.count; index++)
+    if (!validate_projection_delta(&projection_deltas->as.array.items[index]))
+      return 0;
   executable = ab_value_member(value, "executable");
   reasons = ab_value_member(value, "non_executable_reasons");
   if (!boolean_value(executable) || !string_array(reasons, 0, 0))
@@ -808,7 +841,7 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
     return ARCHBIRD_OK;
   schema = ab_value_member(&plan->document, "schema_version");
   provenance = ab_value_member(&plan->document, "provenance");
-  if (!safe_integer(schema, &schema_number) || schema_number != 7 ||
+  if (!safe_integer(schema, &schema_number) || schema_number != 8 ||
       !text_is(ab_value_member(&plan->document, "artifact"), "plan") ||
       (!text_is(provenance, "derived") && !text_is(provenance, "asserted")) ||
       !validate_tool(ab_value_member(&plan->document, "tool")) ||

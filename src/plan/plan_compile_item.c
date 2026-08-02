@@ -484,7 +484,14 @@ ArchbirdStatus ab_plan_item_builder_append(AbPlanItemBuilder *builder,
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&builder->items, id_value);
   if (status == ARCHBIRD_OK)
-    status = literal(&builder->items, "]},\"depends_on\":[],\"evidence\":");
+    status = literal(&builder->items, "],\"projection_deltas\":");
+  if (status == ARCHBIRD_OK && spec->projection_deltas)
+    status = ab_buffer_append(&builder->items, spec->projection_deltas->data,
+                              spec->projection_deltas->length);
+  else if (status == ARCHBIRD_OK)
+    status = literal(&builder->items, "[]");
+  if (status == ARCHBIRD_OK)
+    status = literal(&builder->items, "},\"depends_on\":[],\"evidence\":");
   if (status == ARCHBIRD_OK)
     status = render_rows(&builder->items, evidence, evidence_count);
   if (status == ARCHBIRD_OK)

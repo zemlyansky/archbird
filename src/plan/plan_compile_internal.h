@@ -27,6 +27,7 @@ typedef struct AbPlanItemSpec {
   const char *statement;
   const char *provenance;
   const AbBuffer *operation;
+  const AbBuffer *projection_deltas;
   int executable;
   const char *const *reasons;
   size_t reason_count;

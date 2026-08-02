@@ -763,14 +763,19 @@ An exact missing `required_file_edge` similarly becomes an input-required
 `add_dependency` objective containing only the source path, target path,
 relation kind, and optional relation name. A reviewed source-file submission
 must produce that edge in the fresh Map; an unchanged or unrelated edit is
-rejected with zero worktree writes.
+rejected with zero worktree writes. Plan also records an exhaustive
+source-scoped `file_edges` projection and the one permitted item-key addition.
+Act compares the real before/after ProjectionResults and rejects any extra
+dependency addition or removal even when the selected constraint passes.
 An exact current `forbidden_file_edges` violation between two mapped files
 becomes the symmetric input-required `remove_dependency` objective. Plan
 records the exact source, target, and relation without choosing replacement
 semantics. Reviewed source content must remove the forbidden relation from the
 fresh Map; preserving the edge rejects the complete Act with zero worktree
-writes. Aggregated component edges, incomplete evidence, and external or
-unmapped targets remain on the reviewed redirect/manual path.
+writes. The same source-scoped delta contract permits only that one edge
+removal, so deleting an unrelated import is rejected independently of
+constraint closure. Aggregated component edges, incomplete evidence, and
+external or unmapped targets remain on the reviewed redirect/manual path.
 `redirect_dependency` and `declare_symbol` currently follow this boundary end
 to end. Given reviewed `--redirect OLD=NEW` intent, Plan stores the exhaustive
 edge ProjectionPlan, exact relation, affected source paths, and symbol

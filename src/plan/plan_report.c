@@ -82,6 +82,21 @@ static ArchbirdStatus render_operation_field(AbBuffer *out,
   return ab_buffer_literal(out, "\n");
 }
 
+static ArchbirdStatus render_projection_deltas(AbBuffer *out,
+                                               const AbValue *acceptance) {
+  const AbValue *rows = field(acceptance, "projection_deltas");
+  size_t index;
+  for (index = 0; rows && index < rows->as.array.count; index++) {
+    const AbValue *row = &rows->as.array.items[index];
+    REPORT_TRY(ab_buffer_literal(out, "- Allowed projection delta: add "));
+    REPORT_TRY(render_code_array(out, field(row, "allowed_added")));
+    REPORT_TRY(ab_buffer_literal(out, "; remove "));
+    REPORT_TRY(render_code_array(out, field(row, "allowed_removed")));
+    REPORT_TRY(ab_buffer_literal(out, "\n"));
+  }
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus render_item(AbBuffer *out, const AbValue *item,
                                   size_t index) {
   const AbValue *id = field(item, "id");
@@ -132,7 +147,9 @@ static ArchbirdStatus render_item(AbBuffer *out, const AbValue *item,
   REPORT_TRY(render_code_array(out, dependencies));
   REPORT_TRY(ab_buffer_literal(out, "\n- Acceptance: "));
   REPORT_TRY(render_code_array(out, field(acceptance, "constraints")));
-  REPORT_TRY(ab_buffer_literal(out, "\n- Evidence rows: "));
+  REPORT_TRY(ab_buffer_literal(out, "\n"));
+  REPORT_TRY(render_projection_deltas(out, acceptance));
+  REPORT_TRY(ab_buffer_literal(out, "- Evidence rows: "));
   REPORT_TRY(append_size(out, evidence->as.array.count));
   REPORT_TRY(ab_buffer_literal(out, "; unknowns: "));
   REPORT_TRY(append_size(out, unknowns->as.array.count));

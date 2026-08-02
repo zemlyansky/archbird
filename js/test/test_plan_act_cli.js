@@ -492,7 +492,7 @@ try {
       "act", requiredEdgePlan, "--root", requiredEdgeRoot,
       "--submit", `${requiredEdgeItem.id}=${requiredEdgeInvalid}`,
     ], 2).stderr.toString("utf8"),
-    /fresh Verification has a failing constraint/,
+    /omits a reviewed projection addition/,
   );
   assert.equal(
     fs.readFileSync(requiredEdgeConsumer, "utf8"),
@@ -616,7 +616,7 @@ try {
       "act", forbiddenEdgePlan, "--root", forbiddenEdgeRoot,
       "--submit", `${forbiddenEdgeItem.id}=${forbiddenEdgeInvalid}`,
     ], 2).stderr.toString("utf8"),
-    /fresh Verification has a failing constraint/,
+    /omits a reviewed projection removal/,
   );
   assert.equal(
     fs.readFileSync(forbiddenEdgeConsumer, "utf8"),
@@ -1180,7 +1180,7 @@ try {
     "Git-derived planning mutated the working tree",
   );
   const observedDocument = JSON.parse(fs.readFileSync(observedPlan, "utf8"));
-  assert.equal(observedDocument.schema_version, 7);
+  assert.equal(observedDocument.schema_version, 8);
   assert.equal(observedDocument.items.length, 1);
   assert.equal(observedDocument.items[0].provenance, "derived");
   assert.equal(observedDocument.items[0].executable, true);

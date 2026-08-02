@@ -22,7 +22,7 @@
     "seal"
   ],
   "properties": {
-    "schema_version": {"const": 3},
+    "schema_version": {"const": 4},
     "artifact": {"const": "act"},
     "provenance": {"const": "derived"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -371,7 +371,12 @@
     "acceptance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "verification_sha256", "constraints"],
+      "required": [
+        "status",
+        "verification_sha256",
+        "constraints",
+        "projection_deltas"
+      ],
       "properties": {
         "status": {"enum": ["not_evaluated", "satisfied"]},
         "verification_sha256": {
@@ -384,7 +389,76 @@
           "type": "array",
           "maxItems": 4096,
           "items": {"$ref": "#/$defs/constraintResult"}
+        },
+        "projection_deltas": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/projectionDelta"}
         }
+      }
+    },
+    "edgeProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["select"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "select": {"const": "file_edges"},
+        "from_paths": {"$ref": "#/$defs/paths"},
+        "to_paths": {"$ref": "#/$defs/paths"},
+        "kinds": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 65536}
+        },
+        "kind_patterns": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 65536}
+        },
+        "name_patterns": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 65536}
+        }
+      }
+    },
+    "projectionKeys": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 65536}
+    },
+    "projectionDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Native validation requires materialized rows to have null result identities and empty observed sets, accepted rows to have exact result identities and observed sets equal to the allowed sets, and every projection to be complete and exhaustive over both Maps.",
+      "required": [
+        "projection",
+        "allowed_added",
+        "allowed_removed",
+        "status",
+        "before_result_sha256",
+        "after_result_sha256",
+        "observed_added",
+        "observed_removed"
+      ],
+      "properties": {
+        "projection": {"$ref": "#/$defs/edgeProjection"},
+        "allowed_added": {"$ref": "#/$defs/projectionKeys"},
+        "allowed_removed": {"$ref": "#/$defs/projectionKeys"},
+        "status": {"enum": ["not_evaluated", "satisfied"]},
+        "before_result_sha256": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        },
+        "after_result_sha256": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        },
+        "observed_added": {"$ref": "#/$defs/projectionKeys"},
+        "observed_removed": {"$ref": "#/$defs/projectionKeys"}
       }
     },
     "seal": {

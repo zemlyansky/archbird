@@ -1084,6 +1084,186 @@ static ArchbirdStatus collect_constraint_ids(AbActContext *context,
   return ARCHBIRD_OK;
 }
 
+typedef struct AbActProjectionDelta {
+  const AbValue *projection;
+  const AbString **added;
+  size_t added_count;
+  size_t added_capacity;
+  const AbString **removed;
+  size_t removed_count;
+  size_t removed_capacity;
+} AbActProjectionDelta;
+
+static void projection_deltas_free(ArchbirdEngine *engine,
+                                   AbActProjectionDelta *values, size_t count) {
+  size_t index;
+  for (index = 0; index < count; index++) {
+    ab_free(engine, values[index].added);
+    ab_free(engine, values[index].removed);
+  }
+  ab_free(engine, values);
+}
+
+static ArchbirdStatus projection_delta_add_key(AbActContext *context,
+                                               const AbString ***values,
+                                               size_t *count, size_t *capacity,
+                                               const AbString *key) {
+  const AbString **resized;
+  size_t index;
+  size_t next;
+  for (index = 0; index < *count; index++)
+    if (ab_string_equal((*values)[index], key))
+      return ARCHBIRD_OK;
+  if (*count == AB_ACT_MAX_WORK_ITEMS)
+    return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                     "Plan acceptance contains too many projection keys");
+  if (*count == *capacity) {
+    next = *capacity ? *capacity * 2 : 4;
+    if (next > AB_ACT_MAX_WORK_ITEMS)
+      next = AB_ACT_MAX_WORK_ITEMS;
+    resized = (const AbString **)ab_realloc(context->engine, (void *)*values,
+                                            next * sizeof(*resized));
+    if (!resized)
+      return act_error(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                       "out of memory collecting projection acceptance");
+    *values = resized;
+    *capacity = next;
+  }
+  (*values)[(*count)++] = key;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus
+collect_projection_deltas(AbActContext *context, const AbPlan *plan,
+                          AbActProjectionDelta **out_values,
+                          size_t *out_count) {
+  AbActProjectionDelta *values = NULL;
+  size_t count = 0;
+  size_t item_index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  *out_values = NULL;
+  *out_count = 0;
+  for (item_index = 0;
+       status == ARCHBIRD_OK && item_index < plan->items->as.array.count;
+       item_index++) {
+    const AbValue *acceptance =
+        object_field(&plan->items->as.array.items[item_index], "acceptance");
+    const AbValue *rows = object_field(acceptance, "projection_deltas");
+    size_t row_index;
+    for (row_index = 0;
+         status == ARCHBIRD_OK && row_index < rows->as.array.count;
+         row_index++) {
+      const AbValue *row = &rows->as.array.items[row_index];
+      const AbValue *projection = object_field(row, "projection");
+      const AbValue *added = object_field(row, "allowed_added");
+      const AbValue *removed = object_field(row, "allowed_removed");
+      AbActProjectionDelta *target = NULL;
+      size_t value_index;
+      size_t key_index;
+      for (value_index = 0; value_index < count; value_index++)
+        if (ab_value_equal(values[value_index].projection, projection)) {
+          target = &values[value_index];
+          break;
+        }
+      if (!target) {
+        AbActProjectionDelta *resized;
+        if (count == AB_ACT_MAX_WORK_ITEMS) {
+          status = act_error(
+              context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+              "Plan acceptance contains too many projection definitions");
+          break;
+        }
+        resized = (AbActProjectionDelta *)ab_realloc(
+            context->engine, values, (count + 1) * sizeof(*resized));
+        if (!resized) {
+          status = act_error(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                             "out of memory collecting projection acceptance");
+          break;
+        }
+        values = resized;
+        target = &values[count++];
+        memset(target, 0, sizeof(*target));
+        target->projection = projection;
+      }
+      for (key_index = 0;
+           status == ARCHBIRD_OK && key_index < added->as.array.count;
+           key_index++)
+        status = projection_delta_add_key(
+            context, &target->added, &target->added_count,
+            &target->added_capacity, &added->as.array.items[key_index].as.text);
+      for (key_index = 0;
+           status == ARCHBIRD_OK && key_index < removed->as.array.count;
+           key_index++)
+        status = projection_delta_add_key(
+            context, &target->removed, &target->removed_count,
+            &target->removed_capacity,
+            &removed->as.array.items[key_index].as.text);
+    }
+  }
+  for (item_index = 0; status == ARCHBIRD_OK && item_index < count;
+       item_index++) {
+    AbActProjectionDelta *row = &values[item_index];
+    size_t added_index;
+    size_t removed_index;
+    if (row->added_count > 1)
+      qsort(row->added, row->added_count, sizeof(*row->added),
+            string_pointer_compare);
+    if (row->removed_count > 1)
+      qsort(row->removed, row->removed_count, sizeof(*row->removed),
+            string_pointer_compare);
+    for (added_index = 0; added_index < row->added_count; added_index++)
+      for (removed_index = 0; removed_index < row->removed_count;
+           removed_index++)
+        if (ab_string_equal(row->added[added_index],
+                            row->removed[removed_index])) {
+          status = act_error(
+              context->engine, ARCHBIRD_INVALID_SCHEMA,
+              "Plan acceptance both adds and removes one projection key");
+          break;
+        }
+  }
+  if (status != ARCHBIRD_OK) {
+    projection_deltas_free(context->engine, values, count);
+    return status;
+  }
+  *out_values = values;
+  *out_count = count;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus
+render_projection_deltas(AbBuffer *buffer, const AbActProjectionDelta *values,
+                         size_t count) {
+  size_t index;
+  ArchbirdStatus status = ab_buffer_literal(buffer, "[");
+  for (index = 0; status == ARCHBIRD_OK && index < count; index++) {
+    if (index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(
+          buffer, "{\"after_result_sha256\":null,\"allowed_added\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string_array(buffer, values[index].added,
+                                   values[index].added_count);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"allowed_removed\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string_array(buffer, values[index].removed,
+                                   values[index].removed_count);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(
+          buffer, ",\"before_result_sha256\":null,\"observed_added\":[],"
+                  "\"observed_removed\":[],\"projection\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, values[index].projection);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"status\":\"not_evaluated\"}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "]");
+  return status;
+}
+
 static ArchbirdStatus render_constraint_rows(AbBuffer *buffer,
                                              const AbString **values,
                                              size_t count,
@@ -1284,12 +1464,17 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
                                  void *user_data) {
   AbBuffer document;
   const AbString *constraint_ids[AB_ACT_MAX_WORK_ITEMS];
+  AbActProjectionDelta *projection_deltas = NULL;
   size_t constraint_count = 0;
+  size_t projection_delta_count = 0;
   size_t index;
   ArchbirdStatus status;
   ab_buffer_init(&document, context->engine);
   status =
       collect_constraint_ids(context, plan, constraint_ids, &constraint_count);
+  if (status == ARCHBIRD_OK)
+    status = collect_projection_deltas(context, plan, &projection_deltas,
+                                       &projection_delta_count);
   if (context->executor_count > 1)
     qsort(context->executors, context->executor_count,
           sizeof(*context->executors), executor_compare);
@@ -1298,6 +1483,11 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
   if (status == ARCHBIRD_OK)
     status = render_constraint_rows(&document, constraint_ids, constraint_count,
                                     "not_evaluated");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&document, ",\"projection_deltas\":");
+  if (status == ARCHBIRD_OK)
+    status = render_projection_deltas(&document, projection_deltas,
+                                      projection_delta_count);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         &document,
@@ -1317,7 +1507,7 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         &document,
-        ",\"provenance\":\"derived\",\"schema_version\":3,\"seal\":null,"
+        ",\"provenance\":\"derived\",\"schema_version\":4,\"seal\":null,"
         "\"source\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&document, plan->source);
@@ -1349,6 +1539,8 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
     status = archbird_json_canonicalize(context->engine, document.data,
                                         document.length, json_flags, write_fn,
                                         user_data);
+  projection_deltas_free(context->engine, projection_deltas,
+                         projection_delta_count);
   ab_buffer_free(&document);
   return status;
 }

@@ -40,7 +40,7 @@ int main(void) {
   const char *empty =
       "{\"artifact\":\"plan\",\"items\":[],\"objective\":\"No work.\","
       "\"preserved_constraints\":[],\"provenance\":\"derived\","
-      "\"schema_version\":7,\"source\":{\"map\":{\"configuration_sha256\":"
+      "\"schema_version\":8,\"source\":{\"map\":{\"configuration_sha256\":"
       "\"" SHA_A "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A
       "\"},\"project\":\"demo\",\"verification\":{"
@@ -50,7 +50,8 @@ int main(void) {
       "\",\"name\":\"archbird\",\"version\":\"test\"},\"unknowns\":[]}";
   const char *manual =
       "{\"artifact\":\"plan\",\"items\":[{\"acceptance\":{\"constraints\":["
-      "\"NO-EDGE\"]},\"depends_on\":[],\"evidence\":[],\"executable\":false,"
+      "\"NO-EDGE\"],\"projection_deltas\":[]},\"depends_on\":[],"
+      "\"evidence\":[],\"executable\":false,"
       "\"id\":\"item:manual\",\"non_executable_reasons\":[\"review\"],"
       "\"operation\":{\"action\":\"manual\",\"candidate_paths\":[\"src/a.c\"],"
       "\"instructions\":\"Choose a replacement.\"},\"origins\":[{"
@@ -59,7 +60,7 @@ int main(void) {
       "\"}],\"provenance\":\"derived\",\"statement\":\"Redirect edge.\","
       "\"unknowns\":[\"unknown:manual\"]}],\"objective\":\"Repair edge.\","
       "\"preserved_constraints\":[],\"provenance\":\"derived\","
-      "\"schema_version\":7,\"source\":{\"map\":{\"configuration_sha256\":"
+      "\"schema_version\":8,\"source\":{\"map\":{\"configuration_sha256\":"
       "\"" SHA_A "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A
       "\"},\"project\":\"demo\",\"verification\":{"
@@ -72,7 +73,8 @@ int main(void) {
       "unknown.\"}]}";
   const char *dangling =
       "{\"artifact\":\"plan\",\"items\":[{\"acceptance\":{\"constraints\":["
-      "\"NO-EDGE\"]},\"depends_on\":[\"item:missing\"],\"evidence\":[],"
+      "\"NO-EDGE\"],\"projection_deltas\":[]},\"depends_on\":["
+      "\"item:missing\"],\"evidence\":[],"
       "\"executable\":false,\"id\":\"item:manual\","
       "\"non_executable_reasons\":[\"review\"],\"operation\":{"
       "\"action\":\"manual\",\"candidate_paths\":[],"
@@ -82,7 +84,7 @@ int main(void) {
       "\"}],\"provenance\":\"derived\",\"statement\":\"Redirect edge.\","
       "\"unknowns\":[]}],\"objective\":\"Repair edge.\","
       "\"preserved_constraints\":[],\"provenance\":\"derived\","
-      "\"schema_version\":7,\"source\":{\"map\":{\"configuration_sha256\":"
+      "\"schema_version\":8,\"source\":{\"map\":{\"configuration_sha256\":"
       "\"" SHA_A "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A
       "\"},\"project\":\"demo\",\"verification\":{"

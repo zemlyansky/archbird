@@ -784,7 +784,7 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
         )
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 7)
+        self.assertEqual(plan["schema_version"], 8)
         canonical_before_map = json.dumps(
             json.loads(before_map),
             allow_nan=False,
@@ -2788,7 +2788,7 @@ class PlanActCliTest(unittest.TestCase):
         plan_path = self.plan_path("neutral-api-plan.json")
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 7)
+        self.assertEqual(plan["schema_version"], 8)
         self.assertEqual(len(plan["items"]), 3)
         self.assertTrue(all(not item["executable"] for item in plan["items"]))
 
@@ -3315,7 +3315,7 @@ class PlanActCliTest(unittest.TestCase):
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan_bytes = plan_path.read_bytes()
         plan = json.loads(plan_bytes)
-        self.assertEqual(plan["schema_version"], 7)
+        self.assertEqual(plan["schema_version"], 8)
         self.assertEqual(len(plan["items"]), 1)
         item = plan["items"][0]
         self.assertEqual(
@@ -3412,6 +3412,28 @@ class PlanActCliTest(unittest.TestCase):
             },
         )
         self.assertFalse(item["executable"])
+        edge_key = json.dumps(
+            {
+                "kind": "import",
+                "source": "consumer.py",
+                "target": "provider.py",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        self.assertEqual(
+            item["acceptance"]["projection_deltas"],
+            [
+                {
+                    "allowed_added": [edge_key],
+                    "allowed_removed": [],
+                    "projection": {
+                        "from_paths": ["consumer.py"],
+                        "select": "file_edges",
+                    },
+                }
+            ],
+        )
         report = run(
             "plan",
             "--root",
@@ -3422,6 +3444,10 @@ class PlanActCliTest(unittest.TestCase):
         self.assertIn("- Target path: `provider.py`", report)
         self.assertIn("- Relation: `import`", report)
         self.assertIn("- Relation name: `provider`", report)
+        self.assertIn(
+            f"- Allowed projection delta: add `{edge_key}`; remove none",
+            report,
+        )
         invalid_plan = json.loads(plan_bytes)
         invalid_plan["items"][0]["operation"]["relation"] = "imp*"
         invalid_plan_path = self.plan_path("invalid-required-edge-plan.json")
@@ -3455,7 +3481,7 @@ class PlanActCliTest(unittest.TestCase):
             expected=2,
         )
         self.assertIn(
-            b"fresh Verification has a failing constraint", rejected.stderr
+            b"omits a reviewed projection addition", rejected.stderr
         )
         self.assertEqual(consumer.read_text(), "def consume():\n    return 1\n")
 
@@ -3491,6 +3517,14 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(plan_path.read_bytes(), plan_bytes)
         act = json.loads(act_path.read_bytes())
         self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(
+            act["acceptance"]["projection_deltas"][0]["observed_added"],
+            [edge_key],
+        )
+        self.assertEqual(
+            act["acceptance"]["projection_deltas"][0]["observed_removed"],
+            [],
+        )
         self.assertEqual(act["executors"][0]["reads"], ["consumer.py"])
         self.assertEqual(act["executors"][0]["writes"], ["consumer.py"])
         self.assertEqual(act["transitions"][0]["kind"], "modify")
@@ -3542,14 +3576,21 @@ class PlanActCliTest(unittest.TestCase):
         )
         consumer = self.root / "consumer.py"
         provider = self.root / "provider.py"
-        before = "import provider\n\n\ndef consume():\n    return provider.VALUE\n"
+        before = (
+            "import other\n"
+            "import provider\n\n\n"
+            "def consume():\n"
+            "    return provider.VALUE + other.VALUE\n"
+        )
         consumer.write_text(before)
         provider.write_text("VALUE = 1\n")
+        other = self.root / "other.py"
+        other.write_text("VALUE = 2\n")
         plan_path = self.plan_path("forbidden-edge-plan.json")
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan_bytes = plan_path.read_bytes()
         plan = json.loads(plan_bytes)
-        self.assertEqual(plan["schema_version"], 7)
+        self.assertEqual(plan["schema_version"], 8)
         self.assertEqual(len(plan["items"]), 1)
         item = plan["items"][0]
         self.assertEqual(
@@ -3562,6 +3603,37 @@ class PlanActCliTest(unittest.TestCase):
             },
         )
         self.assertFalse(item["executable"])
+        provider_edge_key = json.dumps(
+            {
+                "kind": "import",
+                "source": "consumer.py",
+                "target": "provider.py",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        other_edge_key = json.dumps(
+            {
+                "kind": "import",
+                "source": "consumer.py",
+                "target": "other.py",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        self.assertEqual(
+            item["acceptance"]["projection_deltas"],
+            [
+                {
+                    "allowed_added": [],
+                    "allowed_removed": [provider_edge_key],
+                    "projection": {
+                        "from_paths": ["consumer.py"],
+                        "select": "file_edges",
+                    },
+                }
+            ],
+        )
         report = run(
             "plan",
             "--root",
@@ -3598,12 +3670,31 @@ class PlanActCliTest(unittest.TestCase):
             expected=2,
         )
         self.assertIn(
-            b"fresh Verification has a failing constraint", rejected.stderr
+            b"omits a reviewed projection removal", rejected.stderr
         )
         self.assertEqual(consumer.read_text(), before)
 
+        overbroad = self.plan_path("consumer-without-any-import.py")
+        overbroad.write_text("def consume():\n    return 1\n")
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--submit",
+            f"{item['id']}={overbroad}",
+            expected=2,
+        )
+        self.assertIn(
+            b"removes an unreviewed projection key", rejected.stderr
+        )
+        self.assertIn(other_edge_key.encode(), rejected.stderr)
+        self.assertEqual(consumer.read_text(), before)
+
         submitted = self.plan_path("consumer-without-provider.py")
-        submitted.write_text("def consume():\n    return 1\n")
+        submitted.write_text(
+            "import other\n\n\ndef consume():\n    return other.VALUE\n"
+        )
         patch = run(
             "act",
             str(plan_path),
@@ -3632,6 +3723,14 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(plan_path.read_bytes(), plan_bytes)
         act = json.loads(act_path.read_bytes())
         self.assertEqual(act["acceptance"]["status"], "satisfied")
+        self.assertEqual(
+            act["acceptance"]["projection_deltas"][0]["observed_added"],
+            [],
+        )
+        self.assertEqual(
+            act["acceptance"]["projection_deltas"][0]["observed_removed"],
+            [provider_edge_key],
+        )
         self.assertEqual(act["executors"][0]["reads"], ["consumer.py"])
         self.assertEqual(act["executors"][0]["writes"], ["consumer.py"])
         self.assertEqual(act["transitions"][0]["kind"], "modify")
@@ -3639,6 +3738,7 @@ class PlanActCliTest(unittest.TestCase):
         run("apply", str(act_path), "--root", str(self.root))
         self.assertEqual(consumer.read_text(), submitted.read_text())
         self.assertEqual(provider.read_text(), "VALUE = 1\n")
+        self.assertEqual(other.read_text(), "VALUE = 2\n")
         verification = json.loads(
             run(
                 "verify",
@@ -4181,7 +4281,10 @@ class PlanActCliTest(unittest.TestCase):
                 "destination_path": "new/name.py",
                 "source_sha256": hashlib.sha256(old.read_bytes()).hexdigest(),
             },
-            acceptance={"constraints": ["MOVE", "NO-OLD"]},
+            acceptance={
+                "constraints": ["MOVE", "NO-OLD"],
+                "projection_deltas": [],
+            },
         )
         plan["items"] = [create, move]
         plan["unknowns"] = [

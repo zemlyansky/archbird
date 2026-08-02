@@ -155,7 +155,8 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
   } else if (empty == 2) {
     items_length = snprintf(
         items, sizeof(items),
-        "[{\"acceptance\":{\"constraints\":[\"UNCHANGED\"]},"
+        "[{\"acceptance\":{\"constraints\":[\"UNCHANGED\"],"
+        "\"projection_deltas\":[]},"
         "\"depends_on\":[],\"evidence\":[],\"executable\":false,"
         "\"id\":\"item:add-symbol\",\"non_executable_reasons\":"
         "[\"Implementation semantics require review.\"],\"operation\":{"
@@ -169,7 +170,8 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
   } else if (empty == 3) {
     items_length = snprintf(
         items, sizeof(items),
-        "[{\"acceptance\":{\"constraints\":[\"UNCHANGED\"]},"
+        "[{\"acceptance\":{\"constraints\":[\"UNCHANGED\"],"
+        "\"projection_deltas\":[]},"
         "\"depends_on\":[],\"evidence\":[],\"executable\":false,"
         "\"id\":\"item:create-file\",\"non_executable_reasons\":"
         "[\"File content requires review.\"],\"operation\":{"
@@ -182,7 +184,8 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
   } else {
     items_length = snprintf(
         items, sizeof(items),
-        "[{\"acceptance\":{\"constraints\":[\"C-REPLACE\"]},"
+        "[{\"acceptance\":{\"constraints\":[\"C-REPLACE\"],"
+        "\"projection_deltas\":[]},"
         "\"depends_on\":[],\"evidence\":[],\"executable\":true,"
         "\"id\":\"item:replace\",\"non_executable_reasons\":[],"
         "\"operation\":{\"action\":\"replace_range\",\"before\":"
@@ -193,7 +196,8 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
         "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
         "\"provenance\":\"derived\",\"statement\":\"Replace alpha.\","
         "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
-        "[\"C-MOVE\"]},\"depends_on\":[],\"evidence\":[],"
+        "[\"C-MOVE\"],\"projection_deltas\":[]},\"depends_on\":[],"
+        "\"evidence\":[],"
         "\"executable\":true,\"id\":\"item:move\","
         "\"non_executable_reasons\":[],\"operation\":{\"action\":"
         "\"move_file\",\"destination_path\":\"src/z.c\","
@@ -203,7 +207,8 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
         "\",\"issue_fingerprint\":\"" VERIFY_SHA "\"}],"
         "\"provenance\":\"derived\",\"statement\":\"Move beta.\","
         "\"unknowns\":[]},{\"acceptance\":{\"constraints\":"
-        "[\"C-JSON\"]},\"depends_on\":[],\"evidence\":[],"
+        "[\"C-JSON\"],\"projection_deltas\":[]},\"depends_on\":[],"
+        "\"evidence\":[],"
         "\"executable\":true,\"id\":\"item:json\","
         "\"non_executable_reasons\":[],\"operation\":{\"action\":"
         "\"edit_json_pointer\",\"expected\":\"old\","
@@ -224,7 +229,7 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
       body, sizeof(body),
       "{\"artifact\":\"plan\",\"items\":%s,\"objective\":\"Exercise native "
       "Plan materialization.\",\"preserved_constraints\":[\"%s\"],"
-      "\"provenance\":\"derived\",\"schema_version\":7,\"source\":{"
+      "\"provenance\":\"derived\",\"schema_version\":8,\"source\":{"
       "\"map\":{\"configuration_sha256\":\"%.*s\",\"input_sha256\":\"%.*s\","
       "\"producer_implementation_sha256\":\"%.*s\",\"sha256\":\"%s\"},"
       "\"project\":\"demo\",\"verification\":{\"policy_sha256\":\""
