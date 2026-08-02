@@ -514,6 +514,7 @@ def _assert_symbol_occurrence_projection() -> None:
             "result = kept_alias(2)\n"
         ),
         "py/api.py": "def old_api(value):\n    return value + 1\n",
+        "py/attribute.py": "import api\nresult = api.old_api(4)\n",
         "py/nested.py": (
             "def outer():\n"
             "    def old_api(value):\n"
@@ -561,6 +562,16 @@ def _assert_symbol_occurrence_projection() -> None:
         map_cache=False,
     )
     map_json = project.map_json()
+    map_document = json.loads(map_json)
+    alias_edge = next(
+        edge
+        for edge in map_document["edges"]
+        if edge["source"] == "py/alias.py"
+        and edge["target"] == "py/api.py"
+        and edge["kind"] == "imported-call"
+    )
+    assert alias_edge["names"] == ["old_api"]
+    assert [site["name"] for site in alias_edge["sites"]] == ["kept_alias"]
 
     def evaluate(
         name: str,
@@ -616,6 +627,7 @@ def _assert_symbol_occurrence_projection() -> None:
     } == {
         ("py/alias.py", "import", "current"),
         ("py/api.py", "declaration", "current"),
+        ("py/attribute.py", "reference", "current"),
         ("py/shadow.py", "import", "current"),
         ("py/use.py", "import", "current"),
         ("py/use.py", "reference", "current"),

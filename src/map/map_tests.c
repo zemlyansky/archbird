@@ -933,6 +933,7 @@ resolve_routes(AbMapState *state, const TestFactIndex *index,
       }
     } else if (fact_domain(fact, "name-uses")) {
       if (string_literal(&fact->kind, "imported-attribute-call") ||
+          string_literal(&fact->kind, "imported-attribute-reference") ||
           string_literal(&fact->kind, "inferred-receiver-call") ||
           string_literal(&fact->kind, "decorator-reference"))
         status = imported_attribute_call_routes(

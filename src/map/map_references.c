@@ -490,10 +490,14 @@ ArchbirdStatus ab_map_resolve_imported_reference(
       out->target_fact = target;
       out->target_symbol = &target->name;
       out->exact = 1;
-      out->relation = string_literal(&fact->kind, "decorator-reference")
-                          ? "decorator-reference"
-                          : "imported-attribute-call";
-      if (string_literal(&fact->kind, "decorator-reference") &&
+      out->relation =
+          string_literal(&fact->kind, "decorator-reference")
+              ? "decorator-reference"
+              : (string_literal(&fact->kind, "imported-attribute-reference")
+                     ? "imported-attribute-reference"
+                     : "imported-attribute-call");
+      if (!string_literal(&fact->kind, "imported-attribute-reference") &&
+          string_literal(&fact->kind, "decorator-reference") &&
           string_literal(&target->kind, "class"))
         out->callable_fact =
             qualified_member(state, current, target,
@@ -525,7 +529,11 @@ ArchbirdStatus ab_map_resolve_imported_reference(
       out->target_symbol = &target->name;
       out->exact = 1;
       out->relation =
-          namespace_symbol ? "imported-member-call" : "imported-attribute-call";
+          string_literal(&fact->kind, "imported-attribute-reference")
+              ? (namespace_symbol ? "imported-member-reference"
+                                  : "imported-attribute-reference")
+              : (namespace_symbol ? "imported-member-call"
+                                  : "imported-attribute-call");
       if (string_literal(&fact->kind, "decorator-reference")) {
         out->relation = "decorator-reference";
         if (string_literal(&target->kind, "class"))
@@ -825,6 +833,7 @@ ArchbirdStatus ab_map_add_reference_edges(AbMapState *state) {
       status = ab_map_resolve_provider_reference(state, fact, &resolution);
     } else if (fact_domain(fact, "name-uses") &&
                (string_literal(&fact->kind, "imported-attribute-call") ||
+                string_literal(&fact->kind, "imported-attribute-reference") ||
                 string_literal(&fact->kind, "inferred-receiver-call") ||
                 string_literal(&fact->kind, "decorator-reference"))) {
       if (fact_has_matching_call(state->project, fact))
@@ -858,6 +867,11 @@ ArchbirdStatus ab_map_add_reference_edges(AbMapState *state) {
       kind = "imported-call";
     else if (string_literal(&edge_evidence->kind, "imported-name-use"))
       kind = "imported-reference";
+    else if (string_literal(&edge_evidence->kind,
+                            "imported-attribute-reference"))
+      kind = !strcmp(resolution.relation, "imported-member-reference")
+                 ? "member-reference"
+                 : "attribute-reference";
     else
       kind = string_literal(&edge_evidence->kind, "decorator-reference")
                  ? "decorator"
@@ -877,22 +891,29 @@ ArchbirdStatus ab_map_add_reference_edges(AbMapState *state) {
         return archbird_error_set(
             state->engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
             "semantic Map edge is missing its evidence provider");
-      status = ab_map_graph_add_edge_evidence_site(
+      status = ab_map_graph_add_edge_evidence_named_site(
           state->engine, &state->graph, kind, &source->path,
           resolution.target->path.data, resolution.target->path.length,
-          resolution.target_symbol, &edge_evidence->id, line,
-          edge_evidence->span_start, edge_evidence->span_end,
+          resolution.target_symbol, &edge_evidence->name, &edge_evidence->id,
+          line, edge_evidence->span_start, edge_evidence->span_end,
           index_name ? "semantic-index" : "semantic-provider",
           index_name ? index_name : &provider->producer.name,
           evidence_state ? evidence_state : &current);
     } else {
       uint64_t line = 0;
       (void)ab_map_fact_u64_attribute(edge_evidence, "line", &line);
-      status = ab_map_graph_add_edge_site(
+      if (!provider)
+        provider = ab_project_merged_fact_provider(state->project, index);
+      if (!provider)
+        return archbird_error_set(
+            state->engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+            "syntax Map edge is missing its evidence provider");
+      status = ab_map_graph_add_edge_evidence_named_site(
           state->engine, &state->graph, kind, &source->path,
           resolution.target->path.data, resolution.target->path.length,
-          resolution.target_symbol, &edge_evidence->id, line,
-          edge_evidence->span_start, edge_evidence->span_end);
+          resolution.target_symbol, &edge_evidence->name, &edge_evidence->id,
+          line, edge_evidence->span_start, edge_evidence->span_end,
+          "syntax-provider", &provider->producer.name, &current);
     }
   }
   if (status == ARCHBIRD_OK)

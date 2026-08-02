@@ -193,6 +193,7 @@ def check_stable_duplicate_reference_witness(extension) -> None:
     source = (
         b"int duplicate(void) { return 1; }\n"
         b"int (*selected)(void) = duplicate;\n"
+        b"int local_only(void) { return local_value; }\n"
         b"int duplicate(void) { return 2; }\n"
     )
     path = "duplicate.c"
@@ -228,11 +229,12 @@ def check_stable_duplicate_reference_witness(extension) -> None:
     extension.project_set_config(project, canonical(config))
     early = source.index(b"duplicate")
     reference = source.index(b"duplicate", early + len("duplicate"))
+    local_reference = source.index(b"local_value")
     late = source.index(b"duplicate", reference + len("duplicate"))
     facts = []
     for fact_id, start, line in (
         ("z-early-definition", early, 1),
-        ("a-late-definition", late, 3),
+        ("a-late-definition", late, 4),
     ):
         facts.append(
             {
@@ -262,6 +264,23 @@ def check_stable_duplicate_reference_witness(extension) -> None:
             "span": {
                 "end": reference + len("duplicate"),
                 "start": reference,
+            },
+        }
+    )
+    facts.append(
+        {
+            "attributes": {"context": "return", "line": 3},
+            "claim": "syntax-structure",
+            "domain": "symbol-references",
+            "id": "unresolved-local-reference",
+            "key": "unresolved-local-reference",
+            "kind": "value",
+            "name": "local_value",
+            "path": path,
+            "project": "duplicate-reference-witness",
+            "span": {
+                "end": local_reference + len("local_value"),
+                "start": local_reference,
             },
         }
     )

@@ -282,6 +282,7 @@ set(ARCHBIRD_INTERNAL_INCLUDE_DIRS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/constraints"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/plan"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/act"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/transformation"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/verify"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/graph"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/okf"

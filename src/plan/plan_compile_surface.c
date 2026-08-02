@@ -375,48 +375,6 @@ static int portable_identifier(const AbString *value) {
   return 1;
 }
 
-static int renamed_text_equal(const AbString *before, const AbString *old_name,
-                              const AbString *new_name,
-                              const AbString *current) {
-  size_t before_offset = 0;
-  size_t current_offset = 0;
-  size_t replaced = 0;
-  while (before_offset < before->length) {
-    size_t candidate = before_offset;
-    while (candidate + old_name->length <= before->length) {
-      int left_boundary =
-          candidate == 0 ||
-          !identifier_byte((uint8_t)before->data[candidate - 1]);
-      int right_boundary =
-          candidate + old_name->length == before->length ||
-          !identifier_byte((uint8_t)before->data[candidate + old_name->length]);
-      if (left_boundary && right_boundary &&
-          memcmp(before->data + candidate, old_name->data, old_name->length) ==
-              0)
-        break;
-      candidate++;
-    }
-    if (candidate + old_name->length > before->length)
-      break;
-    if (candidate - before_offset > current->length - current_offset ||
-        memcmp(before->data + before_offset, current->data + current_offset,
-               candidate - before_offset) != 0)
-      return 0;
-    current_offset += candidate - before_offset;
-    if (new_name->length > current->length - current_offset ||
-        memcmp(current->data + current_offset, new_name->data,
-               new_name->length) != 0)
-      return 0;
-    current_offset += new_name->length;
-    before_offset = candidate + old_name->length;
-    replaced++;
-  }
-  return replaced &&
-         before->length - before_offset == current->length - current_offset &&
-         memcmp(before->data + before_offset, current->data + current_offset,
-                before->length - before_offset) == 0;
-}
-
 static int renamed_text_arrays_equal(const AbValue *before,
                                      const AbValue *current,
                                      const AbString *old_name,
@@ -430,8 +388,8 @@ static int renamed_text_arrays_equal(const AbValue *before,
     const AbValue *left = &before->as.array.items[index];
     const AbValue *right = &current->as.array.items[index];
     if (left->kind != AB_VALUE_STRING || right->kind != AB_VALUE_STRING ||
-        !renamed_text_equal(&left->as.text, old_name, new_name,
-                            &right->as.text))
+        !ab_plan_renamed_text_equal(&left->as.text, old_name, new_name,
+                                    &right->as.text))
       return 0;
   }
   return 1;

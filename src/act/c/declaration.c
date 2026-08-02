@@ -8,6 +8,8 @@
 typedef struct AbActCDeclarationProof {
   const AbValue *implementation_file;
   const AbValue *implementation_symbol;
+  AbString declaration_prefix;
+  AbString declaration_suffix;
   uint64_t anchor_start;
   uint64_t anchor_end;
 } AbActCDeclarationProof;
@@ -165,6 +167,42 @@ static const AbValue *unique_function_symbol(const AbValue *map,
   return match;
 }
 
+static int declaration_wrapper(const AbString *declaration,
+                               const AbString *implementation,
+                               AbString *out_prefix, AbString *out_suffix) {
+  size_t index;
+  size_t match = 0;
+  int found = 0;
+  if (!declaration || !implementation || !implementation->length ||
+      declaration->length < implementation->length)
+    return 0;
+  for (index = 0; index + implementation->length <= declaration->length;
+       index++) {
+    if (memcmp(declaration->data + index, implementation->data,
+               implementation->length) != 0)
+      continue;
+    if (found)
+      return 0;
+    found = 1;
+    match = index;
+  }
+  if (!found)
+    return 0;
+  out_prefix->data = declaration->data;
+  out_prefix->length = match;
+  out_suffix->data = declaration->data + match + implementation->length;
+  out_suffix->length = declaration->length - match - implementation->length;
+  return 1;
+}
+
+static int same_wrapper(const AbString *left_prefix,
+                        const AbString *left_suffix,
+                        const AbString *right_prefix,
+                        const AbString *right_suffix) {
+  return ab_string_equal(left_prefix, right_prefix) &&
+         ab_string_equal(left_suffix, right_suffix);
+}
+
 static int analyze_declaration(const AbValue *map, const AbString *path,
                                const AbString *symbol,
                                AbActCDeclarationProof *out,
@@ -175,6 +213,7 @@ static int analyze_declaration(const AbValue *map, const AbString *path,
   const AbValue *implementation_file;
   const AbValue *signature;
   const AbValue *anchor = NULL;
+  int style_found = 0;
   uint64_t anchor_start = 0;
   uint64_t anchor_end = 0;
   size_t index;
@@ -213,8 +252,12 @@ static int analyze_declaration(const AbValue *map, const AbString *path,
     const AbValue *candidate = &target_symbols->as.array.items[index];
     const AbValue *name = field(candidate, "name");
     const AbValue *candidate_signature = field(candidate, "signature");
+    const AbValue *peer_implementation;
+    const AbValue *peer_signature;
     const AbValue *fact_id = field(candidate, "fact_id");
     const AbValue *extent = field(candidate, "extent");
+    AbString prefix = {0};
+    AbString suffix = {0};
     uint64_t start;
     uint64_t end;
     if (!ab_artifact_text_is(field(candidate, "kind"), "declaration") ||
@@ -225,16 +268,34 @@ static int analyze_declaration(const AbValue *map, const AbString *path,
         extent->kind != AB_VALUE_OBJECT ||
         !ab_artifact_safe_integer(field(extent, "start"), &start) ||
         !ab_artifact_safe_integer(field(extent, "end"), &end) || start >= end ||
-        !unique_function_symbol(map, &name->as.text,
-                                &candidate_signature->as.text, path, NULL))
+        end - start != candidate_signature->as.text.length + 1)
       continue;
+    peer_implementation =
+        unique_function_symbol(map, &name->as.text, NULL, path, NULL);
+    peer_signature = field(peer_implementation, "signature");
+    if (!peer_implementation || !peer_signature ||
+        peer_signature->kind != AB_VALUE_STRING ||
+        !declaration_wrapper(&candidate_signature->as.text,
+                             &peer_signature->as.text, &prefix, &suffix))
+      continue;
+    if (style_found &&
+        !same_wrapper(&out->declaration_prefix, &out->declaration_suffix,
+                      &prefix, &suffix)) {
+      *out_reason = "Peer declarations prove conflicting C signature styles.";
+      return 0;
+    }
+    if (!style_found) {
+      out->declaration_prefix = prefix;
+      out->declaration_suffix = suffix;
+      style_found = 1;
+    }
     if (!anchor || end > anchor_end) {
       anchor = candidate;
       anchor_start = start;
       anchor_end = end;
     }
   }
-  if (!anchor) {
+  if (!anchor || !style_found) {
     *out_reason =
         "No peer declaration proves the destination's C signature style.";
     return 0;
@@ -307,7 +368,14 @@ static ArchbirdStatus extract_signature(AbActContext *context,
     return reject(
         context, ARCHBIRD_POLICY_REJECTED,
         "the C implementation signature is not a safe external declaration");
-  return ab_buffer_append(signature, exact.data, exact.length);
+  status = ab_buffer_append(signature, proof->declaration_prefix.data,
+                            proof->declaration_prefix.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(signature, exact.data, exact.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(signature, proof->declaration_suffix.data,
+                              proof->declaration_suffix.length);
+  return status;
 }
 
 static ArchbirdStatus place_declaration(AbActContext *context,

@@ -628,7 +628,7 @@ let semanticProject = new Project("typescript-test", [
   new Source(
     "src/use.ts",
     Buffer.from(
-      'import { target } from "./defs";\nimport { absent } from "./missing";\nconst π = target(1);\nconst spread = {...{}};\n',
+      'import { target } from "./defs";\nimport { absent } from "./missing";\nconst π = target(1);\nconst alias = target;\nconst spread = {...{}};\n',
     ),
     {
       language: "typescript",
@@ -702,6 +702,19 @@ assert.ok(
       edge.names.includes("target"),
   ),
 );
+const semanticValueReference = semanticMap.symbol_references.find(
+  (reference) =>
+    reference.name === "target" &&
+    reference.relation === "semantic-reference" &&
+    reference.resolution === "unique" &&
+    reference.source.path === "src/use.ts" &&
+    reference.candidates.some(
+      (candidate) =>
+        candidate.path === "src/defs.ts" && candidate.symbol === "target",
+    ),
+);
+assert.ok(semanticValueReference);
+assert.equal(semanticValueReference.evidence[0].line, 4);
 semanticProject = null;
 
 function createScipProject(positionEncoding) {

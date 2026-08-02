@@ -24,6 +24,7 @@ typedef struct AbPlanItemSpec {
   const AbValue *constraint;
   const AbValue *const *findings;
   size_t finding_count;
+  const AbProjectionData *projection_evidence;
   const char *statement;
   const char *provenance;
   const AbBuffer *operation;
@@ -74,12 +75,21 @@ ArchbirdStatus ab_plan_finding_groups_collect(ArchbirdEngine *engine,
 void ab_plan_finding_groups_free(ArchbirdEngine *engine,
                                  AbPlanFindingGroups *groups);
 
+int ab_plan_renamed_text_equal(const AbString *before, const AbString *old_name,
+                               const AbString *new_name,
+                               const AbString *current);
+
 ArchbirdStatus ab_plan_compile_symbol_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
     const AbVerificationArtifact *verification, AbPlanItemBuilder *builder,
     const AbValue *constraint, const AbValue *definition,
     const AbProjectionData *actual, const AbValue *renames,
     uint8_t *rename_used, int *out_handled);
+
+ArchbirdStatus ab_plan_compile_symbol_residual(
+    ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,
+    const AbValue *before_map, AbPlanItemBuilder *builder,
+    const AbValue *constraint, const AbValue *definition, int *out_handled);
 
 ArchbirdStatus ab_plan_compile_edge_constraint(
     ArchbirdEngine *engine, const ArchbirdProject *project, const AbValue *map,

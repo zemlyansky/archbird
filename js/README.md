@@ -540,9 +540,13 @@ stores only the language-independent symbol objective, exhaustive
 scope. Act reevaluates the same complete evidence. Tree-sitter establishes
 ECMAScript declarations and import/export bindings; the TypeScript compiler
 must establish reference targets while preserving aliased local names.
-Unrelated same-name declarations outside the selected projection scope are not
-renamed. Candidate or unresolved calls, duplicate targets, and unsupported
-inputs block Act instead of producing a partial rename.
+Qualified identities may rename only their terminal identifier while
+preserving the same enclosing identity. Unrelated same-name declarations
+outside the selected projection scope are not renamed. Public alias and
+CommonJS assignment targets are separate reviewed surface identities, not
+internal declaration occurrences. Candidate or unresolved calls, duplicate
+targets, and unsupported inputs block Act instead of producing a partial
+rename.
 
 For a `provider_surface` issue, Plan can add a uniquely missing Make
 registration, C header declaration, or bounded C/N-API export registration,

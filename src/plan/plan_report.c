@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#define AB_PLAN_REPORT_EVIDENCE_LIMIT 8u
+
 #define REPORT_TRY(expression)                                                 \
   do {                                                                         \
     ArchbirdStatus status__ = (expression);                                    \
@@ -97,6 +99,42 @@ static ArchbirdStatus render_projection_deltas(AbBuffer *out,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus render_evidence(AbBuffer *out, const AbValue *evidence) {
+  size_t shown = evidence->as.array.count < AB_PLAN_REPORT_EVIDENCE_LIMIT
+                     ? evidence->as.array.count
+                     : AB_PLAN_REPORT_EVIDENCE_LIMIT;
+  size_t index;
+  for (index = 0; index < shown; index++) {
+    const AbValue *row = &evidence->as.array.items[index];
+    const AbValue *path = field(row, "path");
+    const AbValue *line = field(row, "line");
+    const AbValue *detail = field(row, "detail");
+    uint64_t line_number = 0;
+    REPORT_TRY(ab_buffer_literal(out, "  - "));
+    if (path->as.text.length)
+      REPORT_TRY(append_code(out, &path->as.text));
+    else
+      REPORT_TRY(ab_buffer_literal(out, "`project evidence`"));
+    if (ab_value_u64(line, &line_number) && line_number) {
+      REPORT_TRY(ab_buffer_literal(out, ":"));
+      REPORT_TRY(ab_buffer_u64(out, line_number));
+    }
+    if (detail->as.text.length) {
+      REPORT_TRY(ab_buffer_literal(out, " - "));
+      REPORT_TRY(append_markdown_text(out, &detail->as.text));
+    }
+    REPORT_TRY(ab_buffer_literal(out, "\n"));
+  }
+  if (shown < evidence->as.array.count) {
+    REPORT_TRY(ab_buffer_literal(out, "  - "));
+    REPORT_TRY(append_size(out, evidence->as.array.count - shown));
+    REPORT_TRY(ab_buffer_literal(out,
+                                 " additional evidence row(s) are retained "
+                                 "in Plan JSON.\n"));
+  }
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus render_item(AbBuffer *out, const AbValue *item,
                                   size_t index) {
   const AbValue *id = field(item, "id");
@@ -154,6 +192,7 @@ static ArchbirdStatus render_item(AbBuffer *out, const AbValue *item,
   REPORT_TRY(ab_buffer_literal(out, "; unknowns: "));
   REPORT_TRY(append_size(out, unknowns->as.array.count));
   REPORT_TRY(ab_buffer_literal(out, "\n"));
+  REPORT_TRY(render_evidence(out, evidence));
   if (reasons->as.array.count) {
     REPORT_TRY(ab_buffer_literal(out, "- Blocking: "));
     REPORT_TRY(render_code_array(out, reasons));

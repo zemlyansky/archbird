@@ -297,6 +297,9 @@ static int edge_mention_compare(const void *left_raw, const void *right_raw) {
     compared = ab_string_compare(&left->site_fact_id, &right->site_fact_id);
     if (compared != 0)
       return compared;
+    compared = ab_string_compare(&left->site_name, &right->site_name);
+    if (compared != 0)
+      return compared;
   }
   if (left->has_evidence != right->has_evidence)
     return left->has_evidence ? 1 : -1;
@@ -330,6 +333,7 @@ void ab_map_graph_free(ArchbirdEngine *engine, MapGraph *graph) {
     ab_string_free(engine, &graph->edges[index].kind);
     ab_string_free(engine, &graph->edges[index].target);
     ab_string_free(engine, &graph->edges[index].name);
+    ab_string_free(engine, &graph->edges[index].site_name);
     ab_string_free(engine, &graph->edges[index].site_fact_id);
     ab_string_free(engine, &graph->edges[index].evidence_basis);
     ab_string_free(engine, &graph->edges[index].evidence_provider);
@@ -383,10 +387,24 @@ ArchbirdStatus ab_map_graph_add_edge_evidence_site(
     const AbString *name, const AbString *fact_id, uint64_t line,
     size_t span_start, size_t span_end, const char *evidence_basis,
     const AbString *evidence_provider, const AbString *evidence_state) {
+  return ab_map_graph_add_edge_evidence_named_site(
+      engine, graph, kind, source, target, target_length, name, name, fact_id,
+      line, span_start, span_end, evidence_basis, evidence_provider,
+      evidence_state);
+}
+
+ArchbirdStatus ab_map_graph_add_edge_evidence_named_site(
+    ArchbirdEngine *engine, MapGraph *graph, const char *kind,
+    const AbString *source, const char *target, size_t target_length,
+    const AbString *name, const AbString *site_name, const AbString *fact_id,
+    uint64_t line, size_t span_start, size_t span_end,
+    const char *evidence_basis, const AbString *evidence_provider,
+    const AbString *evidence_state) {
   EdgeMention *resized;
   EdgeMention *edge;
   ArchbirdStatus status;
-  if (fact_id && (!fact_id->length || span_start > span_end))
+  if (fact_id && (!fact_id->length || !site_name || !site_name->length ||
+                  span_start > span_end))
     return ARCHBIRD_INVALID_ARGUMENT;
   if ((evidence_basis || evidence_provider || evidence_state) &&
       (!evidence_basis || !evidence_provider || !evidence_state))
@@ -411,8 +429,11 @@ ArchbirdStatus ab_map_graph_add_edge_evidence_site(
   if (status == ARCHBIRD_OK)
     status = ab_string_copy(engine, &edge->name, name->data, name->length);
   if (status == ARCHBIRD_OK && fact_id) {
-    status = ab_string_copy(engine, &edge->site_fact_id, fact_id->data,
-                            fact_id->length);
+    status = ab_string_copy(engine, &edge->site_name, site_name->data,
+                            site_name->length);
+    if (status == ARCHBIRD_OK)
+      status = ab_string_copy(engine, &edge->site_fact_id, fact_id->data,
+                              fact_id->length);
     if (status == ARCHBIRD_OK) {
       edge->site_line = line;
       edge->site_span_start = span_start;
@@ -437,6 +458,7 @@ ArchbirdStatus ab_map_graph_add_edge_evidence_site(
     ab_string_free(engine, &edge->kind);
     ab_string_free(engine, &edge->target);
     ab_string_free(engine, &edge->name);
+    ab_string_free(engine, &edge->site_name);
     ab_string_free(engine, &edge->site_fact_id);
     ab_string_free(engine, &edge->evidence_basis);
     ab_string_free(engine, &edge->evidence_provider);
@@ -1824,7 +1846,23 @@ static int same_edge_site(const EdgeMention *left, const EdgeMention *right) {
          left->site_line == right->site_line &&
          left->site_span_start == right->site_span_start &&
          left->site_span_end == right->site_span_end &&
-         ab_string_equal(&left->name, &right->name);
+         ab_string_equal(&left->site_name, &right->site_name);
+}
+
+static int edge_site_pointer_compare(const void *left_raw,
+                                     const void *right_raw) {
+  const EdgeMention *left = *(const EdgeMention *const *)left_raw;
+  const EdgeMention *right = *(const EdgeMention *const *)right_raw;
+  int compared = ab_string_compare(&left->site_name, &right->site_name);
+  if (compared != 0)
+    return compared;
+  if (left->site_line != right->site_line)
+    return left->site_line < right->site_line ? -1 : 1;
+  if (left->site_span_start != right->site_span_start)
+    return left->site_span_start < right->site_span_start ? -1 : 1;
+  if (left->site_span_end != right->site_span_end)
+    return left->site_span_end < right->site_span_end ? -1 : 1;
+  return ab_string_compare(&left->site_fact_id, &right->site_fact_id);
 }
 
 static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
@@ -1836,6 +1874,8 @@ static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
     size_t name_index;
     size_t evidence_index;
     size_t site_index;
+    size_t site_count = 0;
+    const EdgeMention **sorted_sites = NULL;
     const AbString *previous_name = NULL;
     int has_evidence = graph->edges[index].has_evidence;
     int has_sites = graph->edges[index].has_site;
@@ -1844,6 +1884,20 @@ static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
       has_evidence = has_evidence || graph->edges[end].has_evidence;
       has_sites = has_sites || graph->edges[end].has_site;
       end++;
+    }
+    if (has_sites) {
+      sorted_sites = (const EdgeMention **)ab_malloc(
+          buffer->engine, (end - index) * sizeof(*sorted_sites));
+      if (!sorted_sites)
+        return archbird_error_set(buffer->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "out of memory sorting Map edge sites");
+      for (site_index = index; site_index < end; site_index++)
+        if (graph->edges[site_index].has_site)
+          sorted_sites[site_count++] = &graph->edges[site_index];
+      if (site_count > 1)
+        qsort(sorted_sites, site_count, sizeof(*sorted_sites),
+              edge_site_pointer_compare);
     }
     if (!first_edge)
       status = ab_buffer_literal(buffer, ",");
@@ -1912,11 +1966,9 @@ static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
     if (has_sites) {
       const EdgeMention *previous_site = NULL;
       int first_site = 1;
-      for (site_index = index; status == ARCHBIRD_OK && site_index < end;
+      for (site_index = 0; status == ARCHBIRD_OK && site_index < site_count;
            site_index++) {
-        const EdgeMention *site = &graph->edges[site_index];
-        if (!site->has_site)
-          continue;
+        const EdgeMention *site = sorted_sites[site_index];
         if (previous_site && same_edge_site(site, previous_site))
           continue;
         if (!first_site)
@@ -1932,7 +1984,7 @@ static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
         if (status == ARCHBIRD_OK)
           status = ab_buffer_literal(buffer, ",\"name\":");
         if (status == ARCHBIRD_OK)
-          status = json_string(buffer, &site->name);
+          status = json_string(buffer, &site->site_name);
         if (status == ARCHBIRD_OK)
           status = ab_buffer_literal(buffer, ",\"path\":");
         if (status == ARCHBIRD_OK)
@@ -1963,6 +2015,7 @@ static ArchbirdStatus render_edges(AbBuffer *buffer, const MapGraph *graph) {
       status = json_string(buffer, &graph->edges[index].target);
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "}");
+    ab_free(buffer->engine, sorted_sites);
     first_edge = 0;
     index = end;
   }

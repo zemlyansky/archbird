@@ -50,6 +50,8 @@ int main(void) {
   char *transition_lock_read;
   char *transition_lock;
   char *projection_delta;
+  char *symbol_projection_delta;
+  char *symbol_projection_without_name;
   char *premature_observation;
   const char *valid =
       "{\"acceptance\":{\"constraints\":[],\"projection_deltas\":[],"
@@ -129,6 +131,19 @@ int main(void) {
                    "\"observed_removed\":[],\"projection\":{\"from_paths\":["
                    "\"src/a.c\"],\"select\":\"file_edges\"},"
                    "\"status\":\"not_evaluated\"}]");
+  symbol_projection_delta =
+      replace_once(valid, "\"projection_deltas\":[]",
+                   "\"projection_deltas\":[{\"after_result_sha256\":null,"
+                   "\"allowed_added\":[],\"allowed_removed\":[\"occurrence\"],"
+                   "\"before_result_sha256\":null,\"observed_added\":[],"
+                   "\"observed_removed\":[],\"projection\":{\"names\":["
+                   "\"old_api\"],\"paths\":[\"src/api.py\"],"
+                   "\"select\":\"symbol_occurrences\"},"
+                   "\"status\":\"not_evaluated\"}]");
+  symbol_projection_without_name =
+      symbol_projection_delta ? replace_once(symbol_projection_delta,
+                                             "\"names\":[\"old_api\"],", "")
+                              : NULL;
   premature_observation =
       projection_delta
           ? replace_once(projection_delta, "\"observed_removed\":[]",
@@ -136,6 +151,7 @@ int main(void) {
           : NULL;
   if (!read_without_lock || !unused_lock || !valid_lock ||
       !transition_lock_read || !transition_lock || !projection_delta ||
+      !symbol_projection_delta || !symbol_projection_without_name ||
       !premature_observation) {
     fprintf(stderr, "FAIL could not construct source-lock fixtures\n");
     failures++;
@@ -148,6 +164,10 @@ int main(void) {
                   ARCHBIRD_INVALID_SCHEMA);
     expect_status(engine, "materialized-projection-delta", projection_delta,
                   ARCHBIRD_OK);
+    expect_status(engine, "materialized-symbol-projection-delta",
+                  symbol_projection_delta, ARCHBIRD_OK);
+    expect_status(engine, "symbol-projection-delta-without-name",
+                  symbol_projection_without_name, ARCHBIRD_INVALID_SCHEMA);
     expect_status(engine, "premature-projection-observation",
                   premature_observation, ARCHBIRD_INVALID_SCHEMA);
   }
@@ -160,6 +180,8 @@ int main(void) {
   free(transition_lock);
   free(transition_lock_read);
   free(premature_observation);
+  free(symbol_projection_without_name);
+  free(symbol_projection_delta);
   free(projection_delta);
   free(valid_lock);
   free(unused_lock);

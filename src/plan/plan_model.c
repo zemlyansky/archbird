@@ -306,6 +306,8 @@ static int validate_edge_projection(const AbValue *value) {
   return 1;
 }
 
+static int validate_symbol_projection(const AbValue *value);
+
 static int validate_projection_delta(const AbValue *value) {
   static const char *const fields[] = {"projection", "allowed_added",
                                        "allowed_removed"};
@@ -319,9 +321,11 @@ static int validate_projection_delta(const AbValue *value) {
   projection = ab_value_member(value, "projection");
   added = ab_value_member(value, "allowed_added");
   removed = ab_value_member(value, "allowed_removed");
-  if (!validate_edge_projection(projection) ||
-      !text_is(ab_value_member(projection, "select"), "file_edges") ||
-      !string_array(added, 0, 0) || !string_array(removed, 0, 0) ||
+  if ((!validate_edge_projection(projection) ||
+       !text_is(ab_value_member(projection, "select"), "file_edges")) &&
+      !validate_symbol_projection(projection))
+    return 0;
+  if (!string_array(added, 0, 0) || !string_array(removed, 0, 0) ||
       (!added->as.array.count && !removed->as.array.count))
     return 0;
   for (left = 0; left < added->as.array.count; left++)

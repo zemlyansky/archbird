@@ -40,6 +40,55 @@ static int string_is(const AbString *value, const char *literal) {
          memcmp(value->data, literal, length) == 0;
 }
 
+static int identifier_byte(uint8_t byte) {
+  return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
+         (byte >= '0' && byte <= '9') || byte == '_';
+}
+
+int ab_plan_renamed_text_equal(const AbString *before, const AbString *old_name,
+                               const AbString *new_name,
+                               const AbString *current) {
+  size_t before_offset = 0;
+  size_t current_offset = 0;
+  size_t replaced = 0;
+  if (!before || !old_name || !old_name->length || !new_name || !current)
+    return 0;
+  while (before_offset < before->length) {
+    size_t candidate = before_offset;
+    while (candidate + old_name->length <= before->length) {
+      int left_boundary =
+          candidate == 0 ||
+          !identifier_byte((uint8_t)before->data[candidate - 1]);
+      int right_boundary =
+          candidate + old_name->length == before->length ||
+          !identifier_byte((uint8_t)before->data[candidate + old_name->length]);
+      if (left_boundary && right_boundary &&
+          memcmp(before->data + candidate, old_name->data, old_name->length) ==
+              0)
+        break;
+      candidate++;
+    }
+    if (candidate + old_name->length > before->length)
+      break;
+    if (candidate - before_offset > current->length - current_offset ||
+        memcmp(before->data + before_offset, current->data + current_offset,
+               candidate - before_offset) != 0)
+      return 0;
+    current_offset += candidate - before_offset;
+    if (new_name->length > current->length - current_offset ||
+        memcmp(current->data + current_offset, new_name->data,
+               new_name->length) != 0)
+      return 0;
+    current_offset += new_name->length;
+    before_offset = candidate + old_name->length;
+    replaced++;
+  }
+  return replaced &&
+         before->length - before_offset == current->length - current_offset &&
+         memcmp(before->data + before_offset, current->data + current_offset,
+                before->length - before_offset) == 0;
+}
+
 static int rendered_compare(const void *left_raw, const void *right_raw) {
   const AbRenderedValue *left = (const AbRenderedValue *)left_raw;
   const AbRenderedValue *right = (const AbRenderedValue *)right_raw;
@@ -173,6 +222,7 @@ static ArchbirdStatus collect_evidence(AbPlanItemBuilder *builder,
                                        size_t *out_count) {
   AbRenderedValue *values;
   size_t count = 0;
+  size_t projection_count = 0;
   size_t finding_index;
   size_t index;
   size_t retained;
@@ -186,6 +236,20 @@ static ArchbirdStatus collect_evidence(AbPlanItemBuilder *builder,
                        "too many Plan evidence rows");
       count += evidence->as.array.count;
     }
+  }
+  if (spec->projection_evidence) {
+    for (index = 0; index < spec->projection_evidence->item_count; index++) {
+      size_t item_count =
+          spec->projection_evidence->items[index].evidence_count;
+      if (item_count > AB_PLAN_COMPILE_MAX_ROWS - projection_count)
+        return invalid(builder, ARCHBIRD_LIMIT_EXCEEDED,
+                       "too many projection evidence rows");
+      projection_count += item_count;
+    }
+    if (projection_count > AB_PLAN_COMPILE_MAX_ROWS - count)
+      return invalid(builder, ARCHBIRD_LIMIT_EXCEEDED,
+                     "too many Plan evidence rows");
+    count += projection_count;
   }
   if (!count) {
     *out_values = NULL;
@@ -211,6 +275,23 @@ static ArchbirdStatus collect_evidence(AbPlanItemBuilder *builder,
       ab_buffer_init(&values[index].bytes, builder->engine);
       status = ab_value_render(&values[index].bytes,
                                &evidence->as.array.items[evidence_index]);
+    }
+  }
+  if (spec->projection_evidence) {
+    size_t item_index;
+    for (item_index = 0; status == ARCHBIRD_OK &&
+                         item_index < spec->projection_evidence->item_count;
+         item_index++) {
+      const AbProjectionItem *item =
+          &spec->projection_evidence->items[item_index];
+      size_t evidence_index;
+      for (evidence_index = 0;
+           status == ARCHBIRD_OK && evidence_index < item->evidence_count;
+           evidence_index++, index++) {
+        ab_buffer_init(&values[index].bytes, builder->engine);
+        status = ab_projection_evidence_render(&values[index].bytes,
+                                               &item->evidence[evidence_index]);
+      }
     }
   }
   if (status == ARCHBIRD_OK && count > 1)

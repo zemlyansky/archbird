@@ -843,7 +843,13 @@ objective, normalized ProjectionPlan identity, and repository-relative source
 scope. Act reevaluates the projection, requires identical complete evidence,
 and lets the native Python or ECMAScript executor validate and materialize
 exact declaration, import, export, binding, and reference edits. Unrelated
-same-name declarations outside the selected scope are not renamed.
+same-name declarations outside the selected scope are not renamed. Qualified
+identities may rename only their terminal identifier while preserving the same
+enclosing identity. Python coverage includes exact same-module references,
+qualified imported-attribute references, and literal `__all__` export tokens;
+ECMAScript reference sites require TypeScript-compiler evidence. Public alias
+or CommonJS assignment targets are separate reviewed surface identities and
+are not rewritten as though they were internal declaration occurrences.
 
 For an exact `provider_surface` issue, Plan can add a missing configured Make
 registration, C header `file_pattern` declaration, or bounded C/N-API

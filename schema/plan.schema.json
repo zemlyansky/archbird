@@ -644,12 +644,17 @@
       "required": ["projection", "allowed_added", "allowed_removed"],
       "properties": {
         "projection": {
-          "allOf": [
-            {"$ref": "#/$defs/edgeProjection"},
+          "oneOf": [
             {
-              "type": "object",
-              "properties": {"select": {"const": "file_edges"}}
-            }
+              "allOf": [
+                {"$ref": "#/$defs/edgeProjection"},
+                {
+                  "type": "object",
+                  "properties": {"select": {"const": "file_edges"}}
+                }
+              ]
+            },
+            {"$ref": "#/$defs/symbolOccurrenceProjection"}
           ]
         },
         "allowed_added": {

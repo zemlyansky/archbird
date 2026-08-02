@@ -21,6 +21,7 @@ typedef struct AbSymbolCallRow {
   size_t candidate_start;
   size_t candidate_end;
   size_t candidate_count;
+  const AbSymbolCallSymbol *local_candidate;
   const char *resolution;
 } AbSymbolCallRow;
 
@@ -257,7 +258,9 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
     AbSymbolCallRow *row = &rows[index];
     AbMapReferenceResolution exact;
     const AbFact *exact_evidence = NULL;
+    const AbSymbolCallSymbol *sole_candidate = NULL;
     size_t candidate;
+    size_t local_candidate_count = 0;
     row->binding = ab_map_fact_string_attribute(row->call, "binding");
     status = ab_map_resolve_call_reference(state, row->call, &exact_evidence,
                                            &row->semantic_provider, &exact);
@@ -283,12 +286,29 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
       for (candidate = row->candidate_start; candidate < row->candidate_end;
            candidate++)
         if (ab_map_symbol_reference_usable(&symbols[candidate],
-                                           row->source_file, 0, 0))
+                                           row->source_file, 0, 0)) {
           row->candidate_count++;
-      row->resolution =
-          row->candidate_count == 0
-              ? "unresolved"
-              : (row->candidate_count == 1 ? "candidate" : "ambiguous");
+          sole_candidate = &symbols[candidate];
+          if (symbols[candidate].file == row->source_file) {
+            local_candidate_count++;
+            row->local_candidate = &symbols[candidate];
+          }
+        }
+      if (bytes_literal(row->binding, "project") &&
+          local_candidate_count == 1) {
+        row->candidate_count = 1;
+        row->resolution = "unique";
+      } else {
+        row->local_candidate = NULL;
+        row->resolution =
+            row->candidate_count == 0
+                ? "unresolved"
+                : (row->candidate_count == 1 &&
+                           sole_candidate->file == row->source_file
+                       ? "unique"
+                       : (row->candidate_count == 1 ? "candidate"
+                                                    : "ambiguous"));
+      }
     }
   }
   if (row_count > 1)
@@ -335,7 +355,11 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
     if (status == ARCHBIRD_OK && row->semantic)
       status = render_candidate(buffer, row->semantic_path,
                                 row->semantic_symbol, semantic_definition);
-    if (status == ARCHBIRD_OK && !row->semantic &&
+    if (status == ARCHBIRD_OK && row->local_candidate)
+      status = render_candidate(buffer, &row->local_candidate->file->path,
+                                &row->local_candidate->fact->name,
+                                row->local_candidate->fact);
+    if (status == ARCHBIRD_OK && !row->semantic && !row->local_candidate &&
         strcmp(row->resolution, "builtin")) {
       size_t rendered = 0;
       for (candidate = row->candidate_start;

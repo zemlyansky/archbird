@@ -558,10 +558,14 @@ stores only the language-independent symbol objective, exhaustive
 `symbol_occurrences` ProjectionPlan identity, and repository-relative source
 scope. Act reevaluates the same complete evidence and lets the native Python
 executor materialize exact declaration, import, export, binding, and reference
-edits from CPython AST evidence. Unrelated same-name declarations outside the
-selected projection scope are not renamed. Candidate or unresolved calls,
-duplicate targets, unsupported inputs, and lexical-only C/C++ call binding
-block Act instead of producing a partial rename.
+edits from CPython AST evidence, including qualified imported-attribute
+references and literal `__all__` export tokens. Qualified identities may
+rename only their terminal identifier while preserving the same enclosing
+identity. Unrelated same-name declarations outside the selected projection
+scope are not renamed. Public alias assignments are separate reviewed surface
+identities, not internal declaration occurrences. Candidate or unresolved
+calls, duplicate targets, unsupported inputs, and lexical-only C/C++ call
+binding block Act instead of producing a partial rename.
 
 For a `provider_surface` issue, Plan can add a uniquely missing Make
 registration, C header declaration, or bounded C/N-API export registration,

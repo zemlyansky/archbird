@@ -241,6 +241,43 @@ def main() -> int:
     }:
         raise AssertionError(extension.project_counts(project))
 
+    qualified_source = (
+        "import pkg as public_pkg\n"
+        "value = public_pkg.target()\n"
+        "callback = public_pkg.target\n"
+    )
+    qualified_raw = qualified_source.encode()
+    qualified = json.loads(
+        provider.python_ast_provider_facts(
+            project="python-test",
+            path="pkg/qualified.py",
+            text=qualified_source,
+            source_manifest_sha256="0" * 64,
+        )
+    )
+    qualified_uses = [
+        row
+        for row in qualified["facts"]
+        if row["domain"] == "name-uses"
+        and row["kind"]
+        in {"imported-attribute-call", "imported-attribute-reference"}
+    ]
+    witnessed_uses = {
+        (
+            row["kind"],
+            qualified_raw[row["span"]["start"] : row["span"]["end"]],
+        )
+        for row in qualified_uses
+    }
+    if witnessed_uses != {
+        ("imported-attribute-call", b"target"),
+        ("imported-attribute-reference", b"target"),
+    }:
+        raise AssertionError(
+            "qualified Python evidence must anchor each replaceable member "
+            f"token: {qualified_uses!r}"
+        )
+
     multiline_call = "result = (\n    document\n).encode('utf-8')\n"
     multiline_bundle = json.loads(
         provider.python_ast_provider_facts(

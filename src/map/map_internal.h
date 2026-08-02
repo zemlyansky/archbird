@@ -65,6 +65,7 @@ typedef struct AbMapEdgeMention {
   const AbString *source;
   AbString target;
   AbString name;
+  AbString site_name;
   AbString site_fact_id;
   uint64_t site_line;
   size_t site_span_start;
@@ -403,6 +404,13 @@ ArchbirdStatus ab_map_graph_add_edge_evidence_site(
     const AbString *name, const AbString *fact_id, uint64_t line,
     size_t span_start, size_t span_end, const char *evidence_basis,
     const AbString *evidence_provider, const AbString *evidence_state);
+ArchbirdStatus ab_map_graph_add_edge_evidence_named_site(
+    ArchbirdEngine *engine, AbMapGraph *graph, const char *kind,
+    const AbString *source, const char *target, size_t target_length,
+    const AbString *name, const AbString *site_name, const AbString *fact_id,
+    uint64_t line, size_t span_start, size_t span_end,
+    const char *evidence_basis, const AbString *evidence_provider,
+    const AbString *evidence_state);
 void ab_map_graph_sort(AbMapGraph *graph);
 void ab_map_package_clear(ArchbirdEngine *engine, AbMapPackage *package);
 

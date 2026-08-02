@@ -1,5 +1,6 @@
 #include "projection_internal.h"
 
+#include "artifact_validation.h"
 #include "component_membership.h"
 #include "path_match.h"
 #include "sha256.h"
@@ -5269,6 +5270,91 @@ static int object_has_name(const AbValue *object, const AbString *name) {
   return 0;
 }
 
+static int symbol_occurrence_edge_kind(const AbValue *kind) {
+  static const char *const exact_kinds[] = {
+      "attribute-call",   "attribute-reference", "decorator",
+      "imported-call",    "imported-reference",  "member-call",
+      "member-reference", "semantic-call",       "semantic-reference",
+  };
+  size_t index;
+  if (!kind || kind->kind != AB_VALUE_STRING)
+    return 0;
+  for (index = 0; index < sizeof(exact_kinds) / sizeof(exact_kinds[0]); index++)
+    if (ab_projection_value_is(kind, exact_kinds[index]))
+      return 1;
+  return 0;
+}
+
+static const AbString *edge_primary_provider(const AbValue *edge) {
+  const AbValue *evidence = ab_value_member(edge, "evidence");
+  const AbValue *provider;
+  if (!evidence || evidence->kind != AB_VALUE_ARRAY ||
+      !evidence->as.array.count)
+    return NULL;
+  provider = ab_value_member(&evidence->as.array.items[0], "provider");
+  return provider && provider->kind == AB_VALUE_STRING ? &provider->as.text
+                                                       : NULL;
+}
+
+static ArchbirdStatus add_symbol_edge_occurrences(
+    AbProjectionContext *context, AbProjectionData *fact,
+    const AbString *project, const AbString *symbol, const AbString *leaf,
+    const SymbolOccurrencePaths *targets, SymbolOccurrencePaths *relevant,
+    const AbValue *edges) {
+  AbString exact = {(char *)"exact", 5};
+  size_t edge_index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (edge_index = 0;
+       status == ARCHBIRD_OK && edge_index < edges->as.array.count;
+       edge_index++) {
+    const AbValue *edge = &edges->as.array.items[edge_index];
+    const AbValue *kind = ab_value_member(edge, "kind");
+    const AbValue *source = ab_value_member(edge, "source");
+    const AbValue *target = ab_value_member(edge, "target");
+    const AbValue *sites = ab_value_member(edge, "sites");
+    const AbString *provider;
+    size_t site_index;
+    if (!symbol_occurrence_edge_kind(kind) || !source ||
+        source->kind != AB_VALUE_STRING || !target ||
+        target->kind != AB_VALUE_STRING ||
+        !occurrence_paths_has(targets, &target->as.text) || !sites ||
+        sites->kind != AB_VALUE_ARRAY)
+      continue;
+    provider = edge_primary_provider(edge);
+    for (site_index = 0;
+         status == ARCHBIRD_OK && site_index < sites->as.array.count;
+         site_index++) {
+      const AbValue *site = &sites->as.array.items[site_index];
+      const AbValue *name = ab_value_member(site, "name");
+      const AbValue *fact_id = ab_value_member(site, "fact_id");
+      AbProjectionEvidence evidence = {0};
+      const char *state = "current";
+      uint64_t line = 0;
+      if (!name || name->kind != AB_VALUE_STRING ||
+          (!ab_string_equal(&name->as.text, leaf) &&
+           !ab_string_equal(&name->as.text, symbol)))
+        continue;
+      status = occurrence_paths_add(context->engine, relevant, &source->as.text,
+                                    NULL);
+      if (status == ARCHBIRD_OK)
+        status = edge_evidence(context, project, edge, site, &evidence, &state);
+      (void)ab_value_u64(ab_value_member(site, "line"), &line);
+      if (status == ARCHBIRD_OK)
+        status = add_symbol_occurrence(
+            context, fact, symbol, &source->as.text, "reference",
+            fact_id && fact_id->kind == AB_VALUE_STRING ? &fact_id->as.text
+                                                        : NULL,
+            provider, &exact, ab_value_member(site, "span"), line, state,
+            strcmp(state, "current")
+                ? "symbol edge does not have current exact evidence"
+                : "",
+            &evidence);
+      ab_projection_evidence_free(context->engine, &evidence);
+    }
+  }
+  return status;
+}
+
 static ArchbirdStatus
 add_missing_occurrence_anchor(AbProjectionContext *context,
                               AbProjectionData *fact, const AbString *symbol,
@@ -5357,6 +5443,29 @@ static ArchbirdStatus extract_symbol_occurrences(AbProjectionContext *context,
         continue;
       status = occurrence_paths_add(context->engine, &targets, &path->as.text,
                                     &added);
+      if (status == ARCHBIRD_OK)
+        status = occurrence_paths_add(context->engine, &relevant,
+                                      &path->as.text, NULL);
+    }
+  }
+  if (status == ARCHBIRD_OK && !targets.count && seed_paths &&
+      seed_paths->kind == AB_VALUE_ARRAY && seed_paths->as.array.count) {
+    for (file_index = 0;
+         status == ARCHBIRD_OK && file_index < seed_paths->as.array.count;
+         file_index++) {
+      const AbValue *path = &seed_paths->as.array.items[file_index];
+      if (!ab_artifact_repository_literal_path(path)) {
+        occurrence_paths_free(context->engine, &targets);
+        occurrence_paths_free(context->engine, &relevant);
+        ab_projection_data_free(context->engine, fact);
+        return ab_projection_data_unknown(
+            context->engine, fact, &plan->id, &project->as.text, "set",
+            "selected symbol has no declaration in the Map");
+      }
+      if (!map_file(context, &path->as.text))
+        continue;
+      status =
+          occurrence_paths_add(context->engine, &targets, &path->as.text, NULL);
       if (status == ARCHBIRD_OK)
         status = occurrence_paths_add(context->engine, &relevant,
                                       &path->as.text, NULL);
@@ -5475,6 +5584,7 @@ static ArchbirdStatus extract_symbol_occurrences(AbProjectionContext *context,
       const AbValue *resolution;
       const AbValue *source;
       const AbValue *source_path;
+      const AbValue *source_name;
       const AbValue *evidence;
       const char *state;
       const char *message;
@@ -5485,6 +5595,7 @@ static ArchbirdStatus extract_symbol_occurrences(AbProjectionContext *context,
       resolution = ab_value_member(row, "resolution");
       source = ab_value_member(row, "source");
       source_path = ab_value_member(source, "path");
+      source_name = ab_value_member(row, "name");
       evidence = ab_value_member(row, "evidence");
       state =
           ab_projection_value_is(resolution, "unique") ? "current" : "unknown";
@@ -5498,6 +5609,11 @@ static ArchbirdStatus extract_symbol_occurrences(AbProjectionContext *context,
                  : "reference";
       status = occurrence_paths_add(context->engine, &relevant,
                                     &source_path->as.text, NULL);
+      if (role && !strcmp(role, "reference") &&
+          (!source_name || source_name->kind != AB_VALUE_STRING ||
+           (!ab_string_equal(&source_name->as.text, &leaf) &&
+            !ab_string_equal(&source_name->as.text, symbol))))
+        continue;
       for (evidence_index = 0; status == ARCHBIRD_OK && evidence &&
                                evidence_index < evidence->as.array.count;
            evidence_index++) {
@@ -5517,6 +5633,10 @@ static ArchbirdStatus extract_symbol_occurrences(AbProjectionContext *context,
       }
     }
   }
+  if (status == ARCHBIRD_OK)
+    status =
+        add_symbol_edge_occurrences(context, fact, &project->as.text, symbol,
+                                    &leaf, &targets, &relevant, edges);
   changed = 1;
   while (status == ARCHBIRD_OK && changed) {
     size_t edge_index;
@@ -5630,7 +5750,7 @@ static ArchbirdStatus extract_symbol_occurrences(AbProjectionContext *context,
       status = invalid_map_inventory(
           context, "Map has invalid symbol occurrence discovery coverage");
     else
-      unsupported = oversized + unsupported_known;
+      unsupported = oversized;
   } else if (status == ARCHBIRD_OK) {
     status = invalid_map_inventory(
         context, "Map has no symbol occurrence discovery coverage");

@@ -43,10 +43,11 @@ _DOMAINS = (
     "module-reexports",
     "name-uses",
     "reexport-candidates",
+    "symbol-references",
     "symbols",
 )
 _CONFIGURATION_BYTES = (
-    b'{"contract":"archbird-python-ast-v3",'
+    b'{"contract":"archbird-python-ast-v4",'
     b'"provider":"archbird-python-ast","schema_version":1}'
 )
 _STDLIB = set(getattr(sys, "stdlib_module_names", ())) | {
@@ -913,6 +914,52 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             },
         )
 
+    def _record_imported_attribute_use(
+        self, node: ast.Attribute, kind: str
+    ) -> bool:
+        chain = _attribute_chain(node)
+        if chain is None:
+            return False
+        root, attributes = chain
+        binding = self._import_binding(root)
+        if binding is None or not attributes:
+            return False
+        module, imported, local = binding
+        module_steps = [
+            *([imported] if imported else []),
+            *attributes[:-1],
+        ]
+        target_symbol = attributes[-1]
+        target_module = _join_module(module, module_steps)
+        full_span = _absolute_span(node, self.starts)
+        span = self.tokens.named(target_symbol, full_span, reverse=True)
+        key = ":".join(
+            (
+                str(len(module.encode("utf-8"))),
+                module,
+                ".".join(module_steps),
+                target_symbol,
+                local,
+            )
+        )
+        self.facts.add(
+            "name-uses",
+            kind,
+            span,
+            key,
+            target_symbol,
+            {
+                "enclosing": self._qualname("").rstrip("."),
+                "imported": target_symbol,
+                "line": _line_for_span(self.starts, span),
+                "local": local,
+                "module": target_module,
+                "module_steps": module_steps,
+                "root_module": module,
+            },
+        )
+        return True
+
     def _visit_function_signature_parts(self, node: ast.AST) -> None:
         """Visit signature expressions in their lexical, not execution, owner.
 
@@ -1436,50 +1483,17 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 },
             )
             chain = _attribute_chain(node.func)
-            if chain is not None:
-                root, attributes = chain
-                binding = self._import_binding(root)
-                if binding is not None and attributes:
-                    module, imported, local = binding
-                    module_steps = [
-                        *([imported] if imported else []),
-                        *attributes[:-1],
-                    ]
-                    target_symbol = attributes[-1]
-                    target_module = _join_module(module, module_steps)
-                    key = ":".join(
-                        (
-                            str(len(module.encode("utf-8"))),
-                            module,
-                            ".".join(module_steps),
-                            target_symbol,
-                            local,
-                        )
-                    )
-                    self.facts.add(
-                        "name-uses",
-                        "imported-attribute-call",
-                        full_span,
-                        key,
-                        target_symbol,
-                        {
-                            "enclosing": self._qualname("").rstrip("."),
-                            "imported": target_symbol,
-                            "line": node.func.lineno,
-                            "local": local,
-                            "module": target_module,
-                            "module_steps": module_steps,
-                            "root_module": module,
-                            },
-                        )
-                elif attributes:
+            if not self._record_imported_attribute_use(
+                node.func, "imported-attribute-call"
+            ):
+                if chain is not None and chain[1]:
                     self._record_receiver_call(
-                        node, node.func.value, attributes[-1], full_span
+                        node, node.func.value, chain[1][-1], full_span
                     )
-            else:
-                self._record_receiver_call(
-                    node, node.func.value, node.func.attr, full_span
-                )
+                elif chain is None:
+                    self._record_receiver_call(
+                        node, node.func.value, node.func.attr, full_span
+                    )
             # A simple name.attribute chain is represented by the attribute
             # call fact.  For a computed receiver, retain nested evidence such
             # as ``factory().method()`` by visiting the receiver expression.
@@ -1495,11 +1509,38 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         for keyword in node.keywords:
             self.visit(keyword.value)
 
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if isinstance(node.ctx, ast.Load) and self._record_imported_attribute_use(
+            node, "imported-attribute-reference"
+        ):
+            return
+        self.visit(node.value)
+
     def visit_Name(self, node: ast.Name) -> None:
         if not isinstance(node.ctx, ast.Load):
             return
         binding = self._import_binding(node.id)
         if binding is None:
+            name_binding = self._binding(node.id)
+            if name_binding not in {"project", "unknown"}:
+                return
+            span = _absolute_span(node, self.starts)
+            attributes = {
+                "binding": name_binding,
+                "context": "value",
+                "enclosing": self._qualname("").rstrip("."),
+                "line": node.lineno,
+            }
+            if attributes["enclosing"]:
+                attributes["container"] = attributes["enclosing"]
+            self.facts.add(
+                "symbol-references",
+                "value",
+                span,
+                node.id,
+                node.id,
+                attributes,
+            )
             return
         module, imported, local = binding
         span = _absolute_span(node, self.starts)
@@ -1963,7 +2004,7 @@ def python_ast_provider_facts(
             "implementation_sha256": _implementation_sha256(),
             "name": "archbird-python-ast",
             "runtime": f"cpython-{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "version": "3",
+            "version": "4",
         },
         "provenance": "derived",
         "resolutions": [],

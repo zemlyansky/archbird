@@ -160,7 +160,9 @@ static int validate_projection_definition(ArchbirdEngine *engine,
   AbProjectionPlan plan = {0};
   ArchbirdStatus status;
   if (!value || value->kind != AB_VALUE_OBJECT ||
-      !ab_artifact_text_is(ab_value_member(value, "select"), "file_edges"))
+      (!ab_artifact_text_is(ab_value_member(value, "select"), "file_edges") &&
+       !ab_artifact_text_is(ab_value_member(value, "select"),
+                            "symbol_occurrences")))
     return 0;
   status = ab_projection_plan_compile(engine, value, id, &plan);
   ab_projection_plan_free(engine, &plan);

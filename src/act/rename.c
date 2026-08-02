@@ -204,12 +204,13 @@ static ArchbirdStatus ground_occurrence(AbActContext *context,
   const AbValue *file;
   const AbValue *file_sha;
   const AbValue *language;
-  AbActRenameEvidence evidence;
+  AbRenameEvidence evidence;
   ArchbirdSourceView source;
   uint64_t start;
   uint64_t end;
+  size_t replacement_start;
+  size_t replacement_end;
   const char *reason = NULL;
-  int supported = 0;
   ArchbirdStatus status;
   if (!path || path->kind != AB_VALUE_STRING || !ab_artifact_sha256(sha) ||
       !ab_artifact_safe_integer(start_value, &start) ||
@@ -223,18 +224,8 @@ static ArchbirdStatus ground_occurrence(AbActContext *context,
   if (!file || !ab_artifact_sha256(file_sha) || !ab_value_equal(file_sha, sha))
     return reject(context, ARCHBIRD_CONFLICT,
                   "an occurrence does not match one current mapped file");
-  evidence.file = file;
-  evidence.providers = providers;
-  evidence.role = &role->as.text;
   language = field(file, "language");
-  if (value_is(language, "python"))
-    supported = ab_act_python_rename_evidence_supported(&evidence, &reason);
-  else if (value_is(language, "javascript") ||
-           value_is(language, "typescript") || value_is(language, "tsx"))
-    supported = ab_act_ecmascript_rename_evidence_supported(&evidence, &reason);
-  else
-    reason = "no language executor supports the mapped source language";
-  if (!supported)
+  if (!ab_rename_evidence_supported(item, file, &reason))
     return reject(context, ARCHBIRD_POLICY_REJECTED,
                   reason ? reason
                          : "no language executor supports the occurrence");
@@ -246,15 +237,30 @@ static ArchbirdStatus ground_occurrence(AbActContext *context,
         context, item_id, "archbird.native.ecmascript.rename-symbol@1");
   if (status == ARCHBIRD_OK)
     status = ab_act_executor_source(context, &path->as.text, &source);
-  if (status == ARCHBIRD_OK &&
+  if (status == ARCHBIRD_OK && end > source.byte_length)
+    status = reject(context, ARCHBIRD_CONFLICT,
+                    "an occurrence source span is outside the current source");
+  replacement_start = (size_t)start;
+  replacement_end = (size_t)end;
+  evidence.file = file;
+  evidence.providers = providers;
+  evidence.role = &role->as.text;
+  if (status == ARCHBIRD_OK && value_is(language, "python") &&
+      !ab_act_python_rename_replacement_span(
+          &evidence, source.bytes, source.byte_length, leaf, &replacement_start,
+          &replacement_end, &reason))
+    status =
+        reject(context, ARCHBIRD_CONFLICT,
+               reason ? reason : "the Python occurrence cannot be grounded");
+  if (status == ARCHBIRD_OK && !value_is(language, "python") &&
       (end > source.byte_length || end - start != leaf->length ||
        memcmp(source.bytes + (size_t)start, leaf->data, leaf->length) != 0))
     status = reject(context, ARCHBIRD_CONFLICT,
-                    "an occurrence source span does not contain the old name");
+                    "an occurrence source span is not the old identifier");
   if (status == ARCHBIRD_OK)
     status = ab_act_executor_replace_exact(
-        context, item_id, &path->as.text, (size_t)start, (size_t)end,
-        source.bytes + (size_t)start, (size_t)(end - start),
+        context, item_id, &path->as.text, replacement_start, replacement_end,
+        source.bytes + replacement_start, replacement_end - replacement_start,
         (const uint8_t *)new_name->data, new_name->length);
   return status;
 }

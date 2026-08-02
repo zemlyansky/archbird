@@ -11,6 +11,7 @@
 #include "sha256.h"
 #include "verification_artifact.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -581,10 +582,107 @@ static const AbValue *item_attribute(const AbProjectionItem *item,
   return NULL;
 }
 
-static int destructive_graph_complete(const AbPlanCompile *context) {
+static const AbValue *map_file_for_path(const AbPlanCompile *context,
+                                        const AbString *path) {
+  const AbValue *files = field(&context->map, "files");
+  const AbValue *match = NULL;
+  size_t index;
+  for (index = 0;
+       files && files->kind == AB_VALUE_ARRAY && index < files->as.array.count;
+       index++) {
+    const AbValue *candidate = &files->as.array.items[index];
+    const AbValue *candidate_path = field(candidate, "path");
+    if (!candidate_path || candidate_path->kind != AB_VALUE_STRING ||
+        !ab_string_equal(&candidate_path->as.text, path))
+      continue;
+    if (match)
+      return NULL;
+    match = candidate;
+  }
+  return match;
+}
+
+static int endpoint_matches_path(const AbValue *endpoint,
+                                 const AbString *path) {
+  static const char prefix[] = "file:";
+  return endpoint && endpoint->kind == AB_VALUE_STRING &&
+         endpoint->as.text.length == sizeof(prefix) - 1 + path->length &&
+         memcmp(endpoint->as.text.data, prefix, sizeof(prefix) - 1) == 0 &&
+         memcmp(endpoint->as.text.data + sizeof(prefix) - 1, path->data,
+                path->length) == 0;
+}
+
+static int names_may_target_file(const AbValue *names, const AbValue *file) {
+  const AbValue *symbols = field(file, "symbols");
+  size_t name_index;
+  size_t symbol_index;
+  if (!names || names->kind != AB_VALUE_ARRAY || !names->as.array.count ||
+      !symbols || symbols->kind != AB_VALUE_ARRAY)
+    return 1;
+  for (name_index = 0; name_index < names->as.array.count; name_index++) {
+    const AbValue *name = &names->as.array.items[name_index];
+    if (name->kind != AB_VALUE_STRING)
+      return 1;
+    for (symbol_index = 0; symbol_index < symbols->as.array.count;
+         symbol_index++) {
+      const AbValue *symbol_name =
+          field(&symbols->as.array.items[symbol_index], "name");
+      if (symbol_name && symbol_name->kind == AB_VALUE_STRING &&
+          ab_value_equal(name, symbol_name))
+        return 1;
+    }
+  }
+  return 0;
+}
+
+static int destructive_graph_complete_for_path(const AbPlanCompile *context,
+                                               const AbString *path) {
   const AbProjectionData *fact = &context->destructive_result.data;
-  return strcmp(ab_projection_data_classification(fact), "complete") == 0 &&
-         fact->selection.has_truncated && !fact->selection.truncated;
+  const AbValue *file = map_file_for_path(context, path);
+  uint64_t ledger_unknown = 0;
+  uint64_t relation_unknown = 0;
+  size_t index;
+  if (!file || !fact->selection.has_truncated || fact->selection.truncated)
+    return 0;
+  if (strcmp(ab_projection_data_classification(fact), "complete") == 0)
+    return 1;
+  for (index = 0; index < fact->item_count; index++) {
+    const AbProjectionItem *item = &fact->items[index];
+    const AbValue *record_kind = item_attribute(item, "record_kind");
+    if (!string_equal_literal(&item->state, "unknown"))
+      continue;
+    if (ab_artifact_text_is(record_kind, "ledger")) {
+      const AbValue *unknown = item_attribute(item, "unknown");
+      uint64_t count = 0;
+      if (!ab_artifact_safe_integer(unknown, &count) ||
+          UINT64_MAX - ledger_unknown < count)
+        return 0;
+      ledger_unknown += count;
+      continue;
+    }
+    if (ab_artifact_text_is(record_kind, "node"))
+      continue;
+    if (ab_artifact_text_is(record_kind, "relation")) {
+      const AbValue *target = item_attribute(item, "target");
+      const AbValue *names = item_attribute(item, "names");
+      relation_unknown++;
+      /*
+       * Deleting the source removes its outgoing relation. Only an unknown
+       * relation targeting the path can conceal a consumer of the deletion.
+       */
+      if (endpoint_matches_path(target, path))
+        return 0;
+      if (!target || target->kind != AB_VALUE_STRING)
+        return 0;
+      if (target->as.text.length >= 11 &&
+          memcmp(target->as.text.data, "unresolved:", 11) == 0 &&
+          names_may_target_file(names, file))
+        return 0;
+      continue;
+    }
+    return 0;
+  }
+  return ledger_unknown <= relation_unknown;
 }
 
 static int path_has_consumers(const AbPlanCompile *context,
@@ -672,11 +770,11 @@ static ArchbirdStatus append_forbidden_paths(AbPlanCompile *context,
     status = source_lock(context, &item->key, &sha, &source);
     if (status != ARCHBIRD_OK)
       goto cleanup;
-    if (!destructive_graph_complete(context))
-      reason = "Destructive relation evidence is not complete and exhaustive.";
-    else if (path_has_consumers(context, &item->key))
+    if (path_has_consumers(context, &item->key))
       reason = "Known consumers require a reviewed rewrite before deleting "
                "this path.";
+    else if (!destructive_graph_complete_for_path(context, &item->key))
+      reason = "Destructive relation evidence is not complete and exhaustive.";
     ab_buffer_init(&operation, context->engine);
     if (reason) {
       status =
@@ -810,8 +908,16 @@ static ArchbirdStatus compile_constraint(AbPlanCompile *context,
   if (!id || id->kind != AB_VALUE_STRING ||
       !constraint_selected(context, &id->as.text))
     return ARCHBIRD_OK;
-  if (ab_artifact_text_is(status_value, "pass") ||
-      ab_artifact_text_is(status_value, "waived") ||
+  if (ab_artifact_text_is(status_value, "pass")) {
+    status = ab_plan_compile_symbol_residual(
+        context->engine, context->project, &context->map,
+        context->before_map.kind ? &context->before_map : NULL,
+        &context->builder, constraint, definition, &handled);
+    if (status != ARCHBIRD_OK || handled)
+      return status;
+    return ARCHBIRD_OK;
+  }
+  if (ab_artifact_text_is(status_value, "waived") ||
       ab_artifact_text_is(status_value, "not_applicable"))
     return ARCHBIRD_OK;
   status = ab_plan_compile_symbol_constraint(

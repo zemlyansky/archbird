@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 from archbird import act_transport
+from archbird.native import evaluate_projection_json, render_plan_markdown
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHBIRD = ROOT / "archbird"
@@ -150,7 +151,11 @@ class PlanActCliTest(unittest.TestCase):
             }
         )
         legacy = self.root / "legacy.py"
-        legacy.write_text("def obsolete():\n    return 1\n")
+        legacy.write_text(
+            "import missing_dependency\n\n"
+            "def obsolete():\n"
+            "    return missing_dependency.value\n"
+        )
         plan_path = self.plan_path()
         run(
             "plan",
@@ -698,7 +703,9 @@ class PlanActCliTest(unittest.TestCase):
         plan = json.loads(plan_path.read_bytes())
         self.assertEqual(len(plan["items"]), 1)
         item = plan["items"][0]
-        self.assertTrue(item["executable"])
+        self.assertTrue(
+            item["executable"], json.dumps(item, indent=2, sort_keys=True)
+        )
         self.assertEqual(item["provenance"], "asserted")
         self.assertEqual(
             item["operation"],
@@ -1032,6 +1039,276 @@ class PlanActCliTest(unittest.TestCase):
         run("apply", str(act_path), "--root", str(project))
         run("verify", "FFI-SURFACE", "--root", str(project), "--check")
         self.run_surface_gates(project)
+
+    def test_before_map_reports_incomplete_symbol_rename_closure(self) -> None:
+        self.configure(
+            {
+                "API-NAME": {
+                    "actual": {
+                        "projection": {
+                            "select": "symbols",
+                            "paths": ["api.py"],
+                            "names": ["old_api", "new_api"],
+                        }
+                    },
+                    "assert": "set_equal",
+                    "expected": {"literal": ["new_api"]},
+                    "owner": "api",
+                    "rationale": "The reviewed internal API rename is complete.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+        )
+        api = self.root / "api.py"
+        consumer = self.root / "consumer.py"
+        api.write_text(
+            "def old_api(value):\n"
+            "    return value\n\n"
+            "def local_use(value):\n"
+            "    return old_api(value)\n"
+        )
+        consumer.write_text(
+            "from api import old_api\n\n"
+            "def external_use(value):\n"
+            "    return old_api(value)\n"
+        )
+        before_map_path = self.plan_path("symbol-rename-before-map.json")
+        run(
+            "map",
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            "--output",
+            str(before_map_path),
+            "--check",
+        )
+
+        api.write_text(api.read_text().replace("def old_api", "def new_api"))
+        run("verify", "API-NAME", "--root", str(self.root), "--check")
+        current_map_path = self.plan_path("symbol-rename-current-map.json")
+        run(
+            "map",
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            "--output",
+            str(current_map_path),
+            "--check",
+        )
+        entity_projection = {
+            "id": "observed-symbol-entities",
+            "select": "symbol_entities",
+            "paths": ["api.py"],
+            "names": ["old_api", "new_api"],
+        }
+        before_entities = json.loads(
+            evaluate_projection_json(
+                before_map_path.read_bytes(), entity_projection
+            )
+        )
+        current_entities = json.loads(
+            evaluate_projection_json(
+                current_map_path.read_bytes(), entity_projection
+            )
+        )
+        self.assertEqual(
+            [item["label"] for item in before_entities["fact"]["items"]],
+            ["old_api"],
+        )
+        self.assertEqual(
+            [item["label"] for item in current_entities["fact"]["items"]],
+            ["new_api"],
+        )
+        before_occurrences = json.loads(
+            evaluate_projection_json(
+                before_map_path.read_bytes(),
+                {
+                    "id": "before-old-api-occurrences",
+                    "select": "symbol_occurrences",
+                    "paths": ["api.py"],
+                    "names": ["old_api"],
+                },
+            )
+        )
+        self.assertEqual(
+            before_occurrences["completeness"]["classification"], "complete"
+        )
+        occurrences = json.loads(
+            evaluate_projection_json(
+                current_map_path.read_bytes(),
+                {
+                    "id": "residual-old-api-occurrences",
+                    "select": "symbol_occurrences",
+                    "paths": ["api.py"],
+                    "names": ["old_api"],
+                },
+            )
+        )
+        self.assertEqual(
+            {
+                item["attributes"]["path"]
+                for item in occurrences["fact"]["items"]
+            },
+            {"api.py", "consumer.py"},
+        )
+        self.assertEqual(
+            occurrences["completeness"]["classification"],
+            "incomplete",
+            json.dumps(occurrences, indent=2, sort_keys=True),
+        )
+        partial_plan_path = self.plan_path("symbol-rename-partial-plan.json")
+        run(
+            "plan",
+            "API-NAME",
+            "--root",
+            str(self.root),
+            "--before-map",
+            str(before_map_path),
+            "--output",
+            str(partial_plan_path),
+        )
+        partial_plan = json.loads(partial_plan_path.read_bytes())
+        self.assertEqual(
+            len(partial_plan["items"]),
+            1,
+            json.dumps(partial_plan, indent=2, sort_keys=True),
+        )
+        item = partial_plan["items"][0]
+        self.assertFalse(item["executable"])
+        self.assertEqual(item["provenance"], "derived")
+        self.assertEqual(item["operation"]["action"], "rename_symbol")
+        self.assertEqual(item["operation"]["symbol"], "old_api")
+        self.assertEqual(item["operation"]["new_name"], "new_api")
+        self.assertEqual(
+            item["operation"]["source_paths"], ["api.py", "consumer.py"]
+        )
+        self.assertEqual(
+            {(row["path"], row["line"]) for row in item["evidence"]},
+            {("api.py", 5), ("consumer.py", 0), ("consumer.py", 4)},
+        )
+        self.assertTrue(
+            any("old_api" in row["detail"] for row in item["evidence"])
+        )
+        self.assertIn(
+            "complete and exhaustive",
+            " ".join(item["non_executable_reasons"]),
+        )
+        self.assertEqual(item["acceptance"]["constraints"], ["API-NAME"])
+        markdown = render_plan_markdown(partial_plan_path.read_bytes()).decode()
+        self.assertIn("### 1. INPUT REQUIRED", markdown)
+        self.assertIn("`api.py`:5 - reference occurrence old\\_api", markdown)
+        self.assertIn(
+            "`consumer.py`:4 - reference occurrence old\\_api", markdown
+        )
+
+        api.write_text(api.read_text().replace("old_api(value)", "new_api(value)"))
+        consumer.write_text(consumer.read_text().replace("old_api", "new_api"))
+        complete_plan_path = self.plan_path("symbol-rename-complete-plan.json")
+        run(
+            "plan",
+            "API-NAME",
+            "--root",
+            str(self.root),
+            "--before-map",
+            str(before_map_path),
+            "--output",
+            str(complete_plan_path),
+        )
+        complete_plan = json.loads(complete_plan_path.read_bytes())
+        self.assertEqual(complete_plan["items"], [])
+
+    def test_before_map_blocks_unresolved_python_value_reference(self) -> None:
+        self.configure(
+            {
+                "API-NAME": {
+                    "actual": {
+                        "projection": {
+                            "select": "symbols",
+                            "paths": ["api.py"],
+                            "names": ["old_api", "new_api"],
+                        }
+                    },
+                    "assert": "set_equal",
+                    "expected": {"literal": ["new_api"]},
+                    "owner": "api",
+                    "rationale": "The reviewed internal API rename is complete.",
+                }
+            },
+            layers=[
+                {
+                    "name": "python",
+                    "language": "python",
+                    "globs": ["*.py"],
+                    "import_roots": ["."],
+                }
+            ],
+        )
+        api = self.root / "api.py"
+        api.write_text(
+            "def old_api(value):\n"
+            "    return value\n\n"
+            "callback = old_api\n"
+        )
+        before_map_path = self.plan_path("value-before-map.json")
+        run(
+            "map",
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            "--output",
+            str(before_map_path),
+            "--check",
+        )
+        api.write_text(api.read_text().replace("def old_api", "def new_api"))
+        run("verify", "API-NAME", "--root", str(self.root), "--check")
+        plan_path = self.plan_path("value-residual-plan.json")
+        run(
+            "plan",
+            "API-NAME",
+            "--root",
+            str(self.root),
+            "--before-map",
+            str(before_map_path),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        item = plan["items"][0]
+        self.assertFalse(item["executable"])
+        self.assertEqual(item["operation"]["action"], "rename_symbol")
+        self.assertEqual(item["operation"]["source_paths"], ["api.py"])
+        self.assertIn(
+            ("api.py", 4, "reference occurrence old_api"),
+            {
+                (row["path"], row["line"], row["detail"])
+                for row in item["evidence"]
+            },
+        )
+        self.assertIn(
+            "complete and exhaustive",
+            " ".join(item["non_executable_reasons"]),
+        )
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            expected=2,
+        )
+        self.assertIn("manual or blocked item", rejected.stderr.decode())
 
     def test_required_provider_surface_derives_exact_make_insertion(self) -> None:
         shutil.copytree(REGISTRATION_FIXTURE, self.root, dirs_exist_ok=True)
@@ -1849,9 +2126,40 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(
             manual["items"][0]["operation"]["action"], "declare_symbol"
         )
-        style_rejected = run(
+        style_preview = run(
             "act",
             str(manual_path),
+            "--root",
+            str(self.root),
+            "--format", "patch",
+        ).stdout.decode()
+        self.assertIn(
+            "+extern int core_sum(int left, int right);",
+            style_preview,
+        )
+
+        core = self.root / "src/core.c"
+        header.write_text(
+            header.read_text().replace(
+                "\n#endif\n",
+                "\nstatic int core_other(int value);\n\n#endif\n",
+            )
+        )
+        core.write_text(
+            core.read_text() + "\nint core_other(int value) { return value; }\n"
+        )
+        conflicting_path = self.plan_path("conflicting-header-plan.json")
+        run(
+            "plan",
+            "REQUIRED-HEADER",
+            "--root",
+            str(self.root),
+            "--output",
+            str(conflicting_path),
+        )
+        conflicting = run(
+            "act",
+            str(conflicting_path),
             "--root",
             str(self.root),
             "--format",
@@ -1859,15 +2167,20 @@ class PlanActCliTest(unittest.TestCase):
             expected=2,
         )
         self.assertIn(
-            "signature style",
-            style_rejected.stderr.decode(),
+            "conflicting C signature styles",
+            conflicting.stderr.decode(),
         )
-
         header.write_text(
-            header.read_text().replace(
-                "extern int core_peer", "int core_peer"
+            header.read_text()
+            .replace("extern int core_peer", "int core_peer")
+            .replace("\nstatic int core_other(int value);\n", "")
+        )
+        core.write_text(
+            core.read_text().replace(
+                "\nint core_other(int value) { return value; }\n", ""
             )
         )
+
         plan_path = self.plan_path("tampered-header-plan.json")
         run(
             "plan",
@@ -2090,14 +2403,26 @@ class PlanActCliTest(unittest.TestCase):
 
     def test_map_query_verify_plan_act_closes_a_multifile_rename(self) -> None:
         (self.root / "api.py").write_text(
-            "def old_api(value):\n    return value + 1\n"
+            "def old_api(value):\n"
+            "    return value + 1\n\n"
+            "callback = old_api\n\n"
+            "def local_use(value):\n"
+            "    return old_api(value)\n"
         )
         (self.root / "consumer.py").write_text(
             "from api import old_api\n"
             "result = old_api(1)\n"
         )
+        (self.root / "qualified.py").write_text(
+            "import api as public_api\n"
+            "result = public_api.old_api(2)\n"
+            "callback = public_api.old_api\n"
+        )
         (self.root / "unrelated.py").write_text(
             "def old_api(value):\n    return value - 1\n"
+        )
+        (self.root / "unsupported.go").write_text(
+            "package fixture\n\nfunc old_api() {}\n"
         )
         (self.root / "archbird.json").write_text(
             json.dumps(
@@ -2115,6 +2440,7 @@ class PlanActCliTest(unittest.TestCase):
                         "api-symbols": {
                             "select": "symbols",
                             "paths": ["api.py"],
+                            "names": ["old_api", "new_api"],
                         }
                     },
                     "constraints": {
@@ -2140,6 +2466,22 @@ class PlanActCliTest(unittest.TestCase):
             "--output",
             str(map_path),
             "--check",
+        )
+        rename_occurrences = json.loads(
+            evaluate_projection_json(
+                map_path.read_bytes(),
+                {
+                    "id": "reviewed-rename-occurrences",
+                    "select": "symbol_occurrences",
+                    "paths": ["api.py"],
+                    "names": ["old_api"],
+                },
+            )
+        )
+        self.assertEqual(
+            rename_occurrences["completeness"]["classification"],
+            "complete",
+            json.dumps(rename_occurrences, indent=2, sort_keys=True),
         )
         before_query = run(
             "query",
@@ -2188,7 +2530,9 @@ class PlanActCliTest(unittest.TestCase):
         plan_document = json.loads(plan_path.read_bytes())
         self.assertEqual(len(plan_document["items"]), 1)
         item = plan_document["items"][0]
-        self.assertTrue(item["executable"])
+        self.assertTrue(
+            item["executable"], json.dumps(item, indent=2, sort_keys=True)
+        )
         self.assertEqual(item["operation"]["action"], "rename_symbol")
         self.assertEqual(
             item["operation"]["projection"]["select"],
@@ -2197,7 +2541,30 @@ class PlanActCliTest(unittest.TestCase):
         self.assertEqual(item["operation"]["projection"]["paths"], ["api.py"])
         self.assertEqual(
             item["operation"]["source_paths"],
-            ["api.py", "consumer.py"],
+            ["api.py", "consumer.py", "qualified.py"],
+        )
+        self.assertEqual(
+            {
+                (row["path"], row["line"])
+                for row in item["evidence"]
+                if row["detail"].startswith(
+                    (
+                        "attribute-call",
+                        "attribute-reference",
+                        "declaration occurrence",
+                        "reference occurrence",
+                    )
+                )
+            },
+            {
+                ("api.py", 1),
+                ("api.py", 4),
+                ("api.py", 7),
+                ("consumer.py", 2),
+                ("qualified.py", 2),
+                ("qualified.py", 3),
+            },
+            json.dumps(item["evidence"], indent=2, sort_keys=True),
         )
         self.assertEqual(
             item["operation"]["projection_id"], "plan-symbol-occurrences"
@@ -2290,11 +2657,11 @@ class PlanActCliTest(unittest.TestCase):
                         "implementation_sha256"
                     ],
                     "item_ids": [item["id"]],
-                    "matches": 3,
-                    "reads": ["api.py", "consumer.py"],
+                    "matches": 7,
+                    "reads": ["api.py", "consumer.py", "qualified.py"],
                     "skipped": 0,
                     "unsupported": 0,
-                    "writes": ["api.py", "consumer.py"],
+                    "writes": ["api.py", "consumer.py", "qualified.py"],
                 }
             ],
         )
@@ -2302,6 +2669,7 @@ class PlanActCliTest(unittest.TestCase):
         run("apply", str(act_path), "--root", str(self.root))
         self.assertNotIn("old_api", (self.root / "api.py").read_text())
         self.assertNotIn("old_api", (self.root / "consumer.py").read_text())
+        self.assertNotIn("old_api", (self.root / "qualified.py").read_text())
         self.assertIn("old_api", (self.root / "unrelated.py").read_text())
         run("verify", "--root", str(self.root), "--check")
         after_query = run(
@@ -2316,7 +2684,83 @@ class PlanActCliTest(unittest.TestCase):
         )
         self.assertIn(b'"new_api"', after_query.stdout)
 
-    def test_act_rejects_rename_without_a_language_executor(self) -> None:
+    def test_qualified_symbol_rename_preserves_identity_and_executes_leaf(self) -> None:
+        (self.root / "api.py").write_text(
+            "class Service:\n"
+            "    def old_api(self, value):\n"
+            "        return value + 1\n"
+        )
+        (self.root / "archbird.json").write_text(
+            json.dumps(
+                {
+                    "project": "plan-act-qualified-rename",
+                    "layers": [
+                        {
+                            "name": "python",
+                            "language": "python",
+                            "globs": ["*.py"],
+                        }
+                    ],
+                    "projections": {
+                        "service-api": {
+                            "select": "symbols",
+                            "paths": ["api.py"],
+                            "names": [
+                                "Service.old_api",
+                                "Service.new_api",
+                            ],
+                        }
+                    },
+                    "constraints": {
+                        "SERVICE-API": {
+                            "assert": "set_equal",
+                            "actual": {"projection": "service-api"},
+                            "expected": {"literal": ["Service.new_api"]},
+                            "owner": "architecture",
+                            "rationale": (
+                                "The reviewed method identity rename is complete."
+                            ),
+                        }
+                    },
+                    "gates": {
+                        "service-api": {
+                            "argv": [
+                                sys.executable,
+                                "-c",
+                                (
+                                    "from api import Service;"
+                                    "assert Service().new_api(1)==2;"
+                                    "assert not hasattr(Service,'old_api')"
+                                ),
+                            ],
+                            "timeout_seconds": 30,
+                            "max_output_bytes": 65536,
+                        }
+                    },
+                },
+                sort_keys=True,
+            )
+        )
+        plan_path = self.plan_path("qualified-rename-plan.json")
+        run(
+            "plan",
+            "SERVICE-API",
+            "--root",
+            str(self.root),
+            "--rename",
+            "Service.old_api=Service.new_api",
+            "--output",
+            str(plan_path),
+        )
+        item = json.loads(plan_path.read_bytes())["items"][0]
+        self.assertTrue(item["executable"], item["non_executable_reasons"])
+        self.assertEqual(item["operation"]["symbol"], "Service.old_api")
+        self.assertEqual(item["operation"]["new_name"], "new_api")
+        act_path, _act = self.accepted_act(plan_path, "qualified-rename.act.json")
+        run("apply", str(act_path), "--root", str(self.root))
+        run("verify", "--root", str(self.root), "--check")
+
+    def test_plan_exposes_rename_without_a_language_executor(self) -> None:
         (self.root / "api.c").write_text(
             "int old_api(void) { return 1; }\n"
         )
@@ -2361,9 +2805,15 @@ class PlanActCliTest(unittest.TestCase):
             "--output",
             str(plan_path),
         )
-        operation = json.loads(plan_path.read_bytes())["items"][0]["operation"]
+        item = json.loads(plan_path.read_bytes())["items"][0]
+        operation = item["operation"]
         self.assertEqual(operation["action"], "rename_symbol")
         self.assertNotIn("sites", operation)
+        self.assertFalse(item["executable"])
+        self.assertIn(
+            "no language executor supports the mapped source language",
+            " ".join(item["non_executable_reasons"]),
+        )
         rejected = run(
             "act",
             str(plan_path),
@@ -2374,10 +2824,85 @@ class PlanActCliTest(unittest.TestCase):
             expected=2,
         )
         self.assertIn(
-            "no language executor supports the mapped source language",
+            "Plan contains a manual or blocked item",
             rejected.stderr.decode(),
         )
         self.assertIn("old_api", (self.root / "api.c").read_text())
+
+    def test_python_rename_updates_exact_all_export_literal(self) -> None:
+        (self.root / "api.py").write_text(
+            '__all__ = [r"old_api"]\n\n'
+            "def old_api(value):\n"
+            "    return value + 1\n"
+        )
+        (self.root / "archbird.json").write_text(
+            json.dumps(
+                {
+                    "project": "plan-act-python-export-rename",
+                    "layers": [
+                        {
+                            "name": "python",
+                            "language": "python",
+                            "globs": ["*.py"],
+                            "import_roots": ["."],
+                        }
+                    ],
+                    "projections": {
+                        "api-symbols": {
+                            "select": "symbols",
+                            "paths": ["api.py"],
+                            "names": ["old_api", "new_api"],
+                        }
+                    },
+                    "constraints": {
+                        "API-SURFACE": {
+                            "assert": "set_equal",
+                            "actual": {"projection": "api-symbols"},
+                            "expected": {"literal": ["new_api"]},
+                            "owner": "architecture",
+                            "rationale": "The reviewed API rename is complete.",
+                        }
+                    },
+                },
+                sort_keys=True,
+            )
+        )
+        plan_path = self.plan_path("python-export-rename-plan.json")
+        run(
+            "plan",
+            "API-SURFACE",
+            "--root",
+            str(self.root),
+            "--rename",
+            "old_api=new_api",
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertTrue(
+            plan["items"][0]["executable"],
+            json.dumps(plan, indent=2, sort_keys=True),
+        )
+        patch = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "patch",
+        ).stdout.decode()
+        self.assertIn('-__all__ = [r"old_api"]', patch)
+        self.assertIn('+__all__ = [r"new_api"]', patch)
+        act_path, act = self.accepted_act(
+            plan_path, "python-export-rename-act.json"
+        )
+        self.assertEqual(act["executors"][0]["matches"], 2)
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertIn(
+            '__all__ = [r"new_api"]',
+            (self.root / "api.py").read_text(),
+        )
+        run("verify", "--root", str(self.root), "--check")
 
     def test_neutral_plan_is_grounded_by_the_c_dependency_executor(self) -> None:
         shutil.copytree(REDIRECT_FIXTURE, self.root, dirs_exist_ok=True)
@@ -3544,6 +4069,7 @@ class PlanActCliTest(unittest.TestCase):
                     "allowed_removed": [],
                     "projection": {
                         "from_paths": ["consumer.py"],
+                        "kinds": ["import"],
                         "select": "file_edges",
                     },
                 }
@@ -3744,6 +4270,7 @@ class PlanActCliTest(unittest.TestCase):
                     "allowed_removed": [provider_edge_key],
                     "projection": {
                         "from_paths": ["consumer.py"],
+                        "kinds": ["import"],
                         "select": "file_edges",
                     },
                 }

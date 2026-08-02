@@ -584,9 +584,13 @@ function* typescriptProviderBundles({
           hashBytes,
         );
         const kind = referenceKind(node);
-          const attributes = {
-            declaration_count: symbol?.declarations?.length || 0,
-            enclosing: enclosingDefinition(node, sourceFile),
+        const attributes = {
+          declaration_count: symbol?.declarations?.length || 0,
+          enclosing: enclosingDefinition(node, sourceFile),
+          line:
+            sourceFile.getLineAndCharacterOfPosition(
+              node.getStart(sourceFile),
+            ).line + 1,
           reference_kind: kind,
           symbol_flags: symbol ? symbol.flags : 0,
           ...target.attributes,

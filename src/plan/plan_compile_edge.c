@@ -50,6 +50,10 @@ static ArchbirdStatus render_file_edge_delta(AbBuffer *output,
   if (status == ARCHBIRD_OK)
     status = ab_value_render(output, source);
   if (status == ARCHBIRD_OK)
+    status = literal(output, "],\"kinds\":[");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(output, kind);
+  if (status == ARCHBIRD_OK)
     status = literal(output, "],\"select\":\"file_edges\"}}]");
   ab_buffer_free(&key);
   return status;

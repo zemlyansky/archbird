@@ -229,6 +229,40 @@ def main() -> int:
     )
     if normalized_call.get("attributes", {}).get("source_name") != "ｗｗｗ":
         raise AssertionError(normalized_call)
+
+    qualified_source = (
+        "import pkg as public_pkg\n"
+        "value = public_pkg.target()\n"
+        "callback = public_pkg.target\n"
+    )
+    qualified_raw = qualified_source.encode()
+    qualified_document = json.loads(
+        provider.python_ast_provider_facts(
+            project="provider-applicability",
+            path="pkg/qualified.py",
+            source_bytes=qualified_raw,
+        )
+    )
+    qualified_uses = [
+        row
+        for row in qualified_document["facts"]
+        if row["domain"] == "name-uses"
+        and row["kind"]
+        in {"imported-attribute-call", "imported-attribute-reference"}
+    ]
+    witnessed_uses = {
+        (
+            row["kind"],
+            qualified_raw[row["span"]["start"] : row["span"]["end"]],
+        )
+        for row in qualified_uses
+    }
+    if witnessed_uses != {
+        ("imported-attribute-call", b"target"),
+        ("imported-attribute-reference", b"target"),
+    }:
+        raise AssertionError(qualified_uses)
+
     normalized_manifest = {
         "artifact": "archbird-source-manifest",
         "files": [

@@ -532,6 +532,32 @@
         }
       }
     },
+    "deltaProjection": {
+      "oneOf": [
+        {"$ref": "#/$defs/edgeProjection"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["select", "names"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "select": {"const": "symbol_occurrences"},
+            "names": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 65536
+              }
+            },
+            "paths": {"$ref": "#/$defs/paths"}
+          }
+        }
+      ]
+    },
     "projectionKeys": {
       "type": "array",
       "maxItems": 4096,
@@ -553,7 +579,7 @@
         "observed_removed"
       ],
       "properties": {
-        "projection": {"$ref": "#/$defs/edgeProjection"},
+        "projection": {"$ref": "#/$defs/deltaProjection"},
         "allowed_added": {"$ref": "#/$defs/projectionKeys"},
         "allowed_removed": {"$ref": "#/$defs/projectionKeys"},
         "status": {"enum": ["not_evaluated", "satisfied"]},
