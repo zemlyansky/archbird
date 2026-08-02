@@ -1266,6 +1266,7 @@ def act_accept(
     before_map_json: bytes,
     after_map_json: bytes,
     verification_json: bytes,
+    gate_results_json: bytes = b"",
     *,
     pretty: bool = False,
 ) -> bytes:
@@ -1276,6 +1277,7 @@ def act_accept(
             _bytes(before_map_json, "before Map"),
             _bytes(after_map_json, "after Map"),
             _bytes(verification_json, "Verification"),
+            _bytes(gate_results_json, "gate results"),
         ],
         flags=_JSON_PRETTY if pretty else 0,
         saved_artifact=True,

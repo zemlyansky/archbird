@@ -7,6 +7,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 interface ConformanceCase {
   id: string;
   valid: boolean;
+  schema_valid?: boolean;
   configuration: unknown;
 }
 
@@ -43,7 +44,7 @@ test("public project-configuration schema matches the conformance corpus", () =>
     const actual = validator(entry.configuration);
     assert.equal(
       actual,
-      entry.valid,
+      entry.schema_valid ?? entry.valid,
       `${entry.id}: ${JSON.stringify(validator.errors)}`,
     );
   }

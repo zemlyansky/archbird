@@ -837,17 +837,23 @@ static PyObject *py_act_materialize(PyObject *self, PyObject *args,
 
 static PyObject *py_act_accept(PyObject *self, PyObject *args,
                                PyObject *kwargs) {
-  static char *keywords[] = {"act_json",       "before_map_json",
-                             "after_map_json", "verification_json",
-                             "pretty",         NULL};
+  static char *keywords[] = {"act_json",
+                             "before_map_json",
+                             "after_map_json",
+                             "verification_json",
+                             "gate_results_json",
+                             "pretty",
+                             NULL};
   const char *act;
   const char *before_map;
   const char *after_map;
   const char *verification;
+  const char *gate_results;
   Py_ssize_t act_length;
   Py_ssize_t before_map_length;
   Py_ssize_t after_map_length;
   Py_ssize_t verification_length;
+  Py_ssize_t gate_results_length;
   int pretty = 0;
   ArchbirdEngine *engine = NULL;
   PyOutput output = {0};
@@ -856,13 +862,16 @@ static PyObject *py_act_accept(PyObject *self, PyObject *args,
   size_t budget;
   (void)self;
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "y#y#y#y#|p:act_accept", keywords, &act, &act_length,
+          args, kwargs, "y#y#y#y#y#|p:act_accept", keywords, &act, &act_length,
           &before_map, &before_map_length, &after_map, &after_map_length,
-          &verification, &verification_length, &pretty))
+          &verification, &verification_length, &gate_results,
+          &gate_results_length, &pretty))
     return NULL;
-  budget = larger_input(
-      larger_input((size_t)act_length, (size_t)before_map_length),
-      larger_input((size_t)after_map_length, (size_t)verification_length));
+  budget =
+      larger_input(larger_input((size_t)act_length, (size_t)before_map_length),
+                   larger_input(larger_input((size_t)after_map_length,
+                                             (size_t)verification_length),
+                                (size_t)gate_results_length));
   status = saved_artifact_engine(budget, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_act_accept(
@@ -870,6 +879,7 @@ static PyObject *py_act_accept(PyObject *self, PyObject *args,
         (const uint8_t *)before_map, (size_t)before_map_length,
         (const uint8_t *)after_map, (size_t)after_map_length,
         (const uint8_t *)verification, (size_t)verification_length,
+        (const uint8_t *)gate_results, (size_t)gate_results_length,
         pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
   result = render_result(engine, status, &output);
   archbird_engine_destroy(engine);

@@ -2196,6 +2196,7 @@ def accept_act_json(
     before_map_json: bytes,
     after_map_json: bytes,
     verification_json: bytes,
+    gate_results_json: bytes = b"",
     *,
     pretty: bool = False,
 ) -> bytes:
@@ -2206,6 +2207,7 @@ def accept_act_json(
         before_map_json,
         after_map_json,
         verification_json,
+        gate_results_json,
         pretty=pretty,
     )
 

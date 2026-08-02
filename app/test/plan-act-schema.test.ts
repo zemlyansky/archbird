@@ -6,7 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 const sha = (character: string): string => character.repeat(64);
 
 const plan = {
-  schema_version: 8,
+  schema_version: 9,
   artifact: "plan",
   provenance: "derived",
   tool: {
@@ -29,6 +29,7 @@ const plan = {
     },
   },
   objective: "Remove the forbidden declaration.",
+  gates: {},
   items: [
     {
       id: "remove-legacy",
@@ -75,7 +76,7 @@ const plan = {
 };
 
 const act = {
-  schema_version: 4,
+  schema_version: 5,
   artifact: "act",
   provenance: "derived",
   tool: {
@@ -84,6 +85,7 @@ const act = {
     implementation_sha256: sha("6"),
   },
   plan_sha256: sha("7"),
+  gates: {},
   source: plan.source,
   state: "accepted",
   after: {
@@ -138,6 +140,8 @@ const act = {
       { id: "NO-CYCLES", status: "pass" },
     ],
     projection_deltas: [],
+    gate_workspace_sha256: null,
+    gate_results: [],
   },
   seal: { content_sha256: sha("0") },
 };
@@ -310,6 +314,8 @@ test("Act state cannot claim acceptance before evaluation", () => {
       verification_sha256: string | null;
       constraints: Array<{ id: string; status: string }>;
       projection_deltas: unknown[];
+      gate_workspace_sha256: string | null;
+      gate_results: unknown[];
     };
   };
   materialized.state = "materialized";
@@ -323,6 +329,8 @@ test("Act state cannot claim acceptance before evaluation", () => {
       { id: "NO-CYCLES", status: "not_evaluated" },
     ],
     projection_deltas: [],
+    gate_workspace_sha256: null,
+    gate_results: [],
   };
   assert.equal(validate(materialized), true, JSON.stringify(validate.errors));
 

@@ -2,6 +2,7 @@
 
 #include "archbird_internal.h"
 #include "artifact_validation.h"
+#include "gate.h"
 #include "sha256.h"
 
 #include <ctype.h>
@@ -826,8 +827,9 @@ cleanup:
 static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
                                     int *out_valid) {
   static const char *const fields[] = {
-      "schema_version", "artifact",  "provenance", "tool",
-      "source",         "objective", "items",      "preserved_constraints",
+      "schema_version", "artifact", "provenance",
+      "tool",           "source",   "objective",
+      "gates",          "items",    "preserved_constraints",
       "unknowns"};
   const AbValue *schema;
   const AbValue *provenance;
@@ -837,17 +839,18 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
   size_t index;
   ArchbirdStatus status;
   *out_valid = 0;
-  if (!object_exact(&plan->document, fields, 9))
+  if (!object_exact(&plan->document, fields, 10))
     return ARCHBIRD_OK;
   schema = ab_value_member(&plan->document, "schema_version");
   provenance = ab_value_member(&plan->document, "provenance");
-  if (!safe_integer(schema, &schema_number) || schema_number != 8 ||
+  if (!safe_integer(schema, &schema_number) || schema_number != 9 ||
       !text_is(ab_value_member(&plan->document, "artifact"), "plan") ||
       (!text_is(provenance, "derived") && !text_is(provenance, "asserted")) ||
       !validate_tool(ab_value_member(&plan->document, "tool")) ||
       !validate_source(ab_value_member(&plan->document, "source")) ||
       !bounded_text(ab_value_member(&plan->document, "objective"),
                     AB_PLAN_MAX_METADATA, 1) ||
+      !ab_gate_definitions_valid(ab_value_member(&plan->document, "gates")) ||
       !string_array(ab_value_member(&plan->document, "preserved_constraints"),
                     1, 0))
     return ARCHBIRD_OK;
@@ -867,6 +870,7 @@ static ArchbirdStatus validate_plan(ArchbirdEngine *engine, AbPlan *plan,
   if (status != ARCHBIRD_OK || !*out_valid)
     return status;
   plan->source = ab_value_member(&plan->document, "source");
+  plan->gates = ab_value_member(&plan->document, "gates");
   plan->items = items;
   plan->preserved_constraints =
       ab_value_member(&plan->document, "preserved_constraints");

@@ -891,11 +891,18 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
       beforeMap,
       afterMap,
       verification,
+      gateResults = new Uint8Array(),
       pretty = false,
     ) {
       return withInputs(
-        [act, beforeMap, afterMap, verification],
-        ([actInput, beforeMapInput, afterMapInput, verificationInput]) =>
+        [act, beforeMap, afterMap, verification, gateResults],
+        ([
+          actInput,
+          beforeMapInput,
+          afterMapInput,
+          verificationInput,
+          gateResultsInput,
+        ]) =>
           result(module._ab_wasm_act_accept(
             actInput.pointer,
             actInput.length,
@@ -905,6 +912,8 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
             afterMapInput.length,
             verificationInput.pointer,
             verificationInput.length,
+            gateResultsInput.pointer,
+            gateResultsInput.length,
             boolFlags(pretty),
           )),
       );

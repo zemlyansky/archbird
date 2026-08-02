@@ -77,6 +77,7 @@ _ADAPTER_EXPORTS = (
     "materialize_ast_grep_operations",
     "observe_act_sources",
     "observe_plan_sources",
+    "run_act_gates",
     "act_overlay",
     "render_act",
 )
@@ -90,6 +91,7 @@ def __getattr__(name: str) -> Any:
             "apply_accepted_act",
             "observe_act_sources",
             "observe_plan_sources",
+            "run_act_gates",
             "act_overlay",
             "render_act",
         }:
@@ -97,6 +99,7 @@ def __getattr__(name: str) -> Any:
                 apply_accepted_act,
                 observe_act_sources,
                 observe_plan_sources,
+                run_act_gates,
                 act_overlay,
                 render_act,
             )
@@ -105,6 +108,7 @@ def __getattr__(name: str) -> Any:
                 "apply_accepted_act": apply_accepted_act,
                 "observe_act_sources": observe_act_sources,
                 "observe_plan_sources": observe_plan_sources,
+                "run_act_gates": run_act_gates,
                 "act_overlay": act_overlay,
                 "render_act": render_act,
             }[name]

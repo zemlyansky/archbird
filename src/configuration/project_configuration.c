@@ -3,6 +3,7 @@
 #include "../projection/projection_internal.h"
 #include "../query/query_context.h"
 #include "date.h"
+#include "gate.h"
 #include "json_value.h"
 #include "sha256.h"
 
@@ -977,10 +978,18 @@ static ArchbirdStatus validate_project_consumers(ArchbirdEngine *engine,
   return status;
 }
 
+static ArchbirdStatus validate_gate_definitions(ArchbirdEngine *engine,
+                                                const AbValue *gates) {
+  return ab_gate_definitions_valid(gates)
+             ? ARCHBIRD_OK
+             : invalid(engine, "gates contain an invalid command definition");
+}
+
 static ArchbirdStatus
 normalized_configuration(ArchbirdEngine *engine, const AbValue *source,
                          const AbValue *projections, const AbValue *queries,
-                         const AbValue *constraints, AbValue *out) {
+                         const AbValue *constraints, const AbValue *gates,
+                         AbValue *out) {
   size_t index;
   size_t output = 0;
   ArchbirdStatus status = object_allocate(engine, out, source->as.object.count);
@@ -994,6 +1003,8 @@ normalized_configuration(ArchbirdEngine *engine, const AbValue *source,
       value = queries;
     else if (string_equal(&field->name, "constraints"))
       value = constraints;
+    else if (string_equal(&field->name, "gates"))
+      value = gates;
     status = field_copy(engine, &out->as.object.fields[output++], &field->name,
                         value);
   }
@@ -1069,10 +1080,11 @@ ArchbirdStatus ab_project_configuration_decode(ArchbirdEngine *engine,
                                                size_t json_length,
                                                AbProjectConfiguration *out) {
   static const char *const fields[] = {
-      "artifacts",   "bridges",       "builds",   "components", "constraints",
-      "description", "discovery",     "exclude",  "indexes",    "layers",
-      "limits",      "named_entries", "packages", "parity",     "project",
-      "projections", "queries",       "tests"};
+      "artifacts",     "bridges",     "builds",    "components",
+      "constraints",   "description", "discovery", "exclude",
+      "gates",         "indexes",     "layers",    "limits",
+      "named_entries", "packages",    "parity",    "project",
+      "projections",   "queries",     "tests"};
   AbValue document = {0};
   size_t index;
   ArchbirdStatus status;
@@ -1119,12 +1131,17 @@ ArchbirdStatus ab_project_configuration_decode(ArchbirdEngine *engine,
         normalize_collection(engine, ab_value_member(&document, "constraints"),
                              "constraints", &out->constraints);
   if (status == ARCHBIRD_OK)
+    status = normalize_collection(engine, ab_value_member(&document, "gates"),
+                                  "gates", &out->gates);
+  if (status == ARCHBIRD_OK)
     status = validate_project_consumers(engine, &out->projections,
                                         &out->queries, &out->constraints);
   if (status == ARCHBIRD_OK)
+    status = validate_gate_definitions(engine, &out->gates);
+  if (status == ARCHBIRD_OK)
     status = normalized_configuration(engine, &document, &out->projections,
                                       &out->queries, &out->constraints,
-                                      &out->normalized);
+                                      &out->gates, &out->normalized);
   if (status == ARCHBIRD_OK)
     status = normalize_map_overlay(engine, &document, &out->map_overlay);
   if (status == ARCHBIRD_OK)
@@ -1150,5 +1167,6 @@ void ab_project_configuration_free(ArchbirdEngine *engine,
   ab_value_free(engine, &configuration->projections);
   ab_value_free(engine, &configuration->queries);
   ab_value_free(engine, &configuration->constraints);
+  ab_value_free(engine, &configuration->gates);
   memset(configuration, 0, sizeof(*configuration));
 }

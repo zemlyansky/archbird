@@ -6,6 +6,7 @@
 typedef struct AbPlan {
   AbValue document;
   const AbValue *source;
+  const AbValue *gates;
   const AbValue *items;
   const AbValue *preserved_constraints;
   const AbValue *unknowns;

@@ -943,16 +943,18 @@ static napi_value act_materialize(napi_env env, napi_callback_info info) {
 }
 
 static napi_value act_accept(napi_env env, napi_callback_info info) {
-  size_t argc = 5;
-  napi_value argv[5];
+  size_t argc = 6;
+  napi_value argv[6];
   const uint8_t *act;
   const uint8_t *before_map;
   const uint8_t *after_map;
   const uint8_t *verification;
+  const uint8_t *gate_results;
   size_t act_length;
   size_t before_map_length;
   size_t after_map_length;
   size_t verification_length;
+  size_t gate_results_length;
   int pretty;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
@@ -960,20 +962,24 @@ static napi_value act_accept(napi_env env, napi_callback_info info) {
   napi_value result;
   size_t budget;
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
-  if (argc < 4 || !get_buffer(env, argv[0], &act, &act_length) ||
+  if (argc < 5 || !get_buffer(env, argv[0], &act, &act_length) ||
       !get_buffer(env, argv[1], &before_map, &before_map_length) ||
       !get_buffer(env, argv[2], &after_map, &after_map_length) ||
       !get_buffer(env, argv[3], &verification, &verification_length) ||
-      !get_optional_bool(env, argc, argv, 4, 0, &pretty))
+      !get_buffer(env, argv[4], &gate_results, &gate_results_length) ||
+      !get_optional_bool(env, argc, argv, 5, 0, &pretty))
     return NULL;
-  budget = larger_input(larger_input(act_length, before_map_length),
-                        larger_input(after_map_length, verification_length));
+  budget = larger_input(
+      larger_input(act_length, before_map_length),
+      larger_input(larger_input(after_map_length, verification_length),
+                   gate_results_length));
   status = saved_artifact_engine(budget, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_act_accept(
         engine, act, act_length, before_map, before_map_length, after_map,
-        after_map_length, verification, verification_length,
-        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+        after_map_length, verification, verification_length, gate_results,
+        gate_results_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
+        &output);
   result = render_result(env, engine, status, &output);
   archbird_engine_destroy(engine);
   return result;

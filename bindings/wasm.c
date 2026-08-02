@@ -1230,17 +1230,20 @@ AB_WASM_EXPORT int ab_wasm_act_materialize(
 AB_WASM_EXPORT int ab_wasm_act_accept(
     const uint8_t *act, size_t act_length, const uint8_t *before_map,
     size_t before_map_length, const uint8_t *after_map, size_t after_map_length,
-    const uint8_t *verification, size_t verification_length, uint32_t flags) {
+    const uint8_t *verification, size_t verification_length,
+    const uint8_t *gate_results, size_t gate_results_length, uint32_t flags) {
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status = stateless_begin_saved_artifact(
-      larger_input(larger_input(act_length, before_map_length),
-                   larger_input(after_map_length, verification_length)),
+      larger_input(
+          larger_input(act_length, before_map_length),
+          larger_input(larger_input(after_map_length, verification_length),
+                       gate_results_length)),
       &engine);
   if (status == ARCHBIRD_OK)
-    status = archbird_act_accept(engine, act, act_length, before_map,
-                                 before_map_length, after_map, after_map_length,
-                                 verification, verification_length, flags,
-                                 output_write, &wasm_output);
+    status = archbird_act_accept(
+        engine, act, act_length, before_map, before_map_length, after_map,
+        after_map_length, verification, verification_length, gate_results,
+        gate_results_length, flags, output_write, &wasm_output);
   return stateless_end(engine, status);
 }
 

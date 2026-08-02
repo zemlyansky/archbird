@@ -4,9 +4,12 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const native = require("./native");
 
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
+const GATE_DEFAULT_OUTPUT_BYTES = 1024 * 1024;
+const GATE_TAIL_BYTES = 64 * 1024;
 
 function relativePath(value) {
   if (
@@ -267,6 +270,390 @@ function actOverlay(actJson) {
   return Object.freeze(overlay);
 }
 
+function safeSymlink(root, relative) {
+  const source = candidate(root, relative);
+  const target = fs.readlinkSync(source);
+  if (path.isAbsolute(target)) {
+    throw new Error(`absolute symbolic link is not isolated: ${relative}`);
+  }
+  const resolved = path.resolve(path.dirname(source), target);
+  const relation = path.relative(root, resolved);
+  if (relation === ".." || relation.startsWith(`..${path.sep}`)) {
+    throw new Error(`symbolic link escapes the repository: ${relative}`);
+  }
+  return target;
+}
+
+function recursiveInventory(root, prefix = "") {
+  const rows = [];
+  const start = prefix ? candidate(root, prefix) : root;
+  function visit(directory) {
+    const entries = fs.readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => Buffer.compare(
+        Buffer.from(left.name),
+        Buffer.from(right.name),
+      ));
+    for (const entry of entries) {
+      if (
+        entry.name === ".git" ||
+        entry.name.startsWith(".archbird-gates-")
+      ) {
+        continue;
+      }
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(root, absolute).split(path.sep).join("/");
+      if (relative === ".archbird-apply.lock") continue;
+      const metadata = fs.lstatSync(absolute);
+      if (metadata.isSymbolicLink() || metadata.isFile()) {
+        rows.push(relativePath(relative));
+      } else if (metadata.isDirectory()) {
+        visit(absolute);
+      } else {
+        throw new Error(
+          `unsupported repository entry in gate workspace: ${relative}`,
+        );
+      }
+    }
+  }
+  visit(start);
+  return rows;
+}
+
+function repositoryInventory(root) {
+  const top = spawnSync(
+    "git",
+    ["-C", root, "rev-parse", "--show-toplevel"],
+    { encoding: "utf8", timeout: 10000, windowsHide: true },
+  );
+  if (
+    top.status !== 0 ||
+    !top.stdout ||
+    fs.realpathSync(top.stdout.trim()) !== root
+  ) {
+    return recursiveInventory(root);
+  }
+  const listed = spawnSync(
+    "git",
+    [
+      "-C",
+      root,
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+    ],
+    {
+      encoding: null,
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 30000,
+      windowsHide: true,
+    },
+  );
+  if (listed.status !== 0 || !Buffer.isBuffer(listed.stdout)) {
+    return recursiveInventory(root);
+  }
+  const rows = [];
+  for (const raw of listed.stdout.toString("utf8").split("\0")) {
+    if (!raw) continue;
+    const relative = relativePath(raw);
+    const source = candidate(root, relative);
+    let metadata;
+    try {
+      metadata = fs.lstatSync(source);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (metadata.isDirectory()) {
+      rows.push(...recursiveInventory(root, relative));
+    } else {
+      rows.push(relative);
+    }
+  }
+  return [...new Set(rows)].sort((left, right) =>
+    Buffer.compare(Buffer.from(left), Buffer.from(right))
+  );
+}
+
+function copyGateWorkspace(root, workspace) {
+  for (const relative of repositoryInventory(root)) {
+    const source = candidate(root, relative);
+    const destination = candidate(workspace, relative);
+    const metadata = fs.lstatSync(source);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    if (metadata.isSymbolicLink()) {
+      fs.symlinkSync(safeSymlink(root, relative), destination);
+    } else if (metadata.isFile()) {
+      fs.copyFileSync(source, destination);
+      fs.chmodSync(destination, metadata.mode & 0o777);
+    } else {
+      throw new Error(
+        `unsupported repository entry in gate workspace: ${relative}`,
+      );
+    }
+  }
+}
+
+function writeWorkspaceFile(filePath, data, executable) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, data);
+  let mode = fs.statSync(filePath).mode & 0o777;
+  mode = executable ? mode | 0o111 : mode & ~0o111;
+  fs.chmodSync(filePath, mode);
+}
+
+function applyMaterializedAct(workspace, actJson) {
+  const document = JSON.parse(Buffer.from(actJson).toString("utf8"));
+  for (const transition of document.transitions) {
+    const kind = transition.kind;
+    const filePath = relativePath(transition.path);
+    const destination = candidate(workspace, filePath);
+    const sourcePath = kind === "move"
+      ? relativePath(transition.source_path)
+      : filePath;
+    const source = candidate(workspace, sourcePath);
+    if (kind === "create") {
+      if (fs.existsSync(destination)) {
+        throw new Error(`gate workspace destination exists: ${filePath}`);
+      }
+    } else {
+      const state = readRegular(workspace, sourcePath);
+      const before = transition.before;
+      if (
+        crypto.createHash("sha256").update(state.data).digest("hex") !==
+          before.sha256 ||
+        Boolean(state.mode & 0o111) !== before.executable
+      ) {
+        throw new Error(`gate workspace source differs from Act: ${sourcePath}`);
+      }
+    }
+    if (kind === "delete") {
+      fs.unlinkSync(source);
+      continue;
+    }
+    if (kind === "move" && fs.existsSync(destination)) {
+      throw new Error(`gate workspace destination exists: ${filePath}`);
+    }
+    const after = transition.after;
+    writeWorkspaceFile(
+      destination,
+      Buffer.from(after.content_base64, "base64"),
+      after.executable,
+    );
+    if (kind === "move") fs.unlinkSync(source);
+  }
+}
+
+function workspaceSha256(workspace) {
+  const digest = crypto.createHash("sha256");
+  for (const relative of recursiveInventory(workspace)) {
+    const filePath = candidate(workspace, relative);
+    const metadata = fs.lstatSync(filePath);
+    if (metadata.isSymbolicLink()) {
+      digest.update(Buffer.from("L\0"));
+      digest.update(Buffer.from(relative));
+      digest.update(Buffer.from("\0"));
+      digest.update(Buffer.from(fs.readlinkSync(filePath)));
+      digest.update(Buffer.from("\0"));
+    } else if (metadata.isFile()) {
+      digest.update(Buffer.from("F\0"));
+      digest.update(Buffer.from(relative));
+      digest.update(Buffer.from("\0"));
+      digest.update(Buffer.from(metadata.mode & 0o111 ? "1\0" : "0\0"));
+      digest.update(
+        crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest(),
+      );
+    } else {
+      throw new Error(`unsupported gate workspace entry: ${relative}`);
+    }
+  }
+  return digest.digest("hex");
+}
+
+function gateEnvironment(cwd) {
+  return { ...process.env, PWD: cwd };
+}
+
+function environmentSha256(environment) {
+  const ordered = Object.fromEntries(
+    Object.entries(environment).sort(([left], [right]) =>
+      Buffer.compare(Buffer.from(left), Buffer.from(right))
+    ),
+  );
+  const canonical = native.jsonCanonicalize(
+    Buffer.from(JSON.stringify(ordered)),
+  );
+  return crypto.createHash("sha256").update(canonical).digest("hex");
+}
+
+function definitionSha256(definition) {
+  const canonical = native.jsonCanonicalize(
+    Buffer.from(JSON.stringify(definition)),
+  );
+  return crypto.createHash("sha256").update(canonical).digest("hex");
+}
+
+function tailBase64(value) {
+  const data = Buffer.isBuffer(value) ? value : Buffer.alloc(0);
+  return data.subarray(Math.max(0, data.length - GATE_TAIL_BYTES))
+    .toString("base64");
+}
+
+function gateResult(gateId, definition, workspace) {
+  const started = process.hrtime.bigint();
+  const maxOutput = definition.max_output_bytes ?? GATE_DEFAULT_OUTPUT_BYTES;
+  const cwd = candidate(workspace, definition.cwd || ".");
+  const environment = gateEnvironment(cwd);
+  const environmentHash = environmentSha256(environment);
+  const command = spawnSync(
+    definition.argv[0],
+    definition.argv.slice(1),
+    {
+      cwd,
+      encoding: null,
+      env: environment,
+      input: Buffer.alloc(0),
+      killSignal: "SIGKILL",
+      maxBuffer: Math.max(1, maxOutput + 1),
+      timeout: definition.timeout_seconds * 1000,
+      windowsHide: true,
+    },
+  );
+  const stdout = Buffer.isBuffer(command.stdout)
+    ? command.stdout
+    : Buffer.alloc(0);
+  const stderr = Buffer.isBuffer(command.stderr)
+    ? command.stderr
+    : Buffer.alloc(0);
+  let status = "error";
+  let exitCode = null;
+  if (
+    stdout.length + stderr.length > maxOutput ||
+    command.error?.code === "ENOBUFS"
+  ) {
+    status = "output_limit";
+  } else if (command.error?.code === "ETIMEDOUT") {
+    status = "timeout";
+  } else if (command.status === 0) {
+    status = "pass";
+    exitCode = 0;
+  } else if (Number.isSafeInteger(command.status) && command.status >= 0) {
+    status = "fail";
+    exitCode = command.status;
+  }
+  const durationMs = Number((process.hrtime.bigint() - started) / 1000000n);
+  return {
+    id: gateId,
+    definition_sha256: definitionSha256(definition),
+    status,
+    exit_code: exitCode,
+    duration_ms: durationMs,
+    environment_sha256: environmentHash,
+    stdout_sha256: crypto.createHash("sha256").update(stdout).digest("hex"),
+    stderr_sha256: crypto.createHash("sha256").update(stderr).digest("hex"),
+    stdout_tail_base64: tailBase64(stdout),
+    stderr_tail_base64: tailBase64(stderr),
+  };
+}
+
+function gateOrder(gates) {
+  const remaining = new Set(Object.keys(gates));
+  const emitted = [];
+  while (remaining.size) {
+    const ready = [...remaining]
+      .filter((gateId) =>
+        (gates[gateId].depends_on || []).every((id) => emitted.includes(id))
+      )
+      .sort((left, right) =>
+        Buffer.compare(Buffer.from(left), Buffer.from(right))
+      );
+    if (!ready.length) throw new Error("gate dependencies contain a cycle");
+    emitted.push(ready[0]);
+    remaining.delete(ready[0]);
+  }
+  return emitted;
+}
+
+function runActGates(rootValue, actJson) {
+  const root = repositoryRoot(rootValue);
+  native.actValidate(Buffer.from(actJson));
+  const document = JSON.parse(Buffer.from(actJson).toString("utf8"));
+  if (!document.gates || Array.isArray(document.gates)) {
+    throw new Error("Act has no valid gate definitions");
+  }
+  if (!Object.keys(document.gates).length) return Buffer.alloc(0);
+  const workspace = fs.mkdtempSync(
+    path.join(path.dirname(root), ".archbird-gates-"),
+  );
+  try {
+    copyGateWorkspace(root, workspace);
+    applyMaterializedAct(workspace, actJson);
+    const workspaceHash = workspaceSha256(workspace);
+    const results = Object.create(null);
+    const emptyHash = crypto.createHash("sha256").update(Buffer.alloc(0))
+      .digest("hex");
+    for (const gateId of gateOrder(document.gates)) {
+      const definition = document.gates[gateId];
+      if (
+        (definition.depends_on || [])
+          .some((dependency) => results[dependency].status !== "pass")
+      ) {
+        results[gateId] = {
+          id: gateId,
+          definition_sha256: definitionSha256(definition),
+          status: "blocked",
+          exit_code: null,
+          duration_ms: 0,
+          environment_sha256: environmentSha256(
+            gateEnvironment(candidate(workspace, definition.cwd || ".")),
+          ),
+          stdout_sha256: emptyHash,
+          stderr_sha256: emptyHash,
+          stdout_tail_base64: "",
+          stderr_tail_base64: "",
+        };
+      } else {
+        results[gateId] = gateResult(gateId, definition, workspace);
+      }
+    }
+    return native.jsonCanonicalize(Buffer.from(JSON.stringify({
+      workspace_sha256: workspaceHash,
+      results: Object.keys(results).sort().map((gateId) => results[gateId]),
+    })));
+  } finally {
+    fs.rmSync(workspace, { force: true, recursive: true });
+  }
+}
+
+function gateFailureDetails(gateResultsJson) {
+  if (!gateResultsJson?.length) return "";
+  const document = JSON.parse(Buffer.from(gateResultsJson).toString("utf8"));
+  const details = [];
+  for (const row of document.results || []) {
+    if (row.status === "pass") continue;
+    const exitText = row.exit_code === null
+      ? "no exit code"
+      : `exit ${row.exit_code}`;
+    details.push(
+      `Gate ${row.id || "<unknown>"}: ${row.status || "error"} ` +
+      `(${exitText}, ${row.duration_ms || 0} ms)`,
+    );
+    for (const stream of ["stderr", "stdout"]) {
+      const encoded = row[`${stream}_tail_base64`];
+      if (!encoded) continue;
+      const tail = Buffer.from(encoded, "base64").toString("utf8")
+        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "?")
+        .trim();
+      if (tail) {
+        details.push(`${stream} tail:\n${tail.slice(-4096)}`);
+        break;
+      }
+    }
+  }
+  return details.join("\n");
+}
+
 function renderAct(rootValue, actJson, { format, pretty = false }) {
   const root = repositoryRoot(rootValue);
   native.actValidate(Buffer.from(actJson));
@@ -311,6 +698,12 @@ function renderAct(rootValue, actJson, { format, pretty = false }) {
     lines.push("", "## Constraints", "");
     for (const row of document.acceptance.constraints) {
       lines.push(`- \`${row.id}\`: \`${row.status}\``);
+    }
+  }
+  if (document.acceptance.gate_results.length) {
+    lines.push("", "## Gates", "");
+    for (const row of document.acceptance.gate_results) {
+      lines.push(`- \`${row.id}\`: \`${row.status}\` (${row.duration_ms} ms)`);
     }
   }
   if (patch.length) {
@@ -539,6 +932,8 @@ module.exports = {
   observeActSources,
   observePlanSources,
   observeSourceRequirements,
+  runActGates,
+  gateFailureDetails,
   actOverlay,
   renderAct,
 };

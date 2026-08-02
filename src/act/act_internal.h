@@ -12,6 +12,7 @@ typedef struct AbActTransition {
 typedef struct AbAct {
   AbValue document;
   const AbValue *source;
+  const AbValue *gates;
   const AbValue *source_locks;
   const AbValue *after;
   const AbValue *acceptance;

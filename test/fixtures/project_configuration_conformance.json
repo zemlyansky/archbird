@@ -52,6 +52,57 @@
       }
     },
     {
+      "id": "reviewed-gates",
+      "valid": true,
+      "configuration": {
+        "gates": {
+          "build": {
+            "argv": ["make", "build"],
+            "timeout_seconds": 600
+          },
+          "test": {
+            "argv": ["make", "test"],
+            "depends_on": ["build"],
+            "timeout_seconds": 600,
+            "max_output_bytes": 1048576
+          }
+        }
+      }
+    },
+    {
+      "id": "reviewed-gate-cycle",
+      "valid": false,
+      "schema_valid": true,
+      "configuration": {
+        "gates": {
+          "build": {
+            "argv": ["make", "build"],
+            "depends_on": ["test"],
+            "timeout_seconds": 600
+          },
+          "test": {
+            "argv": ["make", "test"],
+            "depends_on": ["build"],
+            "timeout_seconds": 600
+          }
+        }
+      }
+    },
+    {
+      "id": "reviewed-gate-missing-dependency",
+      "valid": false,
+      "schema_valid": true,
+      "configuration": {
+        "gates": {
+          "test": {
+            "argv": ["make", "test"],
+            "depends_on": ["build"],
+            "timeout_seconds": 600
+          }
+        }
+      }
+    },
+    {
       "id": "all-projection-operators",
       "valid": true,
       "configuration": {

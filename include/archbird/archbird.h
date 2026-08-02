@@ -495,14 +495,17 @@ ARCHBIRD_API ArchbirdStatus archbird_act_materialize(
 /*
  * Accept a materialized Act only after exact before/after Maps and fresh
  * Verification prove its complete constraint contract without new Map
- * diagnostics. The result is an immutable content-sealed Act; this function
- * performs no filesystem I/O.
+ * diagnostics. gate_results_json is the exact isolated execution ledger for
+ * every reviewed gate carried by the Act, or empty only when the Act has no
+ * gates. The result is an immutable content-sealed Act; this function performs
+ * no filesystem or process I/O.
  */
 ARCHBIRD_API ArchbirdStatus archbird_act_accept(
     ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
     const uint8_t *before_map_json, size_t before_map_length,
     const uint8_t *after_map_json, size_t after_map_length,
     const uint8_t *verification_json, size_t verification_length,
+    const uint8_t *gate_results_json, size_t gate_results_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
 /*

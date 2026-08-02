@@ -12,7 +12,9 @@ const {
   applyAcceptedAct,
   observePlanSources,
   actOverlay,
+  gateFailureDetails,
   renderAct,
+  runActGates,
 } = require("./act-transport");
 const {
   MAX_ACT_BYTES,
@@ -1790,6 +1792,12 @@ function planMain(argv) {
     renameDirectives[oldName] = newName;
   }
   const planRequest = {};
+  const configurationPlan = JSON.parse(
+    archbird.compileProjectConfiguration(configJson).toString("utf8"),
+  );
+  if (Object.keys(configurationPlan.gates || {}).length) {
+    planRequest.gates = configurationPlan.gates;
+  }
   if (positionals.length) planRequest.constraint_ids = positionals;
   if (Object.keys(renameDirectives).length) {
     planRequest.renames = renameDirectives;
@@ -2011,12 +2019,24 @@ function actMain(argv) {
       pretty: false,
     },
   );
-  const acceptedAct = archbird.acceptAct(
+  const gateResults = runActGates(
+    resolvedInputs.repository,
     materializedAct,
-    beforeMap,
-    afterMap,
-    afterVerification,
   );
+  let acceptedAct;
+  try {
+    acceptedAct = archbird.acceptAct(
+      materializedAct,
+      beforeMap,
+      afterMap,
+      afterVerification,
+      gateResults,
+    );
+  } catch (error) {
+    const details = gateFailureDetails(gateResults);
+    if (details) throw new Error(`${error.message}\n${details}`);
+    throw error;
+  }
   write(
     renderAct(resolvedInputs.repository, acceptedAct, {
       format: options.format,

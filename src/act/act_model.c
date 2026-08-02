@@ -1,8 +1,10 @@
 #include "act_internal.h"
 
+#include "act_gate_acceptance.h"
 #include "act_source.h"
 #include "artifact_validation.h"
 #include "base64.h"
+#include "gate.h"
 #include "model.h"
 #include "projection_internal.h"
 #include "render_internal.h"
@@ -215,27 +217,41 @@ static int validate_projection_delta(ArchbirdEngine *engine,
 
 static int validate_acceptance(ArchbirdEngine *engine, const AbValue *value,
                                int accepted) {
-  static const char *const fields[] = {"status", "verification_sha256",
-                                       "constraints", "projection_deltas"};
+  static const char *const fields[] = {"status",
+                                       "verification_sha256",
+                                       "constraints",
+                                       "projection_deltas",
+                                       "gate_workspace_sha256",
+                                       "gate_results"};
   const AbValue *status;
   const AbValue *verification;
   const AbValue *constraints;
   const AbValue *projection_deltas;
+  const AbValue *gate_workspace;
+  const AbValue *gate_results;
   size_t index;
-  if (!ab_artifact_object_exact(value, fields, 4))
+  if (!ab_artifact_object_exact(value, fields, 6))
     return 0;
   status = ab_value_member(value, "status");
   verification = ab_value_member(value, "verification_sha256");
   constraints = ab_value_member(value, "constraints");
   projection_deltas = ab_value_member(value, "projection_deltas");
-  if (!array_value(constraints, 0) || !array_value(projection_deltas, 0))
+  gate_workspace = ab_value_member(value, "gate_workspace_sha256");
+  gate_results = ab_value_member(value, "gate_results");
+  if (!array_value(constraints, 0) || !array_value(projection_deltas, 0) ||
+      !array_value(gate_results, 0))
     return 0;
   if (accepted) {
     if (!ab_artifact_text_is(status, "satisfied") ||
-        !ab_artifact_sha256(verification))
+        !ab_artifact_sha256(verification) ||
+        (gate_results->as.array.count && !ab_artifact_sha256(gate_workspace)) ||
+        (!gate_results->as.array.count &&
+         gate_workspace->kind != AB_VALUE_NULL))
       return 0;
   } else if (!ab_artifact_text_is(status, "not_evaluated") ||
-             verification->kind != AB_VALUE_NULL) {
+             verification->kind != AB_VALUE_NULL ||
+             gate_workspace->kind != AB_VALUE_NULL ||
+             gate_results->as.array.count) {
     return 0;
   }
   for (index = 0; index < constraints->as.array.count; index++) {
@@ -503,8 +519,8 @@ static ArchbirdStatus seal_digest(ArchbirdEngine *engine,
 static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
   static const char *const fields[] = {
       "schema_version", "artifact",     "provenance", "tool",  "plan_sha256",
-      "source",         "source_locks", "state",      "after", "executors",
-      "transitions",    "acceptance",   "seal"};
+      "source",         "source_locks", "state",      "after", "gates",
+      "executors",      "transitions",  "acceptance", "seal"};
   const AbValue *state;
   const AbValue *executors;
   const AbValue *source_locks;
@@ -515,23 +531,25 @@ static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
   size_t aggregate = 0;
   int accepted;
   ArchbirdStatus status;
-  if (!ab_artifact_object_exact(&act->document, fields, 13) ||
+  if (!ab_artifact_object_exact(&act->document, fields, 14) ||
       !ab_artifact_safe_integer(
           ab_value_member(&act->document, "schema_version"), &schema) ||
-      schema != 4 ||
+      schema != 5 ||
       !ab_artifact_text_is(ab_value_member(&act->document, "artifact"),
                            "act") ||
       !ab_artifact_text_is(ab_value_member(&act->document, "provenance"),
                            "derived") ||
       !validate_tool(ab_value_member(&act->document, "tool")) ||
       !ab_artifact_sha256(ab_value_member(&act->document, "plan_sha256")) ||
-      !validate_source(ab_value_member(&act->document, "source")))
+      !validate_source(ab_value_member(&act->document, "source")) ||
+      !ab_gate_definitions_valid(ab_value_member(&act->document, "gates")))
     return invalid(engine, "document does not satisfy the Act contract");
   state = ab_value_member(&act->document, "state");
   accepted = ab_artifact_text_is(state, "accepted");
   if (!accepted && !ab_artifact_text_is(state, "materialized"))
     return invalid(engine, "state must be materialized or accepted");
   act->source = ab_value_member(&act->document, "source");
+  act->gates = ab_value_member(&act->document, "gates");
   act->after = ab_value_member(&act->document, "after");
   act->acceptance = ab_value_member(&act->document, "acceptance");
   if (!validate_after(act->after) ||
@@ -545,6 +563,14 @@ static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
           ab_value_member(ab_value_member(act->after, "verification"),
                           "sha256")))
     return invalid(engine, "accepted verification identities do not match");
+  if (accepted) {
+    status = ab_act_gate_acceptance_validate(
+        engine, act->gates,
+        ab_value_member(act->acceptance, "gate_workspace_sha256"),
+        ab_value_member(act->acceptance, "gate_results"));
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
   executors = ab_value_member(&act->document, "executors");
   if (!array_value(executors, 0))
     return invalid(engine, "executors must be an array");

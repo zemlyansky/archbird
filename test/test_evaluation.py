@@ -176,7 +176,7 @@ elif command == 'verify':
     'status':'fail' if before else 'pass',
   }]}
 elif command == 'plan':
-  value = {'artifact':'plan','schema_version':8,'items':[{
+  value = {'artifact':'plan','schema_version':9,'items':[{
     'executable':True,
     'id':'test-regression',
     'origins':[{'issue_fingerprint':'4'*64}],
@@ -193,7 +193,7 @@ elif command == 'plan':
 elif command == 'act':
   value = {
     'artifact':'act',
-    'schema_version':4,
+    'schema_version':5,
     'state':'accepted',
   }
 else:

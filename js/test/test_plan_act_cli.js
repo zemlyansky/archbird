@@ -65,6 +65,9 @@ const ecmascriptMultiRoot = fs.mkdtempSync(
 const ecmascriptReferenceRoot = fs.mkdtempSync(
   path.join(repository, "build/node-plan-act-ecmascript-reference-"),
 );
+const gateRoot = fs.mkdtempSync(
+  path.join(repository, "build/node-plan-act-gates-"),
+);
 const cli = path.join(repository, "js/src/cli.js");
 const makeProvider = {
   definition_sha256:
@@ -283,6 +286,67 @@ try {
     run(["apply", act, "--root", root]).stdout.toString("utf8"),
     "Result: applied-transitions=0; state=already-satisfied\n",
   );
+
+  fs.writeFileSync(
+    path.join(gateRoot, "archbird.json"),
+    JSON.stringify({
+      project: "node-plan-act-gates",
+      gates: {
+        build: {
+          argv: [
+            process.execPath,
+            "-e",
+            "const fs=require('fs');" +
+              "if(process.cwd()!==process.env.PWD)process.exit(4);" +
+              "if(fs.existsSync('legacy.js'))process.exit(2);" +
+              "fs.writeFileSync('built.marker','ready')",
+          ],
+          timeout_seconds: 10,
+        },
+        test: {
+          argv: [
+            process.execPath,
+            "-e",
+            "const fs=require('fs');" +
+              "if(fs.readFileSync('built.marker','utf8')!=='ready')" +
+              "process.exit(3)",
+          ],
+          depends_on: ["build"],
+          timeout_seconds: 10,
+        },
+      },
+      constraints: {
+        "NO-LEGACY": {
+          kind: "forbidden_paths",
+          paths: ["legacy.js"],
+          owner: "architecture",
+          rationale: "Legacy implementation stays absent.",
+        },
+      },
+    }),
+  );
+  const gateLegacy = path.join(gateRoot, "legacy.js");
+  fs.writeFileSync(gateLegacy, "module.exports = 1;\n");
+  const gatePlan = path.join(artifacts, "gate-plan.json");
+  const gateAct = path.join(artifacts, "gate-act.json");
+  run(["plan", "--root", gateRoot, "--output", gatePlan]);
+  run([
+    "act", gatePlan, "--root", gateRoot, "--format", "json",
+    "--output", gateAct,
+  ]);
+  const gateDocument = JSON.parse(fs.readFileSync(gateAct));
+  assert.deepEqual(
+    gateDocument.acceptance.gate_results.map((row) => row.id),
+    ["build", "test"],
+  );
+  assert.deepEqual(
+    [...new Set(
+      gateDocument.acceptance.gate_results.map((row) => row.status),
+    )],
+    ["pass"],
+  );
+  assert.equal(fs.existsSync(gateLegacy), true);
+  assert.equal(fs.existsSync(path.join(gateRoot, "built.marker")), false);
 
   fs.writeFileSync(
     path.join(assertedRoot, "archbird.json"),
@@ -1180,7 +1244,7 @@ try {
     "Git-derived planning mutated the working tree",
   );
   const observedDocument = JSON.parse(fs.readFileSync(observedPlan, "utf8"));
-  assert.equal(observedDocument.schema_version, 8);
+  assert.equal(observedDocument.schema_version, 9);
   assert.equal(observedDocument.items.length, 1);
   assert.equal(observedDocument.items[0].provenance, "derived");
   assert.equal(observedDocument.items[0].executable, true);
@@ -1384,4 +1448,5 @@ try {
   fs.rmSync(ecmascriptUnobservedRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptMultiRoot, { force: true, recursive: true });
   fs.rmSync(ecmascriptReferenceRoot, { force: true, recursive: true });
+  fs.rmSync(gateRoot, { force: true, recursive: true });
 }

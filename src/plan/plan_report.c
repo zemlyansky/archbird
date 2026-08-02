@@ -206,6 +206,8 @@ ArchbirdStatus ab_plan_report_markdown(ArchbirdEngine *engine,
   REPORT_TRY(append_size(out, plan->items->as.array.count - executable));
   REPORT_TRY(ab_buffer_literal(out, " unknowns="));
   REPORT_TRY(append_size(out, plan->unknowns->as.array.count));
+  REPORT_TRY(ab_buffer_literal(out, " gates="));
+  REPORT_TRY(append_size(out, plan->gates->as.object.count));
   REPORT_TRY(ab_buffer_literal(out, " preserved-constraints="));
   REPORT_TRY(append_size(out, plan->preserved_constraints->as.array.count));
   REPORT_TRY(ab_buffer_literal(out, "\n"));
@@ -223,6 +225,8 @@ ArchbirdStatus ab_plan_report_markdown(ArchbirdEngine *engine,
   REPORT_TRY(append_size(out, plan->items->as.array.count - executable));
   REPORT_TRY(ab_buffer_literal(out, "; unknowns="));
   REPORT_TRY(append_size(out, plan->unknowns->as.array.count));
+  REPORT_TRY(ab_buffer_literal(out, "; gates="));
+  REPORT_TRY(append_size(out, plan->gates->as.object.count));
   REPORT_TRY(ab_buffer_literal(out, "; preserved-constraints="));
   REPORT_TRY(append_size(out, plan->preserved_constraints->as.array.count));
   REPORT_TRY(ab_buffer_literal(out, "; plan=`"));

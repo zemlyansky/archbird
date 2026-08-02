@@ -1490,9 +1490,9 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
                                       projection_delta_count);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
-        &document,
-        ",\"status\":\"not_evaluated\",\"verification_sha256\":null},"
-        "\"after\":null,\"artifact\":\"act\",\"executors\":[");
+        &document, ",\"gate_results\":[],\"gate_workspace_sha256\":null,"
+                   "\"status\":\"not_evaluated\",\"verification_sha256\":null},"
+                   "\"after\":null,\"artifact\":\"act\",\"executors\":[");
   for (index = 0; status == ARCHBIRD_OK && index < context->executor_count;
        index++) {
     if (index)
@@ -1501,13 +1501,17 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
       status = render_executor(&document, &context->executors[index]);
   }
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&document, "],\"plan_sha256\":");
+    status = ab_buffer_literal(&document, "],\"gates\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&document, plan->gates);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&document, ",\"plan_sha256\":");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_json_string(&document, plan->sha256, 64);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         &document,
-        ",\"provenance\":\"derived\",\"schema_version\":4,\"seal\":null,"
+        ",\"provenance\":\"derived\",\"schema_version\":5,\"seal\":null,"
         "\"source\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&document, plan->source);

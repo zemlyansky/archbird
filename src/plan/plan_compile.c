@@ -2,6 +2,7 @@
 
 #include "archbird_internal.h"
 #include "artifact_validation.h"
+#include "gate.h"
 #include "json_value.h"
 #include "plan_compile_internal.h"
 #include "plan_internal.h"
@@ -29,6 +30,7 @@ typedef struct AbPlanCompile {
   const AbValue *redirects;
   uint8_t *redirect_used;
   const AbValue *objective;
+  const AbValue *gates;
   AbPlanItemBuilder builder;
   AbProjectionPlan destructive_plan;
   AbProjectionResult destructive_result;
@@ -80,6 +82,7 @@ static ArchbirdStatus json_cstring(AbBuffer *buffer, const char *value) {
 
 static int request_field_allowed(const AbString *name) {
   return string_equal_literal(name, "constraint_ids") ||
+         string_equal_literal(name, "gates") ||
          string_equal_literal(name, "objective") ||
          string_equal_literal(name, "redirects") ||
          string_equal_literal(name, "renames");
@@ -101,6 +104,7 @@ static ArchbirdStatus validate_request(AbPlanCompile *context) {
   context->renames = field(&context->request, "renames");
   context->redirects = field(&context->request, "redirects");
   context->objective = field(&context->request, "objective");
+  context->gates = field(&context->request, "gates");
   if (context->selected_ids) {
     size_t left;
     size_t right;
@@ -124,6 +128,9 @@ static ArchbirdStatus validate_request(AbPlanCompile *context) {
       !ab_artifact_bounded_text(context->objective, 64u * 1024u, 1))
     return fail(context, ARCHBIRD_INVALID_SCHEMA,
                 "objective must be non-empty bounded text");
+  if (context->gates && !ab_gate_definitions_valid(context->gates))
+    return fail(context, ARCHBIRD_INVALID_SCHEMA,
+                "gates contain an invalid command definition");
   if (context->renames) {
     if (context->renames->kind != AB_VALUE_OBJECT ||
         context->renames->as.object.count > AB_PLAN_COMPILE_MAX_ROWS)
@@ -947,7 +954,15 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
   ArchbirdStatus status;
   ab_buffer_init(&rendered, context->engine);
   ab_buffer_init(&canonical, context->engine);
-  status = literal(&rendered, "{\"artifact\":\"plan\",\"items\":[");
+  status = literal(&rendered, "{\"artifact\":\"plan\",\"gates\":");
+  if (status == ARCHBIRD_OK) {
+    if (context->gates)
+      status = ab_value_render(&rendered, context->gates);
+    else
+      status = literal(&rendered, "{}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = literal(&rendered, ",\"items\":[");
   if (status == ARCHBIRD_OK)
     status = ab_plan_item_builder_render_items(&context->builder, &rendered);
   if (status == ARCHBIRD_OK)
@@ -993,7 +1008,7 @@ static ArchbirdStatus render_plan(AbPlanCompile *context,
             ? "\"asserted\""
             : "\"derived\"");
   if (status == ARCHBIRD_OK)
-    status = literal(&rendered, ",\"schema_version\":8,\"source\":");
+    status = literal(&rendered, ",\"schema_version\":9,\"source\":");
   if (status == ARCHBIRD_OK)
     status = render_source_identity(context, &rendered, map_json, map_length,
                                     before_map_json, before_map_length);

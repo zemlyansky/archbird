@@ -29,7 +29,7 @@ function browserPlan() {
   const sha = (character) => character.repeat(64);
   const output = path.join(path.dirname(screenshot), "plan.json");
   fs.writeFileSync(output, JSON.stringify({
-    schema_version: 8,
+    schema_version: 9,
     artifact: "plan",
     provenance: "derived",
     tool: {
@@ -52,6 +52,7 @@ function browserPlan() {
       },
     },
     objective: "Provide the reviewed implementation for the missing API.",
+    gates: {},
     items: [{
       id: "implement-api",
       statement: "Implement the missing API in js/index.js.",

@@ -9,6 +9,12 @@
 
 #define VERIFY_SHA                                                             \
   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+#define TEST_SHA_A                                                             \
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+#define TEST_SHA_B                                                             \
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+#define TEST_SHA_C                                                             \
+  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
 static const char PROJECT_CONFIG[] =
     "{\"constraints\":{\"UNCHANGED\":{\"actual\":{\"literal\":[\"ok\"]},"
@@ -119,7 +125,8 @@ static int render_project(ArchbirdEngine *engine, ArchbirdProject **out_project,
 static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
                      const AbBuffer *verification, const char *a_sha,
                      const char *b_sha, const char *json_sha, int empty,
-                     const char *preserved_constraint, AbBuffer *out) {
+                     const char *preserved_constraint, const char *gates,
+                     AbBuffer *out) {
   AbValue document = {0};
   AbValue verification_document = {0};
   const AbValue *evidence;
@@ -227,9 +234,10 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
   }
   length = snprintf(
       body, sizeof(body),
-      "{\"artifact\":\"plan\",\"items\":%s,\"objective\":\"Exercise native "
+      "{\"artifact\":\"plan\",\"gates\":%s,\"items\":%s,"
+      "\"objective\":\"Exercise native "
       "Plan materialization.\",\"preserved_constraints\":[\"%s\"],"
-      "\"provenance\":\"derived\",\"schema_version\":8,\"source\":{"
+      "\"provenance\":\"derived\",\"schema_version\":9,\"source\":{"
       "\"map\":{\"configuration_sha256\":\"%.*s\",\"input_sha256\":\"%.*s\","
       "\"producer_implementation_sha256\":\"%.*s\",\"sha256\":\"%s\"},"
       "\"project\":\"demo\",\"verification\":{\"policy_sha256\":\""
@@ -237,7 +245,7 @@ static int make_plan(ArchbirdEngine *engine, const AbBuffer *map,
       "\"sha256\":\"%.*s\"}},\"tool\":{"
       "\"implementation_sha256\":\"%s\",\"name\":\"archbird\","
       "\"version\":\"test\"},\"unknowns\":[]}",
-      items, preserved_constraint, 64,
+      gates, items, preserved_constraint, 64,
       field(evidence, "config_sha256")->as.text.data, 64,
       field(evidence, "input_sha256")->as.text.data, 64,
       field(tool, "implementation_sha256")->as.text.data, map_sha, 64,
@@ -284,6 +292,7 @@ int main(void) {
   AbBuffer failing_verification;
   AbBuffer plan;
   AbBuffer empty_plan;
+  AbBuffer gated_plan;
   AbBuffer submitted_plan;
   AbBuffer submitted_create_plan;
   AbBuffer source_requirements;
@@ -293,9 +302,11 @@ int main(void) {
   AbBuffer metadata;
   AbBuffer act;
   AbBuffer empty_act;
+  AbBuffer gated_act;
   AbBuffer submitted_act;
   AbBuffer submitted_create_act;
   AbBuffer accepted_act;
+  AbBuffer gated_accepted_act;
   AbBuffer act_requirements;
   AbBuffer failing_plan;
   AbBuffer failing_act;
@@ -312,6 +323,7 @@ int main(void) {
   ab_buffer_init(&failing_verification, engine);
   ab_buffer_init(&plan, engine);
   ab_buffer_init(&empty_plan, engine);
+  ab_buffer_init(&gated_plan, engine);
   ab_buffer_init(&submitted_plan, engine);
   ab_buffer_init(&submitted_create_plan, engine);
   ab_buffer_init(&source_requirements, engine);
@@ -321,9 +333,11 @@ int main(void) {
   ab_buffer_init(&metadata, engine);
   ab_buffer_init(&act, engine);
   ab_buffer_init(&empty_act, engine);
+  ab_buffer_init(&gated_act, engine);
   ab_buffer_init(&submitted_act, engine);
   ab_buffer_init(&submitted_create_act, engine);
   ab_buffer_init(&accepted_act, engine);
+  ab_buffer_init(&gated_accepted_act, engine);
   ab_buffer_init(&act_requirements, engine);
   ab_buffer_init(&failing_plan, engine);
   ab_buffer_init(&failing_act, engine);
@@ -339,13 +353,18 @@ int main(void) {
   expect_status("evaluate empty policy", status, ARCHBIRD_OK, engine);
   if (status != ARCHBIRD_OK ||
       !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 0,
-                 "UNCHANGED", &plan) ||
+                 "UNCHANGED", "{}", &plan) ||
       !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 1,
-                 "UNCHANGED", &empty_plan) ||
+                 "UNCHANGED", "{}", &empty_plan) ||
+      !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 1,
+                 "UNCHANGED",
+                 "{\"build\":{\"argv\":[\"true\"],"
+                 "\"timeout_seconds\":30}}",
+                 &gated_plan) ||
       !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 2,
-                 "UNCHANGED", &submitted_plan) ||
+                 "UNCHANGED", "{}", &submitted_plan) ||
       !make_plan(engine, &map, &verification, a_sha, b_sha, json_sha, 3,
-                 "UNCHANGED", &submitted_create_plan) ||
+                 "UNCHANGED", "{}", &submitted_create_plan) ||
       !make_metadata(&metadata, a_sha, b_sha, json_sha)) {
     fprintf(stderr, "FAIL fixture construction\n");
     failures++;
@@ -496,7 +515,7 @@ int main(void) {
   expect_status("evaluate failing policy", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK &&
       make_plan(engine, &map, &failing_verification, a_sha, b_sha, json_sha, 1,
-                "BROKEN", &failing_plan)) {
+                "BROKEN", "{}", &failing_plan)) {
     status = archbird_act_materialize(
         engine, project, failing_plan.data, failing_plan.length, map.data,
         map.length, failing_verification.data, failing_verification.length,
@@ -508,7 +527,7 @@ int main(void) {
                         engine, failing_act.data, failing_act.length, map.data,
                         map.length, map.data, map.length,
                         failing_verification.data, failing_verification.length,
-                        0, collect, &accepted_act),
+                        NULL, 0, 0, collect, &accepted_act),
                     ARCHBIRD_POLICY_REJECTED, engine);
   } else {
     fprintf(stderr, "FAIL failing policy fixture construction\n");
@@ -531,7 +550,7 @@ int main(void) {
       status = archbird_act_accept(
           engine, empty_act.data, empty_act.length, drift_map.data,
           drift_map.length, map.data, map.length, verification.data,
-          verification.length, 0, collect, &accepted_act);
+          verification.length, NULL, 0, 0, collect, &accepted_act);
       if (status == ARCHBIRD_OK || accepted_act.length) {
         fprintf(stderr, "FAIL altered before Map produced an accepted Act\n");
         failures++;
@@ -551,15 +570,110 @@ int main(void) {
         "validate empty",
         archbird_act_validate(engine, empty_act.data, empty_act.length),
         ARCHBIRD_OK, engine);
-  if (!find_bytes(&empty_act, "\"executors\":[],\"plan_sha256\":") ||
+  if (!find_bytes(&empty_act, "\"executors\":[],\"gates\":{},"
+                              "\"plan_sha256\":") ||
       !find_bytes(&empty_act, "\"transitions\":[]")) {
     fprintf(stderr, "FAIL empty Act shape\n");
     failures++;
   }
-  status =
-      archbird_act_accept(engine, empty_act.data, empty_act.length, map.data,
-                          map.length, map.data, map.length, verification.data,
-                          verification.length, 0, collect, &accepted_act);
+  status = archbird_act_materialize(
+      engine, project, gated_plan.data, gated_plan.length, map.data, map.length,
+      verification.data, verification.length, metadata.data, metadata.length,
+      NULL, 0, 0, collect, &gated_act);
+  expect_status("materialize gated", status, ARCHBIRD_OK, engine);
+  if (status == ARCHBIRD_OK) {
+    static const char gate_definition[] =
+        "{\"argv\":[\"true\"],\"timeout_seconds\":30}";
+    char definition_sha[65];
+    char gate_results[4096];
+    int gate_results_length;
+    digest((const uint8_t *)gate_definition, sizeof(gate_definition) - 1,
+           definition_sha);
+    gate_results_length = snprintf(
+        gate_results, sizeof(gate_results),
+        "{\"results\":[{\"definition_sha256\":\"%s\","
+        "\"duration_ms\":1,\"environment_sha256\":\"" TEST_SHA_A
+        "\",\"exit_code\":0,\"id\":\"build\",\"status\":\"pass\","
+        "\"stderr_sha256\":\"" TEST_SHA_B "\",\"stderr_tail_base64\":\"\","
+        "\"stdout_sha256\":\"" TEST_SHA_C "\",\"stdout_tail_base64\":\"\"}],"
+        "\"workspace_sha256\":\"" TEST_SHA_A "\"}",
+        definition_sha);
+    if (gate_results_length <= 0 ||
+        (size_t)gate_results_length >= sizeof(gate_results)) {
+      fprintf(stderr, "FAIL construct native gate results\n");
+      failures++;
+    } else {
+      status = archbird_act_accept(
+          engine, gated_act.data, gated_act.length, map.data, map.length,
+          map.data, map.length, verification.data, verification.length,
+          (const uint8_t *)gate_results, (size_t)gate_results_length, 0,
+          collect, &gated_accepted_act);
+      expect_status("accept passing gate", status, ARCHBIRD_OK, engine);
+      if (status == ARCHBIRD_OK &&
+          (!find_bytes(&gated_accepted_act,
+                       "\"gate_workspace_sha256\":\"" TEST_SHA_A "\"") ||
+           !find_bytes(&gated_accepted_act,
+                       "\"id\":\"build\",\"status\":\"pass\""))) {
+        fprintf(stderr, "FAIL accepted gate result ledger\n");
+        failures++;
+      }
+      {
+        char *definition = strstr(gate_results, definition_sha);
+        if (!definition) {
+          fprintf(stderr, "FAIL locate gate definition identity\n");
+          failures++;
+        } else {
+          definition[0] = definition[0] == '0' ? '1' : '0';
+          gated_accepted_act.length = 0;
+          expect_status("reject gate definition drift",
+                        archbird_act_accept(
+                            engine, gated_act.data, gated_act.length, map.data,
+                            map.length, map.data, map.length, verification.data,
+                            verification.length, (const uint8_t *)gate_results,
+                            (size_t)gate_results_length, 0, collect,
+                            &gated_accepted_act),
+                        ARCHBIRD_CONFLICT, engine);
+          definition[0] = definition_sha[0];
+        }
+      }
+      {
+        char *passing = strstr(gate_results, "\"status\":\"pass\"");
+        if (!passing) {
+          fprintf(stderr, "FAIL locate gate status\n");
+          failures++;
+        } else {
+          memcpy(passing, "\"status\":\"fail\"", 15);
+          gated_accepted_act.length = 0;
+          expect_status("reject failing gate",
+                        archbird_act_accept(
+                            engine, gated_act.data, gated_act.length, map.data,
+                            map.length, map.data, map.length, verification.data,
+                            verification.length, (const uint8_t *)gate_results,
+                            (size_t)gate_results_length, 0, collect,
+                            &gated_accepted_act),
+                        ARCHBIRD_POLICY_REJECTED, engine);
+          memcpy(passing, "\"status\":\"pass\"", 15);
+        }
+      }
+      gated_accepted_act.length = 0;
+      expect_status(
+          "reject missing gate result",
+          archbird_act_accept(
+              engine, gated_act.data, gated_act.length, map.data, map.length,
+              map.data, map.length, verification.data, verification.length,
+              (const uint8_t
+                   *)"{\"results\":[],\"workspace_sha256\":\"" TEST_SHA_A "\"}",
+              sizeof("{\"results\":[],\"workspace_sha256\":\"" TEST_SHA_A
+                     "\"}") -
+                  1,
+              0, collect, &gated_accepted_act),
+          ARCHBIRD_INVALID_SCHEMA, engine);
+    }
+  }
+  status = archbird_act_accept(engine, empty_act.data, empty_act.length,
+                               map.data, map.length, map.data, map.length,
+                               verification.data, verification.length, NULL, 0,
+                               0, collect, &accepted_act);
   expect_status("accept empty", status, ARCHBIRD_OK, engine);
   if (status == ARCHBIRD_OK)
     expect_status(
@@ -624,7 +738,9 @@ cleanup:
   ab_buffer_free(&failing_plan);
   ab_buffer_free(&act_requirements);
   ab_buffer_free(&accepted_act);
+  ab_buffer_free(&gated_accepted_act);
   ab_buffer_free(&empty_act);
+  ab_buffer_free(&gated_act);
   ab_buffer_free(&submitted_create_act);
   ab_buffer_free(&submitted_act);
   ab_buffer_free(&act);
@@ -634,6 +750,7 @@ cleanup:
   ab_buffer_free(&submitted_source_requirements);
   ab_buffer_free(&source_requirements);
   ab_buffer_free(&empty_plan);
+  ab_buffer_free(&gated_plan);
   ab_buffer_free(&submitted_create_plan);
   ab_buffer_free(&submitted_plan);
   ab_buffer_free(&plan);

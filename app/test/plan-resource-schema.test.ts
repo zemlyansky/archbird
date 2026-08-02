@@ -29,7 +29,7 @@ function validatePlan() {
 function plan() {
   const sha = (character: string): string => character.repeat(64);
   return {
-    schema_version: 8,
+    schema_version: 9,
     artifact: "plan",
     provenance: "derived",
     tool: {
@@ -52,6 +52,7 @@ function plan() {
       },
     },
     objective: "exercise resource bounds",
+    gates: {},
     items: [{
       id: "edit",
       statement: "edit",

@@ -8,6 +8,7 @@ const {
   applyAcceptedAct,
   observeActSources,
   observePlanSources,
+  runActGates,
   actOverlay,
   renderAct,
 } = require("./act-transport");
@@ -1728,6 +1729,7 @@ function acceptAct(
   beforeMapJson,
   afterMapJson,
   verificationJson,
+  gateResultsJson = Buffer.alloc(0),
   { pretty = false } = {},
 ) {
   return native.actAccept(
@@ -1735,6 +1737,7 @@ function acceptAct(
     Buffer.from(beforeMapJson),
     Buffer.from(afterMapJson),
     Buffer.from(verificationJson),
+    Buffer.from(gateResultsJson),
     pretty,
   );
 }
@@ -1919,6 +1922,7 @@ module.exports = {
   actSourceRequirements,
   preflightActApply,
   renderAct,
+  runActGates,
   validateAct,
   validatePlan,
   jsonCanonicalize: native.jsonCanonicalize,

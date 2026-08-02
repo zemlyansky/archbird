@@ -1,5 +1,6 @@
 #include <archbird/archbird.h>
 
+#include "act_gate_acceptance.h"
 #include "act_internal.h"
 #include "act_projection_acceptance.h"
 #include "artifact_validation.h"
@@ -252,7 +253,8 @@ static ArchbirdStatus render_accepted_document(
     AbBuffer *buffer, const AbAct *act, const AbValue *after_map,
     const char after_map_sha[65], const AbVerificationArtifact *verification,
     const AbValue *const *constraint_rows, size_t constraint_count,
-    const AbBuffer *projection_deltas, const char *seal) {
+    const AbBuffer *projection_deltas,
+    const AbActGateAcceptance *gate_acceptance, const char *seal) {
   const AbValue *result_sha =
       field(&verification->root, "verification_result_sha256");
   ArchbirdStatus status =
@@ -265,6 +267,14 @@ static ArchbirdStatus render_accepted_document(
   if (status == ARCHBIRD_OK)
     status = ab_buffer_append(buffer, projection_deltas->data,
                               projection_deltas->length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"gate_results\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(buffer, gate_acceptance->results);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"gate_workspace_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(buffer, gate_acceptance->workspace_sha256);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         buffer, ",\"status\":\"satisfied\",\"verification_sha256\":");
@@ -284,12 +294,16 @@ static ArchbirdStatus render_accepted_document(
   if (status == ARCHBIRD_OK)
     status = ab_value_render(buffer, field(&act->document, "executors"));
   if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"gates\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(buffer, act->gates);
+  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"plan_sha256\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(buffer, field(&act->document, "plan_sha256"));
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
-        buffer, ",\"provenance\":\"derived\",\"schema_version\":4,\"seal\":");
+        buffer, ",\"provenance\":\"derived\",\"schema_version\":5,\"seal\":");
   if (status == ARCHBIRD_OK) {
     if (seal) {
       status = ab_buffer_literal(buffer, "{\"content_sha256\":");
@@ -322,13 +336,13 @@ static ArchbirdStatus render_accepted_document(
   return status;
 }
 
-ArchbirdStatus
-archbird_act_accept(ArchbirdEngine *engine, const uint8_t *act_json,
-                    size_t act_length, const uint8_t *before_map_json,
-                    size_t before_map_length, const uint8_t *after_map_json,
-                    size_t after_map_length, const uint8_t *verification_json,
-                    size_t verification_length, uint32_t json_flags,
-                    ArchbirdWriteFn write_fn, void *user_data) {
+ArchbirdStatus archbird_act_accept(
+    ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
+    const uint8_t *before_map_json, size_t before_map_length,
+    const uint8_t *after_map_json, size_t after_map_length,
+    const uint8_t *verification_json, size_t verification_length,
+    const uint8_t *gate_results_json, size_t gate_results_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data) {
   AbAct act = {0};
   AbVerificationArtifact verification = {0};
   AbValue before_map = {0};
@@ -341,6 +355,7 @@ archbird_act_accept(ArchbirdEngine *engine, const uint8_t *act_json,
   AbBuffer accepted;
   AbBuffer projection_deltas;
   AbAct accepted_act = {0};
+  AbActGateAcceptance gate_acceptance = {0};
   char before_sha[65];
   char after_sha[65];
   char seal[65];
@@ -348,6 +363,7 @@ archbird_act_accept(ArchbirdEngine *engine, const uint8_t *act_json,
   if (!engine || !act_json || !act_length || !before_map_json ||
       !before_map_length || !after_map_json || !after_map_length ||
       !verification_json || !verification_length || !write_fn ||
+      (!gate_results_json && gate_results_length) ||
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&unsealed, engine);
@@ -402,9 +418,12 @@ archbird_act_accept(ArchbirdEngine *engine, const uint8_t *act_json,
     status = collect_accepted_constraints(engine, &act, &verification,
                                           &constraint_rows, &constraint_count);
   if (status == ARCHBIRD_OK)
+    status = ab_act_gate_acceptance_load(engine, act.gates, gate_results_json,
+                                         gate_results_length, &gate_acceptance);
+  if (status == ARCHBIRD_OK)
     status = render_accepted_document(
         &unsealed, &act, &after_map, after_sha, &verification, constraint_rows,
-        constraint_count, &projection_deltas, NULL);
+        constraint_count, &projection_deltas, &gate_acceptance, NULL);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, unsealed.data, unsealed.length,
                                         0, buffer_write, &canonical);
@@ -414,7 +433,7 @@ archbird_act_accept(ArchbirdEngine *engine, const uint8_t *act_json,
   if (status == ARCHBIRD_OK)
     status = render_accepted_document(
         &sealed, &act, &after_map, after_sha, &verification, constraint_rows,
-        constraint_count, &projection_deltas, seal);
+        constraint_count, &projection_deltas, &gate_acceptance, seal);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, sealed.data, sealed.length, 0,
                                         buffer_write, &accepted);
@@ -424,6 +443,7 @@ archbird_act_accept(ArchbirdEngine *engine, const uint8_t *act_json,
     status = archbird_json_canonicalize(engine, accepted.data, accepted.length,
                                         json_flags, write_fn, user_data);
   ab_act_free(engine, &accepted_act);
+  ab_act_gate_acceptance_free(engine, &gate_acceptance);
   ab_buffer_free(&accepted);
   ab_buffer_free(&projection_deltas);
   ab_free(engine, constraint_rows);

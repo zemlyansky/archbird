@@ -15,6 +15,7 @@
     "source",
     "state",
     "after",
+    "gates",
     "executors",
     "source_locks",
     "transitions",
@@ -22,7 +23,7 @@
     "seal"
   ],
   "properties": {
-    "schema_version": {"const": 4},
+    "schema_version": {"const": 5},
     "artifact": {"const": "act"},
     "provenance": {"const": "derived"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -35,6 +36,7 @@
         {"$ref": "#/$defs/afterState"}
       ]
     },
+    "gates": {"$ref": "#/$defs/gates"},
     "executors": {
       "type": "array",
       "maxItems": 4096,
@@ -72,7 +74,9 @@
                 "items": {
                   "properties": {"status": {"const": "not_evaluated"}}
                 }
-              }
+              },
+              "gate_workspace_sha256": {"type": "null"},
+              "gate_results": {"maxItems": 0}
             }
           },
           "seal": {"type": "null"}
@@ -94,6 +98,14 @@
                     "status": {
                       "enum": ["pass", "waived", "not_applicable"]
                     }
+                  }
+                }
+              },
+              "gate_results": {
+                "items": {
+                  "properties": {
+                    "status": {"const": "pass"},
+                    "exit_code": {"const": 0}
                   }
                 }
               }
@@ -142,6 +154,87 @@
         "name": {"const": "archbird"},
         "version": {"type": "string", "minLength": 1, "maxLength": 256},
         "implementation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "timeout_seconds"],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?:\\.|(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000]+)$"
+        },
+        "depends_on": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "maxProperties": 4096,
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/gate"}
+    },
+    "gateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "definition_sha256",
+        "status",
+        "exit_code",
+        "duration_ms",
+        "environment_sha256",
+        "stdout_sha256",
+        "stderr_sha256",
+        "stdout_tail_base64",
+        "stderr_tail_base64"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "definition_sha256": {"$ref": "#/$defs/sha256"},
+        "status": {"const": "pass"},
+        "exit_code": {"const": 0},
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "environment_sha256": {"$ref": "#/$defs/sha256"},
+        "stdout_sha256": {"$ref": "#/$defs/sha256"},
+        "stderr_sha256": {"$ref": "#/$defs/sha256"},
+        "stdout_tail_base64": {
+          "type": "string",
+          "maxLength": 87384,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "stderr_tail_base64": {
+          "type": "string",
+          "maxLength": 87384,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        }
       }
     },
     "mapIdentity": {
@@ -375,7 +468,9 @@
         "status",
         "verification_sha256",
         "constraints",
-        "projection_deltas"
+        "projection_deltas",
+        "gate_workspace_sha256",
+        "gate_results"
       ],
       "properties": {
         "status": {"enum": ["not_evaluated", "satisfied"]},
@@ -394,6 +489,17 @@
           "type": "array",
           "maxItems": 4096,
           "items": {"$ref": "#/$defs/projectionDelta"}
+        },
+        "gate_workspace_sha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        },
+        "gate_results": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/gateResult"}
         }
       }
     },

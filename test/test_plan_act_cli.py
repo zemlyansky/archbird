@@ -70,6 +70,7 @@ class PlanActCliTest(unittest.TestCase):
         self,
         constraints: dict[str, object],
         *,
+        gates: dict[str, object] | None = None,
         layers: list[dict[str, object]] | None = None,
         tests: list[dict[str, object]] | None = None,
     ) -> None:
@@ -79,6 +80,8 @@ class PlanActCliTest(unittest.TestCase):
         }
         if tests is not None:
             document["tests"] = tests
+        if gates is not None:
+            document["gates"] = gates
         if layers is not None:
             document["layers"] = layers
         (self.root / "archbird.json").write_text(
@@ -210,6 +213,118 @@ class PlanActCliTest(unittest.TestCase):
             replay,
             "Result: applied-transitions=0; state=already-satisfied\n",
         )
+
+    def test_reviewed_gates_run_in_dependency_order_over_isolated_after_state(
+        self,
+    ) -> None:
+        self.configure(
+            {
+                "NO-LEGACY": {
+                    "kind": "forbidden_paths",
+                    "paths": ["legacy.py"],
+                    "owner": "architecture",
+                    "rationale": "Obsolete implementation stays absent.",
+                }
+            },
+            gates={
+                "build": {
+                    "argv": [
+                        sys.executable,
+                        "-c",
+                        (
+                            "from pathlib import Path; "
+                            "import os; "
+                            "assert Path.cwd() == Path(os.environ['PWD']); "
+                            "assert not Path('legacy.py').exists(); "
+                            "Path('built.marker').write_text('ready')"
+                        ),
+                    ],
+                    "timeout_seconds": 10,
+                },
+                "test": {
+                    "argv": [
+                        sys.executable,
+                        "-c",
+                        (
+                            "from pathlib import Path; "
+                            "assert Path('built.marker').read_text() == 'ready'"
+                        ),
+                    ],
+                    "depends_on": ["build"],
+                    "timeout_seconds": 10,
+                },
+            },
+        )
+        legacy = self.root / "legacy.py"
+        legacy.write_text("obsolete = True\n")
+        plan_path = self.plan_path()
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(set(plan["gates"]), {"build", "test"})
+
+        act_path, act = self.accepted_act(plan_path)
+        self.assertTrue(legacy.exists(), "gate preview mutated the repository")
+        self.assertFalse((self.root / "built.marker").exists())
+        self.assertEqual(
+            [row["id"] for row in act["acceptance"]["gate_results"]],
+            ["build", "test"],
+        )
+        self.assertEqual(
+            {row["status"] for row in act["acceptance"]["gate_results"]},
+            {"pass"},
+        )
+        self.assertRegex(
+            act["acceptance"]["gate_workspace_sha256"], r"^[0-9a-f]{64}$"
+        )
+        run("apply", str(act_path), "--root", str(self.root))
+        self.assertFalse(legacy.exists())
+
+    def test_failing_reviewed_gate_rejects_act_without_writing(self) -> None:
+        self.configure(
+            {
+                "NO-LEGACY": {
+                    "kind": "forbidden_paths",
+                    "paths": ["legacy.py"],
+                    "owner": "architecture",
+                    "rationale": "Obsolete implementation stays absent.",
+                }
+            },
+            gates={
+                "behavior": {
+                    "argv": [
+                        sys.executable,
+                        "-c",
+                        (
+                            "import sys; "
+                            "sys.stderr.write('behavior gate failed\\n'); "
+                            "raise SystemExit(7)"
+                        ),
+                    ],
+                    "timeout_seconds": 10,
+                }
+            },
+        )
+        legacy = self.root / "legacy.py"
+        legacy.write_text("obsolete = True\n")
+        plan_path = self.plan_path()
+        act_path = self.plan_path("act.json")
+        run("plan", "--root", str(self.root), "--output", str(plan_path))
+        rejected = run(
+            "act",
+            str(plan_path),
+            "--root",
+            str(self.root),
+            "--format",
+            "json",
+            "--output",
+            str(act_path),
+            expected=2,
+        )
+        self.assertIn("gate 'behavior'", rejected.stderr.decode())
+        self.assertIn("Gate behavior: fail (exit 7", rejected.stderr.decode())
+        self.assertIn("behavior gate failed", rejected.stderr.decode())
+        self.assertTrue(legacy.exists())
+        self.assertFalse(act_path.exists())
 
     def test_package_entrypoint_plan_uses_lossless_native_json_edits(self) -> None:
         cases = (
@@ -784,7 +899,7 @@ class PlanActCliTest(unittest.TestCase):
             str(plan_path),
         )
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 8)
+        self.assertEqual(plan["schema_version"], 9)
         canonical_before_map = json.dumps(
             json.loads(before_map),
             allow_nan=False,
@@ -2788,7 +2903,7 @@ class PlanActCliTest(unittest.TestCase):
         plan_path = self.plan_path("neutral-api-plan.json")
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan = json.loads(plan_path.read_bytes())
-        self.assertEqual(plan["schema_version"], 8)
+        self.assertEqual(plan["schema_version"], 9)
         self.assertEqual(len(plan["items"]), 3)
         self.assertTrue(all(not item["executable"] for item in plan["items"]))
 
@@ -3315,7 +3430,7 @@ class PlanActCliTest(unittest.TestCase):
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan_bytes = plan_path.read_bytes()
         plan = json.loads(plan_bytes)
-        self.assertEqual(plan["schema_version"], 8)
+        self.assertEqual(plan["schema_version"], 9)
         self.assertEqual(len(plan["items"]), 1)
         item = plan["items"][0]
         self.assertEqual(
@@ -3590,7 +3705,7 @@ class PlanActCliTest(unittest.TestCase):
         run("plan", "--root", str(self.root), "--output", str(plan_path))
         plan_bytes = plan_path.read_bytes()
         plan = json.loads(plan_bytes)
-        self.assertEqual(plan["schema_version"], 8)
+        self.assertEqual(plan["schema_version"], 9)
         self.assertEqual(len(plan["items"]), 1)
         item = plan["items"][0]
         self.assertEqual(

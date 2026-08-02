@@ -53,14 +53,15 @@ int main(void) {
   char *premature_observation;
   const char *valid =
       "{\"acceptance\":{\"constraints\":[],\"projection_deltas\":[],"
+      "\"gate_results\":[],\"gate_workspace_sha256\":null,"
       "\"status\":\"not_evaluated\",\"verification_sha256\":null},"
       "\"after\":null,\"artifact\":\"act\","
       "\"executors\":[{\"capability\":\"archbird.native.create-file@1\","
       "\"deterministic\":true,\"implementation_sha256\":\"" SHA_C
       "\",\"item_ids\":[\"item:create\"],\"matches\":1,\"reads\":[],"
       "\"skipped\":0,\"unsupported\":0,\"writes\":[\"hello.txt\"]}],"
-      "\"plan_sha256\":\"" SHA_A
-      "\",\"provenance\":\"derived\",\"schema_version\":4,\"seal\":null,"
+      "\"gates\":{},\"plan_sha256\":\"" SHA_A
+      "\",\"provenance\":\"derived\",\"schema_version\":5,\"seal\":null,"
       "\"source\":{\"map\":{\"configuration_sha256\":\"" SHA_A
       "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A
@@ -75,14 +76,15 @@ int main(void) {
       "\"kind\":\"create\",\"path\":\"hello.txt\",\"source_path\":null}]}";
   const char *bad_content =
       "{\"acceptance\":{\"constraints\":[],\"projection_deltas\":[],"
+      "\"gate_results\":[],\"gate_workspace_sha256\":null,"
       "\"status\":\"not_evaluated\",\"verification_sha256\":null},"
       "\"after\":null,\"artifact\":\"act\","
       "\"executors\":[{\"capability\":\"archbird.native.create-file@1\","
       "\"deterministic\":true,\"implementation_sha256\":\"" SHA_C
       "\",\"item_ids\":[\"item:create\"],\"matches\":1,\"reads\":[],"
       "\"skipped\":0,\"unsupported\":0,\"writes\":[\"hello.txt\"]}],"
-      "\"plan_sha256\":\"" SHA_A
-      "\",\"provenance\":\"derived\",\"schema_version\":4,\"seal\":null,"
+      "\"gates\":{},\"plan_sha256\":\"" SHA_A
+      "\",\"provenance\":\"derived\",\"schema_version\":5,\"seal\":null,"
       "\"source\":{\"map\":{\"configuration_sha256\":\"" SHA_A
       "\",\"input_sha256\":\"" SHA_B
       "\",\"producer_implementation_sha256\":\"" SHA_C "\",\"sha256\":\"" SHA_A

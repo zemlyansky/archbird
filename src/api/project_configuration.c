@@ -31,6 +31,10 @@ ArchbirdStatus archbird_project_configuration_compile(
     status = ab_buffer_json_string(&buffer,
                                    configuration.constraint_policy_sha256, 64);
   if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"gates\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&buffer, &configuration.gates);
+  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, ",\"map_overlay\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&buffer, &configuration.map_overlay);

@@ -54,7 +54,9 @@ from .act_transport import (
     apply_accepted_act,
     observe_plan_sources,
     act_overlay,
+    gate_failure_details,
     render_act,
+    run_act_gates,
 )
 from ._plan_limits import (
     MAX_ACT_BYTES,
@@ -2690,6 +2692,11 @@ def _plan_main(argv: Sequence[str]) -> int:
                 )
             redirect_directives[old] = new
         request: dict[str, object] = {}
+        configuration_plan = json.loads(
+            _native.project_configuration_compile(config_json)
+        )
+        if configuration_plan.get("gates"):
+            request["gates"] = configuration_plan["gates"]
         if args.constraint_ids:
             request["constraint_ids"] = args.constraint_ids
         if rename_directives:
@@ -2897,12 +2904,20 @@ def _act_main(argv: Sequence[str]) -> int:
             policy_date=policy_date,
             pretty=False,
         )
-        accepted_act = _native.act_accept(
-            materialized_act,
-            before_map,
-            after_map,
-            after_verification,
-        )
+        gate_results = run_act_gates(repository, materialized_act)
+        try:
+            accepted_act = _native.act_accept(
+                materialized_act,
+                before_map,
+                after_map,
+                after_verification,
+                gate_results,
+            )
+        except _native.Error as error:
+            details = gate_failure_details(gate_results)
+            if details:
+                raise RuntimeError(f"{error}\n{details}") from error
+            raise
         _write(
             render_act(
                 repository,

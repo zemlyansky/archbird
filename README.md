@@ -494,6 +494,7 @@ vocabulary is:
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
+| `gates` | reviewed build or test commands that must pass in Act's isolated after-state |
 | `limits` | bounded Map analysis policy |
 <!-- archbird-config-fields:end -->
 
@@ -697,6 +698,36 @@ which test produced a hit; it never runs the tests or coverage tools.
 Plan evaluates the complete current Verify policy and derives one editable
 artifact. Omit the constraint name to include every current issue, or scope
 generation by existing constraint ID:
+
+Build and behavioral acceptance commands are stable project policy. Define
+them once as direct argument arrays in `archbird.json`; Archbird never invokes
+a shell:
+
+```json
+{
+  "gates": {
+    "build": {
+      "argv": ["cmake", "--build", "build"],
+      "timeout_seconds": 600
+    },
+    "focused-tests": {
+      "argv": ["ctest", "--test-dir", "build", "--output-on-failure"],
+      "depends_on": ["build"],
+      "timeout_seconds": 600,
+      "max_output_bytes": 1048576
+    }
+  }
+}
+```
+
+Every configured gate runs over the same copied after-state used to build the
+acceptance Map. Dependencies provide a deterministic order and allow build
+outputs to feed later tests. Any failure, timeout, output-limit breach, or
+blocked dependency rejects the Act before the working tree is changed. The
+accepted Act seals each normalized definition, status, duration, environment
+identity, complete output digests, bounded output tails, and the initial
+after-state workspace identity. These are trusted reviewed commands with
+source isolation and provenance, not an operating-system security sandbox.
 
 ```bash
 # Inspect the current task DAG without saving a second artifact.
@@ -1114,7 +1145,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
-| Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `render_plan_markdown`, `validate_act`, `validate_plan` |
+| Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `render_plan_markdown`, `run_act_gates`, `validate_act`, `validate_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
 | Runtime and schemas | `__version__`, `implementation_digest`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `read_schema`, `schema_names` |
 <!-- archbird-python-api:end -->
@@ -1125,7 +1156,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
-| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `validateAct`, `validatePlan` |
+| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `runActGates`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
 | Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
 | Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |

@@ -11,6 +11,7 @@ typedef struct AbProjectConfiguration {
   AbValue projections;
   AbValue queries;
   AbValue constraints;
+  AbValue gates;
   char constraint_policy_sha256[65];
   char map_overlay_sha256[65];
   char sha256[65];

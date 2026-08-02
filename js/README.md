@@ -266,6 +266,7 @@ inventory is:
 | `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
+| `gates` | reviewed build or test commands that must pass in Act's isolated after-state |
 | `limits` | bounded Map analysis policy |
 <!-- archbird-config-fields:end -->
 
@@ -763,8 +764,11 @@ after-Map and Verification. `preflightActApply()` returns `ready` or
 `already_satisfied` after comparing newly observed sources with the complete
 sealed before/after states; partial application and unrelated drift fail. The
 explicit filesystem helpers `observePlanSources()`,
-`actOverlay()`, `renderAct()`, and `applyAcceptedAct()` provide that host
-transport; all Plan interpretation, edit materialization, and acceptance
+`actOverlay()`, `runActGates()`, `renderAct()`, and `applyAcceptedAct()`
+provide that host transport. Reviewed `gates` from `archbird.json` execute as
+direct argument arrays over the copied after-state; the native core rejects
+incomplete or non-passing result ledgers before acceptance. All Plan
+interpretation, edit materialization, gate-result validation, and acceptance
 remain in the native core.
 
 <!-- archbird-node-api:start -->
@@ -773,7 +777,7 @@ remain in the native core.
 | Repository model | `Project`, `Source`, `Workspace` |
 | Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
-| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `validateAct`, `validatePlan` |
+| Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `runActGates`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
 | Runtime and planning | `defaultProviderCacheDir`, `defaultProviderCacheMaxBytes`, `discoveryPlan`, `jsonCanonicalize` |
 | Runtime metadata | `ENGINE`, `IMPLEMENTATION_SHA256`, `NATIVE_ABI_VERSION`, `PATTERN_CONTRACT`, `PATTERN_CONTRACT_VERSION`, `PATTERN_ENGINE`, `PATTERN_OPTIONS`, `PATTERN_UNICODE`, `PROVIDER_SUPPORT`, `VERSION` |
