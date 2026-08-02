@@ -1,5 +1,6 @@
 #include "act_internal.h"
 
+#include "act_source.h"
 #include "artifact_validation.h"
 #include "base64.h"
 #include "model.h"
@@ -193,6 +194,37 @@ static int validate_executor(const AbValue *value) {
          sorted_string_array(ab_value_member(value, "writes"), 0, 0);
 }
 
+static int validate_source_lock(const AbValue *value) {
+  static const char *const fields[] = {"path", "sha256", "executable"};
+  return ab_artifact_object_exact(value, fields, 3) &&
+         ab_artifact_repository_path(ab_value_member(value, "path")) &&
+         ab_artifact_sha256(ab_value_member(value, "sha256")) &&
+         ab_artifact_boolean(ab_value_member(value, "executable"));
+}
+
+static int source_lock_compare(const AbValue *left, const AbValue *right) {
+  return ab_string_compare(&ab_value_member(left, "path")->as.text,
+                           &ab_value_member(right, "path")->as.text);
+}
+
+static size_t source_lock_index(const AbValue *locks, const AbString *path) {
+  size_t low = 0;
+  size_t high = locks->as.array.count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    const AbValue *row = &locks->as.array.items[middle];
+    int compared =
+        ab_string_compare(&ab_value_member(row, "path")->as.text, path);
+    if (compared < 0)
+      low = middle + 1;
+    else if (compared > 0)
+      high = middle;
+    else
+      return middle;
+  }
+  return SIZE_MAX;
+}
+
 static int transition_compare(const AbValue *left, const AbValue *right) {
   const AbValue *left_path = ab_value_member(left, "path");
   const AbValue *right_path = ab_value_member(right, "path");
@@ -276,6 +308,60 @@ static ArchbirdStatus validate_transition(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+static int transition_covers_path(const AbAct *act, const AbString *path) {
+  size_t index;
+  for (index = 0; index < act->transition_count; index++) {
+    const AbValue *transition = act->transitions[index].record;
+    const AbValue *transition_path = ab_value_member(transition, "path");
+    const AbValue *source_path = ab_value_member(transition, "source_path");
+    if (ab_string_equal(&transition_path->as.text, path) ||
+        (source_path->kind == AB_VALUE_STRING &&
+         ab_string_equal(&source_path->as.text, path)))
+      return 1;
+  }
+  return 0;
+}
+
+static ArchbirdStatus validate_read_coverage(ArchbirdEngine *engine, AbAct *act,
+                                             const AbValue *executors) {
+  uint8_t *used = NULL;
+  size_t executor_index;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (act->source_locks->as.array.count) {
+    used = (uint8_t *)ab_calloc(engine, act->source_locks->as.array.count, 1);
+    if (!used)
+      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory validating Act source locks");
+  }
+  for (executor_index = 0;
+       status == ARCHBIRD_OK && executor_index < executors->as.array.count;
+       executor_index++) {
+    const AbValue *reads =
+        ab_value_member(&executors->as.array.items[executor_index], "reads");
+    for (index = 0; index < reads->as.array.count; index++) {
+      const AbString *path = &reads->as.array.items[index].as.text;
+      size_t lock_index;
+      if (transition_covers_path(act, path))
+        continue;
+      lock_index = source_lock_index(act->source_locks, path);
+      if (lock_index == SIZE_MAX) {
+        status = invalid(engine, "executor read has no source lock");
+        break;
+      }
+      used[lock_index] = 1;
+    }
+  }
+  for (index = 0;
+       status == ARCHBIRD_OK && index < act->source_locks->as.array.count;
+       index++)
+    if (!used[index])
+      status = invalid(engine, "source lock is not used by an executor");
+  ab_free(engine, used);
+  return status;
+}
+
 static ArchbirdStatus canonical_digest(ArchbirdEngine *engine,
                                        const uint8_t *json, size_t length,
                                        char out[65]) {
@@ -321,11 +407,12 @@ static ArchbirdStatus seal_digest(ArchbirdEngine *engine,
 
 static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
   static const char *const fields[] = {
-      "schema_version", "artifact",    "provenance", "tool",
-      "plan_sha256",    "source",      "state",      "after",
-      "executors",      "transitions", "acceptance", "seal"};
+      "schema_version", "artifact",     "provenance", "tool",  "plan_sha256",
+      "source",         "source_locks", "state",      "after", "executors",
+      "transitions",    "acceptance",   "seal"};
   const AbValue *state;
   const AbValue *executors;
+  const AbValue *source_locks;
   const AbValue *transitions;
   const AbValue *seal;
   uint64_t schema;
@@ -333,10 +420,10 @@ static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
   size_t aggregate = 0;
   int accepted;
   ArchbirdStatus status;
-  if (!ab_artifact_object_exact(&act->document, fields, 12) ||
+  if (!ab_artifact_object_exact(&act->document, fields, 13) ||
       !ab_artifact_safe_integer(
           ab_value_member(&act->document, "schema_version"), &schema) ||
-      schema != 2 ||
+      schema != 3 ||
       !ab_artifact_text_is(ab_value_member(&act->document, "artifact"),
                            "act") ||
       !ab_artifact_text_is(ab_value_member(&act->document, "provenance"),
@@ -369,6 +456,18 @@ static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
   for (index = 0; index < executors->as.array.count; index++)
     if (!validate_executor(&executors->as.array.items[index]))
       return invalid(engine, "executor ledger is invalid");
+  source_locks = ab_value_member(&act->document, "source_locks");
+  if (!source_locks || source_locks->kind != AB_VALUE_ARRAY ||
+      source_locks->as.array.count > AB_ACT_MAX_SOURCE_PATHS)
+    return invalid(engine, "source_locks must be a bounded array");
+  act->source_locks = source_locks;
+  for (index = 0; index < source_locks->as.array.count; index++) {
+    if (!validate_source_lock(&source_locks->as.array.items[index]))
+      return invalid(engine, "source lock is invalid");
+    if (index && source_lock_compare(&source_locks->as.array.items[index - 1],
+                                     &source_locks->as.array.items[index]) >= 0)
+      return invalid(engine, "source locks are not uniquely sorted");
+  }
   transitions = ab_value_member(&act->document, "transitions");
   if (!array_value(transitions, 0))
     return invalid(engine, "transitions must be an array");
@@ -390,6 +489,15 @@ static ArchbirdStatus validate_act(ArchbirdEngine *engine, AbAct *act) {
     if (status != ARCHBIRD_OK)
       return status;
   }
+  for (index = 0; index < source_locks->as.array.count; index++)
+    if (transition_covers_path(
+            act, &ab_value_member(&source_locks->as.array.items[index], "path")
+                      ->as.text))
+      return invalid(engine,
+                     "source lock duplicates a transition source state");
+  status = validate_read_coverage(engine, act, executors);
+  if (status != ARCHBIRD_OK)
+    return status;
   seal = ab_value_member(&act->document, "seal");
   if (accepted) {
     static const char *const seal_fields[] = {"content_sha256"};

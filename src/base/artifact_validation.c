@@ -99,6 +99,43 @@ int ab_artifact_repository_literal_path(const AbValue *value) {
   return 1;
 }
 
+ArchbirdStatus ab_artifact_resolve_relative_to_file(
+    ArchbirdEngine *engine, const AbString *file_path,
+    const AbString *relative_path, AbString *out) {
+  AbBuffer path;
+  AbValue value = {.kind = AB_VALUE_STRING};
+  size_t directory_length = 0;
+  size_t index;
+  ArchbirdStatus status;
+  if (!engine || !file_path || !relative_path || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memset(out, 0, sizeof(*out));
+  value.as.text = *relative_path;
+  if (!ab_artifact_repository_literal_path(&value))
+    return ARCHBIRD_INVALID_SCHEMA;
+  for (index = file_path->length; index; index--)
+    if (file_path->data[index - 1] == '/') {
+      directory_length = index;
+      break;
+    }
+  ab_buffer_init(&path, engine);
+  status = directory_length
+               ? ab_buffer_append(&path, file_path->data, directory_length)
+               : ARCHBIRD_OK;
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_append(&path, relative_path->data, relative_path->length);
+  value.as.text.data = (char *)path.data;
+  value.as.text.length = path.length;
+  if (status == ARCHBIRD_OK && !ab_artifact_repository_literal_path(&value))
+    status = ARCHBIRD_INVALID_SCHEMA;
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_string_copy(engine, out, value.as.text.data, value.as.text.length);
+  ab_buffer_free(&path);
+  return status;
+}
+
 int ab_artifact_safe_integer(const AbValue *value, uint64_t *out) {
   uint64_t number;
   if (!ab_value_u64(value, &number) || number > AB_ARTIFACT_MAX_SAFE_INTEGER)

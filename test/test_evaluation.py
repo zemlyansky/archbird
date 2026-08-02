@@ -190,7 +190,7 @@ elif command == 'plan':
 elif command == 'act':
   value = {
     'artifact':'act',
-    'schema_version':2,
+    'schema_version':3,
     'state':'accepted',
   }
 else:

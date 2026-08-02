@@ -67,9 +67,9 @@ static ArchbirdStatus validate_metadata(ArchbirdEngine *engine,
   files = field(metadata, "files");
   absent = field(metadata, "absent");
   if (!files || files->kind != AB_VALUE_ARRAY ||
-      files->as.array.count > AB_ACT_MAX_TRANSITIONS || !absent ||
+      files->as.array.count > AB_ACT_MAX_OBSERVED_PATHS || !absent ||
       absent->kind != AB_VALUE_ARRAY ||
-      absent->as.array.count > AB_ACT_MAX_TRANSITIONS)
+      absent->as.array.count > AB_ACT_MAX_OBSERVED_PATHS)
     return invalid(engine, "file inventories exceed the Act limit");
   for (index = 0; index < files->as.array.count; index++) {
     const AbValue *row = &files->as.array.items[index];

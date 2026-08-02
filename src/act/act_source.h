@@ -4,6 +4,8 @@
 #include "json_value.h"
 
 #define AB_ACT_MAX_TRANSITIONS 4096u
+#define AB_ACT_MAX_SOURCE_PATHS (AB_ACT_MAX_TRANSITIONS * 2u)
+#define AB_ACT_MAX_OBSERVED_PATHS (AB_ACT_MAX_TRANSITIONS * 4u)
 
 ArchbirdStatus ab_act_source_metadata_load(ArchbirdEngine *engine,
                                            const uint8_t *json, size_t length,

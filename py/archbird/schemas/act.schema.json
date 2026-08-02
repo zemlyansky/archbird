@@ -16,12 +16,13 @@
     "state",
     "after",
     "executors",
+    "source_locks",
     "transitions",
     "acceptance",
     "seal"
   ],
   "properties": {
-    "schema_version": {"const": 2},
+    "schema_version": {"const": 3},
     "artifact": {"const": "act"},
     "provenance": {"const": "derived"},
     "tool": {"$ref": "#/$defs/tool"},
@@ -38,6 +39,11 @@
       "type": "array",
       "maxItems": 4096,
       "items": {"$ref": "#/$defs/executor"}
+    },
+    "source_locks": {
+      "type": "array",
+      "maxItems": 8192,
+      "items": {"$ref": "#/$defs/sourceLock"}
     },
     "transitions": {
       "type": "array",
@@ -237,6 +243,16 @@
           "minimum": 0,
           "maximum": 67108864
         },
+        "executable": {"type": "boolean"}
+      }
+    },
+    "sourceLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "executable"],
+      "properties": {
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
         "executable": {"type": "boolean"}
       }
     },

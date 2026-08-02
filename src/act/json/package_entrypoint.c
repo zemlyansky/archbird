@@ -62,17 +62,6 @@ static const AbValue *unique_package(const AbValue *map, const AbString *name,
   return count == 1 ? matched : NULL;
 }
 
-static int map_has_file(const AbValue *map, const AbString *path) {
-  const AbValue *files = field(map, "files");
-  size_t index;
-  if (!files || files->kind != AB_VALUE_ARRAY)
-    return 0;
-  for (index = 0; index < files->as.array.count; index++)
-    if (text_equal(field(&files->as.array.items[index], "path"), path))
-      return 1;
-  return 0;
-}
-
 static ArchbirdStatus package_error(ArchbirdEngine *engine,
                                     const char *message) {
   return archbird_error_set(engine, ARCHBIRD_POLICY_REJECTED,
@@ -123,6 +112,7 @@ ArchbirdStatus ab_act_json_package_entrypoint(AbActContext *context,
   const AbValue *map = ab_act_executor_map(context);
   const AbValue *package;
   ArchbirdSourceView source;
+  AbString target_path = {0};
   AbValue document = {0};
   AbValue replacement = {0};
   const AbValue *parent = NULL;
@@ -139,13 +129,21 @@ ArchbirdStatus ab_act_json_package_entrypoint(AbActContext *context,
   package = unique_package(map, &package_name->as.text, &path->as.text);
   if (!package)
     return package_error(engine, "Plan no longer identifies one npm manifest");
-  if (!map_has_file(map, &target->as.text))
-    return package_error(engine, "target is not one mapped project file");
+  status = ab_artifact_resolve_relative_to_file(engine, &path->as.text,
+                                                &target->as.text, &target_path);
+  if (status != ARCHBIRD_OK)
+    return package_error(engine,
+                         "target is not one literal package-relative path");
   status = ab_act_executor_begin(context, item_id,
                                  "archbird.native.json.package-entrypoint@1");
-  if (status != ARCHBIRD_OK)
+  if (status != ARCHBIRD_OK) {
+    ab_string_free(engine, &target_path);
     return status;
+  }
   status = ab_act_executor_source(context, &path->as.text, &source);
+  if (status == ARCHBIRD_OK)
+    status = ab_act_executor_observe_source(context, &target_path);
+  ab_string_free(engine, &target_path);
   if (status != ARCHBIRD_OK)
     return status;
   status =

@@ -630,14 +630,18 @@ comments, continuations, whitespace, line endings, and unrelated source.
 create another artifact.
 
 An exact missing npm package entrypoint becomes a neutral
-`set_package_entrypoint` Plan operation when one package and mapped target are
-proven. Native Act grounds direct `main`, `exports`, and existing-object `bin`
-routes through the lossless JSON editor. Conditional or nested exports,
-ambiguous packages, and non-mapped targets remain manual.
+`set_package_entrypoint` Plan operation when one package and a literal
+package-relative target are proven. Native Act grounds direct `main`,
+`exports`, and existing-object `bin` routes through the lossless JSON editor.
+The target must be an existing regular file but need not be mapped, so
+extensionless npm executables work. Its exact state is sealed as a read-only
+Act source lock. Conditional or nested exports, ambiguous packages, and
+missing targets remain manual.
 
-Existing sources use SHA-256 locks; ranges use UTF-8 byte offsets and include
-expected text. Manual items expose missing transformation inputs and block Act
-instead of inventing code. Act evaluates the complete prepared file set
+Existing transition sources and every read-only executor input use SHA-256
+locks; ranges use UTF-8 byte offsets and include expected text. Manual items
+expose missing transformation inputs and block Act instead of inventing code.
+Act evaluates the complete prepared file set
 through `Project.with_source_overlay()`, deriving a fresh Map and every
 source-policy constraint before the first write. Incomplete relation evidence
 blocks destructive generation. Failed, unknown, or unsatisfied fresh

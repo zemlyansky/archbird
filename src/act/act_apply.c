@@ -92,6 +92,18 @@ ArchbirdStatus archbird_act_preflight_apply(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = ab_act_source_metadata_load(engine, source_metadata_json,
                                          source_metadata_length, &metadata);
+  for (index = 0;
+       status == ARCHBIRD_OK && index < act.source_locks->as.array.count;
+       index++) {
+    const AbValue *lock = &act.source_locks->as.array.items[index];
+    const AbValue *path = field(lock, "path");
+    if (!path_is_observed(&metadata, path))
+      status = reject_path(engine, ARCHBIRD_CONFLICT,
+                           "read-only source lock was not observed", path);
+    else if (!file_state_matches(&metadata, path, lock))
+      status = reject_path(engine, ARCHBIRD_CONFLICT,
+                           "read-only source lock has drifted", path);
+  }
   for (index = 0; status == ARCHBIRD_OK && index < act.transition_count;
        index++) {
     const AbValue *transition = act.transitions[index].record;

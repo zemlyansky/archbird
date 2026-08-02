@@ -270,7 +270,9 @@ class PlanActCliTest(unittest.TestCase):
                 self.assertEqual(executor["item_ids"], [plan["items"][0]["id"]])
                 self.assertTrue(executor["deterministic"])
                 self.assertEqual(executor["matches"], 1)
-                self.assertEqual(executor["reads"], ["package.json"])
+                self.assertEqual(
+                    executor["reads"], ["js/index.js", "package.json"]
+                )
                 self.assertEqual(executor["writes"], ["package.json"])
                 run("apply", str(act_path), "--root", str(project))
                 changed = json.loads(package_path.read_bytes())
@@ -279,6 +281,86 @@ class PlanActCliTest(unittest.TestCase):
                 else:
                     self.assertEqual(changed["exports"]["."], expected)
                 run("verify", "--root", str(project), "--check")
+
+    def test_package_entrypoint_accepts_existing_unmapped_executable(
+        self,
+    ) -> None:
+        project = self.root / "extensionless-entrypoint"
+        shutil.copytree(SAMPLE_FIXTURE, project)
+        package_path = project / "package.json"
+        package = json.loads(package_path.read_bytes())
+        package.pop("main")
+        package_path.write_text(json.dumps(package, indent=2) + "\n")
+        entrypoint = project / "bin" / "sample"
+        entrypoint.parent.mkdir()
+        entrypoint.write_text("#!/usr/bin/env node\nconsole.log('sample')\n")
+        configuration_path = project / "archbird.json"
+        configuration = json.loads(configuration_path.read_bytes())
+        configuration["constraints"]["REQUIRED-ENTRYPOINT-001"][
+            "target"
+        ] = "bin/sample"
+        configuration_path.write_text(
+            json.dumps(configuration, indent=2) + "\n"
+        )
+
+        map_document = json.loads(
+            run(
+                "map",
+                "--root",
+                str(project),
+                "--format",
+                "json",
+            ).stdout
+        )
+        self.assertNotIn(
+            "bin/sample",
+            {row["path"] for row in map_document["files"]},
+        )
+        plan_path = self.plan_path("extensionless-entrypoint-plan.json")
+        run(
+            "plan",
+            "REQUIRED-ENTRYPOINT-001",
+            "--root",
+            str(project),
+            "--output",
+            str(plan_path),
+        )
+        plan = json.loads(plan_path.read_bytes())
+        self.assertEqual(len(plan["items"]), 1)
+        self.assertTrue(plan["items"][0]["executable"])
+        act_path, act = self.accepted_act(
+            plan_path, "extensionless-entrypoint-act.json", root=project
+        )
+        self.assertEqual(
+            act["executors"][0]["reads"], ["bin/sample", "package.json"]
+        )
+        self.assertEqual(
+            act["source_locks"],
+            [
+                {
+                    "path": "bin/sample",
+                    "sha256": hashlib.sha256(entrypoint.read_bytes()).hexdigest(),
+                    "executable": False,
+                }
+            ],
+        )
+        original_entrypoint = entrypoint.read_bytes()
+        entrypoint.write_text("#!/usr/bin/env node\nconsole.log('drifted')\n")
+        drift = run(
+            "apply",
+            str(act_path),
+            "--root",
+            str(project),
+            expected=2,
+        )
+        self.assertIn("read-only source lock has drifted", drift.stderr.decode())
+        self.assertNotIn("main", json.loads(package_path.read_bytes()))
+        entrypoint.write_bytes(original_entrypoint)
+        run("apply", str(act_path), "--root", str(project))
+        self.assertEqual(
+            json.loads(package_path.read_bytes())["main"], "bin/sample"
+        )
+        run("verify", "--root", str(project), "--check")
 
     def test_conditional_package_export_remains_manual(self) -> None:
         project = self.root / "conditional-export"

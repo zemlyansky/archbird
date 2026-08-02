@@ -15,6 +15,8 @@ ArchbirdStatus ab_act_executor_begin(AbActContext *context,
 ArchbirdStatus ab_act_executor_source(AbActContext *context,
                                       const AbString *path,
                                       ArchbirdSourceView *out);
+ArchbirdStatus ab_act_executor_observe_source(AbActContext *context,
+                                              const AbString *path);
 ArchbirdStatus ab_act_executor_replace_exact(
     AbActContext *context, const AbString *item_id, const AbString *path,
     size_t start, size_t end, const uint8_t *expected, size_t expected_length,

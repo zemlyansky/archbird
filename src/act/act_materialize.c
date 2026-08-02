@@ -382,6 +382,16 @@ ArchbirdStatus ab_act_executor_source(AbActContext *context,
   return executor_read(context, path);
 }
 
+ArchbirdStatus ab_act_executor_observe_source(AbActContext *context,
+                                              const AbString *path) {
+  if (!context || !path)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  if (!ab_act_source_file(context->metadata, path))
+    return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,
+                     "executor observed path has no host metadata");
+  return executor_read(context, path);
+}
+
 ArchbirdStatus ab_act_executor_replace_exact(
     AbActContext *context, const AbString *item_id, const AbString *path,
     size_t start, size_t end, const uint8_t *expected, size_t expected_length,
@@ -1147,6 +1157,72 @@ static ArchbirdStatus render_file_state(AbBuffer *buffer, const char *sha256,
   return status;
 }
 
+static int path_is_transition_source(const AbActContext *context,
+                                     const AbString *path) {
+  size_t index;
+  for (index = 0; index < context->work_count; index++)
+    if (ab_string_equal(&context->works[index].path, path))
+      return 1;
+  return 0;
+}
+
+static ArchbirdStatus render_source_locks(AbBuffer *buffer,
+                                          const AbActContext *context) {
+  const AbString *paths[AB_ACT_MAX_SOURCE_PATHS];
+  size_t count = 0;
+  size_t executor_index;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (executor_index = 0; executor_index < context->executor_count;
+       executor_index++) {
+    const AbActExecutorRecord *executor = &context->executors[executor_index];
+    for (index = 0; index < executor->read_count; index++) {
+      size_t existing;
+      if (path_is_transition_source(context, &executor->reads[index]))
+        continue;
+      for (existing = 0; existing < count; existing++)
+        if (ab_string_equal(paths[existing], &executor->reads[index]))
+          break;
+      if (existing < count)
+        continue;
+      if (count == AB_ACT_MAX_SOURCE_PATHS)
+        return act_error(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                         "Act contains too many read-only source locks");
+      paths[count++] = &executor->reads[index];
+    }
+  }
+  if (count > 1)
+    qsort(paths, count, sizeof(*paths), string_pointer_compare);
+  status = ab_buffer_literal(buffer, "[");
+  for (index = 0; status == ARCHBIRD_OK && index < count; index++) {
+    const AbValue *metadata;
+    metadata = ab_act_source_file(context->metadata, paths[index]);
+    if (!metadata)
+      return act_error(context->engine, ARCHBIRD_CONFLICT,
+                       "executor read has no exact source lock");
+    if (index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "{\"executable\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, object_field(metadata, "executable"));
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"path\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, paths[index]->data,
+                                     paths[index]->length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"sha256\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, object_field(metadata, "sha256"));
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "]");
+  return status;
+}
+
 static ArchbirdStatus render_transition(AbBuffer *buffer,
                                         const AbActContext *context,
                                         size_t work_index) {
@@ -1241,10 +1317,14 @@ static ArchbirdStatus render_act(AbActContext *context, const AbPlan *plan,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         &document,
-        ",\"provenance\":\"derived\",\"schema_version\":2,\"seal\":null,"
+        ",\"provenance\":\"derived\",\"schema_version\":3,\"seal\":null,"
         "\"source\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&document, plan->source);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&document, ",\"source_locks\":");
+  if (status == ARCHBIRD_OK)
+    status = render_source_locks(&document, context);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         &document,

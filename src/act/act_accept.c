@@ -284,7 +284,7 @@ render_accepted_document(AbBuffer *buffer, const AbAct *act,
     status = ab_value_render(buffer, field(&act->document, "plan_sha256"));
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
-        buffer, ",\"provenance\":\"derived\",\"schema_version\":2,\"seal\":");
+        buffer, ",\"provenance\":\"derived\",\"schema_version\":3,\"seal\":");
   if (status == ARCHBIRD_OK) {
     if (seal) {
       status = ab_buffer_literal(buffer, "{\"content_sha256\":");
@@ -300,6 +300,10 @@ render_accepted_document(AbBuffer *buffer, const AbAct *act,
     status = ab_buffer_literal(buffer, ",\"source\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(buffer, act->source);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"source_locks\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(buffer, act->source_locks);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"state\":\"accepted\",\"tool\":");
   if (status == ARCHBIRD_OK)

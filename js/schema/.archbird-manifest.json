@@ -2,9 +2,9 @@
   "artifact": "archbird-node-schemas",
   "files": [
     {
-      "bytes": 10949,
+      "bytes": 11401,
       "path": "act.schema.json",
-      "sha256": "24ab772c62a4246ae389ebc12c348746ebd3b45d62dde03bfc97cb62caf5cc0f",
+      "sha256": "bc3a9755346087151e012af7b69f3867fa706610c015bee6f49c81bd2baf9af0",
       "source": "schema/act.schema.json"
     },
     {

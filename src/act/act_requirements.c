@@ -8,6 +8,7 @@
 #include "render_internal.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct PathRequirement {
   const AbString *path;
@@ -33,17 +34,27 @@ static int path_compare(const void *left, const void *right) {
 
 static ArchbirdStatus add_path(ArchbirdEngine *engine, PathRequirement *paths,
                                size_t *count, const AbValue *value) {
-  if (*count >= AB_ACT_MAX_TRANSITIONS)
+  if (*count >= AB_ACT_MAX_SOURCE_PATHS)
     return reject(engine, ARCHBIRD_LIMIT_EXCEEDED,
                   "Plan references too many paths");
   paths[(*count)++].path = &value->as.text;
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus add_string_path(ArchbirdEngine *engine,
+                                      PathRequirement *paths, size_t *count,
+                                      const AbString *value) {
+  if (*count >= AB_ACT_MAX_SOURCE_PATHS)
+    return reject(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                  "Plan references too many paths");
+  paths[(*count)++].path = value;
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus add_observed_path(ArchbirdEngine *engine,
                                         PathRequirement *paths, size_t *count,
                                         const AbValue *value) {
-  if (*count >= AB_ACT_MAX_TRANSITIONS * 2u)
+  if (*count >= AB_ACT_MAX_OBSERVED_PATHS)
     return reject(engine, ARCHBIRD_LIMIT_EXCEEDED,
                   "Act references too many paths");
   paths[(*count)++].path = &value->as.text;
@@ -78,7 +89,8 @@ static void remove_refined(PathRequirement *observe, size_t *observe_count,
 static ArchbirdStatus collect_item(
     ArchbirdEngine *engine, const AbValue *item, AbActSubmissions *submissions,
     PathRequirement *present, size_t *present_count, PathRequirement *absent,
-    size_t *absent_count, PathRequirement *observe, size_t *observe_count) {
+    size_t *absent_count, PathRequirement *observe, size_t *observe_count,
+    AbString *resolved_paths, size_t *resolved_count) {
   const AbValue *operation = field(item, "operation");
   const AbValue *action = field(operation, "action");
   const AbValue *path;
@@ -101,6 +113,25 @@ static ArchbirdStatus collect_item(
   if (ab_artifact_text_is(action, "manual"))
     return reject(engine, ARCHBIRD_POLICY_REJECTED,
                   "Plan contains a manual or blocked item");
+  if (ab_artifact_text_is(action, "set_package_entrypoint")) {
+    ArchbirdStatus status =
+        add_path(engine, present, present_count, field(operation, "path"));
+    if (status == ARCHBIRD_OK) {
+      if (*resolved_count >= AB_ACT_MAX_TRANSITIONS)
+        return reject(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                      "Plan references too many resolved paths");
+      status = ab_artifact_resolve_relative_to_file(
+          engine, &field(operation, "path")->as.text,
+          &field(operation, "target")->as.text,
+          &resolved_paths[*resolved_count]);
+    }
+    if (status == ARCHBIRD_OK) {
+      status = add_string_path(engine, present, present_count,
+                               &resolved_paths[*resolved_count]);
+      (*resolved_count)++;
+    }
+    return status;
+  }
   if (ab_artifact_text_is(action, "move_file")) {
     ArchbirdStatus status = add_path(engine, present, present_count,
                                      field(operation, "source_path"));
@@ -186,12 +217,14 @@ ArchbirdStatus archbird_plan_source_requirements(
     ArchbirdWriteFn write_fn, void *user_data) {
   AbPlan plan = {0};
   AbActSubmissions submissions = {0};
-  PathRequirement present[AB_ACT_MAX_TRANSITIONS];
-  PathRequirement absent[AB_ACT_MAX_TRANSITIONS];
-  PathRequirement observe[AB_ACT_MAX_TRANSITIONS];
+  PathRequirement present[AB_ACT_MAX_SOURCE_PATHS];
+  PathRequirement absent[AB_ACT_MAX_SOURCE_PATHS];
+  PathRequirement observe[AB_ACT_MAX_SOURCE_PATHS];
+  AbString resolved_paths[AB_ACT_MAX_TRANSITIONS];
   size_t present_count = 0;
   size_t absent_count = 0;
   size_t observe_count = 0;
+  size_t resolved_count = 0;
   size_t index;
   AbBuffer document;
   ArchbirdStatus status;
@@ -201,15 +234,17 @@ ArchbirdStatus archbird_plan_source_requirements(
       (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&document, engine);
+  memset(resolved_paths, 0, sizeof(resolved_paths));
   status = ab_plan_load(engine, plan_json, plan_length, &plan);
   if (status == ARCHBIRD_OK)
     status = ab_act_submissions_load(engine, executor_submissions_json,
                                      executor_submissions_length, &submissions);
   for (index = 0; status == ARCHBIRD_OK && index < plan.items->as.array.count;
        index++)
-    status = collect_item(engine, &plan.items->as.array.items[index],
-                          &submissions, present, &present_count, absent,
-                          &absent_count, observe, &observe_count);
+    status =
+        collect_item(engine, &plan.items->as.array.items[index], &submissions,
+                     present, &present_count, absent, &absent_count, observe,
+                     &observe_count, resolved_paths, &resolved_count);
   if (status == ARCHBIRD_OK)
     status = ab_act_submissions_require_consumed(engine, &submissions);
   if (status == ARCHBIRD_OK) {
@@ -247,6 +282,8 @@ ArchbirdStatus archbird_plan_source_requirements(
   ab_buffer_free(&document);
   ab_act_submissions_free(engine, &submissions);
   ab_plan_free(engine, &plan);
+  for (index = 0; index < resolved_count; index++)
+    ab_string_free(engine, &resolved_paths[index]);
   return status;
 }
 
@@ -254,7 +291,7 @@ ArchbirdStatus archbird_act_source_requirements(
     ArchbirdEngine *engine, const uint8_t *act_json, size_t act_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data) {
   AbAct act = {0};
-  PathRequirement paths[AB_ACT_MAX_TRANSITIONS * 2u];
+  PathRequirement paths[AB_ACT_MAX_OBSERVED_PATHS];
   size_t path_count = 0;
   size_t index;
   AbBuffer document;
@@ -268,6 +305,12 @@ ArchbirdStatus archbird_act_source_requirements(
       !ab_artifact_text_is(field(&act.document, "state"), "accepted"))
     status = reject(engine, ARCHBIRD_POLICY_REJECTED,
                     "only an accepted Act can be applied");
+  for (index = 0;
+       status == ARCHBIRD_OK && index < act.source_locks->as.array.count;
+       index++)
+    status = add_observed_path(
+        engine, paths, &path_count,
+        field(&act.source_locks->as.array.items[index], "path"));
   for (index = 0; status == ARCHBIRD_OK && index < act.transition_count;
        index++) {
     const AbValue *transition = act.transitions[index].record;

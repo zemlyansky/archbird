@@ -74,17 +74,6 @@ static const AbValue *unique_npm_package(const AbValue *map,
   return count == 1 ? matched : NULL;
 }
 
-static int map_has_file(const AbValue *map, const AbString *path) {
-  const AbValue *files = field(map, "files");
-  size_t index;
-  if (!files || files->kind != AB_VALUE_ARRAY)
-    return 0;
-  for (index = 0; index < files->as.array.count; index++)
-    if (text_equal(field(&files->as.array.items[index], "path"), path))
-      return 1;
-  return 0;
-}
-
 static int entrypoint_has(const AbValue *entrypoints, const AbString *route) {
   size_t index;
   if (!entrypoints || entrypoints->kind != AB_VALUE_OBJECT)
@@ -269,9 +258,9 @@ ArchbirdStatus ab_plan_compile_package_constraint(
         "Package entrypoint evidence is not a complete current missing route.";
   else if (!package)
     reason = "The package selector does not identify one npm manifest.";
-  else if (!ab_artifact_repository_path(target) ||
-           !map_has_file(map, &target->as.text))
-    reason = "The required package entrypoint target is not one mapped file.";
+  else if (!ab_artifact_repository_literal_path(target))
+    reason = "The required package entrypoint target is not one literal "
+             "package-relative path.";
   else if (!supported_route(package, &route->as.text))
     reason = "The required npm route has nested or conditional structure that "
              "needs review.";
