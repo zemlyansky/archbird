@@ -638,7 +638,7 @@ ArchbirdStatus ab_projection_data_finish(ArchbirdEngine *engine,
   return status;
 }
 
-static ArchbirdStatus render_output_item(AbBuffer *buffer,
+ArchbirdStatus ab_projection_item_render(AbBuffer *buffer,
                                          const AbProjectionItem *item) {
   TRY(ab_buffer_literal(buffer, "{\"attributes\":"));
   TRY(render_attributes_object(buffer, item));
@@ -666,7 +666,7 @@ ArchbirdStatus ab_projection_data_render_content(AbBuffer *buffer,
   for (index = 0; index < fact->item_count; index++) {
     if (index)
       TRY(ab_buffer_literal(buffer, ","));
-    TRY(render_output_item(buffer, &fact->items[index]));
+    TRY(ab_projection_item_render(buffer, &fact->items[index]));
   }
   TRY(ab_buffer_literal(buffer, "],\"message\":"));
   TRY(ab_buffer_json_string(buffer, fact->message.data, fact->message.length));
@@ -692,7 +692,7 @@ ArchbirdStatus ab_projection_data_render(AbBuffer *buffer,
   for (index = 0; index < fact->item_count; index++) {
     if (index)
       TRY(ab_buffer_literal(buffer, ","));
-    TRY(render_output_item(buffer, &fact->items[index]));
+    TRY(ab_projection_item_render(buffer, &fact->items[index]));
   }
   TRY(ab_buffer_literal(buffer, "],\"message\":"));
   TRY(ab_buffer_json_string(buffer, fact->message.data, fact->message.length));

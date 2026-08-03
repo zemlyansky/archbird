@@ -732,6 +732,30 @@ ARCHBIRD_API ArchbirdStatus archbird_map_query(
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*
+ * Resolve two explicit endpoint sets and find bounded shortest connection
+ * witnesses over one exhaustive typed graph ProjectionResult. Relation
+ * direction, parallel relation kinds, projection evidence, and incomplete
+ * frontiers remain explicit in the Path artifact. An absent outcome is
+ * emitted only when the selected graph is complete and the search frontier is
+ * exhausted.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_map_path(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
+    const uint8_t *request_json, size_t request_length, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Render the same canonical Path artifact as deterministic Markdown.
+ * max_chars is a presentation budget and never changes path selection.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_map_path_markdown(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
+    const uint8_t *request_json, size_t request_length, size_t max_chars,
+    ArchbirdWriteFn write_fn, void *user_data);
+
+/*
  * Evaluate a saved-Map query and project its ranked neighborhood as
  * deterministic Markdown. A zero character budget requests all selected
  * nodes. A positive budget first drops complete lower-ranked file blocks; if

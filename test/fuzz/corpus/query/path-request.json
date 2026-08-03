@@ -1,0 +1,1 @@
+{"artifact":"path-request","direction":"both","level":"file","max_depth":4,"max_paths":4,"relations":["imports"],"schema_version":1,"source":{"kind":"file","patterns":["src/a.c"]},"target":{"kind":"file","patterns":["src/a.c"]}}

@@ -13,6 +13,8 @@ from . import __version__
 from .native import (
     diff_maps_json,
     evaluate_projection_json,
+    path_map_json,
+    path_map_markdown,
     query_map_markdown,
     render_map_markdown,
 )
@@ -176,6 +178,44 @@ TOOLS = [
         },
         "name": "archbird_query",
         "title": "Query repository evidence",
+    },
+    {
+        "annotations": READ_ONLY,
+        "description": (
+            "Find bounded shortest connection witnesses over typed Map "
+            "relations while retaining endpoint ambiguity and evidence."
+        ),
+        "inputSchema": _object_schema(
+            {
+                "direction": {
+                    "enum": ["both", "downstream", "upstream"],
+                    "type": "string",
+                },
+                "generation": GENERATION,
+                "level": {
+                    "enum": ["component", "file", "symbol"],
+                    "type": "string",
+                },
+                "max_depth": {
+                    "maximum": 64,
+                    "minimum": 0,
+                    "type": "integer",
+                },
+                "max_paths": {
+                    "maximum": 32,
+                    "minimum": 1,
+                    "type": "integer",
+                },
+                "relations": STRINGS,
+                "source": {"minLength": 1, "type": "string"},
+                "source_kind": {"minLength": 1, "type": "string"},
+                "target": {"minLength": 1, "type": "string"},
+                "target_kind": {"minLength": 1, "type": "string"},
+            },
+            required=("source", "target"),
+        ),
+        "name": "archbird_path",
+        "title": "Find repository connection paths",
     },
     {
         "annotations": READ_ONLY,
@@ -580,6 +620,101 @@ class ArchbirdMcpServer:
                 report,
                 resource,
             )
+        if name == "archbird_path":
+            allowed = {
+                "direction",
+                "generation",
+                "level",
+                "max_depth",
+                "max_paths",
+                "relations",
+                "source",
+                "source_kind",
+                "target",
+                "target_kind",
+            }
+            arguments = _arguments(raw_arguments, allowed)
+            source_pattern = arguments.get("source")
+            target_pattern = arguments.get("target")
+            if not isinstance(source_pattern, str) or not source_pattern:
+                raise McpError(-32602, "source must be a non-empty string")
+            if not isinstance(target_pattern, str) or not target_pattern:
+                raise McpError(-32602, "target must be a non-empty string")
+            snapshot = self._snapshot(arguments)
+            level = _string(
+                arguments,
+                "level",
+                "file",
+                {"component", "file", "symbol"},
+            )
+            direction = _string(
+                arguments,
+                "direction",
+                "downstream",
+                {"both", "downstream", "upstream"},
+            )
+            max_depth = _integer(arguments, "max_depth", 8, 0, 64)
+            max_paths = _integer(arguments, "max_paths", 8, 1, 32)
+            relations = (
+                _strings(arguments, "relations")
+                if "relations" in arguments
+                else None
+            )
+            source_kind = arguments.get("source_kind", level)
+            target_kind = arguments.get("target_kind", level)
+            if not isinstance(source_kind, str) or not source_kind:
+                raise McpError(-32602, "source_kind must be a non-empty string")
+            if not isinstance(target_kind, str) or not target_kind:
+                raise McpError(-32602, "target_kind must be a non-empty string")
+            request = {
+                "direction": direction,
+                "level": level,
+                "max_depth": max_depth,
+                "max_paths": max_paths,
+                "relations": relations,
+                "source": source_pattern,
+                "source_kind": source_kind,
+                "target": target_pattern,
+                "target_kind": target_kind,
+            }
+            encoded = self.repository.derived(
+                snapshot,
+                "mcp-path",
+                request,
+                lambda: path_map_json(
+                    snapshot["map"],
+                    {"kind": source_kind, "patterns": [source_pattern]},
+                    {"kind": target_kind, "patterns": [target_pattern]},
+                    level=level,
+                    relations=relations,
+                    direction=direction,
+                    max_depth=max_depth,
+                    max_paths=max_paths,
+                ),
+            )
+            if len(encoded) > RESULT_LIMIT:
+                raise ValueError(
+                    f"path result exceeds {RESULT_LIMIT} bytes; lower max_paths"
+                )
+            report = path_map_markdown(
+                snapshot["map"],
+                {"kind": source_kind, "patterns": [source_pattern]},
+                {"kind": target_kind, "patterns": [target_pattern]},
+                level=level,
+                relations=relations,
+                direction=direction,
+                max_depth=max_depth,
+                max_paths=max_paths,
+            ).decode("utf-8")
+            resource = self._remember_resource(
+                snapshot,
+                "path",
+                encoded,
+                description="Canonical evidence-preserving Path artifact.",
+                mime_type="application/json",
+                title=f"{snapshot['project']} connection paths",
+            )
+            return _result(_strict_json(encoded), report, resource)
         if name == "archbird_source":
             arguments = _arguments(raw_arguments, {"generation", "path"})
             path = arguments.get("path")
@@ -709,7 +844,8 @@ class ArchbirdMcpServer:
                 },
                 "instructions": (
                     "Use archbird_map for orientation, archbird_query for focused "
-                    "context, archbird_projection for exhaustive typed facts, and "
+                    "context, archbird_path for typed connection witnesses, "
+                    "archbird_projection for exhaustive typed facts, and "
                     "archbird_verify before architecture-sensitive changes."
                 ),
                 "protocolVersion": selected,

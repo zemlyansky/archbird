@@ -96,6 +96,7 @@ def main() -> None:
         "archbird_map",
         "archbird_projection",
         "archbird_query",
+        "archbird_path",
         "archbird_source",
         "archbird_verify",
         "archbird_diff",
@@ -183,6 +184,27 @@ def main() -> None:
     assert "api_open" in queried
     assert "src/api.py" in queried
 
+    path_result = request(
+        {
+            "id": "path",
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "arguments": {
+                    "relations": ["imports"],
+                    "source": "src/api.py",
+                    "target": "src/api.py",
+                },
+                "name": "archbird_path",
+            },
+        }
+    )["result"]
+    connection = path_result["structuredContent"]
+    assert connection["outcome"] == "found"
+    assert connection["search"]["shortest_length"] == 0
+    assert connection["paths"][0]["nodes"] == ["file:src/api.py"]
+    path_uri = path_result["content"][1]["uri"]
+
     source_result = request(
         {
             "id": 7,
@@ -231,6 +253,7 @@ def main() -> None:
     )["result"]["resources"]
     resource_uris = {resource["uri"] for resource in resources}
     assert projection_uri in resource_uris
+    assert path_uri in resource_uris
     assert source_uri in resource_uris
     assert any("/map/" in uri for uri in resource_uris)
     assert any("/verification/" in uri for uri in resource_uris)
@@ -295,7 +318,7 @@ def main() -> None:
     assert process.wait(timeout=30) == 0
     assert process.stdout.read() == b""
     assert process.stderr.read() == b""
-    print("MCP stdio Map, projection, Query, source, Verify, and Diff passed")
+    print("MCP stdio Map, projection, Query, Path, source, Verify, and Diff passed")
 
 
 if __name__ == "__main__":

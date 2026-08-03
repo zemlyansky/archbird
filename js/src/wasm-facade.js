@@ -644,6 +644,36 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
           )),
       );
     },
+    mapPath(map, resolution, request, pretty = false) {
+      return withInputs(
+        [map, resolution, request],
+        ([mapInput, resolutionInput, requestInput]) =>
+          result(module._ab_wasm_map_path(
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            requestInput.pointer,
+            requestInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
+    mapPathMarkdown(map, resolution, request, maxChars = 0) {
+      return withInputs(
+        [map, resolution, request],
+        ([mapInput, resolutionInput, requestInput]) =>
+          result(module._ab_wasm_map_path_markdown(
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            requestInput.pointer,
+            requestInput.length,
+            sizeValue(maxChars, "maxChars"),
+          )),
+      );
+    },
     mapQueryMarkdown(map, resolution, query, maxChars = 0) {
       return withInputs(
         [map, resolution, query],

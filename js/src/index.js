@@ -833,6 +833,24 @@ class Project {
     });
   }
 
+  pathJson(options = {}) {
+    return pathMap(this.mapJson(), {
+      ...options,
+      resolutionJson: options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+    });
+  }
+
+  path(options = {}) {
+    return JSON.parse(this.pathJson(options).toString("utf8"));
+  }
+
+  pathMarkdown(options = {}) {
+    return pathMapMarkdown(this.mapJson(), {
+      ...options,
+      resolutionJson: options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+    });
+  }
+
   verifyJson({
     constraintIds = [],
     baseline = null,
@@ -1486,6 +1504,49 @@ function queryMap(mapJson, options = {}) {
   );
 }
 
+function pathRequest({
+  source,
+  target,
+  level = "file",
+  relations = null,
+  direction = "downstream",
+  maxDepth = 8,
+  maxPaths = 8,
+  producerPolicy = "compatible",
+} = {}) {
+  const request = {
+    artifact: "path-request",
+    direction,
+    level,
+    max_depth: maxDepth,
+    max_paths: maxPaths,
+    producer_policy: producerPolicy,
+    schema_version: 1,
+    source,
+    target,
+  };
+  if (relations !== null) request.relations = [...relations];
+  return canonicalForDigest(request);
+}
+
+function pathMap(mapJson, options = {}) {
+  return native.mapPath(
+    Buffer.from(mapJson),
+    Buffer.from(options.resolutionJson ?? Buffer.alloc(0)),
+    Buffer.from(JSON.stringify(pathRequest(options))),
+    options.pretty ?? false,
+  );
+}
+
+function pathMapMarkdown(mapJson, options = {}) {
+  return native.mapPathMarkdown(
+    Buffer.from(mapJson),
+    Buffer.from(options.resolutionJson ?? Buffer.alloc(0)),
+    Buffer.from(JSON.stringify(pathRequest(options))),
+    options.maxChars ?? 0,
+  );
+}
+
 function renderMapMarkdown(
   mapJson,
   options = {},
@@ -1918,6 +1979,8 @@ module.exports = {
   materializeAct,
   observeActSources,
   observePlanSources,
+  pathMap,
+  pathMapMarkdown,
   actOverlay,
   actSourceRequirements,
   preflightActApply,

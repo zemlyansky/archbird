@@ -44,11 +44,15 @@ def main() -> int:
     map_json = required_bytes(root / "map" / "minimal.json")
     act_map_json = required_bytes(root / "act-map" / "map.json")
     query_json = required_bytes(root / "query" / "request.json")
+    path_json = required_bytes(root / "query" / "path-request.json")
     workspace_json = required_bytes(root / "workspace" / "config.json")
     workspace_maps = required_bytes(root / "workspace-maps" / "maps.json")
     verification = required_bytes(root / "verification" / "verification.json")
 
     artifact(native.map_query(map_json, query_json), "query")
+    artifact(native.map_path(map_json, path_json), "path")
+    if not native.map_path_markdown(map_json, path_json):
+        raise AssertionError("Path fuzz seed rendered empty Markdown")
     artifact(native.map_diff(map_json, map_json), "diff")
     artifact(native.map_freshness(map_json, map_json), "map-freshness")
     for format_name in ("graphml", "mermaid"):
@@ -81,7 +85,7 @@ def main() -> int:
             "okf-output-bundle",
         )
 
-    print("structured Map, workspace, report, graph, and OKF seeds passed")
+    print("structured Map, Query, Path, workspace, graph, and OKF seeds passed")
     return 0
 
 

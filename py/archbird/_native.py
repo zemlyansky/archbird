@@ -1451,6 +1451,34 @@ def map_query(
     )
 
 
+def map_path(
+    map: bytes, request: bytes, pretty: bool = False, resolution: bytes = b""
+) -> bytes:
+    return _simple_render(
+        "archbird_map_path",
+        [_bytes(map), _bytes(resolution), _bytes(request)],
+        flags=_json_flags(pretty),
+        nullable_empty_indices=(1,),
+        saved_artifact=True,
+    )
+
+
+def map_path_markdown(
+    map: bytes, request: bytes, max_chars=0, resolution: bytes = b""
+) -> bytes:
+    if max_chars < 0:
+        raise ValueError("path max_chars must be a nonnegative integer")
+    return _simple_render(
+        "archbird_map_path_markdown",
+        [_bytes(map), _bytes(resolution), _bytes(request)],
+        suffix_types=(ctypes.c_size_t,),
+        suffix_values=(max_chars,),
+        include_flags=False,
+        nullable_empty_indices=(1,),
+        saved_artifact=True,
+    )
+
+
 def map_markdown(map: bytes, full=False, max_chars=0) -> bytes:
     if max_chars < 0:
         raise ValueError("map max_chars must be a nonnegative integer")

@@ -693,7 +693,7 @@ and Act remain canonical JSON artifacts; Plan additionally has a native
 Markdown task-packet view.
 
 <!-- archbird-node-cli:start -->
-The CLI command names are `map`, `config`, `query`, `impact`, `diff`,
+The CLI command names are `map`, `config`, `query`, `impact`, `path`, `diff`,
 `observe`, `freshness`, `workspace`, `verify`, `plan`, `act`, `apply`, `export`,
 `serve`, and `support`.
 <!-- archbird-node-cli:end -->
@@ -779,7 +779,7 @@ remain in the native core.
 | Area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
+| Map, Query, and Path | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `pathMap`, `pathMapMarkdown`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
 | Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `runActGates`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |

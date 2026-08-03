@@ -7,6 +7,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 #ifdef ARCHBIRD_FUZZ_QUERY_INPUT
   (void)archbird_map_query(engine, fuzz_map_json, sizeof(fuzz_map_json) - 1,
                            NULL, 0, data, size, 0, fuzz_discard, NULL);
+  (void)archbird_map_path(engine, fuzz_map_json, sizeof(fuzz_map_json) - 1,
+                          NULL, 0, data, size, 0, fuzz_discard, NULL);
+  (void)archbird_map_path_markdown(engine, fuzz_map_json,
+                                   sizeof(fuzz_map_json) - 1, NULL, 0, data,
+                                   size, 4096, fuzz_discard, NULL);
   (void)archbird_map_query_markdown(engine, fuzz_map_json,
                                     sizeof(fuzz_map_json) - 1, NULL, 0, data,
                                     size, 0, fuzz_discard, NULL);
@@ -24,6 +29,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   size_t view;
   (void)archbird_map_query(engine, data, size, NULL, 0, fuzz_query_json,
                            sizeof(fuzz_query_json) - 1, 0, fuzz_discard, NULL);
+  (void)archbird_map_path(engine, data, size, NULL, 0, fuzz_path_json,
+                          sizeof(fuzz_path_json) - 1, 0, fuzz_discard, NULL);
+  (void)archbird_map_path_markdown(engine, data, size, NULL, 0, fuzz_path_json,
+                                   sizeof(fuzz_path_json) - 1, 4096,
+                                   fuzz_discard, NULL);
   (void)archbird_map_diff(engine, fuzz_map_json, sizeof(fuzz_map_json) - 1,
                           data, size, 0, fuzz_discard, NULL);
   (void)archbird_map_diff(engine, data, size, fuzz_map_json,

@@ -882,6 +882,11 @@ static ArchbirdStatus add_relation(AbProjectionContext *context,
     if (names && !attribute(item, "names"))
       status = add_attribute(context->engine, item, "names", names);
   }
+  if (status == ARCHBIRD_OK) {
+    const AbValue *resolution = attribute(witness, "resolution");
+    if (resolution && !attribute(item, "resolution"))
+      status = add_attribute(context->engine, item, "resolution", resolution);
+  }
   if (status == ARCHBIRD_OK)
     status = set_u64_attribute(context->engine, item, "witness_count",
                                u64_attribute(item, "witness_count") + 1);

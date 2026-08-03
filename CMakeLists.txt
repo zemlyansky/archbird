@@ -277,6 +277,7 @@ set(ARCHBIRD_INTERNAL_INCLUDE_DIRS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/configuration"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/evidence"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/map"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/path"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/projection"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/query"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/constraints"
@@ -1258,6 +1259,14 @@ if(Python3_Development.Module_FOUND)
               ${ARCHBIRD_REPOSITORY_TEST_ENV}
               ${Python3_EXECUTABLE}
               ${CMAKE_CURRENT_SOURCE_DIR}/test/test_freshness.py
+              $<TARGET_FILE:archbird_python>
+    )
+    add_test(
+      NAME archbird_native_path
+      COMMAND ${CMAKE_COMMAND} -E env
+              ${ARCHBIRD_REPOSITORY_TEST_ENV}
+              ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_path.py
               $<TARGET_FILE:archbird_python>
     )
     add_test(

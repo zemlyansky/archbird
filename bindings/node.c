@@ -1294,6 +1294,72 @@ static napi_value map_query(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value map_path(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4];
+  const uint8_t *map;
+  const uint8_t *resolution;
+  const uint8_t *request;
+  size_t map_length;
+  size_t resolution_length;
+  size_t request_length;
+  int pretty;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 3 || !get_buffer(env, argv[0], &map, &map_length) ||
+      !get_buffer(env, argv[1], &resolution, &resolution_length) ||
+      !get_buffer(env, argv[2], &request, &request_length) ||
+      !get_optional_bool(env, argc, argv, 3, 0, &pretty))
+    return NULL;
+  status = saved_artifact_engine(
+      larger_input(larger_input(map_length, request_length), resolution_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_path(
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, request, request_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static napi_value map_path_markdown(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4];
+  const uint8_t *map;
+  const uint8_t *resolution;
+  const uint8_t *request;
+  size_t map_length;
+  size_t resolution_length;
+  size_t request_length;
+  size_t max_chars;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 3 || !get_buffer(env, argv[0], &map, &map_length) ||
+      !get_buffer(env, argv[1], &resolution, &resolution_length) ||
+      !get_buffer(env, argv[2], &request, &request_length) ||
+      !get_optional_size(env, argc, argv, 3, 0, "maxChars", &max_chars))
+    return NULL;
+  status = saved_artifact_engine(
+      larger_input(larger_input(map_length, request_length), resolution_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_path_markdown(
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, request, request_length, max_chars, output_write,
+        &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value map_markdown(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -2406,6 +2472,9 @@ static napi_value init(napi_env env, napi_value exports) {
       {"okfAnalyze", NULL, okf_analyze, NULL, NULL, NULL, napi_default, NULL},
       {"okfPublish", NULL, okf_publish, NULL, NULL, NULL, napi_default, NULL},
       {"mapQuery", NULL, map_query, NULL, NULL, NULL, napi_default, NULL},
+      {"mapPath", NULL, map_path, NULL, NULL, NULL, napi_default, NULL},
+      {"mapPathMarkdown", NULL, map_path_markdown, NULL, NULL, NULL,
+       napi_default, NULL},
       {"mapQueryMarkdown", NULL, map_query_markdown, NULL, NULL, NULL,
        napi_default, NULL},
       {"mapQueryMarkdownView", NULL, map_query_markdown_view, NULL, NULL, NULL,

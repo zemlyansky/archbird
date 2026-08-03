@@ -1160,6 +1160,68 @@ class Project:
     def query(self, **kwargs: object) -> Mapping[str, object]:
         return json.loads(self.query_json(**kwargs))
 
+    def path_json(
+        self,
+        source: Mapping[str, object],
+        target: Mapping[str, object],
+        *,
+        level: str = "file",
+        relations: Optional[Sequence[str]] = None,
+        direction: str = "downstream",
+        max_depth: int = 8,
+        max_paths: int = 8,
+        producer_policy: str = "compatible",
+        pretty: bool = False,
+    ) -> bytes:
+        return path_map_json(
+            self.map_json(),
+            source,
+            target,
+            level=level,
+            relations=relations,
+            direction=direction,
+            max_depth=max_depth,
+            max_paths=max_paths,
+            producer_policy=producer_policy,
+            resolution_json=self.resolution_json or b"",
+            pretty=pretty,
+        )
+
+    def path(
+        self,
+        source: Mapping[str, object],
+        target: Mapping[str, object],
+        **kwargs: object,
+    ) -> Mapping[str, object]:
+        return json.loads(self.path_json(source, target, **kwargs))
+
+    def path_markdown(
+        self,
+        source: Mapping[str, object],
+        target: Mapping[str, object],
+        *,
+        level: str = "file",
+        relations: Optional[Sequence[str]] = None,
+        direction: str = "downstream",
+        max_depth: int = 8,
+        max_paths: int = 8,
+        producer_policy: str = "compatible",
+        max_chars: int = 0,
+    ) -> bytes:
+        return path_map_markdown(
+            self.map_json(),
+            source,
+            target,
+            level=level,
+            relations=relations,
+            direction=direction,
+            max_depth=max_depth,
+            max_paths=max_paths,
+            producer_policy=producer_policy,
+            max_chars=max_chars,
+            resolution_json=self.resolution_json or b"",
+        )
+
     def verify_json(
         self,
         *,
@@ -1458,6 +1520,91 @@ def query_map_json(
     )
     return _native.map_query(
         map_json, request, pretty=pretty, resolution=resolution_json
+    )
+
+
+def _path_request(
+    source: Mapping[str, object],
+    target: Mapping[str, object],
+    *,
+    level: str = "file",
+    relations: Optional[Sequence[str]] = None,
+    direction: str = "downstream",
+    max_depth: int = 8,
+    max_paths: int = 8,
+    producer_policy: str = "compatible",
+) -> bytes:
+    request: dict[str, object] = {
+        "artifact": "path-request",
+        "direction": direction,
+        "level": level,
+        "max_depth": max_depth,
+        "max_paths": max_paths,
+        "producer_policy": producer_policy,
+        "schema_version": 1,
+        "source": dict(source),
+        "target": dict(target),
+    }
+    if relations is not None:
+        request["relations"] = list(relations)
+    return _canonical(request)
+
+
+def path_map_json(
+    map_json: bytes,
+    source: Mapping[str, object],
+    target: Mapping[str, object],
+    *,
+    level: str = "file",
+    relations: Optional[Sequence[str]] = None,
+    direction: str = "downstream",
+    max_depth: int = 8,
+    max_paths: int = 8,
+    producer_policy: str = "compatible",
+    resolution_json: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    request = _path_request(
+        source,
+        target,
+        level=level,
+        relations=relations,
+        direction=direction,
+        max_depth=max_depth,
+        max_paths=max_paths,
+        producer_policy=producer_policy,
+    )
+    return _native.map_path(
+        map_json, request, pretty=pretty, resolution=resolution_json
+    )
+
+
+def path_map_markdown(
+    map_json: bytes,
+    source: Mapping[str, object],
+    target: Mapping[str, object],
+    *,
+    level: str = "file",
+    relations: Optional[Sequence[str]] = None,
+    direction: str = "downstream",
+    max_depth: int = 8,
+    max_paths: int = 8,
+    producer_policy: str = "compatible",
+    max_chars: int = 0,
+    resolution_json: bytes = b"",
+) -> bytes:
+    request = _path_request(
+        source,
+        target,
+        level=level,
+        relations=relations,
+        direction=direction,
+        max_depth=max_depth,
+        max_paths=max_paths,
+        producer_policy=producer_policy,
+    )
+    return _native.map_path_markdown(
+        map_json, request, max_chars=max_chars, resolution=resolution_json
     )
 
 
@@ -2952,6 +3099,8 @@ __all__ = [
     "publish_okf_bundle",
     "query_map_markdown",
     "query_map_json",
+    "path_map_json",
+    "path_map_markdown",
     "render_map_markdown",
     "render_plan_markdown",
     "render_source_markdown",

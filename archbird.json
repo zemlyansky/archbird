@@ -13,14 +13,14 @@
       "language": "c",
       "globs": ["include/**/*.h", "src/**/*.c", "src/**/*.h"],
       "public_headers": ["include/archbird/archbird.h"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/transformation", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "vendor/yyjson/src", "vendor/pcre2/src", "vendor/tree-sitter/lib/include", "vendor/tree-sitter/lib/src"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/path", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/transformation", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "vendor/yyjson/src", "vendor/pcre2/src", "vendor/tree-sitter/lib/include", "vendor/tree-sitter/lib/src"]
     },
     {
       "name": "bindings",
       "role": "frontend",
       "language": "c",
       "globs": ["bindings/*.c"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/transformation", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/path", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/transformation", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports"]
     },
     {
       "name": "python-host",
@@ -140,7 +140,7 @@
       "role": "test",
       "language": "c",
       "globs": ["test/*.c", "test/scip_fixture.h", "test/fuzz/*.c", "test/fuzz/*.h", "test/cmake_consumer/*.c"],
-      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/transformation", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "test"]
+      "import_roots": ["include", "src", "src/api", "src/base", "src/configuration", "src/constraints", "src/evidence", "src/map", "src/path", "src/projection", "src/query", "src/verify", "src/plan", "src/act", "src/transformation", "src/interchange/graph", "src/interchange/okf", "src/interchange/reports", "test"]
     },
     {
       "name": "oracle-tests",
@@ -283,6 +283,7 @@
     {"name": "configuration", "paths": ["src/configuration/**"], "description": "Unversioned project configuration normalization, validation, and independent identities"},
     {"name": "constraints", "paths": ["src/constraints/**"], "description": "Constraint planning, inferred exhaustive operands, and direct evaluation"},
     {"name": "map", "paths": ["src/map/**"], "description": "Architecture Map construction, diff, and workspace analysis"},
+    {"name": "path", "paths": ["src/path/**"], "description": "Bounded evidence-preserving shortest connection witnesses over typed graph projections"},
     {"name": "projection", "paths": ["src/projection/**"], "description": "Shared exhaustive typed derivations over canonical Map evidence"},
     {"name": "query", "paths": ["src/query/**"], "description": "Query plan compilation, typed projection selection, traversal, ranking, and result construction"},
     {"name": "verify", "paths": ["src/verify/**"], "description": "Constraint predicates, observations, baselines, findings, and canonical verification results"},
@@ -886,6 +887,21 @@
             "source": "map",
             "kind": "*",
             "target": "manifest-readers"
+          },
+          {
+            "source": "path",
+            "kind": "*",
+            "target": "abi"
+          },
+          {
+            "source": "path",
+            "kind": "*",
+            "target": "base"
+          },
+          {
+            "source": "path",
+            "kind": "*",
+            "target": "projection"
           },
           {
             "source": "projection",

@@ -243,6 +243,22 @@ function markedNames(relative, name) {
     }).toString("utf8"),
     /Context: profile=exact;.*files=1\/2\./,
   );
+  const connectionOptions = {
+    source: { kind: "file", patterns: ["py/pkg/__init__.py"] },
+    target: { kind: "file", patterns: ["py/pkg/api.py"] },
+    relations: ["imports"],
+  };
+  const connection = project.path(connectionOptions);
+  assert.equal(connection.artifact, "path");
+  assert.equal(connection.outcome, "found");
+  assert.deepEqual(connection.paths[0].nodes, [
+    "file:py/pkg/__init__.py",
+    "file:py/pkg/api.py",
+  ]);
+  assert.match(
+    project.pathMarkdown(connectionOptions).toString("utf8"),
+    /`imports:import` traversed forward/,
+  );
   const changeBrief = project.queryMarkdown({
     paths: ["py/pkg"],
     depth: 0,

@@ -42,6 +42,8 @@ from .native import (
     export_okf_bundle,
     freeze_constraints_json,
     analyze_okf_source,
+    path_map_json,
+    path_map_markdown,
     query_map_markdown,
     query_map_json,
     render_map_markdown,
@@ -95,6 +97,7 @@ _COMMANDS = (
     "mcp",
     "observe",
     "okf",
+    "path",
     "plan",
     "query",
     "serve",
@@ -111,7 +114,7 @@ def _top_level_help() -> str:
         "Map codebases, query evidence, verify architecture, plan changes, "
         "and act on reviewed plans.\n\n"
         "commands:\n"
-        "  map, config, query, impact, diff, observe, freshness, workspace\n"
+        "  map, config, query, impact, path, diff, observe, freshness, workspace\n"
         "  verify, plan, act, export, okf, serve, mcp, support\n\n"
         "Run `archbird COMMAND --help` for command-specific options. With no "
         "command, Archbird maps the current directory; an existing or "
@@ -453,6 +456,89 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
         ),
     )
     result.add_argument("-o", "--output", default="-")
+    return result
+
+
+def path_parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog="archbird path",
+        description=(
+            "Find deterministic evidence-preserving connection paths between "
+            "two explicit endpoint sets."
+        ),
+    )
+    result.add_argument("source_pattern", metavar="SOURCE")
+    result.add_argument("target_pattern", metavar="TARGET")
+    source = result.add_mutually_exclusive_group()
+    source.add_argument("-c", "--config", help="project configuration JSON")
+    source.add_argument("--no-config", action="store_true")
+    result.add_argument("--map", help="saved canonical Map JSON")
+    result.add_argument(
+        "--resolution", help="configuration-resolution JSON paired with --map"
+    )
+    result.add_argument("--root", dest="root_override", help="repository root")
+    _add_discovery_options(result)
+    _add_python_analysis_options(result)
+    _add_cache_options(result)
+    _add_progress_options(result)
+    result.add_argument(
+        "--test-symbol-observations",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="attach runner-observed test-to-symbol evidence; repeatable",
+    )
+    result.add_argument(
+        "--level", choices=("component", "file", "symbol"), default="file"
+    )
+    result.add_argument(
+        "--source-kind",
+        help="source graph entity kind (default: selected level)",
+    )
+    result.add_argument(
+        "--target-kind",
+        help="target graph entity kind (default: selected level)",
+    )
+    result.add_argument(
+        "--relation",
+        action="append",
+        default=[],
+        choices=(
+            "bridges",
+            "builds",
+            "calls",
+            "declarations",
+            "imports",
+            "packages",
+            "references",
+            "tests",
+        ),
+        help="include one typed relation family; repeatable",
+    )
+    result.add_argument(
+        "--direction",
+        choices=("downstream", "upstream", "both"),
+        default="downstream",
+    )
+    result.add_argument("--max-depth", type=int, default=8)
+    result.add_argument("--max-paths", type=int, default=8)
+    result.add_argument(
+        "--format", choices=("markdown", "json"), default="markdown"
+    )
+    result.add_argument(
+        "--max-chars",
+        type=int,
+        default=0,
+        help="maximum Markdown characters",
+    )
+    result.add_argument("--pretty", action="store_true", help="pretty JSON")
+    result.add_argument(
+        "--check",
+        action="store_true",
+        help="require current producer evidence and at least one path witness",
+    )
+    result.add_argument("-o", "--output", default="-")
+    result.set_defaults(root_path=None)
     return result
 
 
@@ -2195,6 +2281,121 @@ def _query_main(
         return 2
 
 
+def _path_main(argv: Sequence[str]) -> int:
+    args = path_parser().parse_args(argv)
+    progress = _Progress(args.progress)
+    try:
+        if args.resolution and not args.map:
+            raise ValueError("--resolution requires --map")
+        if args.map and (
+            args.config
+            or args.root_override
+            or args.no_config
+            or _has_discovery_overrides(args)
+        ):
+            raise ValueError(
+                "--map cannot be combined with repository discovery options"
+            )
+        if args.map and (args.jobs or args.python_provider_timeout is not None):
+            raise ValueError(
+                "--jobs and --python-provider-timeout apply only to a live repository"
+            )
+        if args.map and args.test_symbol_observations:
+            raise ValueError(
+                "--test-symbol-observations requires a live repository, not --map"
+            )
+        if not 0 <= args.max_depth <= 64:
+            raise ValueError("--max-depth must be from 0 to 64")
+        if not 1 <= args.max_paths <= 100:
+            raise ValueError("--max-paths must be from 1 to 100")
+        if args.max_chars < 0:
+            raise ValueError("--max-chars must be nonnegative")
+        if args.format == "json" and args.max_chars:
+            raise ValueError("--max-chars applies only to Markdown")
+        if args.format == "markdown" and args.pretty:
+            raise ValueError("--pretty applies only to JSON")
+        if args.map:
+            map_json = Path(args.map).read_bytes()
+            resolution_json = (
+                Path(args.resolution).read_bytes() if args.resolution else b""
+            )
+        else:
+            repository, config_json, _ = _repository_inputs(args)
+            current = _project_from_args(
+                args,
+                progress,
+                resolved_repository=repository,
+                resolved_config_json=config_json,
+            )
+            progress.emit({"phase": "rendering", "artifact": "canonical Map"})
+            map_json = current.map_json()
+            resolution_json = current.resolution_json or b""
+            _warn_map_cache_stats(current.map_cache_stats)
+        map_document = json.loads(map_json)
+        if args.check and _has_error_diagnostics(map_document):
+            return 1
+        endpoint_kind = args.level
+        options = {
+            "level": args.level,
+            "relations": args.relation or None,
+            "direction": args.direction,
+            "max_depth": args.max_depth,
+            "max_paths": args.max_paths,
+            "producer_policy": (
+                "current" if args.check and args.map else "compatible"
+            ),
+            "resolution_json": resolution_json,
+        }
+        source = {
+            "kind": args.source_kind or endpoint_kind,
+            "patterns": [args.source_pattern],
+        }
+        target = {
+            "kind": args.target_kind or endpoint_kind,
+            "patterns": [args.target_pattern],
+        }
+        if args.format == "json":
+            encoded = path_map_json(
+                map_json, source, target, pretty=args.pretty, **options
+            )
+        else:
+            encoded = path_map_markdown(
+                map_json,
+                source,
+                target,
+                max_chars=args.max_chars,
+                **options,
+            )
+        if args.check:
+            artifact = json.loads(
+                path_map_json(map_json, source, target, **options)
+                if args.format == "markdown"
+                else encoded
+            )
+            if artifact.get("outcome") != "found":
+                progress.clear()
+                print(
+                    "archbird: check failed: connection path outcome is "
+                    f"{artifact.get('outcome', 'invalid')}",
+                    file=sys.stderr,
+                )
+                return 1
+        progress.finish()
+        _write(encoded, args.output)
+        return 0
+    except _native.Error as error:
+        progress.clear()
+        if getattr(error, "status", None) == 10:
+            print(f"archbird: check failed: {error}", file=sys.stderr)
+            return 1
+        print(f"archbird: error: {error}", file=sys.stderr)
+        return 2
+    except (ConfigError, OSError, RuntimeError, ValueError) as error:
+        progress.clear()
+        print(f"archbird: error: {error}", file=sys.stderr)
+        return 2
+
+
 def _freshness_main(argv: Sequence[str]) -> int:
     args = freshness_parser().parse_args(argv)
     progress = _Progress(args.progress)
@@ -3172,6 +3373,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _query_main(
             arguments[1:], command="impact", default_direction="upstream"
         )
+    if arguments and arguments[0] == "path":
+        return _path_main(arguments[1:])
     if arguments and arguments[0] == "diff":
         return _diff_main(arguments[1:])
     if arguments and arguments[0] == "observe":

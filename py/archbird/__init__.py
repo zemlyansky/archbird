@@ -59,6 +59,8 @@ _NATIVE_EXPORTS = (
     "plan_source_requirements",
     "preflight_act_apply",
     "publish_okf_bundle",
+    "path_map_json",
+    "path_map_markdown",
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",

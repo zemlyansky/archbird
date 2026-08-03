@@ -1164,6 +1164,80 @@ static PyObject *py_map_query(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_map_path(PyObject *self, PyObject *args, PyObject *kwargs) {
+  static char *keywords[] = {"map", "request", "pretty", "resolution", NULL};
+  const char *map;
+  const char *request;
+  const char *resolution = "";
+  Py_ssize_t map_length;
+  Py_ssize_t request_length;
+  Py_ssize_t resolution_length = 0;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|py#:map_path", keywords,
+                                   &map, &map_length, &request, &request_length,
+                                   &pretty, &resolution, &resolution_length))
+    return NULL;
+  status = saved_artifact_engine(
+      larger_input(larger_input((size_t)map_length, (size_t)request_length),
+                   (size_t)resolution_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_path(
+        engine, (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, (const uint8_t *)request,
+        (size_t)request_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
+        &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_map_path_markdown(PyObject *self, PyObject *args,
+                                      PyObject *kwargs) {
+  static char *keywords[] = {"map", "request", "max_chars", "resolution", NULL};
+  const char *map;
+  const char *request;
+  const char *resolution = "";
+  Py_ssize_t map_length;
+  Py_ssize_t request_length;
+  Py_ssize_t resolution_length = 0;
+  Py_ssize_t max_chars = 0;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#y#|ny#:map_path_markdown",
+                                   keywords, &map, &map_length, &request,
+                                   &request_length, &max_chars, &resolution,
+                                   &resolution_length))
+    return NULL;
+  if (max_chars < 0) {
+    PyErr_SetString(PyExc_ValueError,
+                    "path max_chars must be a nonnegative integer");
+    return NULL;
+  }
+  status = saved_artifact_engine(
+      larger_input(larger_input((size_t)map_length, (size_t)request_length),
+                   (size_t)resolution_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_path_markdown(
+        engine, (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, (const uint8_t *)request,
+        (size_t)request_length, (size_t)max_chars, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_map_markdown(PyObject *self, PyObject *args,
                                  PyObject *kwargs) {
   static char *keywords[] = {"map", "full", "max_chars", NULL};
@@ -2261,6 +2335,11 @@ static PyMethodDef archbird_methods[] = {
      "Project canonical Map/Verify/Act artifacts into an OKF output bundle."},
     {"map_query", (PyCFunction)py_map_query, METH_VARARGS | METH_KEYWORDS,
      "Query a canonical saved map without reading repository sources."},
+    {"map_path", (PyCFunction)py_map_path, METH_VARARGS | METH_KEYWORDS,
+     "Find typed connection paths in a canonical saved map."},
+    {"map_path_markdown", (PyCFunction)py_map_path_markdown,
+     METH_VARARGS | METH_KEYWORDS,
+     "Find typed connection paths and render deterministic Markdown."},
     {"map_query_markdown", (PyCFunction)py_map_query_markdown,
      METH_VARARGS | METH_KEYWORDS,
      "Query a canonical saved map and render ranked Markdown context."},

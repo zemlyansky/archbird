@@ -474,7 +474,9 @@ typedef enum ReportExerciseKind {
   REPORT_EXERCISE_QUERY_RETRIEVAL,
   REPORT_EXERCISE_QUERY_CHANGES,
   REPORT_EXERCISE_QUERY_VERIFICATION,
-  REPORT_EXERCISE_QUERY_BUDGET
+  REPORT_EXERCISE_QUERY_BUDGET,
+  REPORT_EXERCISE_PATH,
+  REPORT_EXERCISE_PATH_MARKDOWN
 } ReportExerciseKind;
 
 static ArchbirdStatus exercise_report(TestAllocator *allocator,
@@ -485,6 +487,11 @@ static ArchbirdStatus exercise_report(TestAllocator *allocator,
   static const char retrieval_query[] =
       "{\"search\":[\"browser bundle\"],\"search_limit\":4,"
       "\"direction\":\"both\",\"depth\":1,\"test_depth\":1}";
+  static const char path[] =
+      "{\"artifact\":\"path-request\",\"relations\":[\"imports\"],"
+      "\"schema_version\":1,\"source\":{\"kind\":\"file\","
+      "\"patterns\":[\"py/sample/__init__.py\"]},\"target\":{"
+      "\"kind\":\"file\",\"patterns\":[\"py/sample/api.py\"]}}";
   ArchbirdStatus status;
   ArchbirdEngine *engine = create_engine(allocator, &status);
   CountingOutput output = {0};
@@ -542,6 +549,16 @@ static ArchbirdStatus exercise_report(TestAllocator *allocator,
         engine, report_map, report_map_length, NULL, 0, (const uint8_t *)query,
         sizeof(query) - 1, 1200, count_write, &output);
     break;
+  case REPORT_EXERCISE_PATH:
+    status = archbird_map_path(engine, report_map, report_map_length, NULL, 0,
+                               (const uint8_t *)path, sizeof(path) - 1, 0,
+                               count_write, &output);
+    break;
+  case REPORT_EXERCISE_PATH_MARKDOWN:
+    status = archbird_map_path_markdown(
+        engine, report_map, report_map_length, NULL, 0, (const uint8_t *)path,
+        sizeof(path) - 1, 4096, count_write, &output);
+    break;
   default:
     status = ARCHBIRD_INVALID_ARGUMENT;
     break;
@@ -593,6 +610,14 @@ static ArchbirdStatus exercise_change_query_report(TestAllocator *allocator) {
 static ArchbirdStatus
 exercise_verification_query_report(TestAllocator *allocator) {
   return exercise_report(allocator, REPORT_EXERCISE_QUERY_VERIFICATION);
+}
+
+static ArchbirdStatus exercise_path(TestAllocator *allocator) {
+  return exercise_report(allocator, REPORT_EXERCISE_PATH);
+}
+
+static ArchbirdStatus exercise_path_markdown(TestAllocator *allocator) {
+  return exercise_report(allocator, REPORT_EXERCISE_PATH_MARKDOWN);
 }
 
 static ArchbirdStatus exercise_verify(TestAllocator *allocator) {
@@ -866,6 +891,8 @@ int main(void) {
                     exercise_verification_query_report);
   run_failure_sweep("query-report-budget-every-n",
                     exercise_budgeted_query_report);
+  run_failure_sweep("path-every-n", exercise_path);
+  run_failure_sweep("path-markdown-every-n", exercise_path_markdown);
   run_failure_sweep("verify-every-n", exercise_verify);
   run_failure_sweep("verify-authoring-every-n", exercise_verify_authoring);
   free(report_map);
@@ -877,6 +904,7 @@ int main(void) {
   if (failures)
     return 1;
   puts("native allocator tests passed: JSON/edit, PCRE2, config resolution, "
-       "SCIP, Map/reports, Verify/authoring, and Act every-N sweeps");
+       "SCIP, Map/Query/Path reports, Verify/authoring, and Act every-N "
+       "sweeps");
   return 0;
 }

@@ -27,6 +27,8 @@ const {
   exportGraph,
   freezeConstraints,
   IMPLEMENTATION_SHA256,
+  pathMap,
+  pathMapMarkdown,
   Project,
   publishOkfBundle,
   queryMap,
@@ -498,6 +500,29 @@ const sourceCliMapResult = spawnSync(process.execPath, [
   "--no-cache", "--progress", "never", "--check",
 ], { encoding: "utf8", env: process.env });
 assert.equal(sourceCliMapResult.status, 0, sourceCliMapResult.stderr);
+const sourceCliConnection = spawnSync(process.execPath, [
+  sourceCli, "path", "src/api.js", "src/api.js",
+  "--map", sourceCliMap, "--relation", "imports",
+  "--format", "json", "--check", "--progress", "never",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliConnection.status, 0, sourceCliConnection.stderr);
+const sourceCliPathArtifact = JSON.parse(sourceCliConnection.stdout);
+assert.equal(sourceCliPathArtifact.outcome, "found");
+assert.equal(sourceCliPathArtifact.search.shortest_length, 0);
+assert.deepEqual(
+  sourceCliPathArtifact.paths[0].nodes,
+  ["file:src/api.js"],
+);
+const sourceCliPathInvalid = spawnSync(process.execPath, [
+  sourceCli, "path", "src/api.js", "src/api.js",
+  "--map", sourceCliMap, "--config", "ignored.json",
+  "--format", "json",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliPathInvalid.status, 2, sourceCliPathInvalid.stderr);
+assert.match(
+  sourceCliPathInvalid.stderr,
+  /--map cannot be combined with repository discovery options/,
+);
 const sourceCliSaved = spawnSync(process.execPath, [
   sourceCli, "query", "--map", sourceCliMap, "--root", sourceCliFixture,
   "--symbol", "selected", "--depth", "0", "--test-depth", "0",
@@ -1698,6 +1723,38 @@ const contextReport = repositoryProject.queryMarkdown({
 assert.match(contextReport, /Context: profile=exact;/);
 assert.match(contextReport, /files=1\/2\./);
 assert.match(contextReport, /## Selection manifest/);
+const connectionOptions = {
+  source: { kind: "file", patterns: ["py/pkg/__init__.py"] },
+  target: { kind: "file", patterns: ["py/pkg/api.py"] },
+  relations: ["imports"],
+};
+const connectionPath = repositoryProject.path(connectionOptions);
+assert.equal(connectionPath.artifact, "path");
+assert.equal(connectionPath.outcome, "found");
+assert.equal(connectionPath.paths.length, 1);
+assert.deepEqual(connectionPath.paths[0].nodes, [
+  "file:py/pkg/__init__.py",
+  "file:py/pkg/api.py",
+]);
+assert.equal(
+  connectionPath.paths[0].steps[0].relation.attributes.family,
+  "imports",
+);
+assert.ok(connectionPath.paths[0].steps[0].relation.evidence.length);
+assert.deepEqual(
+  repositoryProject.pathJson(connectionOptions),
+  pathMap(repositoryMapJson, {
+    ...connectionOptions,
+    resolutionJson: repositoryProject.resolutionJson,
+  }),
+);
+assert.deepEqual(
+  repositoryProject.pathMarkdown(connectionOptions),
+  pathMapMarkdown(repositoryMapJson, {
+    ...connectionOptions,
+    resolutionJson: repositoryProject.resolutionJson,
+  }),
+);
 assert.throws(
   () => renderMapMarkdown(repositoryMapJson, { maxChars: -1 }),
   /nonnegative safe integer/,

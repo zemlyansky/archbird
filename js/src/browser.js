@@ -51,6 +51,24 @@ function queryRequest(options = {}) {
   return canonical(request);
 }
 
+function pathRequest(options = {}) {
+  const request = {
+    artifact: "path-request",
+    direction: options.direction || "downstream",
+    level: options.level || "file",
+    max_depth: options.maxDepth ?? 8,
+    max_paths: options.maxPaths ?? 8,
+    producer_policy: options.producerPolicy || "compatible",
+    schema_version: 1,
+    source: options.source,
+    target: options.target,
+  };
+  if (options.relations !== undefined && options.relations !== null) {
+    request.relations = [...options.relations];
+  }
+  return canonical(request);
+}
+
 function queryProjection(options = {}) {
   const views = { focused: 0, changes: 1 };
   const details = { compact: 0, standard: 1, full: 2 };
@@ -487,6 +505,28 @@ async function createBrowserArchbird(moduleOptions = {}) {
         projection.detail,
         options.maxChars ?? 0,
         Buffer.from(verificationResult),
+      );
+    }
+
+    pathJson(options = {}) {
+      return core.mapPath(
+        this.mapJson(),
+        this.resolutionJson ?? Buffer.alloc(0),
+        Buffer.from(JSON.stringify(pathRequest(options))),
+        options.pretty ?? false,
+      );
+    }
+
+    path(options = {}) {
+      return JSON.parse(this.pathJson(options).toString("utf8"));
+    }
+
+    pathMarkdown(options = {}) {
+      return core.mapPathMarkdown(
+        this.mapJson(),
+        this.resolutionJson ?? Buffer.alloc(0),
+        Buffer.from(JSON.stringify(pathRequest(options))),
+        options.maxChars ?? 0,
       );
     }
 

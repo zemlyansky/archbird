@@ -38,6 +38,11 @@ static const uint8_t fuzz_map_json[] = ARCHBIRD_FUZZ_MAP_JSON;
 static const uint8_t fuzz_query_json[] =
     "{\"depth\":1,\"direction\":\"both\",\"paths\":[\"src\"],"
     "\"test_depth\":1}";
+static const uint8_t fuzz_path_json[] =
+    "{\"artifact\":\"path-request\",\"relations\":[\"imports\"],"
+    "\"schema_version\":1,\"source\":{\"kind\":\"file\","
+    "\"patterns\":[\"src/a.c\"]},\"target\":{\"kind\":\"file\","
+    "\"patterns\":[\"src/a.c\"]}}";
 static const uint8_t fuzz_workspace_json[] =
     "{\"description\":\"\",\"projects\":[{\"config\":"
     "\"subject/archbird.json\"}],\"schema_version\":1,"

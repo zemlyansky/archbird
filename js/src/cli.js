@@ -32,6 +32,7 @@ const COMMANDS = new Set([
   "impact",
   "map",
   "observe",
+  "path",
   "plan",
   "query",
   "serve",
@@ -76,6 +77,7 @@ function usage(command = "map") {
     observe: "archbird observe [ROOT] --map MAP.json --request COVERAGE.json [--output OBSERVATIONS.json]",
     query: "archbird query [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
     impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
+    path: "archbird path SOURCE TARGET [--root PROJECT | --map MAP.json] [--level component|file|symbol] [--relation FAMILY] [--direction downstream|upstream|both] [--format markdown|json] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
@@ -105,7 +107,7 @@ function topLevelUsage() {
     "       archbird [ROOT] [MAP OPTIONS]\n\n" +
     "Map codebases, query evidence, verify architecture, and apply reviewed Plans.\n\n" +
     "commands:\n" +
-    "  map, config, query, impact, diff, observe, freshness, workspace\n" +
+    "  map, config, query, impact, path, diff, observe, freshness, workspace\n" +
     "  verify, plan, act, apply, export, serve, support\n\n" +
     "Run `archbird COMMAND --help` for command-specific options. With no command, " +
     "Archbird maps the current directory; an existing or path-shaped positional " +
@@ -800,6 +802,27 @@ function selectorDefinitions() {
   };
 }
 
+function pathDefinitions() {
+  return {
+    ...DISCOVERY,
+    map: { type: "string" },
+    resolution: { type: "string" },
+    level: { default: "file", type: "string" },
+    sourceKind: { flag: "source-kind", type: "string" },
+    targetKind: { flag: "target-kind", type: "string" },
+    relation: { type: "multiple" },
+    direction: { default: "downstream", type: "string" },
+    maxDepth: { flag: "max-depth", default: 8, type: "number" },
+    maxPaths: { flag: "max-paths", default: 8, type: "number" },
+    maxChars: { flag: "max-chars", default: 0, type: "number" },
+    testSymbolObservations: {
+      flag: "test-symbol-observations",
+      type: "multiple",
+    },
+    format: { default: "markdown", type: "string" },
+  };
+}
+
 const GIT_CHANGE_STATUS = Object.freeze({
   A: "added",
   B: "broken-pair",
@@ -1407,6 +1430,128 @@ function queryMain(argv, command) {
     throw error;
   }
   return options.check && hasErrors(sourceDocument) ? 1 : 0;
+}
+
+function pathMain(argv) {
+  const options = parse(argv, pathDefinitions(), { positionals: 2 });
+  if (options.help) {
+    process.stdout.write(usage("path"));
+    return 0;
+  }
+  const [sourcePattern, targetPattern] = options._;
+  if (!sourcePattern || !targetPattern) {
+    throw new Error("path requires SOURCE and TARGET endpoint patterns");
+  }
+  if (!["component", "file", "symbol"].includes(options.level)) {
+    throw new Error("--level must be component, file, or symbol");
+  }
+  if (!["downstream", "upstream", "both"].includes(options.direction)) {
+    throw new Error("--direction must be downstream, upstream, or both");
+  }
+  const relationFamilies = new Set([
+    "bridges", "builds", "calls", "declarations",
+    "imports", "packages", "references", "tests",
+  ]);
+  if (options.relation.some((value) => !relationFamilies.has(value))) {
+    throw new Error("--relation contains an unsupported family");
+  }
+  if (!Number.isSafeInteger(options.maxDepth) ||
+      options.maxDepth < 0 || options.maxDepth > 64) {
+    throw new Error("--max-depth must be from 0 to 64");
+  }
+  if (!Number.isSafeInteger(options.maxPaths) ||
+      options.maxPaths < 1 || options.maxPaths > 100) {
+    throw new Error("--max-paths must be from 1 to 100");
+  }
+  if (!Number.isSafeInteger(options.maxChars) || options.maxChars < 0) {
+    throw new Error("--max-chars must be a nonnegative integer");
+  }
+  if (!["json", "markdown"].includes(options.format)) {
+    throw new Error("--format must be json or markdown");
+  }
+  if (options.format === "json" && options.maxChars) {
+    throw new Error("--max-chars applies only to Markdown");
+  }
+  if (options.format === "markdown" && options.pretty) {
+    throw new Error("--pretty applies only to JSON");
+  }
+  if (options.resolution && !options.map) {
+    throw new Error("--resolution requires --map");
+  }
+  if (options.map && (
+    options.config || options.root || options.noConfig ||
+    hasDiscoveryOverrides(options)
+  )) {
+    throw new Error("--map cannot be combined with repository discovery options");
+  }
+  if (options.map && options.testSymbolObservations.length) {
+    throw new Error("--test-symbol-observations requires a live repository, not --map");
+  }
+  const progress = new Progress(options.progress);
+  let mapJson;
+  let resolutionJson = Buffer.alloc(0);
+  if (options.map) {
+    mapJson = read(options.map);
+    if (options.resolution) resolutionJson = read(options.resolution);
+  } else {
+    const repositoryOptions = { ...options, _: [] };
+    const resolvedInputs = repositoryInputs(repositoryOptions);
+    const current = project(repositoryOptions, progress, resolvedInputs);
+    progress.emit({ phase: "rendering", artifact: "canonical Map" });
+    mapJson = current.mapJson();
+    resolutionJson = current.resolutionJson || Buffer.alloc(0);
+    warnMapCacheStats(current.mapCacheStats);
+  }
+  const mapDocument = JSON.parse(mapJson);
+  if (options.check && hasErrors(mapDocument)) return 1;
+  const pathOptions = {
+    source: {
+      kind: options.sourceKind || options.level,
+      patterns: [sourcePattern],
+    },
+    target: {
+      kind: options.targetKind || options.level,
+      patterns: [targetPattern],
+    },
+    level: options.level,
+    relations: options.relation.length ? options.relation : null,
+    direction: options.direction,
+    maxDepth: options.maxDepth,
+    maxPaths: options.maxPaths,
+    producerPolicy: options.check && options.map ? "current" : "compatible",
+    resolutionJson,
+  };
+  let pathJson;
+  try {
+    pathJson = archbird.pathMap(mapJson, {
+      ...pathOptions,
+      pretty: options.pretty,
+    });
+  } catch (error) {
+    if (options.check && error?.code === "ARCHBIRD_STATUS_10") {
+      progress.clear();
+      process.stderr.write(`archbird: check failed: ${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
+  const artifact = JSON.parse(pathJson);
+  if (options.check && artifact.outcome !== "found") {
+    progress.clear();
+    process.stderr.write(
+      `archbird: check failed: connection path outcome is ${artifact.outcome}\n`,
+    );
+    return 1;
+  }
+  const encoded = options.format === "json"
+    ? pathJson
+    : archbird.pathMapMarkdown(mapJson, {
+      ...pathOptions,
+      maxChars: options.maxChars,
+    });
+  progress.finish();
+  write(encoded, options.output);
+  return 0;
 }
 
 function configMain(argv) {
@@ -2213,6 +2358,7 @@ function main(argv = process.argv.slice(2)) {
   if (command === "query" || command === "impact") {
     return queryMain(rest, command);
   }
+  if (command === "path") return pathMain(rest);
   if (command === "diff") return diffMain(rest);
   if (command === "observe") return observeMain(rest);
   if (command === "freshness") return freshnessMain(rest);

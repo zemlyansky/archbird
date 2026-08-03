@@ -108,6 +108,9 @@ ArchbirdStatus ab_projection_data_render(AbBuffer *buffer,
 ArchbirdStatus ab_projection_data_render_content(AbBuffer *buffer,
                                                  const AbProjectionData *fact);
 
+ArchbirdStatus ab_projection_item_render(AbBuffer *buffer,
+                                         const AbProjectionItem *item);
+
 ArchbirdStatus
 ab_projection_data_unknown(ArchbirdEngine *engine, AbProjectionData *fact,
                            const AbString *name, const AbString *project,

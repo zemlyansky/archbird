@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archbird.org/schema/path.schema.json",
+  "title": "Archbird Path",
+  "type": "object",
+  "required": [
+    "artifact",
+    "schema_version",
+    "project",
+    "source_tool",
+    "evidence",
+    "request",
+    "producer_compatibility",
+    "graph",
+    "source",
+    "target",
+    "outcome",
+    "reason",
+    "paths",
+    "search",
+    "path_sha256"
+  ],
+  "properties": {
+    "artifact": {"const": "path"},
+    "schema_version": {"const": 1},
+    "project": {"type": "string", "minLength": 1},
+    "source_tool": {"type": "object"},
+    "evidence": {"type": "object"},
+    "request": {"$ref": "path-request.schema.json"},
+    "producer_compatibility": {"enum": ["current", "different", "unknown"]},
+    "graph": {
+      "type": "object",
+      "required": [
+        "classification",
+        "completeness",
+        "coverage",
+        "projection_definition_sha256",
+        "projection_result_sha256"
+      ],
+      "properties": {
+        "classification": {
+          "enum": ["complete", "bounded", "incomplete", "unknown"]
+        },
+        "completeness": {"type": "object"},
+        "coverage": {
+          "oneOf": [
+            {"$ref": "#/$defs/projection_item"},
+            {"type": "null"}
+          ]
+        },
+        "projection_definition_sha256": {"$ref": "#/$defs/sha256"},
+        "projection_result_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "source": {"$ref": "#/$defs/resolved_endpoint"},
+    "target": {"$ref": "#/$defs/resolved_endpoint"},
+    "outcome": {"enum": ["found", "absent", "unknown"]},
+    "reason": {
+      "enum": [
+        "witnesses",
+        "path-limit",
+        "endpoint-unresolved",
+        "graph-incomplete",
+        "depth-frontier",
+        "exhaustive"
+      ]
+    },
+    "paths": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/path"}
+    },
+    "search": {
+      "type": "object",
+      "required": [
+        "frontier",
+        "max_depth",
+        "max_paths",
+        "path_count",
+        "shortest_length",
+        "truncated"
+      ],
+      "properties": {
+        "frontier": {"type": "boolean"},
+        "max_depth": {"type": "integer", "minimum": 0, "maximum": 64},
+        "max_paths": {"type": "integer", "minimum": 1, "maximum": 100},
+        "path_count": {"type": "integer", "minimum": 0},
+        "shortest_length": {
+          "oneOf": [
+            {"type": "integer", "minimum": 0, "maximum": 64},
+            {"type": "null"}
+          ]
+        },
+        "truncated": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "path_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "projection_item": {
+      "type": "object",
+      "required": [
+        "attributes",
+        "evidence",
+        "key",
+        "label",
+        "message",
+        "state",
+        "value"
+      ],
+      "properties": {
+        "attributes": {"type": "object"},
+        "evidence": {"type": "array", "items": {"type": "object"}},
+        "key": {"type": "string"},
+        "label": {"type": "string"},
+        "message": {"type": "string"},
+        "state": {"type": "string"},
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "resolved_endpoint": {
+      "type": "object",
+      "required": ["candidates", "state"],
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/projection_item"}
+        },
+        "state": {"enum": ["resolved", "ambiguous", "unresolved"]}
+      },
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object",
+      "required": ["relation", "traversal"],
+      "properties": {
+        "relation": {"$ref": "#/$defs/projection_item"},
+        "traversal": {"enum": ["forward", "reverse"]}
+      },
+      "additionalProperties": false
+    },
+    "path": {
+      "type": "object",
+      "required": ["source", "target", "length", "nodes", "steps"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1},
+        "target": {"type": "string", "minLength": 1},
+        "length": {"type": "integer", "minimum": 0},
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "steps": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/step"}
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -58,6 +58,7 @@ Archbird reads a supplied index but does not invoke an indexer.
 | --- | --- | --- |
 | **Map** | What exists, and how is it connected? | Searchable files, symbols, dependencies, tests, and build routes |
 | **Query** | Which exact evidence matters for this task? | Focused, ranked context with source witnesses |
+| **Path** | How are two explicit architecture entities connected? | Bounded shortest witnesses with typed relations, direction, evidence, and completeness |
 | **Verify** | Does the code follow the architecture constraints? | Constraint status, violations, code locations, and unknowns |
 | **Plan** | What structural change follows from current evidence, and what remains unknown? | An editable language-neutral Plan with objectives, operators, applicability, and acceptance constraints |
 | **Act** | How does that Plan ground into exact repository changes, and does its after-state pass? | An accepted, sealed Act bound to exact transitions plus fresh Map and Verification evidence |
@@ -124,6 +125,13 @@ Query from those candidates. It tolerates prefixes, substrings, and small
 typos, but it does not interpret a natural-language question or turn a text
 match into a proven code relationship.
 
+`path SOURCE TARGET` resolves exact or glob-shaped endpoint sets and finds
+globally shortest witnesses over the Map's exhaustive typed graph projection.
+It preserves parallel relation kinds and traversal direction. A missing route
+is reported as `absent` only when the selected graph and bounded search are
+complete; unresolved endpoints, unsupported evidence, or a depth frontier
+remain `unknown`.
+
 `serve` starts a browser-based architecture explorer and immediately prints its
 loopback URL. Use it to expand selected components into files and selected files
 into symbols while the rest of the architecture stays collapsed; inspect typed
@@ -153,6 +161,9 @@ archbird query --map .archbird/map.json \
 
 archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
+
+archbird path 'src/cli.c' 'src/runtime.c' \
+  --map .archbird/map.json --relation calls --direction downstream
 
 archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' \
@@ -1149,7 +1160,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Python area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map and Query | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
+| Map, Query, and Path | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `path_map_json`, `path_map_markdown`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
 | Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `render_plan_markdown`, `run_act_gates`, `validate_act`, `validate_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
@@ -1160,7 +1171,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Node area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map and Query | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
+| Map, Query, and Path | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `pathMap`, `pathMapMarkdown`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
 | Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `runActGates`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
@@ -1200,7 +1211,7 @@ The complete C ABI is declared in
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
 | Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_constraints_report_with_blocking`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
-| Map, Query, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_unified_diff` |
+| Map, Query, Path, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_path`, `archbird_map_path_markdown`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_unified_diff` |
 | Workspace | `archbird_workspace_analyze`, `archbird_workspace_plan` |
 | Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_render_markdown`, `archbird_plan_source_requirements`, `archbird_plan_validate` |
 <!-- archbird-c-api:end -->
@@ -1229,13 +1240,13 @@ archbird export mermaid --map .archbird/map.json \
 The command names are:
 
 <!-- archbird-python-cli:start -->
-Python: `map`, `config`, `query`, `impact`, `diff`, `observe`, `freshness`,
+Python: `map`, `config`, `query`, `impact`, `path`, `diff`, `observe`, `freshness`,
 `workspace`, `verify`, `plan`, `act`, `apply`, `export`, `okf`,
 `serve`, `mcp`, `support`.
 <!-- archbird-python-cli:end -->
 
 <!-- archbird-node-cli:start -->
-Node: `map`, `config`, `query`, `impact`, `diff`, `observe`, `freshness`,
+Node: `map`, `config`, `query`, `impact`, `path`, `diff`, `observe`, `freshness`,
 `workspace`, `verify`, `plan`, `act`, `apply`, `export`, `serve`,
 `support`.
 <!-- archbird-node-cli:end -->
