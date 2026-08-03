@@ -1097,44 +1097,429 @@ static const AbManifestFile *compile_source_file(const AbMapState *state,
   return best;
 }
 
-static const AbString *compile_executable(const AbValue *row,
-                                          AbString *temporary) {
-  const AbValue *arguments = ab_value_member(row, "arguments");
-  const AbString *command = compile_string(row, "command");
-  const char *data;
-  size_t length;
-  size_t start = 0;
-  size_t end;
-  size_t leaf;
-  if (arguments && arguments->kind == AB_VALUE_ARRAY &&
-      arguments->as.array.count &&
-      arguments->as.array.items[0].kind == AB_VALUE_STRING)
-    command = &arguments->as.array.items[0].as.text;
-  if (!command || !command->length)
-    return NULL;
-  data = command->data;
-  length = command->length;
-  while (start < length && isspace((unsigned char)data[start]))
-    start++;
-  if (start == length)
-    return NULL;
-  if (data[start] == '\'' || data[start] == '"') {
-    char quote = data[start++];
-    end = start;
-    while (end < length && data[end] != quote)
-      end++;
-  } else {
-    end = start;
-    while (end < length && !isspace((unsigned char)data[end]))
-      end++;
+static ArchbirdStatus tokenize_compile_command(ArchbirdEngine *engine,
+                                               const AbString *command,
+                                               AbStringArray *out,
+                                               int *out_valid) {
+  AbBuffer token;
+  size_t index = 0;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  *out_valid = 0;
+  ab_buffer_init(&token, engine);
+  while (status == ARCHBIRD_OK && index < command->length) {
+    char quote = '\0';
+    int started = 0;
+    while (index < command->length &&
+           isspace((unsigned char)command->data[index]))
+      index++;
+    if (index == command->length)
+      break;
+    token.length = 0;
+    while (status == ARCHBIRD_OK && index < command->length) {
+      char byte = command->data[index];
+      if (!quote && isspace((unsigned char)byte))
+        break;
+      started = 1;
+      index++;
+      if (quote) {
+        if (byte == quote) {
+          quote = '\0';
+        } else if (byte == '\\' && quote == '"' && index < command->length &&
+                   (command->data[index] == '"' ||
+                    command->data[index] == '\\')) {
+          status = ab_buffer_append(
+              &token, (const uint8_t *)&command->data[index++], 1);
+        } else {
+          status =
+              ab_buffer_append(&token, (const uint8_t *)&byte, sizeof(byte));
+        }
+      } else if (byte == '\'' || byte == '"') {
+        quote = byte;
+      } else if (byte == '\\' && index < command->length &&
+                 (isspace((unsigned char)command->data[index]) ||
+                  command->data[index] == '\'' || command->data[index] == '"' ||
+                  command->data[index] == '\\')) {
+        status = ab_buffer_append(&token,
+                                  (const uint8_t *)&command->data[index++], 1);
+      } else {
+        status = ab_buffer_append(&token, (const uint8_t *)&byte, sizeof(byte));
+      }
+    }
+    if (status == ARCHBIRD_OK && quote) {
+      string_array_free(engine, out);
+      ab_buffer_free(&token);
+      return ARCHBIRD_OK;
+    }
+    if (status == ARCHBIRD_OK && started)
+      status =
+          append_value(engine, out, (const char *)token.data, token.length);
   }
-  leaf = start;
-  for (; start < end; start++)
-    if (data[start] == '/' || data[start] == '\\')
-      leaf = start + 1;
-  temporary->data = (char *)data + leaf;
-  temporary->length = end - leaf;
+  if (status == ARCHBIRD_OK)
+    *out_valid = out->count > 0;
+  ab_buffer_free(&token);
+  return status;
+}
+
+static ArchbirdStatus compile_arguments(ArchbirdEngine *engine,
+                                        const AbValue *row, AbStringArray *out,
+                                        int *out_valid) {
+  const AbValue *arguments = ab_value_member(row, "arguments");
+  const AbString *command;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  *out_valid = 0;
+  if (arguments) {
+    if (arguments->kind != AB_VALUE_ARRAY || !arguments->as.array.count)
+      return ARCHBIRD_OK;
+    for (index = 0; status == ARCHBIRD_OK && index < arguments->as.array.count;
+         index++) {
+      const AbValue *argument = &arguments->as.array.items[index];
+      if (argument->kind != AB_VALUE_STRING) {
+        string_array_free(engine, out);
+        return ARCHBIRD_OK;
+      }
+      status = append_value(engine, out, argument->as.text.data,
+                            argument->as.text.length);
+    }
+    if (status == ARCHBIRD_OK)
+      *out_valid = out->count > 0 && out->items[0].length > 0;
+    return status;
+  }
+  command = compile_string(row, "command");
+  if (!command || !command->length)
+    return ARCHBIRD_OK;
+  return tokenize_compile_command(engine, command, out, out_valid);
+}
+
+static const AbString *compile_executable(const AbStringArray *arguments,
+                                          AbString *temporary) {
+  const AbString *command;
+  size_t index;
+  size_t leaf = 0;
+  if (!arguments->count || !arguments->items[0].length)
+    return NULL;
+  command = &arguments->items[0];
+  for (index = 0; index < command->length; index++)
+    if (command->data[index] == '/' || command->data[index] == '\\')
+      leaf = index + 1;
+  temporary->data = command->data + leaf;
+  temporary->length = command->length - leaf;
   return temporary->length ? temporary : NULL;
+}
+
+static int compile_path_absolute(const char *path, size_t length) {
+  return (length && (path[0] == '/' || path[0] == '\\')) ||
+         (length >= 3 && isalpha((unsigned char)path[0]) && path[1] == ':' &&
+          (path[2] == '/' || path[2] == '\\'));
+}
+
+static ArchbirdStatus
+normalize_compile_path(ArchbirdEngine *engine, const AbString *directory,
+                       const char *path, size_t path_length, AbString *out) {
+  char *joined = NULL;
+  char *normalized = NULL;
+  size_t *segments = NULL;
+  size_t joined_length;
+  size_t input = 0;
+  size_t write = 0;
+  size_t segment_count = 0;
+  size_t anchor = 0;
+  int absolute = compile_path_absolute(path, path_length);
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!absolute && directory->length > SIZE_MAX - path_length - 2)
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "compile command path is too large");
+  joined_length = absolute ? path_length : directory->length + 1 + path_length;
+  joined = (char *)ab_malloc(engine, joined_length + 1);
+  normalized = (char *)ab_malloc(engine, joined_length + 1);
+  if (joined_length)
+    segments =
+        (size_t *)ab_malloc(engine, (joined_length + 1) * sizeof(*segments));
+  if (!joined || !normalized || (joined_length && !segments)) {
+    status =
+        archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+                           "out of memory normalizing compile path");
+    goto done;
+  }
+  if (absolute) {
+    memcpy(joined, path, path_length);
+  } else {
+    memcpy(joined, directory->data, directory->length);
+    joined[directory->length] = '/';
+    memcpy(joined + directory->length + 1, path, path_length);
+  }
+  joined[joined_length] = '\0';
+  if (joined_length >= 3 && isalpha((unsigned char)joined[0]) &&
+      joined[1] == ':' && (joined[2] == '/' || joined[2] == '\\')) {
+    normalized[write++] = joined[0];
+    normalized[write++] = ':';
+    normalized[write++] = '/';
+    anchor = write;
+    input = 3;
+  } else if (joined_length && (joined[0] == '/' || joined[0] == '\\')) {
+    normalized[write++] = '/';
+    anchor = write;
+    input = 1;
+  }
+  while (input < joined_length) {
+    size_t start;
+    size_t length;
+    while (input < joined_length &&
+           (joined[input] == '/' || joined[input] == '\\'))
+      input++;
+    start = input;
+    while (input < joined_length && joined[input] != '/' &&
+           joined[input] != '\\')
+      input++;
+    length = input - start;
+    if (!length || (length == 1 && joined[start] == '.'))
+      continue;
+    if (length == 2 && joined[start] == '.' && joined[start + 1] == '.') {
+      if (segment_count &&
+          !(write - segments[segment_count - 1] == 2 &&
+            normalized[segments[segment_count - 1]] == '.' &&
+            normalized[segments[segment_count - 1] + 1] == '.')) {
+        write = segments[--segment_count];
+        if (write > anchor && normalized[write - 1] == '/')
+          write--;
+        continue;
+      }
+      if (anchor)
+        continue;
+    }
+    if (write && normalized[write - 1] != '/')
+      normalized[write++] = '/';
+    segments[segment_count++] = write;
+    memcpy(normalized + write, joined + start, length);
+    write += length;
+  }
+  normalized[write] = '\0';
+  out->data = normalized;
+  out->length = write;
+  normalized = NULL;
+done:
+  ab_free(engine, segments);
+  ab_free(engine, normalized);
+  ab_free(engine, joined);
+  return status;
+}
+
+static int compile_repository_root(const AbString *source_path,
+                                   const AbString *mapped_source,
+                                   size_t *out_length) {
+  size_t offset;
+  if (source_path->length < mapped_source->length)
+    return 0;
+  offset = source_path->length - mapped_source->length;
+  if (memcmp(source_path->data + offset, mapped_source->data,
+             mapped_source->length) != 0)
+    return 0;
+  if (!offset) {
+    *out_length = 0;
+    return 1;
+  }
+  if (source_path->data[offset - 1] != '/')
+    return 0;
+  *out_length = offset == 1 && source_path->data[0] == '/' ? 1 : offset - 1;
+  return 1;
+}
+
+static int manifest_has_directory(const AbSourceManifest *manifest,
+                                  const char *path, size_t length) {
+  size_t index;
+  if (!length)
+    return 1;
+  for (index = 0; index < manifest->file_count; index++) {
+    const AbManifestFile *file = &manifest->files[index];
+    if (!file->has_layer || file->path.length <= length ||
+        file->path.data[length] != '/')
+      continue;
+    if (memcmp(file->path.data, path, length) == 0)
+      return 1;
+  }
+  return 0;
+}
+
+static ArchbirdStatus append_compile_root(
+    AbMapState *state, AbMapCompileCommand *command, AbMapCompileRootKind kind,
+    const AbString *directory, const char *path, size_t path_length,
+    const AbString *source_path, size_t repository_root_length) {
+  AbString normalized = {0};
+  const char *relative;
+  size_t relative_length;
+  size_t index;
+  AbMapCompileRoot *resized;
+  ArchbirdStatus status;
+  if (!path_length || (path_length == 1 && path[0] == '-'))
+    return ARCHBIRD_OK;
+  status = normalize_compile_path(state->engine, directory, path, path_length,
+                                  &normalized);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (repository_root_length) {
+    if (normalized.length < repository_root_length ||
+        memcmp(normalized.data, source_path->data, repository_root_length) !=
+            0 ||
+        (normalized.length > repository_root_length &&
+         normalized.data[repository_root_length] != '/')) {
+      ab_string_free(state->engine, &normalized);
+      return ARCHBIRD_OK;
+    }
+    relative = normalized.data + repository_root_length;
+    relative_length = normalized.length - repository_root_length;
+    if (relative_length && relative[0] == '/') {
+      relative++;
+      relative_length--;
+    }
+  } else {
+    if (compile_path_absolute(normalized.data, normalized.length)) {
+      ab_string_free(state->engine, &normalized);
+      return ARCHBIRD_OK;
+    }
+    relative = normalized.data;
+    relative_length = normalized.length;
+  }
+  if (!manifest_has_directory(state->manifest, relative, relative_length)) {
+    ab_string_free(state->engine, &normalized);
+    return ARCHBIRD_OK;
+  }
+  for (index = 0; index < command->root_count; index++) {
+    if (command->roots[index].kind == kind &&
+        command->roots[index].path.length == relative_length &&
+        (!relative_length || memcmp(command->roots[index].path.data, relative,
+                                    relative_length) == 0)) {
+      ab_string_free(state->engine, &normalized);
+      return ARCHBIRD_OK;
+    }
+  }
+  if (command->root_count == SIZE_MAX / sizeof(*command->roots)) {
+    ab_string_free(state->engine, &normalized);
+    return archbird_error_set(state->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "too many compilation search paths");
+  }
+  resized = (AbMapCompileRoot *)ab_realloc(state->engine, command->roots,
+                                           (command->root_count + 1) *
+                                               sizeof(*command->roots));
+  if (!resized) {
+    ab_string_free(state->engine, &normalized);
+    return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory storing compilation search paths");
+  }
+  command->roots = resized;
+  memset(&command->roots[command->root_count], 0, sizeof(*command->roots));
+  status =
+      ab_string_copy(state->engine, &command->roots[command->root_count].path,
+                     relative, relative_length);
+  if (status == ARCHBIRD_OK) {
+    command->roots[command->root_count].kind = kind;
+    command->root_count++;
+  }
+  ab_string_free(state->engine, &normalized);
+  return status;
+}
+
+static int compile_include_option(const AbString *argument,
+                                  AbMapCompileRootKind *out_kind,
+                                  const char **out_path,
+                                  size_t *out_path_length, int *out_next) {
+  static const struct {
+    const char *option;
+    AbMapCompileRootKind kind;
+  } options[] = {
+      {"-iquote", AB_MAP_COMPILE_ROOT_QUOTE},
+      {"-isystem", AB_MAP_COMPILE_ROOT_SYSTEM},
+      {"-idirafter", AB_MAP_COMPILE_ROOT_AFTER},
+      {"-imsvc", AB_MAP_COMPILE_ROOT_SYSTEM},
+      {"/external:I", AB_MAP_COMPILE_ROOT_SYSTEM},
+      {"-I", AB_MAP_COMPILE_ROOT_NORMAL},
+      {"/I", AB_MAP_COMPILE_ROOT_NORMAL},
+  };
+  size_t index;
+  *out_next = 0;
+  for (index = 0; index < sizeof(options) / sizeof(options[0]); index++) {
+    size_t length = strlen(options[index].option);
+    if (argument->length < length ||
+        memcmp(argument->data, options[index].option, length) != 0)
+      continue;
+    *out_kind = options[index].kind;
+    if (argument->length == length) {
+      *out_path = NULL;
+      *out_path_length = 0;
+      *out_next = 1;
+    } else {
+      *out_path = argument->data + length;
+      *out_path_length = argument->length - length;
+    }
+    return 1;
+  }
+  return 0;
+}
+
+static ArchbirdStatus reserve_compile_command(AbMapState *state,
+                                              const AbConfigBuild *config,
+                                              const AbManifestFile *source,
+                                              AbMapCompileCommand **out) {
+  AbMapCompileCommand *resized;
+  if (state->compile_command_count ==
+      SIZE_MAX / sizeof(*state->compile_commands))
+    return archbird_error_set(state->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "too many compilation commands");
+  resized = (AbMapCompileCommand *)ab_realloc(
+      state->engine, state->compile_commands,
+      (state->compile_command_count + 1) * sizeof(*state->compile_commands));
+  if (!resized)
+    return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory storing compilation commands");
+  state->compile_commands = resized;
+  *out = &state->compile_commands[state->compile_command_count++];
+  memset(*out, 0, sizeof(**out));
+  (*out)->source = source;
+  (*out)->database = &config->path;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus collect_compile_roots(AbMapState *state,
+                                            AbMapCompileCommand *command,
+                                            const AbString *directory,
+                                            const AbString *file,
+                                            const AbStringArray *arguments) {
+  AbString source_path = {0};
+  size_t repository_root_length;
+  size_t index;
+  ArchbirdStatus status = normalize_compile_path(
+      state->engine, directory, file->data, file->length, &source_path);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (!compile_repository_root(&source_path, &command->source->path,
+                               &repository_root_length)) {
+    ab_string_free(state->engine, &source_path);
+    return ARCHBIRD_OK;
+  }
+  for (index = 1; status == ARCHBIRD_OK && index < arguments->count; index++) {
+    AbMapCompileRootKind kind;
+    const char *path;
+    size_t path_length;
+    int next;
+    if (!compile_include_option(&arguments->items[index], &kind, &path,
+                                &path_length, &next))
+      continue;
+    if (next) {
+      if (++index == arguments->count)
+        break;
+      path = arguments->items[index].data;
+      path_length = arguments->items[index].length;
+    }
+    status =
+        append_compile_root(state, command, kind, directory, path, path_length,
+                            &source_path, repository_root_length);
+  }
+  ab_string_free(state->engine, &source_path);
+  return status;
 }
 
 static ArchbirdStatus compile_entry_condition(AbMapState *state,
@@ -1193,18 +1578,30 @@ static ArchbirdStatus add_compile_commands_routes(AbMapState *state,
     const AbString *file;
     const AbManifestFile *source;
     const char *source_evidence = NULL;
+    AbStringArray arguments = {0};
     AbString executable = {0};
     AbMapBuildRoute *route = NULL;
+    AbMapCompileCommand *command = NULL;
+    int valid_arguments = 0;
+    if (row->kind == AB_VALUE_OBJECT)
+      status =
+          compile_arguments(state->engine, row, &arguments, &valid_arguments);
+    if (status != ARCHBIRD_OK) {
+      string_array_free(state->engine, &arguments);
+      break;
+    }
     if (row->kind != AB_VALUE_OBJECT ||
         !(directory = compile_string(row, "directory")) ||
-        !(file = compile_string(row, "file")) ||
-        !compile_executable(row, &executable)) {
+        !(file = compile_string(row, "file")) || !valid_arguments ||
+        !compile_executable(&arguments, &executable)) {
       invalid++;
+      string_array_free(state->engine, &arguments);
       continue;
     }
     source = compile_source_file(state, directory, file, &source_evidence);
     if (!source) {
       unmapped++;
+      string_array_free(state->engine, &arguments);
       continue;
     }
     status = reserve_build(state, config, &route);
@@ -1230,6 +1627,12 @@ static ArchbirdStatus add_compile_commands_routes(AbMapState *state,
                              strlen(source_evidence));
     if (status == ARCHBIRD_OK)
       status = compile_entry_condition(state, row, &route->conditions);
+    if (status == ARCHBIRD_OK)
+      status = reserve_compile_command(state, config, source, &command);
+    if (status == ARCHBIRD_OK)
+      status =
+          collect_compile_roots(state, command, directory, file, &arguments);
+    string_array_free(state->engine, &arguments);
   }
   if (status == ARCHBIRD_OK && invalid) {
     char message[128];

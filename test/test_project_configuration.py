@@ -365,6 +365,7 @@ def _assert_import_resolution_soundness() -> None:
     helper_start = relative_source.index("helper")
     assert any(
         site["name"] == "helper"
+        and site["line"] == 1
         and site["span"] == {
             "start": helper_start,
             "end": helper_start + len("helper"),

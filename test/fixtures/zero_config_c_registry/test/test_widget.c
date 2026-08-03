@@ -8,6 +8,9 @@ TEST_IMPL(direct) { return widget_run(); }
 static int widget_explicit_test(void) { return widget_run(); }
 static int widget_forwarded_test(void) { return widget_run(); }
 
+#define WIDGET_TEST_OBJECTS 1
+static const char *widget_values[WIDGET_TEST_OBJECTS] = {""};
+
 struct widget_testcase {
   const char *name;
   int (*function)(void);

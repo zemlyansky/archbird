@@ -160,6 +160,26 @@ typedef struct AbMapBuildRoute {
   AbString variant;
 } AbMapBuildRoute;
 
+typedef enum AbMapCompileRootKind {
+  AB_MAP_COMPILE_ROOT_QUOTE = 1,
+  AB_MAP_COMPILE_ROOT_NORMAL = 2,
+  AB_MAP_COMPILE_ROOT_SYSTEM = 3,
+  AB_MAP_COMPILE_ROOT_AFTER = 4
+} AbMapCompileRootKind;
+
+typedef struct AbMapCompileRoot {
+  AbString path;
+  AbMapCompileRootKind kind;
+} AbMapCompileRoot;
+
+typedef struct AbMapCompileCommand {
+  const AbManifestFile *source;
+  const AbString *database;
+  AbMapCompileRoot *roots;
+  size_t root_count;
+  size_t context_leader;
+} AbMapCompileCommand;
+
 typedef struct AbMapArtifactInput {
   AbString path;
   AbStringArray evidence;
@@ -354,6 +374,9 @@ typedef struct AbMapState {
   size_t package_count;
   AbMapBuildRoute *builds;
   size_t build_count;
+  AbMapCompileCommand *compile_commands;
+  size_t compile_command_count;
+  unsigned char *compile_contexts;
   AbMapArtifact *artifacts;
   size_t artifact_count;
   AbMapSurface *surfaces;

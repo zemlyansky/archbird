@@ -1206,6 +1206,28 @@ static const RouteSymbol *unique_route_symbol(const TestFactIndex *index,
 
 static size_t dispatch_initializer(const AbTokenList *tokens, size_t name);
 
+static int declaration_level_name(const AbTokenList *tokens, size_t name) {
+  size_t start = name;
+  size_t index;
+  size_t brackets = 0;
+  size_t parentheses = 0;
+  while (start && !ab_token_equals(tokens, start - 1, ";") &&
+         !ab_token_equals(tokens, start - 1, "{") &&
+         !ab_token_equals(tokens, start - 1, "}"))
+    start--;
+  for (index = start; index < name; index++) {
+    if (ab_token_equals(tokens, index, "["))
+      brackets++;
+    else if (ab_token_equals(tokens, index, "]") && brackets)
+      brackets--;
+    else if (ab_token_equals(tokens, index, "("))
+      parentheses++;
+    else if (ab_token_equals(tokens, index, ")") && parentheses)
+      parentheses--;
+  }
+  return brackets == 0 && parentheses == 0;
+}
+
 static size_t registry_initializer(const AbTokenList *tokens, size_t name) {
   size_t index;
   size_t limit = name + 64 < tokens->count ? name + 64 : tokens->count;
@@ -1284,6 +1306,8 @@ static ArchbirdStatus c_registry_cases(AbMapState *state,
     if (!string_contains_fold(name, name_length, "test") &&
         !string_contains_fold(name, name_length, "case"))
       continue;
+    if (!declaration_level_name(&tokens, name_index))
+      continue;
     group_length = test_registry_group_length(name, name_length);
     opening = registry_initializer(&tokens, name_index);
     if (opening == SIZE_MAX)
@@ -1330,6 +1354,11 @@ static ArchbirdStatus c_registry_cases(AbMapState *state,
         continue;
       }
       token_inner(&tokens, selector_token, &selector, &selector_length);
+      if (!selector_length) {
+        cursor = entry_close;
+        depth = 0;
+        continue;
+      }
       if (callback_token != SIZE_MAX &&
           tokens.items[callback_token].kind == AB_TOKEN_IDENTIFIER) {
         callback =

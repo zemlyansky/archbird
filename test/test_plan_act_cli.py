@@ -1193,7 +1193,12 @@ class PlanActCliTest(unittest.TestCase):
         )
         self.assertEqual(
             {(row["path"], row["line"]) for row in item["evidence"]},
-            {("api.py", 5), ("consumer.py", 0), ("consumer.py", 4)},
+            {
+                ("api.py", 5),
+                ("consumer.py", 0),
+                ("consumer.py", 1),
+                ("consumer.py", 4),
+            },
         )
         self.assertTrue(
             any("old_api" in row["detail"] for row in item["evidence"])

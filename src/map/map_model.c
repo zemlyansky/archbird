@@ -197,6 +197,15 @@ static void build_free(ArchbirdEngine *engine, AbMapBuildRoute *build) {
   memset(build, 0, sizeof(*build));
 }
 
+static void compile_command_free(ArchbirdEngine *engine,
+                                 AbMapCompileCommand *command) {
+  size_t index;
+  for (index = 0; index < command->root_count; index++)
+    ab_string_free(engine, &command->roots[index].path);
+  ab_free(engine, command->roots);
+  memset(command, 0, sizeof(*command));
+}
+
 static void artifact_free(ArchbirdEngine *engine, AbMapArtifact *artifact) {
   size_t index;
   ab_string_free(engine, &artifact->name);
@@ -367,6 +376,10 @@ void ab_map_state_free(AbMapState *state) {
   for (index = 0; index < state->build_count; index++)
     build_free(state->engine, &state->builds[index]);
   ab_free(state->engine, state->builds);
+  for (index = 0; index < state->compile_command_count; index++)
+    compile_command_free(state->engine, &state->compile_commands[index]);
+  ab_free(state->engine, state->compile_commands);
+  ab_free(state->engine, state->compile_contexts);
   for (index = 0; index < state->artifact_count; index++)
     artifact_free(state->engine, &state->artifacts[index]);
   ab_free(state->engine, state->artifacts);

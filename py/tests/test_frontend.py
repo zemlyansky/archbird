@@ -219,6 +219,18 @@ def main() -> int:
     domain_counts: dict[str, int] = {}
     for fact in provider_document["facts"]:
         domain_counts[fact["domain"]] = domain_counts.get(fact["domain"], 0) + 1
+    imported_members = [
+        fact
+        for fact in provider_document["facts"]
+        if fact["domain"] == "imported-names"
+    ]
+    if not imported_members or any(
+        fact.get("attributes", {}).get("line") != 1 for fact in imported_members
+    ):
+        raise AssertionError(
+            f"imported member facts must retain one-based source lines: "
+            f"{imported_members!r}"
+        )
     expected_domains = {
         "calls": 3,
         "export-origins": 4,

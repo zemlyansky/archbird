@@ -44,6 +44,13 @@ enum AbMapImportDelimiter {
   AB_MAP_IMPORT_UNKNOWN = 1u << 2
 };
 
+enum AbMapCompileImportResolution {
+  C_IMPORT_COMPILE_NONE = 0,
+  C_IMPORT_COMPILE_RESOLVED = 1,
+  C_IMPORT_COMPILE_MISS = 2,
+  C_IMPORT_COMPILE_INCONSISTENT = 3
+};
+
 #define MAP_TRY(expression)                                                    \
   do {                                                                         \
     status = (expression);                                                     \
@@ -884,14 +891,92 @@ static int absolute_c_include(const AbString *imported) {
          (imported->data[2] == '/' || imported->data[2] == '\\');
 }
 
-static ArchbirdStatus
-resolve_c_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
-                 const AbMapConfig *config, const AbManifestFile *file,
-                 const AbString *imported, unsigned delimiter_mask,
-                 const AbManifestFile **out) {
+static int c_header_file(const AbManifestFile *file) {
+  static const char *const suffixes[] = {
+      ".h", ".hh", ".hpp", ".hxx", ".inc", ".inl", ".ipp", ".tcc", ".generic"};
+  size_t index;
+  for (index = 0; index < sizeof(suffixes) / sizeof(suffixes[0]); index++) {
+    size_t length = strlen(suffixes[index]);
+    if (file->path.length >= length &&
+        memcmp(file->path.data + file->path.length - length, suffixes[index],
+               length) == 0)
+      return 1;
+  }
+  return 0;
+}
+
+static int has_direct_compile_command(const AbMapState *state,
+                                      const AbManifestFile *file) {
+  size_t index;
+  for (index = 0; index < state->compile_command_count; index++)
+    if (state->compile_commands[index].source == file)
+      return 1;
+  return 0;
+}
+
+static int compile_context_contains(const AbMapState *state,
+                                    size_t command_index,
+                                    const AbManifestFile *file) {
+  size_t file_index;
+  if (!state->compile_contexts ||
+      command_index >= state->compile_command_count ||
+      file < state->manifest->files ||
+      file >= state->manifest->files + state->manifest->file_count)
+    return 0;
+  file_index = (size_t)(file - state->manifest->files);
+  return state->compile_contexts[command_index * state->manifest->file_count +
+                                 file_index] != 0;
+}
+
+static int compile_command_applies(const AbMapState *state,
+                                   size_t command_index,
+                                   const AbManifestFile *file,
+                                   int direct_commands) {
+  const AbMapCompileCommand *command = &state->compile_commands[command_index];
+  if (direct_commands)
+    return command->source == file;
+  return c_header_file(file) &&
+         compile_context_contains(state, command_index, file);
+}
+
+static ArchbirdStatus resolve_compile_command_import(
+    AbMapState *state, const AbMapCompileCommand *command,
+    const AbString *imported, unsigned delimiter_mask,
+    const AbManifestFile **out) {
+  static const char *const suffixes[] = {"", ".generic"};
+  static const AbMapCompileRootKind order[] = {
+      AB_MAP_COMPILE_ROOT_QUOTE, AB_MAP_COMPILE_ROOT_NORMAL,
+      AB_MAP_COMPILE_ROOT_SYSTEM, AB_MAP_COMPILE_ROOT_AFTER};
+  size_t kind_index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  *out = NULL;
+  for (kind_index = 0;
+       status == ARCHBIRD_OK && kind_index < sizeof(order) / sizeof(order[0]);
+       kind_index++) {
+    size_t root_index;
+    if (order[kind_index] == AB_MAP_COMPILE_ROOT_QUOTE &&
+        !(delimiter_mask & (AB_MAP_IMPORT_LOCAL | AB_MAP_IMPORT_UNKNOWN)))
+      continue;
+    for (root_index = 0; root_index < command->root_count; root_index++) {
+      const AbMapCompileRoot *root = &command->roots[root_index];
+      if (root->kind != order[kind_index])
+        continue;
+      status = resolve_joined_import_with_suffixes(
+          state->engine, state->manifest, root->path.data, root->path.length,
+          imported, suffixes, sizeof(suffixes) / sizeof(suffixes[0]), out);
+      if (status != ARCHBIRD_OK || *out)
+        return status;
+    }
+  }
+  return status;
+}
+
+static ArchbirdStatus resolve_compile_context_import(
+    AbMapState *state, const AbMapCompileCommand *command,
+    const AbManifestFile *file, const AbString *imported,
+    unsigned delimiter_mask, const AbManifestFile **out) {
   static const char *const suffixes[] = {"", ".generic"};
   size_t base_length = path_directory_length(&file->path);
-  const AbConfigLayer *layer;
   ArchbirdStatus status = ARCHBIRD_OK;
   *out = NULL;
   if (!imported->length || absolute_c_include(imported))
@@ -900,20 +985,228 @@ resolve_c_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
     delimiter_mask = AB_MAP_IMPORT_UNKNOWN;
   if (delimiter_mask & (AB_MAP_IMPORT_LOCAL | AB_MAP_IMPORT_UNKNOWN)) {
     status = resolve_joined_import_with_suffixes(
-        engine, manifest, file->path.data, base_length, imported, suffixes,
-        sizeof(suffixes) / sizeof(suffixes[0]), out);
+        state->engine, state->manifest, file->path.data, base_length, imported,
+        suffixes, sizeof(suffixes) / sizeof(suffixes[0]), out);
     if (status != ARCHBIRD_OK || *out)
       return status;
   }
-  layer = source_config_layer(config, file);
+  return resolve_compile_command_import(state, command, imported,
+                                        delimiter_mask, out);
+}
+
+static void named_reference_file_range(const NamedReference *imports,
+                                       size_t import_count,
+                                       const AbManifestFile *file,
+                                       size_t *out_start, size_t *out_end) {
+  size_t low = 0;
+  size_t high = import_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (ab_string_compare(&imports[middle].file->path, &file->path) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  *out_start = low;
+  high = import_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (ab_string_compare(&imports[middle].file->path, &file->path) <= 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  *out_end = low;
+}
+
+static int same_compile_roots(const AbMapCompileCommand *left,
+                              const AbMapCompileCommand *right) {
+  size_t index;
+  if (left->root_count != right->root_count)
+    return 0;
+  for (index = 0; index < left->root_count; index++)
+    if (left->roots[index].kind != right->roots[index].kind ||
+        !ab_string_equal(&left->roots[index].path, &right->roots[index].path))
+      return 0;
+  return 1;
+}
+
+static ArchbirdStatus build_compile_contexts(AbMapState *state,
+                                             const NamedReference *imports,
+                                             size_t import_count) {
+  size_t context_size;
+  size_t *queue = NULL;
+  size_t command_index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!state->compile_command_count || !state->manifest->file_count)
+    return ARCHBIRD_OK;
+  if (state->compile_command_count > SIZE_MAX / state->manifest->file_count)
+    return archbird_error_set(state->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "compilation context matrix is too large");
+  context_size = state->compile_command_count * state->manifest->file_count;
+  state->compile_contexts =
+      (unsigned char *)ab_calloc(state->engine, context_size, 1);
+  queue = (size_t *)ab_malloc(state->engine,
+                              state->manifest->file_count * sizeof(*queue));
+  if (!state->compile_contexts || !queue) {
+    ab_free(state->engine, queue);
+    return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory deriving compilation contexts");
+  }
+  for (command_index = 0; command_index < state->compile_command_count;
+       command_index++) {
+    const AbMapCompileCommand *command =
+        &state->compile_commands[command_index];
+    size_t leader = command_index;
+    size_t previous;
+    size_t source_index;
+    for (previous = 0; previous < command_index; previous++)
+      if (same_compile_roots(command, &state->compile_commands[previous])) {
+        leader = previous;
+        break;
+      }
+    state->compile_commands[command_index].context_leader = leader;
+    source_index = (size_t)(command->source - state->manifest->files);
+    state->compile_contexts[leader * state->manifest->file_count +
+                            source_index] = 1;
+  }
+  for (command_index = 0;
+       status == ARCHBIRD_OK && command_index < state->compile_command_count;
+       command_index++) {
+    const AbMapCompileCommand *command =
+        &state->compile_commands[command_index];
+    unsigned char *context =
+        state->compile_contexts + command_index * state->manifest->file_count;
+    size_t previous;
+    size_t read_index = 0;
+    size_t write_index = 0;
+    int leader = 1;
+    for (previous = 0; previous < command_index; previous++)
+      if (same_compile_roots(command, &state->compile_commands[previous])) {
+        leader = 0;
+        break;
+      }
+    if (!leader)
+      continue;
+    for (previous = 0; previous < state->manifest->file_count; previous++)
+      if (context[previous])
+        queue[write_index++] = previous;
+    while (status == ARCHBIRD_OK && read_index < write_index) {
+      const AbManifestFile *file = &state->manifest->files[queue[read_index++]];
+      size_t import_index;
+      size_t import_end;
+      named_reference_file_range(imports, import_count, file, &import_index,
+                                 &import_end);
+      for (; status == ARCHBIRD_OK && import_index < import_end;
+           import_index++) {
+        const AbManifestFile *target = NULL;
+        size_t target_index;
+        status = resolve_compile_context_import(
+            state, command, file, imports[import_index].name,
+            imports[import_index].import_delimiter_mask, &target);
+        if (status != ARCHBIRD_OK || !target)
+          continue;
+        target_index = (size_t)(target - state->manifest->files);
+        if (!context[target_index]) {
+          context[target_index] = 1;
+          queue[write_index++] = target_index;
+        }
+      }
+    }
+    for (previous = command_index + 1; previous < state->compile_command_count;
+         previous++)
+      if (same_compile_roots(command, &state->compile_commands[previous]))
+        memcpy(state->compile_contexts + previous * state->manifest->file_count,
+               context, state->manifest->file_count);
+  }
+  ab_free(state->engine, queue);
+  return status;
+}
+
+static ArchbirdStatus resolve_compile_import(AbMapState *state,
+                                             const AbManifestFile *file,
+                                             const AbString *imported,
+                                             unsigned delimiter_mask,
+                                             const AbManifestFile **out,
+                                             int *out_compile_resolution) {
+  const AbManifestFile *consensus = NULL;
+  size_t index;
+  int missing = 0;
+  int inconsistent = 0;
+  int direct_commands = has_direct_compile_command(state, file);
+  *out = NULL;
+  *out_compile_resolution = C_IMPORT_COMPILE_NONE;
+  for (index = 0; index < state->compile_command_count; index++) {
+    const AbMapCompileCommand *command = &state->compile_commands[index];
+    const AbManifestFile *candidate = NULL;
+    ArchbirdStatus status;
+    if (!compile_command_applies(state, index, file, direct_commands))
+      continue;
+    if (!direct_commands && command->context_leader != index)
+      continue;
+    *out_compile_resolution = C_IMPORT_COMPILE_MISS;
+    status = resolve_compile_command_import(state, command, imported,
+                                            delimiter_mask, &candidate);
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (!candidate) {
+      missing = 1;
+    } else if (consensus && consensus != candidate) {
+      inconsistent = 1;
+    } else {
+      consensus = candidate;
+    }
+  }
+  if (*out_compile_resolution == C_IMPORT_COMPILE_NONE)
+    return ARCHBIRD_OK;
+  if (inconsistent || (consensus && missing)) {
+    *out_compile_resolution = C_IMPORT_COMPILE_INCONSISTENT;
+  } else if (consensus) {
+    *out = consensus;
+    *out_compile_resolution = C_IMPORT_COMPILE_RESOLVED;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus
+resolve_c_import(AbMapState *state, const AbManifestFile *file,
+                 const AbString *imported, unsigned delimiter_mask,
+                 const AbManifestFile **out, int *out_compile_evidence) {
+  static const char *const suffixes[] = {"", ".generic"};
+  size_t base_length = path_directory_length(&file->path);
+  const AbConfigLayer *layer;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  int compile_resolution = C_IMPORT_COMPILE_NONE;
+  *out = NULL;
+  *out_compile_evidence = C_IMPORT_COMPILE_NONE;
+  if (!imported->length || absolute_c_include(imported))
+    return ARCHBIRD_OK;
+  if (!delimiter_mask)
+    delimiter_mask = AB_MAP_IMPORT_UNKNOWN;
+  if (delimiter_mask & (AB_MAP_IMPORT_LOCAL | AB_MAP_IMPORT_UNKNOWN)) {
+    status = resolve_joined_import_with_suffixes(
+        state->engine, state->manifest, file->path.data, base_length, imported,
+        suffixes, sizeof(suffixes) / sizeof(suffixes[0]), out);
+    if (status != ARCHBIRD_OK || *out)
+      return status;
+  }
+  status = resolve_compile_import(state, file, imported, delimiter_mask, out,
+                                  &compile_resolution);
+  if (status != ARCHBIRD_OK || compile_resolution != C_IMPORT_COMPILE_NONE) {
+    *out_compile_evidence = compile_resolution;
+    return status;
+  }
+  layer = source_config_layer(state->config, file);
   if (layer && (string_literal(&layer->language, "c") ||
                 string_literal(&layer->language, "cpp"))) {
     size_t root_index;
     for (root_index = 0; root_index < layer->import_roots.count; root_index++) {
       const AbString *root = &layer->import_roots.items[root_index];
       status = resolve_joined_import_with_suffixes(
-          engine, manifest, root->data, root->length, imported, suffixes,
-          sizeof(suffixes) / sizeof(suffixes[0]), out);
+          state->engine, state->manifest, root->data, root->length, imported,
+          suffixes, sizeof(suffixes) / sizeof(suffixes[0]), out);
       if (status != ARCHBIRD_OK || *out)
         return status;
     }
@@ -922,16 +1215,17 @@ resolve_c_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
 }
 
 static ArchbirdStatus
-resolve_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
-               const AbMapConfig *config, const AbManifestFile *file,
+resolve_import(AbMapState *state, const AbManifestFile *file,
                const AbString *imported, unsigned delimiter_mask,
-               const AbManifestFile **out) {
+               const AbManifestFile **out, int *out_compile_evidence) {
   size_t family_length;
   const char *family = language_family(file, &family_length);
+  *out_compile_evidence = C_IMPORT_COMPILE_NONE;
   if (bytes_literal(family, family_length, "c"))
-    return resolve_c_import(engine, manifest, config, file, imported,
-                            delimiter_mask, out);
-  return ab_map_resolve_import(engine, manifest, config, file, imported, out);
+    return resolve_c_import(state, file, imported, delimiter_mask, out,
+                            out_compile_evidence);
+  return ab_map_resolve_import(state->engine, state->manifest, state->config,
+                               file, imported, out);
 }
 
 ArchbirdStatus
@@ -1566,6 +1860,49 @@ exact_named_call_target(const NamedReference *calls, size_t start, size_t end) {
   return target;
 }
 
+static ArchbirdStatus add_import_edge(AbMapState *state,
+                                      const NamedReference *imported,
+                                      const AbManifestFile *target,
+                                      int compile_evidence) {
+  static const AbString current = {(char *)"current", 7};
+  size_t index;
+  size_t evidence_start = state->graph.edge_count;
+  int direct_commands = has_direct_compile_command(state, imported->file);
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (compile_evidence != C_IMPORT_COMPILE_RESOLVED)
+    return ab_map_graph_add_edge_site(state->engine, &state->graph, "import",
+                                      &imported->file->path, target->path.data,
+                                      target->path.length, imported->name,
+                                      imported->fact_id, imported->line,
+                                      imported->span_start, imported->span_end);
+  for (index = 0; status == ARCHBIRD_OK && index < state->compile_command_count;
+       index++) {
+    const AbMapCompileCommand *command = &state->compile_commands[index];
+    size_t evidence_index;
+    int duplicate = 0;
+    if (!compile_command_applies(state, index, imported->file, direct_commands))
+      continue;
+    for (evidence_index = evidence_start;
+         evidence_index < state->graph.edge_count; evidence_index++) {
+      const EdgeMention *evidence = &state->graph.edges[evidence_index];
+      if (evidence->has_evidence &&
+          ab_string_equal(&evidence->evidence_provider, command->database)) {
+        duplicate = 1;
+        break;
+      }
+    }
+    if (duplicate)
+      continue;
+    status = ab_map_graph_add_edge_evidence_named_site(
+        state->engine, &state->graph, "import", &imported->file->path,
+        target->path.data, target->path.length, imported->name, imported->name,
+        imported->fact_id, imported->line, imported->span_start,
+        imported->span_end, "compile-command-search-path", command->database,
+        &current);
+  }
+  return status;
+}
+
 static ArchbirdStatus build_graph(AbMapState *state) {
   ArchbirdEngine *engine = state->engine;
   const ArchbirdProject *project = state->project;
@@ -1598,6 +1935,8 @@ static ArchbirdStatus build_graph(AbMapState *state) {
   if (status == ARCHBIRD_OK)
     status = collect_named_domain(engine, project, manifest, "imports", 0,
                                   &imports, &import_count);
+  if (status == ARCHBIRD_OK)
+    status = build_compile_contexts(state, imports, import_count);
   if (status == ARCHBIRD_OK)
     status = collect_python_imported_members(
         engine, project, manifest, &imported_members, &imported_member_count);
@@ -1705,9 +2044,10 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     const AbManifestFile *target = NULL;
     size_t namespace_resolved = 0;
     size_t namespace_unresolved = 0;
-    status = resolve_import(engine, manifest, config, imports[index].file,
-                            imports[index].name,
-                            imports[index].import_delimiter_mask, &target);
+    int compile_evidence = 0;
+    status = resolve_import(state, imports[index].file, imports[index].name,
+                            imports[index].import_delimiter_mask, &target,
+                            &compile_evidence);
     if (status != ARCHBIRD_OK)
       break;
     if (python_package_file(target)) {
@@ -1718,17 +2058,16 @@ static ArchbirdStatus build_graph(AbMapState *state) {
         break;
     }
     if (target && target != imports[index].file) {
-      status = ab_map_graph_add_edge_site(
-          engine, graph, "import", &imports[index].file->path,
-          target->path.data, target->path.length, imports[index].name,
-          imports[index].fact_id, imports[index].line,
-          imports[index].span_start, imports[index].span_end);
+      status =
+          add_import_edge(state, &imports[index], target, compile_evidence);
     } else if (!target) {
       char *external_target = NULL;
       size_t external_length = 0;
       ImportTargetClass target_class = IMPORT_TARGET_UNKNOWN;
       if (imports[index].builtin) {
         target_class = IMPORT_TARGET_BUILTIN;
+      } else if (compile_evidence == C_IMPORT_COMPILE_INCONSISTENT) {
+        target_class = IMPORT_TARGET_UNKNOWN;
       } else if (imports[index].import_delimiter_mask == AB_MAP_IMPORT_SYSTEM) {
         target_class = IMPORT_TARGET_EXTERNAL;
         status = package_target(engine, imports[index].name, &external_target,
@@ -2552,10 +2891,10 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
   memcpy(input_digest, archbird_project_map_input_sha256(project), 65);
   ab_buffer_init(&buffer, engine);
   MAP_TRY(ab_map_analyze_packages(&state));
+  MAP_TRY(ab_map_analyze_builds(&state));
   MAP_TRY(build_graph(&state));
   MAP_TRY(ab_map_add_reference_edges(&state));
   MAP_TRY(ab_map_analyze_indexes(&state));
-  MAP_TRY(ab_map_analyze_builds(&state));
   MAP_TRY(ab_map_analyze_artifacts(&state));
   MAP_TRY(ab_map_analyze_bridges(&state));
   MAP_TRY(ab_map_analyze_tests(&state));

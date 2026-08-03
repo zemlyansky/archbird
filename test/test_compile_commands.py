@@ -27,13 +27,14 @@ def canonical(value: object) -> bytes:
 def build_map(extension, sources: dict[str, bytes], config: dict) -> dict:
     files = []
     for path, data in sorted(sources.items()):
+        is_c_source = path.endswith((".c", ".h"))
         row = {
             "bytes": len(data),
             "path": path,
-            "roles": ["source"] if path.endswith(".c") else ["build", "index"],
+            "roles": ["source"] if is_c_source else ["build", "index"],
             "sha256": hashlib.sha256(data).hexdigest(),
         }
-        if path.endswith(".c"):
+        if is_c_source:
             row["language"] = "c"
             row["layer"] = "core"
         files.append(row)
@@ -53,7 +54,9 @@ def build_map(extension, sources: dict[str, bytes], config: dict) -> dict:
         extension.project_add_source(project, path, data)
     extension.project_finalize_sources(project)
     extension.project_set_config(project, canonical(config))
-    extension.project_scan_builtin_provider(project, "lexical:c", "primary")
+    extension.project_scan_builtin_provider(
+        project, "syntax:tree-sitter:c", "primary"
+    )
     extension.project_finalize_providers(project)
     return json.loads(extension.project_map(project))
 
@@ -64,38 +67,96 @@ def main() -> int:
     extension = load_extension(Path(sys.argv[1]).resolve())
     debug = [
         {
-            "arguments": ["/usr/bin/cc", "-g", "-c", "/checkout/src/a.c"],
-            "directory": "/checkout",
+            "arguments": [
+                "/usr/bin/cc",
+                "-g",
+                "-iquote../../quotes",
+                "-I",
+                "../../include",
+                "-I../../variants/debug",
+                "-isystem",
+                "../../system",
+                "-I/usr/include",
+                "-c",
+                "/checkout/src/a.c",
+            ],
+            "directory": "/checkout/build/debug",
             "file": "/checkout/src/a.c",
         },
         {
-            "command": "'/opt/toolchains/clang' -g -c src/b.c",
+            "command": (
+                "'/opt/toolchains/clang' -g -iquote \"quote headers\" "
+                "-Iinclude -isystem system -c src/b.c"
+            ),
             "directory": "/checkout",
             "file": "src/b.c",
+        },
+        {
+            "command": "cc -c src/c.c",
+            "directory": "/checkout",
+            "file": "src/c.c",
         },
         {
             "command": "cc -c generated.c",
             "directory": "/checkout",
             "file": "generated.c",
         },
-    ]
-    release = [
         {
-            "command": "/usr/local/bin/cc -O3 -c src/a.c",
+            "command": "'cc -Iinclude -c src/a.c",
             "directory": "/checkout",
             "file": "src/a.c",
         },
+    ]
+    release = [
         {
-            "arguments": ["clang", "-O3", "-c", "src/b.c"],
-            "directory": "/checkout",
+            "command": (
+                "/usr/local/bin/cc -O3 -iquote ../../quotes "
+                "-I../../include -I../../variants/release "
+                "-isystem../../system -c /checkout/src/a.c"
+            ),
+            "directory": "/checkout/build/release",
+            "file": "/checkout/src/a.c",
+        },
+        {
+            "arguments": [
+                "clang-cl",
+                "/O2",
+                "-iquotequote headers",
+                "/Iinclude",
+                "/external:Isystem",
+                "/c",
+                "src/b.c",
+            ],
+            "directory": "C:\\checkout",
             "file": "src/b.c",
         },
     ]
     sources = {
         "build/debug/compile_commands.json": canonical(debug),
         "build/release/compile_commands.json": canonical(release),
-        "src/a.c": b"int a(void) { return 1; }\n",
-        "src/b.c": b"int b(void) { return 2; }\n",
+        "include/shared.h": b"#define SHARED 1\n",
+        "include/orphan.h": b"#include <shared.h>\n",
+        "include/wrapper.h": b"#include <system.h>\n",
+        "quote headers/quoted path.h": b"#define QUOTED 1\n",
+        "quotes/quote_a.h": b"#define QUOTE_A 1\n",
+        "src/a.c": (
+            b'#include "quote_a.h"\n'
+            b"#include <shared.h>\n"
+            b"#include <wrapper.h>\n"
+            b"#include <system.h>\n"
+            b"#include <variant.h>\n"
+            b"int a(void) { return SHARED + QUOTE_A + SYSTEM; }\n"
+        ),
+        "src/b.c": (
+            b'#include "quoted path.h"\n'
+            b"#include <shared.h>\n"
+            b"#include <wrapper.h>\n"
+            b"int b(void) { return SHARED + QUOTED; }\n"
+        ),
+        "src/c.c": b"int c(void) { return 0; }\n",
+        "system/system.h": b"#define SYSTEM 1\n",
+        "variants/debug/variant.h": b"#define VARIANT 1\n",
+        "variants/release/variant.h": b"#define VARIANT 2\n",
     }
     config = {
         "project": "compile-commands",
@@ -104,7 +165,15 @@ def main() -> int:
                 "name": "core",
                 "role": "core",
                 "language": "c",
-                "globs": ["src/**/*.c"],
+                "globs": [
+                    "include/**/*.h",
+                    "quote headers/**/*.h",
+                    "quotes/**/*.h",
+                    "src/**/*.c",
+                    "system/**/*.h",
+                    "variants/**/*.h",
+                ],
+                "import_roots": ["include"],
             }
         ],
         "builds": [
@@ -124,21 +193,29 @@ def main() -> int:
     }
     mapped = build_map(extension, sources, config)
     routes = mapped["builds"]
-    assert len(routes) == 4, routes
+    assert len(routes) == 5, routes
     assert [(row["variant"], row["name"]) for row in routes] == [
         ("debug", "src/a.c"),
         ("debug", "src/b.c"),
+        ("debug", "src/c.c"),
         ("release", "src/a.c"),
         ("release", "src/b.c"),
     ]
-    assert [row["command"] for row in routes] == ["cc", "clang", "cc", "clang"]
+    assert [row["command"] for row in routes] == [
+        "cc",
+        "clang",
+        "cc",
+        "cc",
+        "clang-cl",
+    ]
     assert all(row["paths"] == [row["name"]] for row in routes)
     assert [row["conditions"][0] for row in routes] == [
         "compile-source:suffix",
         "compile-source:exact",
         "compile-source:exact",
+        "compile-source:suffix",
         "compile-source:exact",
-    ]
+    ], routes
     assert all(
         len(row["conditions"]) == 2
         and row["conditions"][1].startswith("command-sha256:")
@@ -146,11 +223,73 @@ def main() -> int:
         for row in routes
     )
     encoded_routes = canonical(routes)
+    encoded_map = canonical(mapped)
     assert b"/checkout" not in encoded_routes
     assert b"/usr/" not in encoded_routes
+    assert b"/checkout" not in encoded_map
+    assert b"C:\\\\checkout" not in encoded_map
     assert [row["code"] for row in mapped["diagnostics"]] == [
-        "compile-command-unmapped"
+        "compile-command-invalid",
+        "compile-command-unmapped",
+        "unresolved-import",
+    ], mapped["diagnostics"]
+    local_imports = {
+        (row["source"], row["target"])
+        for row in mapped["edges"]
+        if row["kind"] == "import" and row["target"] != "unresolved-import"
+    }
+    assert local_imports == {
+        ("src/a.c", "include/shared.h"),
+        ("src/a.c", "include/wrapper.h"),
+        ("src/a.c", "quotes/quote_a.h"),
+        ("src/a.c", "system/system.h"),
+        ("src/b.c", "include/shared.h"),
+        ("src/b.c", "include/wrapper.h"),
+        ("src/b.c", "quote headers/quoted path.h"),
+        ("include/orphan.h", "include/shared.h"),
+        ("include/wrapper.h", "system/system.h"),
+    }, mapped["edges"]
+    assert not any(
+        row["target"].endswith("/variant.h")
+        for row in mapped["edges"]
+        if row["kind"] == "import"
+    )
+    assert any(
+        row["source"] == "src/a.c"
+        and row["target"] == "unresolved-import"
+        and row["names"] == ["variant.h"]
+        for row in mapped["edges"]
+    )
+    compile_edges = [
+        row
+        for row in mapped["edges"]
+        if row["kind"] == "import"
+        and row["source"] in {"include/wrapper.h", "src/a.c", "src/b.c"}
+        and row["target"] != "unresolved-import"
     ]
+    assert all(
+        row["evidence"]
+        == [
+            {
+                "basis": "compile-command-search-path",
+                "provider": "build/debug/compile_commands.json",
+                "state": "current",
+            },
+            {
+                "basis": "compile-command-search-path",
+                "provider": "build/release/compile_commands.json",
+                "state": "current",
+            },
+        ]
+        for row in compile_edges
+    ), compile_edges
+    orphan_edge = next(
+        row
+        for row in mapped["edges"]
+        if row["source"] == "include/orphan.h"
+        and row["target"] == "include/shared.h"
+    )
+    assert "evidence" not in orphan_edge, orphan_edge
 
     changed = json.loads(json.dumps(mapped))
     changed["builds"][0]["variant"] = "asan"

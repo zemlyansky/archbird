@@ -1657,7 +1657,10 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 positions.imported,
                 f"{len(prefix.encode('utf-8'))}:{prefix}{alias.name}",
                 alias.name,
-                {"module": prefix},
+                {
+                    "line": _line_for_span(self.starts, positions.imported),
+                    "module": prefix,
+                },
             )
             if node.module is None:
                 local = alias.asname or alias.name

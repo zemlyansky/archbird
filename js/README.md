@@ -295,6 +295,12 @@ Build routes expose repository source paths, compiler basenames, and command
 digests without leaking absolute build-machine paths. SCIP facts retain their
 variant, producer, source anchoring, coverage, and freshness.
 
+Map uses repository-local C/C++ include search paths from compilation
+databases in compiler order. Each translation unit's context follows its
+literal includes through reached headers, and variants must agree on one
+selected target. Resolved edges cite only the repository-relative database
+path; external roots and absolute machine paths remain private.
+
 The embedded config is mirrored by `examples/minimal.archbird.json`; the
 complete multi-language form is `examples/quickstart.archbird.json` in the
 source distribution.

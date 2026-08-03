@@ -536,6 +536,13 @@ Compilation routes retain repository source paths, the compiler basename, and
 a command digest without publishing absolute build-machine paths. SCIP facts
 retain their variant, producer, source anchoring, coverage, and freshness.
 
+Map also uses repository-local C/C++ include search paths from compilation
+databases. It follows compiler search order for each translation unit and
+propagates that context through the headers reached by its literal includes.
+Variants must resolve an include to the same selected file; disagreement stays
+unresolved. Resolved edges cite the repository-relative compilation-database
+path, while external roots and absolute machine paths remain private.
+
 The block above is mirrored by
 [`examples/minimal.archbird.json`](examples/minimal.archbird.json). A complete
 native/Python/TypeScript/package/build/test example is
