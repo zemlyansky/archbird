@@ -318,6 +318,64 @@ def _assert_import_resolution_soundness() -> None:
         for row in namespace_map["diagnostics"]
     )
 
+    relative_package = root / "relative-package"
+    (relative_package / "pkg").mkdir(parents=True)
+    (relative_package / "pkg/__init__.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    (relative_package / "pkg/helper.py").write_text(
+        "def run():\n    return 1\n", encoding="utf-8"
+    )
+    relative_source = "from . import helper, VALUE\n\nhelper.run()\n"
+    (relative_package / "pkg/consumer.py").write_text(
+        relative_source, encoding="utf-8"
+    )
+    relative_config = {
+        "project": "relative-package",
+        "layers": [
+            {
+                "globs": ["**/*.py"],
+                "import_roots": ["."],
+                "language": "python",
+                "name": "python",
+            }
+        ],
+    }
+    relative_map = json.loads(
+        Project.from_repository(
+            relative_package,
+            config=json.dumps(relative_config, separators=(",", ":")).encode(),
+            jobs=1,
+        ).map_json()
+    )
+    assert any(
+        row["kind"] == "import"
+        and row["source"] == "pkg/consumer.py"
+        and row["target"] == "pkg/__init__.py"
+        for row in relative_map["edges"]
+    )
+    helper_edge = next(
+        row
+        for row in relative_map["edges"]
+        if row["kind"] == "import"
+        and row["source"] == "pkg/consumer.py"
+        and row["target"] == "pkg/helper.py"
+    )
+    assert helper_edge["names"] == [".helper"]
+    helper_start = relative_source.index("helper")
+    assert any(
+        site["name"] == "helper"
+        and site["span"] == {
+            "start": helper_start,
+            "end": helper_start + len("helper"),
+        }
+        for site in helper_edge["sites"]
+    )
+    assert not any(
+        row["code"] == "unresolved-import"
+        for row in relative_map["diagnostics"]
+    )
+
     c_system = root / "c-system"
     (c_system / "src").mkdir(parents=True)
     (c_system / "src/main.c").write_text(
@@ -394,6 +452,49 @@ def _assert_import_resolution_soundness() -> None:
     assert not any(
         row["code"] == "unresolved-import"
         for row in c_template_map["diagnostics"]
+    )
+
+    zero_cpp = root / "zero-cpp"
+    (zero_cpp / "include/Acme").mkdir(parents=True)
+    (zero_cpp / "src").mkdir()
+    (zero_cpp / "include/Acme/detail.hpp").write_text(
+        "#pragma once\ninline int detail() { return 1; }\n",
+        encoding="utf-8",
+    )
+    (zero_cpp / "include/Acme/detail.h").write_text(
+        "#pragma once\n#define ACME_DETAIL 1\n",
+        encoding="utf-8",
+    )
+    (zero_cpp / "src/main.cpp").write_text(
+        "#include <Acme/detail.hpp>\nint main() { return detail(); }\n",
+        encoding="utf-8",
+    )
+    (zero_cpp / "src/main.c").write_text(
+        "#include <Acme/detail.h>\nint main(void) { return ACME_DETAIL; }\n",
+        encoding="utf-8",
+    )
+    zero_cpp_map = json.loads(
+        Project.from_repository(zero_cpp, jobs=1, map_cache=False).map_json()
+    )
+    assert any(
+        row["kind"] == "import"
+        and row["source"] == "src/main.cpp"
+        and row["target"] == "include/Acme/detail.hpp"
+        and row["names"] == ["Acme/detail.hpp"]
+        for row in zero_cpp_map["edges"]
+    )
+    assert any(
+        row["kind"] == "import"
+        and row["source"] == "src/main.c"
+        and row["target"] == "include/Acme/detail.h"
+        and row["names"] == ["Acme/detail.h"]
+        for row in zero_cpp_map["edges"]
+    )
+    assert not any(
+        row["source"] in {"src/main.c", "src/main.cpp"}
+        and row["target"]
+        in {"package:Acme/detail.h", "package:Acme/detail.hpp"}
+        for row in zero_cpp_map["edges"]
     )
 
 

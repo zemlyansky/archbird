@@ -1442,10 +1442,12 @@ static ArchbirdStatus resolve_python_namespace_members(
         ab_map_resolve_import(state->engine, state->manifest, state->config,
                               imported->file, &qualified, &target);
     if (status == ARCHBIRD_OK && target) {
-      status = ab_map_graph_add_edge_site(
+      uint64_t line = 0;
+      (void)ab_map_fact_u64_attribute(fact, "line", &line);
+      status = ab_map_graph_add_edge_evidence_named_site(
           state->engine, &state->graph, "import", &imported->file->path,
-          target->path.data, target->path.length, &qualified, imported->fact_id,
-          imported->line, imported->span_start, imported->span_end);
+          target->path.data, target->path.length, &qualified, &fact->name,
+          &fact->id, line, fact->span_start, fact->span_end, NULL, NULL, NULL);
       if (status == ARCHBIRD_OK)
         (*out_resolved)++;
     } else if (status == ARCHBIRD_OK) {
@@ -1454,6 +1456,15 @@ static ArchbirdStatus resolve_python_namespace_members(
     ab_string_free(state->engine, &qualified);
   }
   return status;
+}
+
+static int python_package_file(const AbManifestFile *file) {
+  static const char suffix[] = "/__init__.py";
+  return file &&
+         (string_literal(&file->path, "__init__.py") ||
+          (file->path.length >= sizeof(suffix) - 1 &&
+           memcmp(file->path.data + file->path.length - (sizeof(suffix) - 1),
+                  suffix, sizeof(suffix) - 1) == 0));
 }
 
 static ArchbirdStatus definition_candidates(
@@ -1692,11 +1703,20 @@ static ArchbirdStatus build_graph(AbMapState *state) {
                             NULL, 0, NULL, 0);
   for (index = 0; status == ARCHBIRD_OK && index < import_count; index++) {
     const AbManifestFile *target = NULL;
+    size_t namespace_resolved = 0;
+    size_t namespace_unresolved = 0;
     status = resolve_import(engine, manifest, config, imports[index].file,
                             imports[index].name,
                             imports[index].import_delimiter_mask, &target);
     if (status != ARCHBIRD_OK)
       break;
+    if (python_package_file(target)) {
+      status = resolve_python_namespace_members(
+          state, &imports[index], imported_members, imported_member_count,
+          &namespace_resolved, &namespace_unresolved);
+      if (status != ARCHBIRD_OK)
+        break;
+    }
     if (target && target != imports[index].file) {
       status = ab_map_graph_add_edge_site(
           engine, graph, "import", &imports[index].file->path,
@@ -1707,8 +1727,6 @@ static ArchbirdStatus build_graph(AbMapState *state) {
       char *external_target = NULL;
       size_t external_length = 0;
       ImportTargetClass target_class = IMPORT_TARGET_UNKNOWN;
-      size_t namespace_resolved = 0;
-      size_t namespace_unresolved = 0;
       if (imports[index].builtin) {
         target_class = IMPORT_TARGET_BUILTIN;
       } else if (imports[index].import_delimiter_mask == AB_MAP_IMPORT_SYSTEM) {
