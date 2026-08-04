@@ -322,7 +322,7 @@ ArchbirdStatus ab_act_c_napi_export_provider_capability(
     AbActContext *context, const AbActCProviderCapability *provider,
     const AbValue *operation, const AbString *item_id) {
   ArchbirdEngine *engine = ab_act_executor_engine(context);
-  ArchbirdSourceView source;
+  ArchbirdSourceView source = {0};
   AbActCNapiEntry *entries = NULL;
   AbActCNapiScan scan;
   AbBuffer wrapper;

@@ -440,8 +440,8 @@ ground_declaration(AbActContext *context, const AbString *path,
   ArchbirdEngine *engine = ab_act_executor_engine(context);
   const AbValue *implementation_path;
   AbActCDeclarationProof proof;
-  AbActCDeclarationPlacement placement;
-  ArchbirdSourceView source;
+  AbActCDeclarationPlacement placement = {0};
+  ArchbirdSourceView source = {0};
   const char *reason = NULL;
   AbBuffer signature;
   AbBuffer replacement;

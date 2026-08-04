@@ -1,7 +1,7 @@
 {
   "name": "archbird",
   "version": "0.0.2",
-  "description": "Map codebase architecture, check its rules, and verify coordinated changes",
+  "description": "Map codebases, verify architecture, and safely plan structural changes",
   "author": "Anton Zemlyansky",
   "license": "Apache-2.0",
   "type": "commonjs",
@@ -58,5 +58,5 @@
   "bugs": {
     "url": "https://github.com/zemlyansky/archbird/issues"
   },
-  "homepage": "https://github.com/zemlyansky/archbird#readme"
+  "homepage": "https://archbird.org/js/"
 }

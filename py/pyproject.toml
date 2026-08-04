@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "archbird"
 version = "0.0.2"
-description = "Map codebase architecture, check its rules, and verify coordinated changes"
+description = "Map codebases, verify architecture, and safely plan structural changes"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
@@ -31,7 +31,8 @@ scip = ["protobuf>=5.27,<7"]
 okf = ["PyYAML>=6.0", "markdown-it-py>=3,<5"]
 
 [project.urls]
-Homepage = "https://github.com/zemlyansky/archbird"
+Homepage = "https://archbird.org/py/"
+Documentation = "https://archbird.org/py/"
 Repository = "https://github.com/zemlyansky/archbird"
 Issues = "https://github.com/zemlyansky/archbird/issues"
 

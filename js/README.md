@@ -26,6 +26,7 @@ npx archbird serve      # explore it in the local web application
 | --- | --- | --- |
 | **Map** | What exists, and how is it connected? | Searchable files, symbols, dependencies, tests, and build routes |
 | **Query** | Which exact evidence matters for this task? | Focused, ranked context with source witnesses |
+| **Path** | How are two explicit architecture entities connected? | Bounded shortest witnesses with typed relations, evidence, and completeness |
 | **Verify** | Does the code follow the architecture constraints? | Constraint status, violations, code locations, and unknowns |
 | **Plan** | What structural change follows from current evidence, and what remains unknown? | An editable language-neutral Plan with objectives, operators, applicability, and acceptance constraints |
 | **Act** | How does that Plan ground into exact repository changes, and does its after-state pass? | An accepted, sealed Act bound to exact transitions plus fresh Map and Verification evidence |
@@ -76,6 +77,9 @@ npx archbird query --map .archbird/map.json \
 npx archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
 
+npx archbird path 'src/cli.c' 'src/runtime.c' \
+  --map .archbird/map.json --relation calls --direction downstream --check
+
 npx archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' \
   --view changes --detail compact --check
@@ -96,6 +100,12 @@ of the analyzed scope.
 or semantic search. Use concise repository vocabulary such as
 `provider registry`; every candidate records the matched field and match type.
 Prefer a typed selector such as `--symbol` or `--path` once the target is known.
+
+`path SOURCE TARGET` searches the Map's exhaustive typed graph for bounded
+shortest witnesses. It preserves relation kind, direction, evidence state,
+semantic resolution, provenance, and completeness. `found` requires a current,
+source-evidenced route; candidate-only connectivity remains `unknown` and
+fails `--check`.
 
 `query --view changes` presents the same complete Query artifact as a coding
 packet. It groups change seeds, affected code, strongest routes, ranked tests,
@@ -177,6 +187,38 @@ valid generations, and retains the last good Map when a later candidate fails.
 Live Map, projection, Query, Verify, and source work runs in the native Node
 host; the page receives typed ProjectionResults and does not load browser Wasm.
 Normal exploration does not download the canonical Map; saving it is explicit.
+
+## Agent workflow
+
+Copy this compact policy into a project's `AGENTS.md`, `CLAUDE.md`, or
+equivalent agent instructions:
+
+```text
+Use Archbird before broad source exploration.
+
+- Start with `npx archbird map . --view overview --detail standard --max-chars
+  12000 --check`.
+- When an exact identity is known, use `npx archbird query . --symbol
+  'PATH:SYMBOL' --depth 1 --test-depth 1 --max-chars 12000 --check`.
+- When the identity is unknown, use `npx archbird query . --search 'CONCISE
+  REPOSITORY TERMS' --max-chars 12000 --check`. Search is lexical and advisory.
+- Read an exact declaration with `npx archbird query . --symbol 'PATH:SYMBOL'
+  --view source --detail standard --max-chars 12000 --check`. Read one complete
+  file with `npx archbird query . --path PATH --dump --check`; do not combine
+  `--dump` with `--max-chars`.
+- Use `npx archbird path SOURCE TARGET --check` for explicit connection
+  questions. Candidate-only or incomplete connectivity remains `unknown`.
+- Run `npx archbird verify --root . --check` before and after
+  architecture-sensitive work. Treat static test routes as navigation, not
+  proof of execution.
+- Check `npx archbird freshness --root . --snapshot .archbird/map.json
+  --check` before reusing a saved Map.
+- Review generated Plans and accepted Acts. Never run `npx archbird apply`
+  unless repository mutation is explicitly authorized and the exact Act was
+  reviewed.
+- If Archbird disagrees with source, inspect source directly and report a
+  general reproducer; never hide uncertainty or manufacture observed evidence.
+```
 
 ## Configuration
 

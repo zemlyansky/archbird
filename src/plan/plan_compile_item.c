@@ -9,6 +9,8 @@ typedef struct AbRenderedValue {
   AbBuffer bytes;
 } AbRenderedValue;
 
+typedef char AbPlanUnknownId[29];
+
 static const AbValue *field(const AbValue *object, const char *name) {
   return object && object->kind == AB_VALUE_OBJECT
              ? ab_value_member(object, name)
@@ -487,7 +489,7 @@ ArchbirdStatus ab_plan_item_builder_append(AbPlanItemBuilder *builder,
   const AbValue *result_sha;
   AbRenderedValue *origins = NULL;
   AbRenderedValue *evidence = NULL;
-  char (*unknown_ids)[29] = NULL;
+  AbPlanUnknownId *unknown_ids = NULL;
   char operation_sha[65];
   char item_id[26];
   size_t origin_count = 0;
@@ -530,8 +532,8 @@ ArchbirdStatus ab_plan_item_builder_append(AbPlanItemBuilder *builder,
   memcpy(item_id + 5, operation_sha, 20);
   item_id[25] = '\0';
   if (reason_count) {
-    unknown_ids = (char (*)[29])ab_calloc(builder->engine, reason_count,
-                                          sizeof(*unknown_ids));
+    unknown_ids = (AbPlanUnknownId *)ab_calloc(builder->engine, reason_count,
+                                               sizeof(*unknown_ids));
     if (!unknown_ids) {
       status = invalid(builder, ARCHBIRD_OUT_OF_MEMORY,
                        "out of memory collecting Plan unknowns");
