@@ -26,18 +26,61 @@ archbird serve  # explore it in the local web application
 | **Plan** | What structural change follows from current evidence, and what remains unknown? | An editable language-neutral Plan with objectives, operators, applicability, and acceptance constraints |
 | **Act** | How does that Plan ground into exact repository changes, and does its after-state pass? | An accepted, sealed Act bound to exact transitions plus fresh Map and Verification evidence |
 
-Every result links back to the source, configuration, or test data used to
-produce it. Missing or uncertain information is shown instead of guessed.
+**Map builds the canonical repository IR.** Architecture is normally scattered
+across source languages, packages, public interfaces, native/frontend bridges,
+tests, build systems, and generated artifacts. Map joins those facts once so
+every later stage works from the same files, symbols, relationships, and source
+locations. Provider-specific lexical, syntax, host-AST, and SCIP facts are
+normalized into this language-neutral intermediate representation without
+discarding their provenance or uncertainty.
 
-Map works without configuration. Add Verify when you want automated
-architecture constraints. Plan derives only edits established by current
-evidence and exposes underdetermined work as manual items. Act materializes and
-checks exact edits against an isolated after-state without writing. Apply
-revalidates source locks and replays only an accepted Act.
+**Query and Path evaluate projections over the Map IR.** Query selects,
+traverses, and ranks the small neighborhood relevant to one task. Path answers
+a narrower question: whether two explicit entities are connected and which
+relationships form the connection. They share typed projection and graph
+indexes, but neither operation rewrites the Map or promotes an uncertain
+relationship into a confirmed one.
 
-`archbird` and `archbird .` remain supported shortcuts for mapping the current
-repository. The explicit `archbird map` form is useful in scripts and alongside
-the other stage commands.
+**Verify checks architectural intent against the complete relevant model.**
+Each constraint compiles into exhaustive projections over the Map IR plus a
+predicate such as required symbols, allowed dependencies, acyclicity, parity,
+or a numeric bound. Verify never uses a ranked or truncated Query result. Its
+Verification artifact records pass, failure, or unknown together with the exact
+operands and source locations responsible.
+
+**Plan describes a structural transition.** Archbird can derive a Plan from the
+Map IR, current Verification findings, and a requested goal, but a developer or
+agent may also author or edit one directly. The language-neutral Plan records
+ordered objectives, applicable transformation operators, acceptance
+constraints, source identities, and explicitly manual work; it does not contain
+unreviewed guessed code.
+
+**Act grounds and checks the Plan.** Act combines the reviewed Plan with exact
+source bytes and executor input, produces candidate file transitions, and
+evaluates their isolated after-state through a fresh Map and Verify run. A
+passing result can be sealed as an accepted Act without touching the worktree.
+Apply is the only mutating operation: it revalidates every source lock and
+replays that accepted Act.
+
+The stages therefore form one traceable pipeline:
+
+```text
+providers ───────────────→ Map IR ──→ projections ──→ Query / Path
+                              │
+                              └─────→ constraints ──→ Verification
+                                         │
+Map IR + Verification + intent ──────────┴──→ Plan (derived or authored)
+                                                   │
+source + executor input ───────────────────────────┴──→ Act candidate
+                                                            │
+                                                fresh Map + Verify
+                                                            │
+                                                    accepted Act → Apply
+```
+
+Every output retains its source and configuration links. Missing, conflicting,
+incomplete, and stale information remains visible instead of being guessed
+away.
 
 ## Command-line workflow
 

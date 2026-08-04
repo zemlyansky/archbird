@@ -23,14 +23,8 @@ python -m pip install archbird
 # Or Node 18+
 npm install --save-dev archbird
 
-archbird                 # shorthand for: archbird map
-archbird .               # shorthand for: archbird map .
-archbird map             # explicit form; npm: npx archbird map
-archbird plan            # derive a Plan from current constraint issues
-archbird act PLAN.json   # ground and verify an Act; writes nothing
-archbird apply ACT.json  # replay the accepted Act
-archbird serve           # npm: npx archbird serve
-archbird mcp             # Python/root launcher: local agent protocol
+archbird map .  # map the current repository; npm: npx archbird map .
+archbird serve  # explore it locally; npm: npx archbird serve
 ```
 
 ## Language support
@@ -63,47 +57,75 @@ Archbird reads a supplied index but does not invoke an indexer.
 | **Plan** | What structural change follows from current evidence, and what remains unknown? | An editable language-neutral Plan with objectives, operators, applicability, and acceptance constraints |
 | **Act** | How does that Plan ground into exact repository changes, and does its after-state pass? | An accepted, sealed Act bound to exact transitions plus fresh Map and Verification evidence |
 
-**Map handles fragmentation.** In a complex repository, architecture is spread
-across source languages, package manifests, public interfaces, native/frontend
-bridges, tests, build systems, and generated artifacts. Map joins those parts
-into one navigable model, so a developer or coding agent can locate a symbol,
-follow its dependencies and consumers, and see which tests and delivery
-surfaces are connected to it.
+**Map builds the canonical repository IR.** Architecture is normally scattered
+across source languages, packages, public interfaces, native/frontend bridges,
+tests, build systems, and generated artifacts. Map joins those facts once so
+every later stage works from the same files, symbols, relationships, and source
+locations. Provider-specific lexical, syntax, host-AST, and SCIP facts are
+normalized into this language-neutral intermediate representation without
+discarding their provenance or uncertainty.
 
-**Verify handles architectural drift.** Map describes what the repository
-currently contains; constraints describe what must remain true. Verify checks
-the complete relevant Map rather than a shortened query view and reports which
-constraints pass, which fail, where the violation occurs, and where incomplete
-or stale information prevents a reliable answer.
+**Query and Path evaluate projections over the Map IR.** Query selects,
+traverses, and ranks the small neighborhood relevant to one task. Path answers
+a narrower question: whether two explicit entities are connected and which
+relationships form the connection. They share typed projection and graph
+indexes, but neither operation rewrites the Map or promotes an uncertain
+relationship into a confirmed one.
 
-**Plan and Act handle coordinated change.** A structural fix may need
-synchronized updates to an implementation, public interface, language binding,
-package entrypoint, tests, and build artifacts. Plan derives evidence-bound
-operators only where current Map and Verify evidence establish sufficient
-applicability. Underdetermined work remains a visible manual item rather than
-guessed code. A developer or agent may edit the Plan. Act selects the
-language-specific executor, grounds the operator into exact transitions,
-evaluates those bytes through an isolated source overlay and fresh
-Map/Verification, and writes no repository files. Apply revalidates source
-locks and replays only the already accepted Act; it never reevaluates the Plan
-or reruns an executor. `archbird act --format patch` renders the same Act as a
-unified patch for review; patch is not a separate artifact.
+**Verify checks architectural intent against the complete relevant model.**
+Each constraint compiles into exhaustive projections over the Map IR plus a
+predicate such as required symbols, allowed dependencies, acyclicity, parity,
+or a numeric bound. Verify never uses a ranked or truncated Query result. Its
+Verification artifact records pass, failure, or unknown together with the exact
+operands and source locations responsible.
 
-Across all stages, results retain links to the source, configuration, or
-test data that produced them. Archbird keeps ambiguous, incomplete, and stale
-information visible instead of guessing. Repository mutation occurs only
-through `archbird apply ACT.json`.
+**Plan describes a structural transition.** Archbird can derive a Plan from the
+Map IR, current Verification findings, and a requested goal, but a developer or
+agent may also author or edit one directly. The language-neutral Plan records
+ordered objectives, applicable transformation operators, acceptance
+constraints, source identities, and explicitly manual work; it does not contain
+unreviewed guessed code.
 
-## Map
+**Act grounds and checks the Plan.** Act combines the reviewed Plan with exact
+source bytes and executor input, produces candidate file transitions, and
+evaluates their isolated after-state through a fresh Map and Verify run. A
+passing result can be sealed as an accepted Act without touching the worktree.
+Apply is the only mutating operation: it revalidates every source lock and
+replays that accepted Act.
 
-Start in any repository:
+The stages therefore form one traceable pipeline:
+
+```text
+providers ───────────────→ Map IR ──→ projections ──→ Query / Path
+                              │
+                              └─────→ constraints ──→ Verification
+                                         │
+Map IR + Verification + intent ──────────┴──→ Plan (derived or authored)
+                                                   │
+source + executor input ───────────────────────────┴──→ Act candidate
+                                                            │
+                                                fresh Map + Verify
+                                                            │
+                                                    accepted Act → Apply
+```
+
+Every output retains its source and configuration links. Missing, conflicting,
+incomplete, and stale information remains visible instead of being guessed
+away.
+
+## Command-line workflow
+
+The CLI follows the product stages directly. Run it from the repository root;
+`archbird.json` is discovered automatically when present.
+
+### Map a repository
 
 ```bash
-cd project
 archbird map .
-archbird query . --symbol runtime_start
-archbird query . --search 'provider registry'
-archbird serve --root .
+archbird map . --view architecture \
+  --group-by component --level file --relations imports,calls
+archbird map . --view tests --group-by directory
+archbird map . --view evidence --detail full
 ```
 
 `map` scans the configured/discovered scope and builds Archbird's canonical
@@ -112,6 +134,16 @@ tests, build routes, artifacts, and components. Unsupported inputs, unresolved
 relationships, provider recovery, and other unknown frontiers remain explicit.
 The default Markdown output is a readable architecture overview; use JSON when
 you want to save the canonical Map for later commands.
+
+### Query focused context
+
+```bash
+archbird query . --symbol 'src/runtime.c:runtime_start' \
+  --depth 1 --test-depth 1 --max-chars 12000 --check
+archbird query . --search 'provider registry' \
+  --search-limit 8 --max-chars 12000 --check
+archbird impact . --path src/runtime.c --depth 2 --check
+```
 
 `query` loads or builds that Map, selects a starting point, follows its recorded
 relationships, and returns a focused neighborhood. Use typed selectors such as
@@ -130,72 +162,6 @@ signatures, descriptions, and package metadata, then runs the same focused
 Query from those candidates. It tolerates prefixes, substrings, and small
 typos, but it does not interpret a natural-language question or turn a text
 match into a proven code relationship.
-
-`path SOURCE TARGET` resolves exact or glob-shaped endpoint sets and finds
-globally shortest witnesses over the Map's exhaustive typed graph projection.
-It preserves parallel relation kinds, traversal direction, evidence state,
-semantic resolution, and provenance. `found` requires an all-current,
-source-evidenced route and prefers it even when a shorter candidate shortcut
-exists. When only candidate/unknown relations connect the endpoints, Path
-renders those witnesses as `unknown` with reason `candidate-witnesses`, and
-`--check` fails. A missing route is reported as `absent` only when the selected
-graph and bounded search are complete; unresolved endpoints, unsupported
-evidence, or a depth frontier remain `unknown`.
-
-Rendering a saved Path validates its exact artifact shape, content digest, and
-cross-field proof invariants before producing Markdown. A `current` witness
-requires current endpoints and relations, nonempty relation evidence, and
-`unique`, `builtin`, or not-applicable resolution; the renderer never trusts an
-`outcome` label by itself.
-
-`serve` starts a browser-based architecture explorer and immediately prints its
-loopback URL. Use it to expand selected components into files and selected files
-into symbols while the rest of the architecture stays collapsed; inspect typed
-connections and source witnesses; overlay configured constraint coverage and
-findings; run focused queries; and compare Map snapshots as the repository
-changes. Analysis progress is visible from the first page render. If an update
-fails, the explorer reports the failure and keeps showing the last valid Map
-and generation-matched Verification.
-
-### Save and reuse evidence
-
-Save complete evidence when subsequent operations must use the exact same
-repository state:
-
-```bash
-mkdir -p .archbird
-archbird map . --format json --pretty \
-  --output .archbird/map.json --check
-archbird config show . --pretty \
-  --output .archbird/resolution.json --check
-
-archbird query --map .archbird/map.json \
-  --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000 --check
-
-archbird query --map .archbird/map.json \
-  --search 'provider registry' --search-limit 8
-
-archbird impact --map .archbird/map.json \
-  --path src/runtime.c --depth 2
-
-archbird path 'src/cli.c' 'src/runtime.c' \
-  --map .archbird/map.json --relation calls --direction downstream
-
-archbird query --map .archbird/map.json \
-  --symbol 'src/runtime.c:runtime_start' \
-  --view changes --detail compact --check
-
-archbird query --git-diff HEAD \
-  --view changes --detail compact --check
-
-archbird query --git-diff HEAD --view changes \
-  --verification-result .archbird/verify.json --check
-```
-
-Archbird excludes `.archbird/**` by default, so saving generated artifacts
-there does not change repository discovery or freshness. Use
-`--no-default-excludes` only when that tool-output tree is intentionally part
-of the analyzed scope.
 
 Query selectors accept exact or partial symbols, paths, mapped directories,
 globs, layers, components, tests, packages, artifacts, builds, provider
@@ -312,274 +278,31 @@ When valid semantic-AST and concrete-syntax extents differ, the concrete
 source boundary is canonical for rendering while every alternate boundary and
 provider remains recorded in the merge-variation ledger.
 
-Plain saved-Map queries accept every supported Map schema even when another
-Archbird core produced the artifact. Add `--check` when the result will drive a
-decision: it also requires the saved producer digest to match the active core.
-That producer check does not establish live-source freshness; use `freshness`
-for a new Map-to-repository comparison. C/API query requests use
-`producer_policy: "compatible"|"current"`; every Query records the effective
-policy and its `current`, `different`, or `unknown` producer classification.
-
-Progress is adaptive: `--progress auto` updates one terminal line only when an
-analysis takes long enough to notice and stays silent for pipes and agents.
-Use `--progress always` for captured agent/CI logs or `--progress never` for
-silence.
-
-`direct`, `candidate`, and `conservative` are static evidence strengths, not
-claims that a test ran. Zero error diagnostics means selected analysis
-completed; unresolved calls, parser recovery, partial surfaces, and unsupported
-coverage remain visible.
-
-Audit a saved Map against live source before treating it as current:
+### Find a connection with Path
 
 ```bash
-archbird freshness . --snapshot .archbird/map.json \
-  --output .archbird/freshness.json --check
+archbird path 'src/cli.c' 'src/runtime.c' --root . \
+  --relation calls --direction downstream --check
 ```
 
-## Local and offline visualization
+`path SOURCE TARGET` resolves exact or glob-shaped endpoint sets and finds
+globally shortest witnesses over the Map's exhaustive typed graph projection.
+It preserves parallel relation kinds, traversal direction, evidence state,
+semantic resolution, and provenance. `found` requires an all-current,
+source-evidenced route and prefers it even when a shorter candidate shortcut
+exists. When only candidate/unknown relations connect the endpoints, Path
+renders those witnesses as `unknown` with reason `candidate-witnesses`, and
+`--check` fails. A missing route is reported as `absent` only when the selected
+graph and bounded search are complete; unresolved endpoints, unsupported
+evidence, or a depth frontier remain `unknown`.
 
-```bash
-archbird serve
-archbird serve --no-config
-archbird serve --root ../project
-```
+Rendering a saved Path validates its exact artifact shape, content digest, and
+cross-field proof invariants before producing Markdown. A `current` witness
+requires current endpoints and relations, nonempty relation evidence, and
+`unique`, `builtin`, or not-applicable resolution; the renderer never trusts an
+`outcome` label by itself.
 
-`serve` prints a loopback URL immediately, analyzes in a worker, publishes only
-valid generations, and retains the last good Map when a later candidate fails.
-Live Map, Query, projection, Verify, and graph-view work runs in the server's
-native Archbird core; the page does not fetch browser Wasm for live repository
-exploration. Wasm is reserved for the static app's local folder/ZIP and saved
-artifact workflows.
-The application provides:
-
-- useful zero-config exploration from the same exhaustive graph
-  ProjectionResult used by Markdown: switch overview, architecture, tests, and
-  evidence views, then independently group by directory, configured component,
-  layer, or language; configured components and constraints refine the graph
-  when `archbird.json` exists but never gate the zero-config path;
-- one mixed-resolution architecture graph: double-click, press Enter, or use
-  the inspector to expand a component or inferred layer through directories
-  into files, then expand one file into symbols while unrelated groups remain
-  collapsed; collapse, hide, and restore controls are presentation state and
-  never rewrite Map or Projection evidence;
-- entity-type colors, generation-matched constraint/finding overlays, keyboard
-  navigation, pointer-centered normalized wheel zoom, slider zoom, layout
-  direction, evidence-class, and edge-kind controls; selecting never changes
-  the viewport, while expanding animates children from the activated node and
-  keeps that node at the same screen position; dependency arrows default to
-  provider → consumer flow and can switch explicitly to consumer → provider
-  uses;
-- compact node and edge hover details for identity, relation counts, evidence,
-  and verification state; external symbol relations stay at the file frontier
-  until explicitly revealed for one symbol;
-- graph-local filtering plus focused typed or lexical Query from the current
-  canonical Map;
-- exact source witnesses for live repositories, retained last-good evidence,
-  repository snapshots, and structural comparison between saved generations;
-- canonical artifact and graph-view JSON downloads plus GraphML and Mermaid
-  graph exports;
-- task-oriented Diff and change-artifact summaries, Verification finding
-  review with explicit waiver candidates, and project-configuration review;
-- system, light, and dark themes with responsive graph and inspector layouts.
-
-The same application can run statically on GitHub Pages. A browser can open a
-saved artifact, local directory, or ZIP and analyze supplied files through the
-Wasm Worker without uploading source or requiring a server. Directory input
-passes path/size metadata and discovery documents through native discovery
-before reading selected source bytes, so default-excluded dependency/build
-trees do not fail merely because they contain large binaries. Saved artifacts
-do not contain repository source bytes, so source viewing is available only
-while a live server or browser repository session owns those bytes. Browser
-directory and ZIP inputs are explicit snapshots rather than watched filesystem
-handles; reload changed input to create another generation.
-Server mode evaluates Map and ProjectionPlans in the native Node/Python host
-and sends typed ProjectionResults to the page. Normal live exploration does not
-download the canonical Map; `Save canonical artifact` fetches those bytes
-explicitly. Static folder/ZIP and saved-Map workflows evaluate the same plans
-in the browser Wasm host. A successfully
-mapped repository with no supported source files shows an explicit empty-scope
-state rather than a blank graph.
-
-## Agent protocol
-
-The Python CLI and source launcher expose the same live repository service over
-MCP stdio:
-
-```bash
-archbird mcp
-archbird mcp --root ../project
-archbird mcp --no-config
-```
-
-An MCP host launches that command and communicates through stdin/stdout. The
-server maps the repository once, watches it for changes, retains recent valid
-generations, and exposes read-only tools for status, Map presentation,
-exhaustive projections, focused Query, hash-checked source, Verify, and Diff.
-It does not advertise Act because the current live service does not yet provide
-Map-aware change planning.
-
-Map, Projection, Query, source, Verification, and Diff results include
-generation- and digest-bound resource links. Tool results are structured JSON
-plus text where useful, and are bounded to 2 MiB; Map and Query have smaller
-configurable presentation budgets. `archbird_source` validates the requested
-repository-relative path and current bytes against the selected Map generation.
-Project configuration can come from the repository or a file, but not stdin,
-because MCP owns stdin.
-
-The transport follows the
-[MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
-and the tool/resource shapes follow the
-[MCP server specification](https://modelcontextprotocol.io/specification/2025-11-25/server).
-
-## Project configuration
-
-Archbird works without config. Add `archbird.json` when names and boundaries
-are reviewed project intent. CLI arguments override project config, which
-overrides versioned discovery defaults.
-
-```bash
-archbird config show . --pretty
-archbird config init . --output archbird.json
-```
-
-`config init` is a review candidate, not architecture truth.
-
-<!-- archbird-minimal-project-config:start -->
-```json
-{
-  "project": "demo",
-  "layers": [
-    {
-      "name": "core",
-      "role": "core",
-      "language": "c",
-      "globs": ["include/**/*.h", "src/**/*.c"],
-      "public_headers": ["include/demo.h"]
-    },
-    {
-      "name": "javascript",
-      "role": "frontend",
-      "language": "typescript",
-      "globs": ["js/src/**/*.ts"]
-    }
-  ],
-  "components": [
-    {"name": "native-core", "paths": ["include/**", "src/**"]},
-    {"name": "javascript-api", "paths": ["js/src/**"]}
-  ]
-}
-```
-<!-- archbird-minimal-project-config:end -->
-
-That first file changes only Map construction. Add a reusable exhaustive
-projection, a named Query, and a constraint when the project is ready to make
-reviewed architecture policy persistent:
-
-```json
-{
-  "projections": {
-    "public-core-api": {
-      "select": "symbols",
-      "paths": ["include/demo.h"],
-      "public_only": true
-    }
-  },
-  "queries": {
-    "public-api-impact": {
-      "projection": "public-core-api",
-      "direction": "upstream",
-      "depth": 1
-    }
-  },
-  "constraints": {
-    "CORE-PUBLIC-API": {
-      "assert": "required_subset",
-      "expected": {"literal": ["demo_close", "demo_open"]},
-      "actual": {"projection": "public-core-api"},
-      "severity": "error",
-      "owner": "core",
-      "rationale": "Supported native entrypoints must remain public."
-    }
-  }
-}
-```
-
-These are top-level members of the same `archbird.json`; the fragment is shown
-separately to make the progression visible. The complete configuration
-vocabulary is:
-
-<!-- archbird-config-fields:start -->
-| Section | Purpose |
-| --- | --- |
-| `project`, `description` | optional stable project identity and human context |
-| `exclude`, `discovery` | project-level selection and explicit discovery policy |
-| `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
-| `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
-| `bridges` | declared/used/implemented ABI, binding, or message surfaces |
-| `tests` | static cases, reviewed case routes, and generated-source relations |
-| `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
-| `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
-| `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
-| `gates` | reviewed build or test commands that must pass in Act's isolated after-state |
-| `limits` | bounded Map analysis policy |
-<!-- archbird-config-fields:end -->
-
-Selectors are segment-aware: `src/*.c` matches immediate children and
-`src/**/*.c` is recursive. Components group selected files; they do not discover
-new source. `route_to` records broad asserted intent; `case_routes` is
-case-specific. Patterns use the pinned `archbird-pcre2-v1` contract rather than
-Python `re` or JavaScript `RegExp`.
-
-Zero-config discovery consumes conventional root `compile_commands.json` and
-`index.scip` files when present. Declare multiple compiler outputs explicitly
-and give each one a stable variant when a repository has CPU, CUDA, Wasm, or
-other builds:
-
-```json
-{
-  "builds": [
-    {"name": "wasm-db", "kind": "compile_commands", "path": "build/wasm/compile_commands.json", "variant": "wasm"}
-  ],
-  "indexes": [
-    {"name": "wasm-scip", "format": "scip", "path": "build/wasm/index.scip", "variant": "wasm"}
-  ]
-}
-```
-
-Archbird reads these artifacts; it never invokes the compiler or indexer.
-Compilation routes retain repository source paths, the compiler basename, and
-a command digest without publishing absolute build-machine paths. SCIP facts
-retain their variant, producer, source anchoring, coverage, and freshness.
-
-Map also uses repository-local C/C++ include search paths from compilation
-databases. It follows compiler search order for each translation unit and
-propagates that context through the headers reached by its literal includes.
-Variants must resolve an include to the same selected file; disagreement stays
-unresolved. Resolved edges cite the repository-relative compilation-database
-path, while external roots and absolute machine paths remain private.
-In zero-config mode, a conventional repository `include/` match remains useful
-candidate evidence but does not establish the import. An authored
-`import_roots` entry or agreeing compilation-database evidence promotes the
-same connection to current.
-
-The block above is mirrored by
-[`examples/minimal.archbird.json`](examples/minimal.archbird.json). A complete
-native/Python/TypeScript/package/build/test example is
-[`examples/quickstart.archbird.json`](examples/quickstart.archbird.json). The
-Draft 2020-12 project-configuration schema is
-[`schema/archbird.schema.json`](schema/archbird.schema.json). The native
-configuration compiler is authoritative and additionally enforces relational
-invariants that standard JSON Schema cannot express, such as `min <= max`.
-A shared accepted/rejected corpus keeps the schema and native C, Python, Node,
-and Wasm compilers aligned for their common contract. Project configuration is
-unversioned: absent project-model fields inherit discovery, while explicitly
-present fields replace the corresponding discovered value. Generated Map,
-ProjectionResult, Query, Verification, and change artifacts each carry an
-independent schema version and migration schedule; Archbird has no global
-schema version.
-
-## Verify architecture
+### Verify architecture
 
 Reviewed architecture policy belongs in the `constraints` collection of the
 same `archbird.json` that defines project structure. Typed constraints infer
@@ -711,7 +434,7 @@ comparison, evidence state, applicability, disposition, baseline state, and a
 stable fingerprint. JSON, Markdown, SARIF, and JUnit are views of the same
 canonical Verification result.
 
-### Add observed test evidence
+#### Add observed test evidence
 
 Static test routes are candidates. `observe` converts project-owned per-test
 coverage reports into exact runtime test-to-symbol evidence:
@@ -731,7 +454,7 @@ Formats without per-test contexts require one isolated report per case.
 Archbird checks source hashes and rejects aggregate coverage that cannot prove
 which test produced a hit; it never runs the tests or coverage tools.
 
-## Plan and Act
+### Plan, Act, and Apply
 
 Plan evaluates the complete current Verify policy and derives one editable
 artifact. Omit the constraint name to include every current issue, or scope
@@ -1065,22 +788,150 @@ and each source, 4,096 items or touched files, 16 MiB per operation text field,
 per metadata string. Source coordinates stop at JavaScript's exact integer
 limit (`2^53 - 1`) so Python and Node consume the same Plan.
 
-## Evidence providers
+### Explore the live repository
 
-Archbird stores normalized facts, not parser-specific trees. Several providers
-can contribute without erasing provenance or blindly unioning contradictions.
+```bash
+archbird serve
+archbird serve --no-config
+archbird serve --root ../project
+```
 
-| Level | Evidence | Providers |
-| --- | --- | --- |
-| L0 | paths, bytes, hashes, manifests, coverage | shared C/Wasm core |
-| L1 | declarations, calls, test/build/FFI strings | portable lexical/protocol providers |
-| L2 | syntax, scopes, imports, call shapes, spans, recovery | pinned Tree-sitter C, C++, Python, JS, TS/TSX, R |
-| L3 | resolved definitions, references, relationships | supplied SCIP; CPython AST; TypeScript compiler |
-| L4 | behavior and exact runtime hits | project-owned observed artifacts |
+`serve` starts a browser-based architecture explorer and immediately prints its
+loopback URL. Use it to expand selected components into files and selected files
+into symbols while the rest of the architecture stays collapsed; inspect typed
+connections and source witnesses; overlay configured constraint coverage and
+findings; run focused queries; and compare Map snapshots as the repository
+changes. Analysis progress is visible from the first page render. If an update
+fails, the explorer reports the failure and keeps showing the last valid Map
+and generation-matched Verification.
 
-Tree-sitter recovery is fact-local. Semantic indexes retain producer, document
-coverage, source anchoring, and freshness. Provider conflicts, ambiguity, and
-unresolved targets remain explicit.
+```bash
+archbird serve
+archbird serve --no-config
+archbird serve --root ../project
+```
+
+`serve` prints a loopback URL immediately, analyzes in a worker, publishes only
+valid generations, and retains the last good Map when a later candidate fails.
+Live Map, Query, projection, Verify, and graph-view work runs in the server's
+native Archbird core; the page does not fetch browser Wasm for live repository
+exploration. Wasm is reserved for the static app's local folder/ZIP and saved
+artifact workflows.
+The application provides:
+
+- useful zero-config exploration from the same exhaustive graph
+  ProjectionResult used by Markdown: switch overview, architecture, tests, and
+  evidence views, then independently group by directory, configured component,
+  layer, or language; configured components and constraints refine the graph
+  when `archbird.json` exists but never gate the zero-config path;
+- one mixed-resolution architecture graph: double-click, press Enter, or use
+  the inspector to expand a component or inferred layer through directories
+  into files, then expand one file into symbols while unrelated groups remain
+  collapsed; collapse, hide, and restore controls are presentation state and
+  never rewrite Map or Projection evidence;
+- entity-type colors, generation-matched constraint/finding overlays, keyboard
+  navigation, pointer-centered normalized wheel zoom, slider zoom, layout
+  direction, evidence-class, and edge-kind controls; selecting never changes
+  the viewport, while expanding animates children from the activated node and
+  keeps that node at the same screen position; dependency arrows default to
+  provider → consumer flow and can switch explicitly to consumer → provider
+  uses;
+- compact node and edge hover details for identity, relation counts, evidence,
+  and verification state; external symbol relations stay at the file frontier
+  until explicitly revealed for one symbol;
+- graph-local filtering plus focused typed or lexical Query from the current
+  canonical Map;
+- exact source witnesses for live repositories, retained last-good evidence,
+  repository snapshots, and structural comparison between saved generations;
+- canonical artifact and graph-view JSON downloads plus GraphML and Mermaid
+  graph exports;
+- task-oriented Diff and change-artifact summaries, Verification finding
+  review with explicit waiver candidates, and project-configuration review;
+- system, light, and dark themes with responsive graph and inspector layouts.
+
+The same application can run statically on GitHub Pages. A browser can open a
+saved artifact, local directory, or ZIP and analyze supplied files through the
+Wasm Worker without uploading source or requiring a server. Directory input
+passes path/size metadata and discovery documents through native discovery
+before reading selected source bytes, so default-excluded dependency/build
+trees do not fail merely because they contain large binaries. Saved artifacts
+do not contain repository source bytes, so source viewing is available only
+while a live server or browser repository session owns those bytes. Browser
+directory and ZIP inputs are explicit snapshots rather than watched filesystem
+handles; reload changed input to create another generation.
+Server mode evaluates Map and ProjectionPlans in the native Node/Python host
+and sends typed ProjectionResults to the page. Normal live exploration does not
+download the canonical Map; `Save canonical artifact` fetches those bytes
+explicitly. Static folder/ZIP and saved-Map workflows evaluate the same plans
+in the browser Wasm host. A successfully
+mapped repository with no supported source files shows an explicit empty-scope
+state rather than a blank graph.
+
+### Reuse saved evidence safely
+
+Save complete evidence when subsequent operations must use the exact same
+repository state:
+
+```bash
+mkdir -p .archbird
+archbird map . --format json --pretty \
+  --output .archbird/map.json --check
+archbird config show . --pretty \
+  --output .archbird/resolution.json --check
+
+archbird query --map .archbird/map.json \
+  --symbol 'src/runtime.c:runtime_start' --depth 1 --max-chars 12000 --check
+
+archbird query --map .archbird/map.json \
+  --search 'provider registry' --search-limit 8
+
+archbird impact --map .archbird/map.json \
+  --path src/runtime.c --depth 2
+
+archbird path 'src/cli.c' 'src/runtime.c' \
+  --map .archbird/map.json --relation calls --direction downstream
+
+archbird query --map .archbird/map.json \
+  --symbol 'src/runtime.c:runtime_start' \
+  --view changes --detail compact --check
+
+archbird query --git-diff HEAD \
+  --view changes --detail compact --check
+
+archbird query --git-diff HEAD --view changes \
+  --verification-result .archbird/verify.json --check
+```
+
+Archbird excludes `.archbird/**` by default, so saving generated artifacts
+there does not change repository discovery or freshness. Use
+`--no-default-excludes` only when that tool-output tree is intentionally part
+of the analyzed scope.
+
+Plain saved-Map queries accept every supported Map schema even when another
+Archbird core produced the artifact. Add `--check` when the result will drive a
+decision: it also requires the saved producer digest to match the active core.
+That producer check does not establish live-source freshness; use `freshness`
+for a new Map-to-repository comparison. C/API query requests use
+`producer_policy: "compatible"|"current"`; every Query records the effective
+policy and its `current`, `different`, or `unknown` producer classification.
+
+Progress is adaptive: `--progress auto` updates one terminal line only when an
+analysis takes long enough to notice and stays silent for pipes and agents.
+Use `--progress always` for captured agent/CI logs or `--progress never` for
+silence.
+
+`direct`, `candidate`, and `conservative` are static evidence strengths, not
+claims that a test ran. Zero error diagnostics means selected analysis
+completed; unresolved calls, parser recovery, partial surfaces, and unsupported
+coverage remain visible.
+
+Audit a saved Map against live source before treating it as current:
+
+```bash
+archbird freshness . --snapshot .archbird/map.json \
+  --output .archbird/freshness.json --check
+```
+
 
 ## Programmatic APIs
 
@@ -1243,6 +1094,249 @@ The complete C ABI is declared in
 | Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_render_markdown`, `archbird_plan_source_requirements`, `archbird_plan_validate` |
 <!-- archbird-c-api:end -->
 
+## Agent protocol
+
+The Python CLI and source launcher expose the same live repository service over
+MCP stdio:
+
+```bash
+archbird mcp
+archbird mcp --root ../project
+archbird mcp --no-config
+```
+
+An MCP host launches that command and communicates through stdin/stdout. The
+server maps the repository once, watches it for changes, retains recent valid
+generations, and exposes read-only tools for status, Map presentation,
+exhaustive projections, focused Query, hash-checked source, Verify, and Diff.
+It does not advertise Act because the current live service does not yet provide
+Map-aware change planning.
+
+Map, Projection, Query, source, Verification, and Diff results include
+generation- and digest-bound resource links. Tool results are structured JSON
+plus text where useful, and are bounded to 2 MiB; Map and Query have smaller
+configurable presentation budgets. `archbird_source` validates the requested
+repository-relative path and current bytes against the selected Map generation.
+Project configuration can come from the repository or a file, but not stdin,
+because MCP owns stdin.
+
+The transport follows the
+[MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+and the tool/resource shapes follow the
+[MCP server specification](https://modelcontextprotocol.io/specification/2025-11-25/server).
+
+## CI and agent workflow
+
+```bash
+archbird map . --progress always \
+  --format json --output .archbird/map.json --check
+archbird verify \
+  --format sarif --output .archbird/architecture.sarif --check
+```
+
+For agents:
+
+Copy this compact policy into a project's `AGENTS.md`, `CLAUDE.md`, or
+equivalent agent instructions:
+
+```text
+Use Archbird before broad source exploration.
+
+- Start with `archbird map . --view overview --detail standard --max-chars
+  12000 --check`.
+- When an exact identity is known, use `archbird query . --symbol
+  'PATH:SYMBOL' --depth 1 --test-depth 1 --max-chars 12000 --check`.
+- When the identity is unknown, use `archbird query . --search 'CONCISE
+  REPOSITORY TERMS' --max-chars 12000 --check`. Search is lexical; its ranked
+  matches are advisory starting points, not proven semantic edges.
+- Read an exact declaration with `archbird query . --symbol 'PATH:SYMBOL'
+  --view source --detail standard --max-chars 12000 --check`. Read one complete
+  selected file with `archbird query . --path PATH --dump --check`; do not add
+  `--max-chars` to `--dump`.
+- Use `archbird path SOURCE TARGET --check` for an explicit connection
+  question. Only a current, source-evidenced witness is `found`; candidate-only
+  or incomplete connectivity remains `unknown`.
+- Run `archbird verify --root . --check` before and after architecture-sensitive
+  work. Verify is exhaustive; Query may rank, collapse, and bound context.
+- Treat static test routes as navigation candidates, not proof that a test ran.
+  Use project-owned runner observations for execution evidence.
+- Before reusing `.archbird/map.json`, run `archbird freshness --root .
+  --snapshot .archbird/map.json --check`.
+- Review generated Plans and accepted Acts. Never run `archbird apply` unless
+  repository mutation is explicitly authorized and the exact Act was reviewed.
+- If Archbird disagrees with source, inspect source directly and report a
+  general reproducer; never hide uncertainty or manufacture observed evidence.
+```
+
+For repeated read-only exploration, an MCP-capable agent can launch
+`archbird mcp --root .` and use its generation-bound Map, Projection, Query,
+source, Verify, and Diff tools. Plan, Act, and Apply remain explicit CLI review
+steps.
+
+## Project configuration
+
+Archbird works without config. Add `archbird.json` when names and boundaries
+are reviewed project intent. CLI arguments override project config, which
+overrides versioned discovery defaults.
+
+```bash
+archbird config show . --pretty
+archbird config init . --output archbird.json
+```
+
+`config init` is a review candidate, not architecture truth.
+
+<!-- archbird-minimal-project-config:start -->
+```json
+{
+  "project": "demo",
+  "layers": [
+    {
+      "name": "core",
+      "role": "core",
+      "language": "c",
+      "globs": ["include/**/*.h", "src/**/*.c"],
+      "public_headers": ["include/demo.h"]
+    },
+    {
+      "name": "javascript",
+      "role": "frontend",
+      "language": "typescript",
+      "globs": ["js/src/**/*.ts"]
+    }
+  ],
+  "components": [
+    {"name": "native-core", "paths": ["include/**", "src/**"]},
+    {"name": "javascript-api", "paths": ["js/src/**"]}
+  ]
+}
+```
+<!-- archbird-minimal-project-config:end -->
+
+That first file changes only Map construction. Add a reusable exhaustive
+projection, a named Query, and a constraint when the project is ready to make
+reviewed architecture policy persistent:
+
+```json
+{
+  "projections": {
+    "public-core-api": {
+      "select": "symbols",
+      "paths": ["include/demo.h"],
+      "public_only": true
+    }
+  },
+  "queries": {
+    "public-api-impact": {
+      "projection": "public-core-api",
+      "direction": "upstream",
+      "depth": 1
+    }
+  },
+  "constraints": {
+    "CORE-PUBLIC-API": {
+      "assert": "required_subset",
+      "expected": {"literal": ["demo_close", "demo_open"]},
+      "actual": {"projection": "public-core-api"},
+      "severity": "error",
+      "owner": "core",
+      "rationale": "Supported native entrypoints must remain public."
+    }
+  }
+}
+```
+
+These are top-level members of the same `archbird.json`; the fragment is shown
+separately to make the progression visible. The complete configuration
+vocabulary is:
+
+<!-- archbird-config-fields:start -->
+| Section | Purpose |
+| --- | --- |
+| `project`, `description` | optional stable project identity and human context |
+| `exclude`, `discovery` | project-level selection and explicit discovery policy |
+| `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
+| `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
+| `bridges` | declared/used/implemented ABI, binding, or message surfaces |
+| `tests` | static cases, reviewed case routes, and generated-source relations |
+| `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
+| `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
+| `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
+| `gates` | reviewed build or test commands that must pass in Act's isolated after-state |
+| `limits` | bounded Map analysis policy |
+<!-- archbird-config-fields:end -->
+
+Selectors are segment-aware: `src/*.c` matches immediate children and
+`src/**/*.c` is recursive. Components group selected files; they do not discover
+new source. `route_to` records broad asserted intent; `case_routes` is
+case-specific. Patterns use the pinned `archbird-pcre2-v1` contract rather than
+Python `re` or JavaScript `RegExp`.
+
+Zero-config discovery consumes conventional root `compile_commands.json` and
+`index.scip` files when present. Declare multiple compiler outputs explicitly
+and give each one a stable variant when a repository has CPU, CUDA, Wasm, or
+other builds:
+
+```json
+{
+  "builds": [
+    {"name": "wasm-db", "kind": "compile_commands", "path": "build/wasm/compile_commands.json", "variant": "wasm"}
+  ],
+  "indexes": [
+    {"name": "wasm-scip", "format": "scip", "path": "build/wasm/index.scip", "variant": "wasm"}
+  ]
+}
+```
+
+Archbird reads these artifacts; it never invokes the compiler or indexer.
+Compilation routes retain repository source paths, the compiler basename, and
+a command digest without publishing absolute build-machine paths. SCIP facts
+retain their variant, producer, source anchoring, coverage, and freshness.
+
+Map also uses repository-local C/C++ include search paths from compilation
+databases. It follows compiler search order for each translation unit and
+propagates that context through the headers reached by its literal includes.
+Variants must resolve an include to the same selected file; disagreement stays
+unresolved. Resolved edges cite the repository-relative compilation-database
+path, while external roots and absolute machine paths remain private.
+In zero-config mode, a conventional repository `include/` match remains useful
+candidate evidence but does not establish the import. An authored
+`import_roots` entry or agreeing compilation-database evidence promotes the
+same connection to current.
+
+The block above is mirrored by
+[`examples/minimal.archbird.json`](examples/minimal.archbird.json). A complete
+native/Python/TypeScript/package/build/test example is
+[`examples/quickstart.archbird.json`](examples/quickstart.archbird.json). The
+Draft 2020-12 project-configuration schema is
+[`schema/archbird.schema.json`](schema/archbird.schema.json). The native
+configuration compiler is authoritative and additionally enforces relational
+invariants that standard JSON Schema cannot express, such as `min <= max`.
+A shared accepted/rejected corpus keeps the schema and native C, Python, Node,
+and Wasm compilers aligned for their common contract. Project configuration is
+unversioned: absent project-model fields inherit discovery, while explicitly
+present fields replace the corresponding discovered value. Generated Map,
+ProjectionResult, Query, Verification, and change artifacts each carry an
+independent schema version and migration schedule; Archbird has no global
+schema version.
+
+## Evidence providers
+
+Archbird stores normalized facts, not parser-specific trees. Several providers
+can contribute without erasing provenance or blindly unioning contradictions.
+
+| Level | Evidence | Providers |
+| --- | --- | --- |
+| L0 | paths, bytes, hashes, manifests, coverage | shared C/Wasm core |
+| L1 | declarations, calls, test/build/FFI strings | portable lexical/protocol providers |
+| L2 | syntax, scopes, imports, call shapes, spans, recovery | pinned Tree-sitter C, C++, Python, JS, TS/TSX, R |
+| L3 | resolved definitions, references, relationships | supplied SCIP; CPython AST; TypeScript compiler |
+| L4 | behavior and exact runtime hits | project-owned observed artifacts |
+
+Tree-sitter recovery is fact-local. Semantic indexes retain producer, document
+coverage, source anchoring, and freshness. Provider conflicts, ambiguity, and
+unresolved targets remain explicit.
+
 ## Interchange and command surface
 
 Canonical Archbird JSON is authoritative. Optional inputs/projections are:
@@ -1297,54 +1391,6 @@ multiprocess CPython-AST worker batches and terminates its workers when a batch
 does not return within
 `--python-provider-timeout` seconds; this execution policy does not enter
 canonical Map identity.
-
-## CI and agent workflow
-
-```bash
-archbird map . --progress always \
-  --format json --output .archbird/map.json --check
-archbird verify \
-  --format sarif --output .archbird/architecture.sarif --check
-```
-
-For agents:
-
-Copy this compact policy into a project's `AGENTS.md`, `CLAUDE.md`, or
-equivalent agent instructions:
-
-```text
-Use Archbird before broad source exploration.
-
-- Start with `archbird map . --view overview --detail standard --max-chars
-  12000 --check`.
-- When an exact identity is known, use `archbird query . --symbol
-  'PATH:SYMBOL' --depth 1 --test-depth 1 --max-chars 12000 --check`.
-- When the identity is unknown, use `archbird query . --search 'CONCISE
-  REPOSITORY TERMS' --max-chars 12000 --check`. Search is lexical; its ranked
-  matches are advisory starting points, not proven semantic edges.
-- Read an exact declaration with `archbird query . --symbol 'PATH:SYMBOL'
-  --view source --detail standard --max-chars 12000 --check`. Read one complete
-  selected file with `archbird query . --path PATH --dump --check`; do not add
-  `--max-chars` to `--dump`.
-- Use `archbird path SOURCE TARGET --check` for an explicit connection
-  question. Only a current, source-evidenced witness is `found`; candidate-only
-  or incomplete connectivity remains `unknown`.
-- Run `archbird verify --root . --check` before and after architecture-sensitive
-  work. Verify is exhaustive; Query may rank, collapse, and bound context.
-- Treat static test routes as navigation candidates, not proof that a test ran.
-  Use project-owned runner observations for execution evidence.
-- Before reusing `.archbird/map.json`, run `archbird freshness --root .
-  --snapshot .archbird/map.json --check`.
-- Review generated Plans and accepted Acts. Never run `archbird apply` unless
-  repository mutation is explicitly authorized and the exact Act was reviewed.
-- If Archbird disagrees with source, inspect source directly and report a
-  general reproducer; never hide uncertainty or manufacture observed evidence.
-```
-
-For repeated read-only exploration, an MCP-capable agent can launch
-`archbird mcp --root .` and use its generation-bound Map, Projection, Query,
-source, Verify, and Diff tools. Plan, Act, and Apply remain explicit CLI review
-steps.
 
 ## Guarantees, limits, and distribution
 
