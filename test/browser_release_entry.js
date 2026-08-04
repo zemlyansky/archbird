@@ -95,6 +95,7 @@ const config = {
     files: map.files.length,
     freshness: freshness.status,
     indexes: map.indexes.length,
+    implementationSha256: map.tool.implementation_sha256,
     membershipFinding: verification.constraints[0].findings[0].key,
     membershipOverlap: verification.constraints[0].findings[0].evidence[0].path,
     project: map.project,

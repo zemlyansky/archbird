@@ -1,10 +1,13 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
-if (process.argv.length !== 5) {
-  throw new Error("usage: release_node_smoke.js INSTALLED_PACKAGE CONFIG ROOT");
+if (![5, 6].includes(process.argv.length)) {
+  throw new Error(
+    "usage: release_node_smoke.js INSTALLED_PACKAGE CONFIG ROOT [OUTPUT]",
+  );
 }
 const packageRoot = path.resolve(process.argv[2]);
 const archbird = require(packageRoot);
@@ -49,4 +52,21 @@ if (symbolGraph.request.view !== "symbols" || symbolGraph.source.artifact !== "q
 const symbols = document.files.reduce((count, row) => count + row.symbols.length, 0);
 project.dispose();
 project.dispose();
+if (process.argv[5]) {
+  fs.writeFileSync(process.argv[5], `${JSON.stringify({
+    artifact: "archbird-node-release-conformance",
+    engine: archbird.ENGINE.kind,
+    implementation_sha256: archbird.IMPLEMENTATION_SHA256,
+    map_sha256: crypto.createHash("sha256").update(first).digest("hex"),
+    operations: [
+      "dispose",
+      "freshness",
+      "graph",
+      "map",
+      "query",
+    ],
+    package: packageRoot,
+    version: archbird.VERSION,
+  }, null, 2)}\n`);
+}
 console.log(`node release smoke passed: files=${document.files.length} symbols=${symbols}`);

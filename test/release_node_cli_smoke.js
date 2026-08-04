@@ -6,9 +6,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
-if (process.argv.length !== 7) {
+if (![7, 8].includes(process.argv.length)) {
   throw new Error(
-    "usage: release_node_cli_smoke.js CLI REPOSITORY_ROOT WORK ENGINE VERSION",
+    "usage: release_node_cli_smoke.js CLI REPOSITORY_ROOT WORK ENGINE VERSION [OUTPUT]",
   );
 }
 
@@ -17,6 +17,7 @@ const repository = path.resolve(process.argv[3]);
 const work = path.resolve(process.argv[4]);
 const engine = process.argv[5];
 const version = process.argv[6];
+const output = process.argv[7];
 fs.mkdirSync(work, { recursive: true });
 
 function run(arguments_, { expected = 0 } = {}) {
@@ -32,6 +33,8 @@ function run(arguments_, { expected = 0 } = {}) {
   }
   return completed.stdout;
 }
+
+const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 assert.equal(run(["--version"]).trim(), version);
 const support = JSON.parse(run(["support"]));
@@ -68,13 +71,14 @@ assert.deepEqual(support.providers.precision, {
 });
 const fixture = path.join(repository, "test/fixtures/map_base");
 const mergeLedgerPath = path.join(work, `${engine}.merge-conflicts.json`);
-const map = JSON.parse(run([
+const mapJson = run([
   "map", "--config", path.join(fixture, "archbird.json"),
   "--root", fixture,
   "--merge-ledger", mergeLedgerPath,
   "--format", "json",
   "--check",
-]));
+]);
+const map = JSON.parse(mapJson);
 assert.equal(map.artifact, "map");
 assert.equal(map.project, "map-base");
 const mergeSummary = JSON.parse(fs.readFileSync(mergeLedgerPath)).summary;
@@ -90,10 +94,11 @@ assert.equal(zeroMap.packages[0].identity, "@archbird/zero-fixture");
 assert.equal(zeroMap.tests.length, 1);
 assert.equal(zeroMap.tests[0].inventory_state, "candidate");
 assert.equal(zeroMap.tests[0].cases[0].selector, "test_main");
-const selectedVerification = JSON.parse(run([
+const selectedVerificationJson = run([
   "verify", "PYTHON-ENTRY", "--config", path.join(fixture, "archbird.json"),
   "--root", fixture, "--format", "json", "--progress", "never",
-]));
+]);
+const selectedVerification = JSON.parse(selectedVerificationJson);
 assert.equal(selectedVerification.artifact, "verification");
 assert.equal(selectedVerification.policy.kind, "selected");
 assert.deepEqual(selectedVerification.policy.requested_ids, ["PYTHON-ENTRY"]);
@@ -135,9 +140,10 @@ const freshness = JSON.parse(run([
   "--snapshot", mapPath, "--check",
 ]));
 assert.equal(freshness.status, "current");
-const query = JSON.parse(run([
+const queryJson = run([
   "query", "--map", mapPath, "--path", "py/pkg", "--depth", "0", "--format", "json",
-]));
+]);
+const query = JSON.parse(queryJson);
 assert.equal(query.files.length, 2);
 const queryPath = path.join(work, `${engine}.query.json`);
 fs.writeFileSync(queryPath, JSON.stringify(query));
@@ -230,9 +236,10 @@ fs.writeFileSync(
 const legacyPath = path.join(actRoot, "legacy.js");
 fs.writeFileSync(legacyPath, "export const obsolete = true;\n");
 const planPath = path.join(actRoot, "plan.json");
-fs.writeFileSync(planPath, run([
+const planJson = run([
   "plan", "--root", actRoot,
-]));
+]);
+fs.writeFileSync(planPath, planJson);
 const plan = JSON.parse(fs.readFileSync(planPath));
 assert.equal(plan.artifact, "plan");
 assert.equal(plan.items[0].operation.action, "delete_file");
@@ -242,9 +249,10 @@ const preview = run([
 assert.match(preview, /--- a\/legacy\.js/);
 assert.equal(fs.existsSync(legacyPath), true);
 const actPath = path.join(actRoot, "act.json");
-fs.writeFileSync(actPath, run([
+const actJson = run([
   "act", planPath, "--root", actRoot, "--format", "json",
-]));
+]);
+fs.writeFileSync(actPath, actJson);
 const act = JSON.parse(fs.readFileSync(actPath));
 assert.equal(act.artifact, "act");
 assert.equal(act.state, "accepted");
@@ -252,4 +260,31 @@ assert.equal(act.acceptance.status, "satisfied");
 assert.equal(fs.existsSync(legacyPath), true);
 run(["apply", actPath, "--root", actRoot]);
 assert.equal(fs.existsSync(legacyPath), false);
+if (output) {
+  fs.writeFileSync(output, `${JSON.stringify({
+    artifact: "archbird-node-cli-release-conformance",
+    engine,
+    implementation_sha256: support.core_implementation_sha256,
+    operations: [
+      "act",
+      "apply",
+      "map",
+      "path",
+      "plan",
+      "query",
+      "source",
+      "support",
+      "test-observations",
+      "verify",
+    ],
+    parity: {
+      act: digest(actJson),
+      map: digest(mapJson),
+      plan: digest(planJson),
+      query: digest(queryJson),
+      verification: digest(selectedVerificationJson),
+    },
+    version,
+  }, null, 2)}\n`);
+}
 console.log(`packaged Node CLI Map/Query/Verify/Plan/Act passed through ${engine}`);

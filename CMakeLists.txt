@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(Archbird VERSION 0.0.2 LANGUAGES C)
+project(Archbird VERSION 0.0.3 LANGUAGES C)
 
 set(ARCHBIRD_SOVERSION 0)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/include/archbird/archbird.h"
@@ -1139,11 +1139,15 @@ if(BUILD_TESTING)
 endif()
 
 if(ARCHBIRD_BUILD_PYTHON)
-find_package(Python3 COMPONENTS Development.Module)
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
 if(Python3_Development.Module_FOUND)
   Python3_add_library(archbird_python MODULE bindings/python.c WITH_SOABI)
   target_link_libraries(archbird_python PRIVATE archbird_native)
   target_include_directories(archbird_python PRIVATE src)
+  target_compile_definitions(archbird_python PRIVATE
+    ARCHBIRD_CONFIGURED_PYTHON_MAJOR=${Python3_VERSION_MAJOR}
+    ARCHBIRD_CONFIGURED_PYTHON_MINOR=${Python3_VERSION_MINOR}
+  )
   if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     # PyMethodDef type-erases METH_KEYWORDS functions as PyCFunction; the
     # required method-table cast is interpreted using ml_flags by CPython.

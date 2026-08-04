@@ -7,6 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(ARCHBIRD_CONFIGURED_PYTHON_MAJOR) &&                               \
+    defined(ARCHBIRD_CONFIGURED_PYTHON_MINOR)
+_Static_assert(PY_MAJOR_VERSION == ARCHBIRD_CONFIGURED_PYTHON_MAJOR,
+               "configured Python interpreter and development headers differ");
+_Static_assert(PY_MINOR_VERSION == ARCHBIRD_CONFIGURED_PYTHON_MINOR,
+               "configured Python interpreter and development headers differ");
+#endif
+
 typedef struct PyArchbirdProject {
   ArchbirdEngine *engine;
   ArchbirdProject *project;
@@ -18,8 +26,17 @@ typedef struct PyOutput {
   size_t capacity;
 } PyOutput;
 
+typedef struct PySink {
+  PyObject *callable;
+  PyObject *error_type;
+  PyObject *error_value;
+  PyObject *error_traceback;
+} PySink;
+
 static PyObject *archbird_error_type;
 static const char *project_capsule_name = "archbird.native.Project";
+static const char *closed_project_capsule_name =
+    "archbird.native.Project.closed";
 
 static int output_write(void *user_data, const uint8_t *bytes, size_t length) {
   PyOutput *output = (PyOutput *)user_data;
@@ -47,6 +64,56 @@ static int output_write(void *user_data, const uint8_t *bytes, size_t length) {
   if (length)
     memcpy(output->data + output->length, bytes, length);
   output->length = needed;
+  return 0;
+}
+
+static int sink_capture_error(PySink *sink) {
+  PyErr_Fetch(&sink->error_type, &sink->error_value, &sink->error_traceback);
+  return 1;
+}
+
+static int sink_write(void *user_data, const uint8_t *bytes, size_t length) {
+  PySink *sink = (PySink *)user_data;
+  PyObject *chunk;
+  PyObject *result;
+  PyObject *expected;
+  int equal;
+  if (sink->error_type)
+    return 1;
+  if (length > (size_t)PY_SSIZE_T_MAX) {
+    PyErr_SetString(PyExc_OverflowError,
+                    "native output chunk exceeds Python size");
+    return sink_capture_error(sink);
+  }
+  chunk = PyBytes_FromStringAndSize((const char *)bytes, (Py_ssize_t)length);
+  if (!chunk)
+    return sink_capture_error(sink);
+  result = PyObject_CallOneArg(sink->callable, chunk);
+  Py_DECREF(chunk);
+  if (!result)
+    return sink_capture_error(sink);
+  if (result == Py_None) {
+    Py_DECREF(result);
+    return 0;
+  }
+  expected = PyLong_FromSize_t(length);
+  if (!expected) {
+    Py_DECREF(result);
+    return sink_capture_error(sink);
+  }
+  equal = PyObject_RichCompareBool(result, expected, Py_EQ);
+  Py_DECREF(expected);
+  if (equal < 0) {
+    Py_DECREF(result);
+    return sink_capture_error(sink);
+  }
+  if (!equal) {
+    PyErr_Format(PyExc_OSError, "output sink wrote %R of %zu bytes", result,
+                 length);
+    Py_DECREF(result);
+    return sink_capture_error(sink);
+  }
+  Py_DECREF(result);
   return 0;
 }
 
@@ -119,6 +186,14 @@ static PyArchbirdProject *get_project(PyObject *capsule) {
                                                    project_capsule_name);
 }
 
+static void project_destroy_owned(PyArchbirdProject *owned) {
+  if (!owned)
+    return;
+  archbird_project_destroy(owned->project);
+  archbird_engine_destroy(owned->engine);
+  free(owned);
+}
+
 static void project_capsule_destroy(PyObject *capsule) {
   PyArchbirdProject *owned =
       (PyArchbirdProject *)PyCapsule_GetPointer(capsule, project_capsule_name);
@@ -126,9 +201,7 @@ static void project_capsule_destroy(PyObject *capsule) {
     PyErr_Clear();
     return;
   }
-  archbird_project_destroy(owned->project);
-  archbird_engine_destroy(owned->engine);
-  free(owned);
+  project_destroy_owned(owned);
 }
 
 static int parse_mode(const char *value, ArchbirdProviderMode *out) {
@@ -202,6 +275,29 @@ static PyObject *py_project_create(PyObject *self, PyObject *args) {
     free(owned);
   }
   return capsule;
+}
+
+static PyObject *py_project_close(PyObject *self, PyObject *capsule) {
+  PyArchbirdProject *owned;
+  (void)self;
+  if (PyCapsule_IsValid(capsule, closed_project_capsule_name))
+    Py_RETURN_NONE;
+  if (!PyCapsule_IsValid(capsule, project_capsule_name)) {
+    PyErr_SetString(PyExc_TypeError,
+                    "project must be an Archbird project handle");
+    return NULL;
+  }
+  owned = get_project(capsule);
+  if (!owned)
+    return NULL;
+  if (PyCapsule_SetDestructor(capsule, NULL) < 0)
+    return NULL;
+  if (PyCapsule_SetName(capsule, closed_project_capsule_name) < 0) {
+    (void)PyCapsule_SetDestructor(capsule, project_capsule_destroy);
+    return NULL;
+  }
+  project_destroy_owned(owned);
+  Py_RETURN_NONE;
 }
 
 static PyObject *py_project_add_source(PyObject *self, PyObject *args) {
@@ -550,6 +646,39 @@ static PyObject *py_project_map(PyObject *self, PyObject *args,
     return NULL;
   return render_project(capsule, archbird_project_render_map,
                         pretty ? ARCHBIRD_JSON_PRETTY : 0);
+}
+
+static PyObject *py_project_write_map(PyObject *self, PyObject *args,
+                                      PyObject *kwargs) {
+  static char *keywords[] = {"project", "sink", "pretty", NULL};
+  PyObject *capsule;
+  PyObject *sink_object;
+  int pretty = 0;
+  PyArchbirdProject *owned;
+  PySink sink = {0};
+  ArchbirdStatus status;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|p:project_write_map",
+                                   keywords, &capsule, &sink_object, &pretty))
+    return NULL;
+  if (!PyCallable_Check(sink_object)) {
+    PyErr_SetString(PyExc_TypeError, "sink must be callable");
+    return NULL;
+  }
+  owned = get_project(capsule);
+  if (!owned)
+    return NULL;
+  sink.callable = sink_object;
+  status = archbird_project_render_map(owned->engine, owned->project,
+                                       pretty ? ARCHBIRD_JSON_PRETTY : 0,
+                                       sink_write, &sink);
+  if (sink.error_type) {
+    PyErr_Restore(sink.error_type, sink.error_value, sink.error_traceback);
+    return NULL;
+  }
+  if (status != ARCHBIRD_OK)
+    return raise_status(owned->engine, status);
+  Py_RETURN_NONE;
 }
 
 static PyObject *py_project_provider_facts(PyObject *self, PyObject *args,
@@ -2392,6 +2521,8 @@ static PyMethodDef archbird_methods[] = {
      "Resolve discovery, project configuration, and explicit overlays."},
     {"project_create", py_project_create, METH_VARARGS,
      "Create a native project from canonical source-manifest JSON."},
+    {"project_close", py_project_close, METH_O,
+     "Release one native project handle."},
     {"project_add_source", py_project_add_source, METH_VARARGS,
      "Add one exact source byte sequence to a native project."},
     {"project_finalize_sources", py_project_finalize_sources, METH_O,
@@ -2431,6 +2562,9 @@ static PyMethodDef archbird_methods[] = {
      "Render the compact provider conflict ledger."},
     {"project_map", (PyCFunction)py_project_map, METH_VARARGS | METH_KEYWORDS,
      "Render the canonical native project map."},
+    {"project_write_map", (PyCFunction)py_project_write_map,
+     METH_VARARGS | METH_KEYWORDS,
+     "Stream the canonical native project map to a Python sink."},
     {"project_provider_facts", (PyCFunction)py_project_provider_facts,
      METH_VARARGS | METH_KEYWORDS, "Render one accepted provider artifact."},
     {"json_canonicalize", (PyCFunction)py_json_canonicalize,

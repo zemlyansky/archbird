@@ -504,6 +504,10 @@ def project_create(manifest: bytes) -> _Project:
         raise
 
 
+def project_close(project: _Project) -> None:
+    project.close()
+
+
 def project_add_source(project: _Project, path: str, data: bytes) -> None:
     encoded = _text(path, "source path")
     source = _bytes(data, "source")

@@ -16,6 +16,7 @@ and check that coordinated changes produced the required structural result.
 [Python documentation](https://archbird.org/py/) ·
 [Open the browser app](https://archbird.org/app/)
 
+<!-- archbird-example: template core-install -->
 ```bash
 # Python 3.9+
 python -m pip install archbird
@@ -120,6 +121,7 @@ The CLI follows the product stages directly. Run it from the repository root;
 
 ### Map a repository
 
+<!-- archbird-example: tested-pass core-map covers=map -->
 ```bash
 archbird map .
 archbird map . --view architecture \
@@ -137,6 +139,7 @@ you want to save the canonical Map for later commands.
 
 ### Query focused context
 
+<!-- archbird-example: tested-pass core-query covers=impact,query,search -->
 ```bash
 archbird query . --symbol 'src/runtime.c:runtime_start' \
   --depth 1 --test-depth 1 --max-chars 12000 --check
@@ -212,6 +215,7 @@ The default is an architecture-first overview for a person or coding agent;
 canonical JSON still contains every selected file and mapped fact. Choose the
 human projection and its amount of detail independently:
 
+<!-- archbird-example: tested-pass core-views covers=map,source -->
 ```bash
 archbird map --view overview --detail compact
 archbird map --view architecture \
@@ -262,6 +266,7 @@ Every emitted file is matched by repository-relative path and SHA-256 against
 the Map before its bytes are rendered. A saved Map therefore needs the source
 checkout explicitly:
 
+<!-- archbird-example: template core-source-saved -->
 ```bash
 archbird query --map .archbird/map.json --root . \
   --symbol 'src/runtime.c:runtime_start' --view source
@@ -280,9 +285,10 @@ provider remains recorded in the merge-variation ledger.
 
 ### Find a connection with Path
 
+<!-- archbird-example: illustrative core-path -->
 ```bash
 archbird path 'src/cli.c' 'src/runtime.c' --root . \
-  --relation calls --direction downstream --check
+  --relation calls --direction downstream
 ```
 
 `path SOURCE TARGET` resolves exact or glob-shaped endpoint sets and finds
@@ -295,6 +301,10 @@ renders those witnesses as `unknown` with reason `candidate-witnesses`, and
 `--check` fails. A missing route is reported as `absent` only when the selected
 graph and bounded search are complete; unresolved endpoints, unsupported
 evidence, or a depth frontier remain `unknown`.
+
+Add `--check` when a script specifically requires a proven `found` result.
+Repository-dependent examples omit it because an honest `unknown` is a valid
+answer.
 
 Rendering a saved Path validates its exact artifact shape, content digest, and
 cross-field proof invariants before producing Markdown. A `current` witness
@@ -314,6 +324,7 @@ stages and needs no second suite file.
 For a first check in an unfamiliar repository, configuration may contain only
 the reviewed constraint; discovery supplies the project model and layers:
 
+<!-- archbird-example: tested-pass core-verify-inline covers=verify -->
 ```bash
 archbird verify --config - --check <<'JSON'
 {
@@ -333,6 +344,7 @@ JSON
 The same fragment can be saved unchanged as `archbird.json`. Explicit
 project-model sections replace discovery; omitted sections inherit it.
 
+<!-- archbird-example: tested-pass core-saved-plans covers=query,verify -->
 ```bash
 # Run one saved Query plan or an ad-hoc query.
 archbird query public-api-impact
@@ -439,6 +451,7 @@ canonical Verification result.
 Static test routes are candidates. `observe` converts project-owned per-test
 coverage reports into exact runtime test-to-symbol evidence:
 
+<!-- archbird-example: template core-observe -->
 ```bash
 archbird observe . --map .archbird/map.json \
   --request .archbird/coverage-request.json \
@@ -490,6 +503,7 @@ identity, complete output digests, bounded output tails, and the initial
 after-state workspace identity. These are trusted reviewed commands with
 source isolation and provenance, not an operating-system security sandbox.
 
+<!-- archbird-example: template core-plan-act -->
 ```bash
 # Inspect the current task DAG without saving a second artifact.
 archbird plan --format markdown
@@ -790,6 +804,7 @@ limit (`2^53 - 1`) so Python and Node consume the same Plan.
 
 ### Explore the live repository
 
+<!-- archbird-example: template core-serve -->
 ```bash
 archbird serve
 archbird serve --no-config
@@ -805,6 +820,7 @@ changes. Analysis progress is visible from the first page render. If an update
 fails, the explorer reports the failure and keeps showing the last valid Map
 and generation-matched Verification.
 
+<!-- archbird-example: template core-serve-workspaces -->
 ```bash
 archbird serve
 archbird serve --no-config
@@ -872,6 +888,7 @@ state rather than a blank graph.
 Save complete evidence when subsequent operations must use the exact same
 repository state:
 
+<!-- archbird-example: tested-pass core-saved-evidence covers=config,impact,map,path,query,search -->
 ```bash
 mkdir -p .archbird
 archbird map . --format json --pretty \
@@ -927,6 +944,7 @@ coverage remain visible.
 
 Audit a saved Map against live source before treating it as current:
 
+<!-- archbird-example: tested-pass core-freshness covers=freshness -->
 ```bash
 archbird freshness . --snapshot .archbird/map.json \
   --output .archbird/freshness.json --check
@@ -1099,6 +1117,7 @@ The complete C ABI is declared in
 The Python CLI and source launcher expose the same live repository service over
 MCP stdio:
 
+<!-- archbird-example: template core-mcp -->
 ```bash
 archbird mcp
 archbird mcp --root ../project
@@ -1127,6 +1146,7 @@ and the tool/resource shapes follow the
 
 ## CI and agent workflow
 
+<!-- archbird-example: tested-pass core-ci covers=map,verify -->
 ```bash
 archbird map . --progress always \
   --format json --output .archbird/map.json --check
@@ -1179,6 +1199,7 @@ Archbird works without config. Add `archbird.json` when names and boundaries
 are reviewed project intent. CLI arguments override project config, which
 overrides versioned discovery defaults.
 
+<!-- archbird-example: tested-pass core-config covers=config -->
 ```bash
 archbird config show . --pretty
 archbird config init . --output archbird.json
@@ -1349,6 +1370,7 @@ Canonical Archbird JSON is authoritative. Optional inputs/projections are:
 | GraphML, Mermaid | output | graph interchange and bounded diagrams |
 | SARIF, JUnit | output | Verify/change CI integration |
 
+<!-- archbird-example: template core-export -->
 ```bash
 archbird export json --map .archbird/map.json --view components \
   --output .archbird/components.json
@@ -1419,6 +1441,7 @@ licenses; source distributions retain the corresponding license files.
 
 Clone the pinned third-party sources together with Archbird:
 
+<!-- archbird-example: template core-development -->
 ```bash
 git clone --recurse-submodules --shallow-submodules \
   https://github.com/zemlyansky/archbird.git

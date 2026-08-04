@@ -10,12 +10,13 @@ const {
   sharedChromium,
 } = require("./browser_harness");
 
-if (process.argv.length !== 4) {
-  throw new Error("usage: run_browser_release.js BROWSER_ROOT VERSION");
+if (![4, 5].includes(process.argv.length)) {
+  throw new Error("usage: run_browser_release.js BROWSER_ROOT VERSION [OUTPUT]");
 }
 
 const root = path.resolve(process.argv[2]);
 const version = process.argv[3];
+const output = process.argv[4];
 async function main() {
   const environment = browserEnvironment(root);
   Object.assign(process.env, environment);
@@ -63,8 +64,27 @@ async function main() {
       semanticEdges: 1,
       version,
     };
-    if (JSON.stringify(parsed) !== JSON.stringify(expected)) {
+    const implementationSha256 = parsed.implementationSha256;
+    delete parsed.implementationSha256;
+    if (
+      !/^[0-9a-f]{64}$/.test(implementationSha256 || "")
+      || JSON.stringify(parsed) !== JSON.stringify(expected)
+    ) {
       throw new Error(`unexpected browser result: ${result}`);
+    }
+    if (output) {
+      require("node:fs").writeFileSync(output, `${JSON.stringify({
+        artifact: "archbird-browser-release-conformance",
+        engine: "wasm",
+        implementation_sha256: implementationSha256,
+        operations: [
+          "freshness",
+          "map",
+          "projection",
+          "semantic-index",
+        ],
+        version,
+      }, null, 2)}\n`);
     }
     console.log(`real-browser packaged Wasm Map passed (${browser.version()}, ${executablePath})`);
   } finally {

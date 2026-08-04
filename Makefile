@@ -1,4 +1,5 @@
 PYTHON ?= python
+PYTHON_EXECUTABLE := $(shell command -v $(PYTHON) 2>/dev/null || printf '%s\n' $(PYTHON))
 NODE ?= $(shell command -v node 2>/dev/null || printf '%s\n' node)
 NPM ?= npm
 CMAKE ?= cmake
@@ -13,6 +14,7 @@ AUDITWHEEL ?= auditwheel
 TWINE ?= twine
 MANYLINUX_PLATFORM ?= manylinux_2_17_x86_64
 RELEASE_SOURCE_DATE_EPOCH ?= 946684800
+RELEASE_BASELINE_TAG ?= v0.0.2
 PY_VERSION := $(shell $(PYTHON) tools/check_versions.py --print python)
 JS_VERSION := $(shell $(PYTHON) tools/check_versions.py --print node)
 NATIVE_BUILD ?= build/native
@@ -25,6 +27,8 @@ CORE_BUILD ?= build
 RELEASE_DIR ?= $(CURDIR)/build/release
 RELEASE_TMP ?= $(CURDIR)/build/release-tmp
 BUILD_TMP ?= $(CURDIR)/build/tmp
+TEST_CACHE ?= $(BUILD_TMP)/xdg-cache
+RELEASE_CACHE ?= $(RELEASE_TMP)/xdg-cache
 EMSCRIPTEN_CACHE ?= $(CURDIR)/build/emscripten-cache
 PYTHON_NATIVE := $(CURDIR)/py/archbird/_native.py
 NODE_NATIVE := $(CURDIR)/js/build/Release/_native.node
@@ -37,7 +41,9 @@ JS_RELEASE_SMOKE = $(CURDIR)/build/release-node-smoke
 JS_BROWSER_SMOKE = $(CURDIR)/build/release-browser-smoke
 APP_BROWSER_SMOKE = $(CURDIR)/build/app-browser
 PY_RELEASE_SMOKE = $(CURDIR)/build/release-python-smoke
+PY_SDIST_RELEASE_SMOKE = $(CURDIR)/build/release-python-sdist-install-smoke
 PY_SDIST_SMOKE = $(CURDIR)/build/release-python-sdist-smoke
+RELEASE_SELF_BEFORE = $(CURDIR)/build/release-self-before
 NATIVE_C_FILES = $(shell find include src bindings test -type f \
 	\( -name '*.c' -o -name '*.h' \) ! -path 'test/fixtures/*' -print | \
 	LC_ALL=C sort)
@@ -54,8 +60,13 @@ NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Isrc/api -Isrc/base -Isrc/evidence -Isrc
 	-Ivendor/tree-sitter-c/src
 .PHONY: test verify version-check evaluation-test schema-snapshots build-c build-py editable-install test-py js-dependencies build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
 	native-warnings native-wasm-smoke native-fuzz-smoke native-json-corpus native-sha256-vectors native-analyze \
-	native-boundaries release-py release-js release clean \
+	native-boundaries release-source-check release-self-check release-py release-js release clean \
 	release-check
+
+.NOTPARALLEL: release release-check release-self-check release-py release-js
+
+test verify: export TMPDIR := $(BUILD_TMP)
+test verify: export XDG_CACHE_HOME := $(TEST_CACHE)
 
 test: version-check evaluation-test schema-snapshots native-test test-py test-js app-test app-live-test app-py-live-test
 
@@ -69,6 +80,7 @@ evaluation-test:
 	$(PYTHON) test/test_evaluation.py
 
 app-test: export TMPDIR := $(BUILD_TMP)
+app-test: export XDG_CACHE_HOME := $(TEST_CACHE)
 app-test: native-wasm-smoke js-dependencies
 	cd app && $(NPM) ci --ignore-scripts --no-audit --no-fund
 	$(NODE) test/test_js_identity_staging.js $(CURDIR)
@@ -154,6 +166,8 @@ editable-install: build-py
 	cd / && $(PYTHON) -c \
 		"import archbird._native as n; assert n.__file__.endswith('_native.py'), n.__file__; print(n.__file__)"
 
+test-py: export TMPDIR := $(BUILD_TMP)
+test-py: export XDG_CACHE_HOME := $(TEST_CACHE)
 test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_process_supervisor.py \
 		$(CURDIR)/build/test-process-supervisor
@@ -173,6 +187,7 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_evidence_routes.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_adjacency_scaling.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_readme_examples.py
+	$(PYTHON) test/test_release_gates.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) py/tests/test_repository.py \
 		$(PYTHON_NATIVE) $(CURDIR)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_scip_python_host.py \
@@ -208,6 +223,8 @@ build-js: js-dependencies
 	$(PYTHON) tools/check_source_frontend.py node --node $(NODE) \
 		--addon $(NODE_NATIVE)
 
+test-js: export TMPDIR := $(BUILD_TMP)
+test-js: export XDG_CACHE_HOME := $(TEST_CACHE)
 test-js: build-js build-py
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) test/test_coverage_observations.js js/src $(CURDIR) $(NODE_NATIVE)
@@ -216,7 +233,8 @@ test-js: build-js build-py
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) js/test/test_plan_act_cli.js $(NODE_NATIVE) $(CURDIR)
 	$(NODE) test/test_cli_progress.js js/src/cli.js $(CURDIR) $(NODE_NATIVE)
-	$(NODE) test/test_readme_examples.js $(CURDIR) js/src/cli.js $(NODE_NATIVE)
+	$(NODE) test/test_readme_examples.js $(CURDIR) js/src/cli.js \
+		$(NODE_NATIVE) $(CURDIR)/js
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_git_diff_cli.py \
 		$(CURDIR) $(NODE) $(NODE_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_verification_overlay.py \
@@ -227,8 +245,9 @@ test-js: build-js build-py
 native-configure:
 	command mkdir -p $(BUILD_TMP)
 	TMPDIR=$(BUILD_TMP) \
-	command $(CMAKE) -S . -B $(NATIVE_BUILD) -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-		-DARCHBIRD_REFERENCE_ROOT= -DARCHBIRD_BUILD_PYTHON=OFF \
+command $(CMAKE) -S . -B $(NATIVE_BUILD) -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DPython3_EXECUTABLE=$(PYTHON_EXECUTABLE) \
+		-DARCHBIRD_REFERENCE_ROOT= -DARCHBIRD_BUILD_PYTHON=ON \
 		-DARCHBIRD_BUILD_NODE=OFF -DARCHBIRD_BUILD_SHARED=ON \
 		-DBUILD_TESTING=ON
 
@@ -269,15 +288,21 @@ native-sanitize:
 		--parallel $(BUILD_JOBS)
 	TMPDIR=$(BUILD_TMP) ctest --test-dir $(NATIVE_ASAN_BUILD) --output-on-failure
 
+native-warnings: export TMPDIR := $(BUILD_TMP)
+native-warnings: export XDG_CACHE_HOME := $(TEST_CACHE)
 native-warnings:
 	command mkdir -p $(BUILD_TMP)
 	TMPDIR=$(BUILD_TMP) \
 	command $(CMAKE) -S . -B $(NATIVE_WARNING_BUILD) \
 		-DCMAKE_BUILD_TYPE=Release -DARCHBIRD_WARNINGS_AS_ERRORS=ON \
-		-DARCHBIRD_REFERENCE_ROOT= -DARCHBIRD_BUILD_PYTHON=OFF \
+		-DPython3_EXECUTABLE=$(PYTHON_EXECUTABLE) \
+		-DARCHBIRD_REFERENCE_ROOT= -DARCHBIRD_BUILD_PYTHON=ON \
 		-DARCHBIRD_BUILD_NODE=ON -DARCHBIRD_BUILD_SHARED=OFF
 	TMPDIR=$(BUILD_TMP) command $(CMAKE) --build $(NATIVE_WARNING_BUILD) \
 		--clean-first --parallel $(BUILD_JOBS)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) py/tests/test_repository.py \
+		$$(find $(NATIVE_WARNING_BUILD)/python/archbird -maxdepth 1 \
+			-type f -name '_native*.so' -print -quit) $(CURDIR)
 
 native-wasm-smoke:
 	command mkdir -p $(BUILD_TMP) $(EMSCRIPTEN_CACHE)
@@ -323,9 +348,55 @@ native-boundaries:
 	$(PYTHON) test/test_json_boundary.py
 	$(PYTHON) test/test_planning_boundaries.py
 
+release-source-check: version-check
+	$(PYTHON) tools/stage_release_provenance.py check
+
+release-self-check: release-source-check build-py
+	command rm -rf $(RELEASE_SELF_BEFORE)
+	command mkdir -p $(RELEASE_SELF_BEFORE) $(RELEASE_DIR)
+	$(PYTHON) tools/materialize_git_tree.py --repository $(CURDIR) \
+		--revision $(RELEASE_BASELINE_TAG) --output $(RELEASE_SELF_BEFORE)
+	PYTHON=$(PYTHON) ./archbird map $(RELEASE_SELF_BEFORE) \
+		--config $(CURDIR)/archbird.json --format json --pretty \
+		--output $(RELEASE_DIR)/self-before.map.json --no-cache --check
+	PYTHON=$(PYTHON) ./archbird map $(CURDIR) \
+		--config $(CURDIR)/archbird.json --format json --pretty \
+		--output $(RELEASE_DIR)/self-after.map.json --no-cache --check
+	PYTHON=$(PYTHON) ./archbird freshness $(RELEASE_SELF_BEFORE) \
+		--config $(CURDIR)/archbird.json \
+		--snapshot $(RELEASE_DIR)/self-before.map.json \
+		--output $(RELEASE_DIR)/self-before.freshness.json \
+		--no-cache --check
+	PYTHON=$(PYTHON) ./archbird freshness $(CURDIR) \
+		--config $(CURDIR)/archbird.json \
+		--snapshot $(RELEASE_DIR)/self-after.map.json \
+		--output $(RELEASE_DIR)/self-after.freshness.json \
+		--no-cache --check
+	PYTHON=$(PYTHON) ./archbird diff \
+		--before $(RELEASE_DIR)/self-before.map.json \
+		--after $(RELEASE_DIR)/self-after.map.json --format json --pretty \
+		--output $(RELEASE_DIR)/self-transition.diff.json
+	PYTHON=$(PYTHON) ./archbird verify --root $(CURDIR) --no-cache \
+		--format json --pretty \
+		--output $(RELEASE_DIR)/self-after.verify.json --check
+	$(PYTHON) test/check_release_transition.py \
+		--repository $(CURDIR) --before-ref $(RELEASE_BASELINE_TAG) \
+		--version $(PY_VERSION) \
+		--before-map $(RELEASE_DIR)/self-before.map.json \
+		--after-map $(RELEASE_DIR)/self-after.map.json \
+		--before-freshness $(RELEASE_DIR)/self-before.freshness.json \
+		--after-freshness $(RELEASE_DIR)/self-after.freshness.json \
+		--diff $(RELEASE_DIR)/self-transition.diff.json \
+		--verification $(RELEASE_DIR)/self-after.verify.json \
+		--expected-changes test/release-0.0.3.expected.json \
+		--allow-unmapped .gitignore --allow-unmapped archbird.json \
+		--require-clean --require-tag \
+		--output $(RELEASE_DIR)/self-transition.json
+
 release-py: export SOURCE_DATE_EPOCH := $(RELEASE_SOURCE_DATE_EPOCH)
 release-py: export TMPDIR := $(RELEASE_TMP)
-release-py: version-check app-test
+release-py: export XDG_CACHE_HOME := $(RELEASE_CACHE)
+release-py: release-source-check app-test
 	$(PYTHON) tools/sync_schemas.py python
 	$(PYTHON) tools/sync_csrc.py python
 	$(PYTHON) tools/stage_app.py python
@@ -334,6 +405,9 @@ release-py: version-check app-test
 	command mkdir -p $(RELEASE_TMP)
 	command rm -rf $(PY_RELEASE_RAW)
 	command mkdir -p $(RELEASE_DIR) $(PY_RELEASE_RAW)
+	@set -eu; \
+	trap 'cd "$(CURDIR)" && $(PYTHON) tools/stage_release_provenance.py python --clean' EXIT; \
+	$(PYTHON) tools/stage_release_provenance.py python; \
 	cd py && $(PYTHON) -m build --outdir $(PY_RELEASE_RAW)
 	$(AUDITWHEEL) show $(PY_RAW_WHEEL)
 	command rm -f $(PY_MANYLINUX_WHEEL)
@@ -350,7 +424,8 @@ release-py: version-check app-test
 
 release-js: export SOURCE_DATE_EPOCH := $(RELEASE_SOURCE_DATE_EPOCH)
 release-js: export TMPDIR := $(RELEASE_TMP)
-release-js: version-check app-test
+release-js: export XDG_CACHE_HOME := $(RELEASE_CACHE)
+release-js: release-source-check app-test
 	command mkdir -p $(RELEASE_TMP)
 	$(PYTHON) tools/sync_schemas.py node
 	$(PYTHON) tools/sync_csrc.py node
@@ -364,11 +439,15 @@ release-js: version-check app-test
 	cd js && ARCHBIRD_NATIVE_ADDON=$(abspath $(NATIVE_RELEASE_BUILD)/node/_native.node) \
 		ARCHBIRD_WASM_BUILD=$(abspath $(NATIVE_WASM_BUILD)/wasm) \
 		$(NODE) scripts/stage-native.js
+	@set -eu; \
+	trap 'cd "$(CURDIR)" && $(PYTHON) tools/stage_release_provenance.py node --clean' EXIT; \
+	$(PYTHON) tools/stage_release_provenance.py node; \
 	cd js && $(NPM) pack --ignore-scripts --pack-destination $(RELEASE_DIR)
 	cd js && $(NODE) scripts/clean-staged.js
 
 release-check: export TMPDIR := $(BUILD_TMP)
-release-check: version-check release-py release-js
+release-check: export XDG_CACHE_HOME := $(RELEASE_CACHE)
+release-check: version-check release-self-check release-py release-js
 	$(TWINE) check $(PY_MANYLINUX_WHEEL) $(PY_SDIST)
 	$(PYTHON) test/check_release_archives.py \
 		--forbid-prefix "$(CURDIR)" \
@@ -376,6 +455,11 @@ release-check: version-check release-py release-js
 		$(PY_MANYLINUX_WHEEL) \
 		$(PY_SDIST) \
 		$(JS_PACKAGE)
+	$(PYTHON) test/check_release_provenance.py \
+		--repository $(CURDIR) --version $(PY_VERSION) \
+		--require-clean --require-tag \
+		--output $(RELEASE_DIR)/release-provenance.json \
+		$(PY_MANYLINUX_WHEEL) $(PY_SDIST) $(JS_PACKAGE)
 	command rm -rf $(PY_SDIST_SMOKE)
 	command mkdir -p $(PY_SDIST_SMOKE)/wheel
 	$(PYTHON) -m tarfile -e $(PY_SDIST) $(PY_SDIST_SMOKE)
@@ -389,8 +473,22 @@ release-check: version-check release-py release-js
 	$(PYTHON) -m venv $(PY_RELEASE_SMOKE)
 	$(PY_RELEASE_SMOKE)/bin/python -m pip install \
 		--disable-pip-version-check --no-deps $(PY_MANYLINUX_WHEEL)
+	$(PY_RELEASE_SMOKE)/bin/python test/check_python_native_contract.py \
+		--output $(RELEASE_DIR)/python-wheel-native-contract.json
 	$(PY_RELEASE_SMOKE)/bin/python test/release_python_smoke.py \
-		test/fixtures/map_base/archbird.json test/fixtures/map_base
+		test/fixtures/map_base/archbird.json test/fixtures/map_base \
+		--output $(RELEASE_DIR)/python-wheel-runtime.json
+	command rm -rf $(PY_SDIST_RELEASE_SMOKE)
+	$(PYTHON) -m venv $(PY_SDIST_RELEASE_SMOKE)
+	$(PY_SDIST_RELEASE_SMOKE)/bin/python -m pip install \
+		--disable-pip-version-check --no-deps \
+		$(PY_SDIST_SMOKE)/wheel/*.whl
+	$(PY_SDIST_RELEASE_SMOKE)/bin/python \
+		test/check_python_native_contract.py \
+		--output $(RELEASE_DIR)/python-sdist-native-contract.json
+	$(PY_SDIST_RELEASE_SMOKE)/bin/python test/release_python_smoke.py \
+		test/fixtures/map_base/archbird.json test/fixtures/map_base \
+		--output $(RELEASE_DIR)/python-sdist-runtime.json
 	$(NODE) test/test_python_live_server.js \
 		$(PY_RELEASE_SMOKE)/bin/python test/fixtures/map_base - \
 		$(CURDIR)/build/release-python-live-smoke
@@ -403,13 +501,16 @@ release-check: version-check release-py release-js
 		--prefix $(JS_RELEASE_SMOKE) $(JS_PACKAGE)
 	$(NODE) test/release_node_smoke.js \
 		$(JS_RELEASE_SMOKE)/node_modules/archbird \
-		test/fixtures/map_base/archbird.json test/fixtures/map_base
+		test/fixtures/map_base/archbird.json test/fixtures/map_base \
+		$(RELEASE_DIR)/node-native-prebuilt.json
 	$(NODE) test/release_node_cli_smoke.js \
 		$(JS_RELEASE_SMOKE)/node_modules/.bin/archbird \
-		$(CURDIR) $(JS_RELEASE_SMOKE)/cli native $(JS_VERSION)
+		$(CURDIR) $(JS_RELEASE_SMOKE)/cli native $(JS_VERSION) \
+		$(RELEASE_DIR)/node-cli-native.json
 	$(NODE) test/release_node_cli_smoke.js \
 		$(JS_RELEASE_SMOKE)/node_modules/.bin/archbird \
-		$(CURDIR) $(JS_RELEASE_SMOKE)/cli wasm $(JS_VERSION)
+		$(CURDIR) $(JS_RELEASE_SMOKE)/cli wasm $(JS_VERSION) \
+		$(RELEASE_DIR)/node-cli-wasm.json
 	$(NODE) test/test_packaged_live_cli.js \
 		$(JS_RELEASE_SMOKE)/node_modules/.bin/archbird \
 		test/fixtures/map_base $(JS_RELEASE_SMOKE)/live
@@ -422,14 +523,45 @@ release-check: version-check release-py release-js
 	command cp test/browser_release.html $(JS_BROWSER_SMOKE)/index.html
 	command cp $(JS_RELEASE_SMOKE)/node_modules/archbird/wasm/archbird.wasm \
 		$(JS_BROWSER_SMOKE)/archbird.wasm
-	$(NODE) test/run_browser_release.js $(JS_BROWSER_SMOKE) $(JS_VERSION)
+	$(NODE) test/run_browser_release.js $(JS_BROWSER_SMOKE) $(JS_VERSION) \
+		$(RELEASE_DIR)/browser-wasm.json
 	cd $(JS_RELEASE_SMOKE)/node_modules/archbird && \
 		$(NPM) run build:native
 	ARCHBIRD_ENGINE=native \
 	ARCHBIRD_NATIVE_ADDON=$(JS_RELEASE_SMOKE)/node_modules/archbird/build/Release/_native.node \
 		$(NODE) test/release_node_smoke.js \
 		$(JS_RELEASE_SMOKE)/node_modules/archbird \
-		test/fixtures/map_base/archbird.json test/fixtures/map_base
+		test/fixtures/map_base/archbird.json test/fixtures/map_base \
+		$(RELEASE_DIR)/node-native-rebuilt.json
+	$(PY_RELEASE_SMOKE)/bin/python test/test_readme_examples.py \
+		--require-installed \
+		--output $(RELEASE_DIR)/python-wheel-readme.json
+	$(PY_SDIST_RELEASE_SMOKE)/bin/python test/test_readme_examples.py \
+		--require-installed \
+		--output $(RELEASE_DIR)/python-sdist-readme.json
+	ARCHBIRD_ENGINE=native \
+	ARCHBIRD_NATIVE_ADDON=$(NATIVE_RELEASE_BUILD)/node/_native.node \
+		$(NODE) test/test_readme_examples.js $(CURDIR) \
+		$(JS_RELEASE_SMOKE)/node_modules/.bin/archbird \
+		$(NATIVE_RELEASE_BUILD)/node/_native.node \
+		$(JS_RELEASE_SMOKE)/node_modules/archbird \
+		$(RELEASE_DIR)/node-readme.json
+	$(PYTHON) tools/create_release_attestation.py \
+		--provenance $(RELEASE_DIR)/release-provenance.json \
+		--transition $(RELEASE_DIR)/self-transition.json \
+		--report browser-wasm=$(RELEASE_DIR)/browser-wasm.json \
+		--report node-cli-native=$(RELEASE_DIR)/node-cli-native.json \
+		--report node-cli-wasm=$(RELEASE_DIR)/node-cli-wasm.json \
+		--report node-native-prebuilt=$(RELEASE_DIR)/node-native-prebuilt.json \
+		--report node-native-rebuilt=$(RELEASE_DIR)/node-native-rebuilt.json \
+		--report node-readme=$(RELEASE_DIR)/node-readme.json \
+		--report python-sdist-readme=$(RELEASE_DIR)/python-sdist-readme.json \
+		--report python-sdist-contract=$(RELEASE_DIR)/python-sdist-native-contract.json \
+		--report python-sdist-runtime=$(RELEASE_DIR)/python-sdist-runtime.json \
+		--report python-wheel-readme=$(RELEASE_DIR)/python-wheel-readme.json \
+		--report python-wheel-contract=$(RELEASE_DIR)/python-wheel-native-contract.json \
+		--report python-wheel-runtime=$(RELEASE_DIR)/python-wheel-runtime.json \
+		--output $(RELEASE_DIR)/release-attestation.json
 
 release: release-check
 

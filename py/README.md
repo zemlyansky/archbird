@@ -8,6 +8,7 @@ Use it to understand unfamiliar code, give coding agents focused context,
 enforce reviewed architecture constraints in CI, compare ports or frontends,
 and check that coordinated changes produced the required structural result.
 
+<!-- archbird-example: template python-install -->
 ```bash
 python -m pip install archbird
 
@@ -91,6 +92,7 @@ root; `archbird.json` is discovered automatically when present.
 
 Map builds the reusable repository model. It works without configuration:
 
+<!-- archbird-example: tested-pass python-map covers=map -->
 ```bash
 archbird map .
 archbird map . --view architecture \
@@ -109,6 +111,7 @@ selected graph.
 Save the complete Map when later operations must use the same repository
 evidence:
 
+<!-- archbird-example: tested-pass python-save-map covers=config,map -->
 ```bash
 mkdir -p .archbird
 archbird map . --format json --pretty \
@@ -126,6 +129,7 @@ interactive runs and stays silent when output is piped; use `always` or
 
 Query selects and ranks a task-sized neighborhood from the Map:
 
+<!-- archbird-example: tested-pass python-query covers=impact,query,search -->
 ```bash
 archbird query . \
   --symbol 'src/runtime.c:runtime_start' \
@@ -144,6 +148,7 @@ conservative test routes are navigation evidence, not proof that a test ran.
 
 Render hash-checked source from the same selection:
 
+<!-- archbird-example: tested-pass python-source covers=source -->
 ```bash
 archbird query . \
   --symbol 'src/runtime.c:runtime_start' \
@@ -159,6 +164,7 @@ and terminal-control bytes are rejected rather than silently rendered.
 
 For a current change set:
 
+<!-- archbird-example: tested-pass python-changes covers=query -->
 ```bash
 archbird query --git-diff HEAD --view changes --detail compact --check
 archbird query --git-diff HEAD --view changes \
@@ -174,13 +180,14 @@ explicit `--path`.
 
 Path answers one explicit graph-connectivity question:
 
+<!-- archbird-example: illustrative python-path -->
 ```bash
 archbird path 'src/cli.c' 'src/runtime.c' \
-  --root . --relation calls --direction downstream --check
+  --root . --relation calls --direction downstream
 
 archbird path 'src/cli.c' 'src/runtime.c' \
   --map .archbird/map.json \
-  --relation calls --direction downstream --check
+  --relation calls --direction downstream
 ```
 
 It returns bounded shortest witnesses with typed relations, direction,
@@ -188,6 +195,9 @@ provenance, evidence state, semantic resolution, and completeness. A `found`
 result requires a current source-evidenced route. Candidate-only,
 stale, incomplete, or depth-bounded connectivity remains `unknown`; `--check`
 does not turn it into proof.
+
+Add `--check` when automation specifically requires a proven `found` result.
+Repository-dependent examples omit it because an honest `unknown` is valid.
 
 ### Verify architecture
 
@@ -200,6 +210,7 @@ below therefore needs no second suite file.
 For a first check in an unfamiliar repository, configuration may contain only
 the reviewed constraint; discovery supplies the project model and layers:
 
+<!-- archbird-example: tested-pass python-verify-inline covers=verify -->
 ```bash
 archbird verify --config - --check <<'JSON'
 {
@@ -219,6 +230,7 @@ JSON
 The same fragment can be saved unchanged as `archbird.json`. Explicit
 project-model sections replace discovery; omitted sections inherit it.
 
+<!-- archbird-example: tested-pass python-saved-plans covers=query,verify -->
 ```bash
 # Run one saved Query plan or an ad-hoc query.
 archbird query public-api-impact
@@ -324,6 +336,7 @@ canonical Verification result.
 Generate coverage.py JSON with pytest dynamic contexts, then convert it without
 rerunning the project:
 
+<!-- archbird-example: template python-observe -->
 ```bash
 pytest --cov=your_package --cov-context=test
 coverage json --show-contexts -o .archbird/coverage.json
@@ -370,6 +383,7 @@ must remove the relation from the fresh after-Map. Act rejects any unrelated
 edge addition or removal even when Verify passes. Component edges, incomplete
 evidence, and external or unmapped targets remain redirect/manual work.
 
+<!-- archbird-example: template python-plan-act -->
 ```bash
 archbird plan --format markdown
 archbird plan --output .archbird/plan.json
@@ -528,6 +542,7 @@ participate in Verify.
 
 ### Explore the live repository
 
+<!-- archbird-example: template python-serve -->
 ```bash
 archbird serve
 ```
@@ -544,6 +559,7 @@ user explicitly saves it.
 Saved Maps preserve one analyzed state; they do not prove that the checkout is
 still unchanged:
 
+<!-- archbird-example: tested-pass python-saved-evidence covers=freshness,query,verify -->
 ```bash
 archbird freshness . --snapshot .archbird/map.json \
   --output .archbird/freshness.json --check
@@ -685,6 +701,7 @@ remain shared with Node and C.
 
 ## MCP for coding agents
 
+<!-- archbird-example: template python-mcp -->
 ```bash
 archbird mcp
 archbird mcp --root ../project
@@ -749,6 +766,7 @@ Archbird works without config. Add `archbird.json` when names and boundaries
 are reviewed project intent. CLI arguments override project config, which
 overrides versioned discovery defaults.
 
+<!-- archbird-example: tested-pass python-config covers=config -->
 ```bash
 archbird config show . --pretty
 archbird config init . --output archbird.json
@@ -871,6 +889,7 @@ source repository also contains a complete package/build/test example in
 
 ## Interchange and visualization
 
+<!-- archbird-example: template python-export -->
 ```bash
 archbird export json --map .archbird/map.json --view components \
   --output .archbird/components.json
@@ -887,6 +906,7 @@ render SARIF or JUnit; Plan and Act remain canonical JSON artifacts.
 The optional OKF adapter validates, indexes, queries, and publishes browsable
 knowledge bundles while treating prose as context rather than executable truth:
 
+<!-- archbird-example: template python-okf -->
 ```bash
 python -m pip install 'archbird[okf]'
 archbird okf validate knowledge/
@@ -957,6 +977,7 @@ Python dependencies.
 
 For editable source development, use:
 
+<!-- archbird-example: template python-development -->
 ```bash
 make editable-install PYTHON=/path/to/environment/bin/python
 make build-c   # after C edits

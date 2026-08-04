@@ -1,6 +1,6 @@
 {
   "name": "archbird",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Map codebases, verify architecture, and safely plan structural changes",
   "author": "Anton Zemlyansky",
   "license": "Apache-2.0",
@@ -40,6 +40,7 @@
     "src",
     "native",
     "wasm",
+    "release.json",
     "README.md",
     "LICENSE"
   ],

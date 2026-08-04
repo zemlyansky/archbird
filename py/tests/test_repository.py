@@ -58,6 +58,53 @@ def main() -> int:
     )
     import archbird.provider_cache as provider_cache_module
 
+    with tempfile.TemporaryDirectory(dir=repository / "build") as raw:
+        submodule_root = Path(raw)
+        (submodule_root / "vendor").mkdir()
+        (submodule_root / "vendor/.git").write_text(
+            "gitdir: ../../.git/modules/vendor\n",
+            encoding="utf-8",
+        )
+        (submodule_root / "vendor/library.c").write_text(
+            "int library_open(void) { return 0; }\n",
+            encoding="utf-8",
+        )
+        (submodule_root / "archbird.json").write_text(
+            json.dumps(
+                {
+                    "project": "submodule-marker",
+                    "layers": [
+                        {
+                            "name": "native",
+                            "language": "c",
+                            "globs": ["vendor/**/*.c"],
+                        }
+                    ],
+                    "artifacts": [
+                        {
+                            "name": "native-library",
+                            "output": "build/library.a",
+                            "inputs": ["vendor/**/*"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        submodule_project = Project.from_config(
+            submodule_root / "archbird.json",
+            root=submodule_root,
+            cache_dir=None,
+            map_cache=False,
+        )
+        if [source.path for source in submodule_project.sources] != [
+            "vendor/library.c"
+        ]:
+            raise AssertionError(
+                "default discovery included a nested Git control marker: "
+                f"{[source.path for source in submodule_project.sources]!r}"
+            )
+
     if len(_native.IMPLEMENTATION_SHA256) != 64 or any(
         character not in "0123456789abcdef"
         for character in _native.IMPLEMENTATION_SHA256

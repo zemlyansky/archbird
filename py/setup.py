@@ -371,6 +371,8 @@ setup(
                 *tree_sitter_include_dirs,
             ],
             define_macros=[
+                ("ARCHBIRD_CONFIGURED_PYTHON_MAJOR", str(sys.version_info.major)),
+                ("ARCHBIRD_CONFIGURED_PYTHON_MINOR", str(sys.version_info.minor)),
                 *[
                     (
                         f"ARCHBIRD_LEXICAL_{language}_IMPLEMENTATION_SHA256",

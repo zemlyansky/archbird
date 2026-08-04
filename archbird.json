@@ -147,7 +147,7 @@
       "role": "test",
       "language": "python",
       "globs": ["test/*.py"],
-      "import_roots": ["."]
+      "import_roots": [".", "test"]
     },
     {
       "name": "python-tests",
@@ -160,7 +160,7 @@
       "name": "javascript-tests",
       "role": "test",
       "language": "javascript",
-      "globs": ["js/test/*.js", "test/scip_fixture.js"],
+      "globs": ["js/test/*.js", "test/*.js"],
       "import_roots": ["js/src"]
     },
     {
@@ -180,7 +180,13 @@
       "name": "build",
       "role": "build",
       "language": "text",
-      "globs": ["CMakeLists.txt", "Makefile", "cmake/*.in", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/*.py", "js/package.json", "js/scripts/*.js"]
+      "globs": ["CMakeLists.txt", "Makefile", "cmake/*.in", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/*.py", "js/package.json", "js/package-lock.json", "js/scripts/*.js"]
+    },
+    {
+      "name": "documentation",
+      "role": "documentation",
+      "language": "text",
+      "globs": ["README.md", "py/README.md", "js/README.md"]
     }
   ],
   "packages": [
@@ -300,7 +306,8 @@
     {"name": "core-tests", "paths": ["test/**"], "description": "Core and Python-oracle conformance corpus"},
     {"name": "python-tests", "paths": ["py/tests/**"], "description": "Python host and precision-provider tests"},
     {"name": "javascript-tests", "paths": ["js/test/**"], "description": "Node host and TypeScript-provider tests"},
-    {"name": "build", "paths": ["CMakeLists.txt", "Makefile", "cmake/**", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/**", "js/package.json", "js/scripts/**", "tools/**"], "description": "Native and distribution build routes"}
+    {"name": "documentation", "paths": ["README.md", "py/README.md", "js/README.md"], "description": "Public core, PyPI, and npm usage contracts"},
+    {"name": "build", "paths": ["CMakeLists.txt", "Makefile", "cmake/**", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/**", "js/package.json", "js/package-lock.json", "js/scripts/**", "tools/**"], "description": "Native and distribution build routes"}
   ],
   "projections": {
     "public-core-api": {
@@ -682,6 +689,11 @@
             "source": "core-tests",
             "kind": "*",
             "target": "interchange"
+          },
+          {
+            "source": "core-tests",
+            "kind": "*",
+            "target": "javascript-host"
           },
           {
             "source": "core-tests",

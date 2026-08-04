@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
+import argparse
 import json
-import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -79,7 +80,144 @@ def check_markdown_structure(path: Path, text: str) -> None:
         raise AssertionError(f"{path}: unclosed fenced code block")
 
 
-def check_public_readmes(repository: Path) -> None:
+def shell_blocks(text: str) -> tuple[tuple[int, str], ...]:
+    """Return fenced shell examples with their opening line numbers."""
+
+    blocks: list[tuple[int, str]] = []
+    language = ""
+    lines: list[str] = []
+    start = 0
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if not language:
+            match = re.fullmatch(r"```(bash|sh|shell|console)", line)
+            if match:
+                language = match.group(1)
+                lines = []
+                start = line_number
+            continue
+        if line == "```":
+            blocks.append((start, "\n".join(lines)))
+            language = ""
+            lines = []
+            continue
+        lines.append(line)
+    return tuple(blocks)
+
+
+def classified_shell_blocks(
+    path: Path, text: str
+) -> tuple[dict[str, object], ...]:
+    """Return shell blocks with an explicit documentation-test contract."""
+
+    lines = text.splitlines()
+    classified: list[dict[str, object]] = []
+    marker = re.compile(
+        r"<!-- archbird-example: "
+        r"(tested-pass|tested-failure|template|illustrative) "
+        r"([a-z0-9]+(?:-[a-z0-9]+)*)"
+        r"(?: covers=([a-z0-9,-]+))? -->"
+    )
+    for line_number, block in shell_blocks(text):
+        if line_number < 2:
+            raise AssertionError(
+                f"{path}:{line_number}: shell example has no classification"
+            )
+        match = marker.fullmatch(lines[line_number - 2])
+        if match is None:
+            raise AssertionError(
+                f"{path}:{line_number}: shell example must be immediately "
+                "preceded by an archbird-example classification"
+            )
+        category, identifier, raw_covers = match.groups()
+        covers = tuple(sorted(set((raw_covers or "").split(",")) - {""}))
+        if category.startswith("tested-") and not covers:
+            raise AssertionError(
+                f"{path}:{line_number}: tested example {identifier!r} "
+                "has no coverage claims"
+            )
+        if category in {"template", "illustrative"} and covers:
+            raise AssertionError(
+                f"{path}:{line_number}: non-executable example {identifier!r} "
+                "must not claim observed coverage"
+            )
+        commands = shell_commands(block)
+        if any("--check" in command for command in commands) and not (
+            category.startswith("tested-")
+        ):
+            raise AssertionError(
+                f"{path}:{line_number}: every --check example must have an "
+                "executable tested-pass or tested-failure contract"
+            )
+        classified.append(
+            {
+                "category": category,
+                "covers": list(covers),
+                "id": identifier,
+                "line": line_number,
+            }
+        )
+    return tuple(classified)
+
+
+def shell_commands(block: str) -> tuple[str, ...]:
+    """Join backslash-continued example lines without executing shell syntax."""
+
+    commands: list[str] = []
+    current: list[str] = []
+    for raw_line in block.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            if current:
+                commands.append(" ".join(current))
+                current = []
+            continue
+        continued = line.endswith("\\")
+        current.append(line[:-1].rstrip() if continued else line)
+        if not continued:
+            commands.append(" ".join(current))
+            current = []
+    if current:
+        commands.append(" ".join(current))
+    return tuple(commands)
+
+
+def command_operation(command: str) -> str | None:
+    """Return the documented Archbird operation for one shell command."""
+
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    index = 0
+    while index < len(words) and "=" in words[index] and not words[index].startswith(
+        ("-", "/", ".")
+    ):
+        index += 1
+    if index < len(words) and words[index] == "npx":
+        index += 1
+    if index >= len(words) or words[index] != "archbird":
+        return None
+    index += 1
+    if index >= len(words) or words[index].startswith("-"):
+        return "map"
+    operation = words[index]
+    if operation in {".", ".."} or operation.startswith(("./", "../", "/")):
+        return "map"
+    if operation == "query":
+        if "--search" in words:
+            return "search"
+        if "--dump" in words or (
+            "--view" in words
+            and words.index("--view") + 1 < len(words)
+            and words[words.index("--view") + 1] == "source"
+        ):
+            return "source"
+    return operation
+
+
+def check_public_readmes(
+    repository: Path,
+) -> dict[str, tuple[dict[str, object], ...]]:
     readmes = tuple(
         repository / relative
         for relative in ("README.md", "py/README.md", "js/README.md")
@@ -111,11 +249,55 @@ def check_public_readmes(repository: Path) -> None:
             + ", ".join(str(path) for path in unexpected_readmes)
         )
     link_pattern = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+    examples: dict[str, tuple[dict[str, object], ...]] = {}
+    example_ids: set[str] = set()
     for readme in readmes:
         text = readme.read_text(encoding="utf-8")
         if text.count(tagline) != 1:
             raise AssertionError(f"{readme}: missing the shared product definition")
         check_markdown_structure(readme, text)
+        relative_readme = readme.relative_to(repository).as_posix()
+        examples[relative_readme] = classified_shell_blocks(readme, text)
+        for example in examples[relative_readme]:
+            identifier = str(example["id"])
+            if identifier in example_ids:
+                raise AssertionError(
+                    f"{readme}:{example['line']}: duplicate public example "
+                    f"identifier {identifier!r}"
+                )
+            example_ids.add(identifier)
+        for line_number, block in shell_blocks(text):
+            for command in shell_commands(block):
+                if (
+                    re.match(r"(?:npx )?archbird path\b", command)
+                    and "--check" in command
+                ):
+                    raise AssertionError(
+                        f"{readme}:{line_number}: an illustrative Path command "
+                        "cannot claim a proven result with --check; use a "
+                        "deterministic executable fixture or omit --check"
+                    )
+        for line_number, block in shell_blocks(text):
+            example = next(
+                row
+                for row in examples[relative_readme]
+                if row["line"] == line_number
+            )
+            if not str(example["category"]).startswith("tested-"):
+                continue
+            operations = sorted(
+                {
+                    operation
+                    for command in shell_commands(block)
+                    if (operation := command_operation(command)) is not None
+                }
+            )
+            if operations != example["covers"]:
+                raise AssertionError(
+                    f"{readme}:{line_number}: tested example "
+                    f"{example['id']!r} coverage differs: "
+                    f"declared={example['covers']!r} actual={operations!r}"
+                )
         leaked = [marker for marker in forbidden if marker in text]
         if leaked:
             raise AssertionError(f"{readme}: private development marker(s): {leaked}")
@@ -135,20 +317,13 @@ def check_public_readmes(repository: Path) -> None:
             relative = target.split("#", 1)[0]
             if not (readme.parent / relative).resolve().exists():
                 raise AssertionError(f"{readme}: missing relative link target {target}")
+    return examples
 
 
 def execute(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    environment = os.environ.copy()
-    source_python = str(Path(__file__).resolve().parents[1] / "py")
-    environment["PYTHONPATH"] = (
-        source_python
-        if not environment.get("PYTHONPATH")
-        else source_python + os.pathsep + environment["PYTHONPATH"]
-    )
     return subprocess.run(
         [sys.executable, "-m", "archbird", *arguments],
         cwd=cwd,
-        env=environment,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -177,8 +352,12 @@ def expect_error(*arguments: str, cwd: Path, match: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output")
+    parser.add_argument("--require-installed", action="store_true")
+    args = parser.parse_args()
     repository = Path(__file__).resolve().parents[1]
-    check_public_readmes(repository)
+    examples = check_public_readmes(repository)
     project_template = repository / "examples" / "minimal.archbird.json"
     workflow_template = repository / "examples" / "quickstart.archbird.json"
     project_config = json.loads(project_template.read_text(encoding="utf-8"))
@@ -215,6 +394,15 @@ def main() -> None:
     import archbird
     from archbird import native
 
+    package_root = Path(archbird.__file__).resolve().parent
+    if args.require_installed:
+        try:
+            package_root.relative_to(Path(sys.prefix).resolve())
+        except ValueError as error:
+            raise AssertionError(
+                f"README contract imported outside its isolated installation: "
+                f"{package_root}"
+            ) from error
     if set(native.__all__) != set(archbird._NATIVE_EXPORTS):
         raise AssertionError("archbird.native.__all__ drifted from top-level exports")
     for readme in (repository / "README.md", repository / "py" / "README.md"):
@@ -418,6 +606,70 @@ def main() -> None:
             raise AssertionError("query . did not produce a live Query artifact")
         run(
             "query",
+            ".",
+            "--search",
+            "demo open",
+            "--search-limit",
+            "8",
+            "--max-chars",
+            "12000",
+            "--check",
+            cwd=root,
+        )
+        run(
+            "impact",
+            ".",
+            "--path",
+            "src/core.c",
+            "--depth",
+            "2",
+            "--check",
+            cwd=root,
+        )
+        run(
+            "query",
+            ".",
+            "--symbol",
+            "src/core.c:demo_open",
+            "--view",
+            "source",
+            "--detail",
+            "standard",
+            "--max-chars",
+            "12000",
+            "--check",
+            cwd=root,
+        )
+        run(
+            "query",
+            ".",
+            "--path",
+            "src/core.c",
+            "--dump",
+            "--check",
+            cwd=root,
+        )
+        path_result = json.loads(
+            run(
+                "path",
+                "src/core.c",
+                "include/demo.h",
+                "--root",
+                ".",
+                "--relation",
+                "imports",
+                "--direction",
+                "downstream",
+                "--format",
+                "json",
+                "--check",
+                cwd=root,
+            ).stdout
+        )
+        if path_result["outcome"] != "found":
+            raise AssertionError("README Path fixture was not proof-quality")
+        run(
+            "query",
             "public-api-impact",
             "--map",
             ".archbird/map.json",
@@ -549,6 +801,51 @@ def main() -> None:
         freshness = json.loads(audit_map_freshness(map_json, project.map_json()))
         if freshness["status"] != "current":
             raise AssertionError("Python README freshness example is not current")
+        if args.output:
+            Path(args.output).write_text(
+                json.dumps(
+                    {
+                        "artifact": "archbird-python-readme-conformance",
+                        "documents": ["README.md", "py/README.md"],
+                        "examples": sorted(
+                            (
+                                example
+                                for document in ("README.md", "py/README.md")
+                                for example in examples[document]
+                                if str(example["category"]).startswith("tested-")
+                            ),
+                            key=lambda row: str(row["id"]),
+                        ),
+                        "implementation_sha256": (
+                            native.CORE_IMPLEMENTATION_SHA256
+                        ),
+                        "operations": [
+                            "api",
+                            "config",
+                            "freshness",
+                            "graph",
+                            "impact",
+                            "map",
+                            "path",
+                            "query",
+                            "search",
+                            "source",
+                            "verify",
+                        ],
+                        "package": str(package_root),
+                        "surfaces": {
+                            "c_api": sorted(c_api),
+                            "cli": sorted(python_commands),
+                            "python_api": sorted(archbird.__all__),
+                        },
+                        "version": archbird.__version__,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
 
 if __name__ == "__main__":

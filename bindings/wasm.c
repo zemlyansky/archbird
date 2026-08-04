@@ -15,7 +15,7 @@
 #endif
 
 #ifndef ARCHBIRD_VERSION
-#define ARCHBIRD_VERSION "0.0.2"
+#define ARCHBIRD_VERSION "0.0.3"
 #endif
 
 typedef struct WasmOutput {

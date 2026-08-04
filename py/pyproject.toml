@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archbird"
-version = "0.0.2"
+version = "0.0.3"
 description = "Map codebases, verify architecture, and safely plan structural changes"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -44,6 +44,7 @@ namespaces = true
 archbird = [
   "app/*",
   "app/assets/*",
+  "release.json",
   "schemas/*.json",
   "schemas/.archbird-manifest.json"
 ]

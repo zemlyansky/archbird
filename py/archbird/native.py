@@ -674,7 +674,7 @@ class Project:
         )
 
     def _reset_capsule(self) -> None:
-        self._capsule.close()
+        _native.project_close(self._capsule)
         self._capsule = _native.project_create(self.manifest_json)
         for source in self.sources:
             _native.project_add_source(self._capsule, source.path, source.data)

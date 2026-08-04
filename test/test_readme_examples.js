@@ -6,13 +6,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
-if (process.argv.length !== 5) {
-  throw new Error("usage: test_readme_examples.js REPOSITORY CLI ADDON");
+if (![6, 7].includes(process.argv.length)) {
+  throw new Error(
+    "usage: test_readme_examples.js REPOSITORY CLI ADDON PACKAGE [OUTPUT]",
+  );
 }
 
 const repository = path.resolve(process.argv[2]);
 const cli = path.resolve(process.argv[3]);
 const addon = path.resolve(process.argv[4]);
+const packageRoot = path.resolve(process.argv[5]);
+const output = process.argv[6] ? path.resolve(process.argv[6]) : "";
 const temporaryRoot = path.join(repository, "build", "tmp");
 fs.mkdirSync(temporaryRoot, { recursive: true });
 const root = fs.mkdtempSync(path.join(temporaryRoot, "readme-node-"));
@@ -65,6 +69,30 @@ function markedNames(relative, name) {
   return new Set(names);
 }
 
+function classifiedExamples(relative) {
+  const lines = fs.readFileSync(
+    path.join(repository, relative), "utf8",
+  ).split(/\r?\n/);
+  const marker = /<!-- archbird-example: (tested-pass|tested-failure|template|illustrative) ([a-z0-9]+(?:-[a-z0-9]+)*)(?: covers=([a-z0-9,-]+))? -->/;
+  const examples = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^```(?:bash|sh|shell|console)$/.test(lines[index])) continue;
+    assert.ok(index > 0, `${relative}:${index + 1}: unclassified shell example`);
+    const match = lines[index - 1].match(marker);
+    assert.ok(
+      match && match[0] === lines[index - 1],
+      `${relative}:${index + 1}: unclassified shell example`,
+    );
+    examples.push({
+      category: match[1],
+      covers: match[3] ? [...new Set(match[3].split(","))].sort() : [],
+      id: match[2],
+      line: index + 1,
+    });
+  }
+  return examples;
+}
+
 try {
   fs.copyFileSync(
     path.join(repository, "examples", "quickstart.archbird.json"),
@@ -109,6 +137,8 @@ try {
   const zeroConfig = JSON.parse(
     run(["--no-config", "--format", "json", "--check"]),
   );
+  const support = JSON.parse(run(["support"]));
+  assert.equal(support.engine.kind, "native");
   assert.match(run(["--help"]), /^usage: archbird COMMAND/m);
   assert.match(run(["config", "--help"]), /^archbird config show\|init/m);
   expectError(["verfiy"], /unknown command/);
@@ -154,6 +184,23 @@ try {
     "--format", "json", "--check",
   ]));
   assert.equal(liveQuery.artifact, "query");
+  run([
+    "query", ".", "--search", "demo open", "--search-limit", "8",
+    "--max-chars", "12000", "--check",
+  ]);
+  run(["impact", ".", "--path", "src/core.c", "--depth", "2", "--check"]);
+  run([
+    "query", ".", "--symbol", "src/core.c:demo_open",
+    "--view", "source", "--detail", "standard",
+    "--max-chars", "12000", "--check",
+  ]);
+  run(["query", ".", "--path", "src/core.c", "--dump", "--check"]);
+  const pathResult = JSON.parse(run([
+    "path", "src/core.c", "include/demo.h", "--root", ".",
+    "--relation", "imports", "--direction", "downstream",
+    "--format", "json", "--check",
+  ]));
+  assert.equal(pathResult.outcome, "found");
   run([
     "query", "public-api-impact", "--map", ".archbird/map.json",
     "--config", "archbird.json", "--format", "json",
@@ -201,7 +248,7 @@ try {
 
   process.env.ARCHBIRD_ENGINE = "native";
   process.env.ARCHBIRD_NATIVE_ADDON = addon;
-  const api = require(path.join(repository, "js", "src", "index.js"));
+  const api = require(packageRoot);
   const { Project, auditMapFreshness } = api;
   for (const relative of ["README.md", "js/README.md"]) {
     assert.deepEqual(
@@ -224,7 +271,7 @@ try {
     );
   }
   const packageDocument = JSON.parse(
-    fs.readFileSync(path.join(repository, "js", "package.json"), "utf8"),
+    fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
   );
   const entrypoints = new Set(
     Object.keys(packageDocument.exports).map((name) => (
@@ -239,7 +286,7 @@ try {
     );
   }
   const browserSource = fs.readFileSync(
-    path.join(repository, "js", "src", "browser.js"),
+    path.join(packageRoot, "src", "browser.js"),
     "utf8",
   );
   const browserFacade = browserSource.match(
@@ -273,6 +320,39 @@ try {
     "current",
   );
   project.dispose();
+  if (output) {
+    fs.writeFileSync(output, `${JSON.stringify({
+      artifact: "archbird-node-readme-conformance",
+      documents: ["README.md", "js/README.md"],
+      examples: ["README.md", "js/README.md"]
+        .flatMap((relative) => classifiedExamples(relative))
+        .filter((example) => example.category.startsWith("tested-"))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      implementation_sha256: api.IMPLEMENTATION_SHA256,
+      operations: [
+        "api",
+        "config",
+        "freshness",
+        "graph",
+        "impact",
+        "map",
+        "path",
+        "query",
+        "search",
+        "source",
+        "support",
+        "verify",
+      ],
+      package: packageRoot,
+      surfaces: {
+        browser_api: [...browserNames].sort(),
+        cli: [...commands].sort(),
+        entrypoints: [...entrypoints].sort(),
+        node_api: Object.keys(api).sort(),
+      },
+      version: api.VERSION,
+    }, null, 2)}\n`);
+  }
   console.log("README quick-start passed through Node native host");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

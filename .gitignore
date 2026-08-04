@@ -26,6 +26,8 @@ js/LICENSE
 js/NOTICE
 app/public/archbird.wasm
 py/archbird/app/
+py/archbird/release.json
+js/release.json
 src.zip
 
 # Markdown is local project state unless it is a README.

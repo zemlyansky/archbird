@@ -8,6 +8,7 @@ Use it to understand unfamiliar code, give coding agents focused context,
 enforce reviewed architecture constraints in CI, compare ports or frontends,
 and check that coordinated changes produced the required structural result.
 
+<!-- archbird-example: template node-install -->
 ```bash
 npm install --save-dev archbird
 
@@ -89,6 +90,7 @@ The CLI follows the product stages directly. Run it from the repository root;
 
 ### Map a repository
 
+<!-- archbird-example: tested-pass node-map covers=map -->
 ```bash
 npx archbird map .
 npx archbird map . --view architecture \
@@ -104,6 +106,7 @@ presentation.
 
 ### Query focused context
 
+<!-- archbird-example: tested-pass node-query covers=impact,query,search,source -->
 ```bash
 npx archbird query . --symbol 'src/runtime.c:runtime_start' \
   --depth 1 --test-depth 1 --max-chars 12000 --check
@@ -142,6 +145,7 @@ without exact source-path evidence.
 The default is an architecture-first overview. Canonical JSON contains every
 selected file and mapped fact; Markdown is only a human projection:
 
+<!-- archbird-example: tested-pass node-views covers=map,source -->
 ```bash
 npx archbird map --view overview --detail compact
 npx archbird map --view architecture \
@@ -190,9 +194,10 @@ claims that a test ran. Use project-runner observations for executed routes.
 
 ### Find a connection with Path
 
+<!-- archbird-example: illustrative node-path -->
 ```bash
 npx archbird path 'src/cli.c' 'src/runtime.c' --root . \
-  --relation calls --direction downstream --check
+  --relation calls --direction downstream
 ```
 
 `path SOURCE TARGET` searches the Map's exhaustive typed graph for bounded
@@ -200,6 +205,9 @@ shortest witnesses. It preserves relation kind, direction, evidence state,
 semantic resolution, provenance, and completeness. `found` requires a current,
 source-evidenced route; candidate-only connectivity remains `unknown` and
 fails `--check`.
+
+Add `--check` when automation specifically requires a proven `found` result.
+Repository-dependent examples omit it because an honest `unknown` is valid.
 
 ### Verify architecture
 
@@ -212,6 +220,7 @@ below therefore needs no second suite file.
 For a first check in an unfamiliar repository, configuration may contain only
 the reviewed constraint; discovery supplies the project model and layers:
 
+<!-- archbird-example: tested-pass node-verify-inline covers=verify -->
 ```bash
 npx archbird verify --config - --check <<'JSON'
 {
@@ -231,6 +240,7 @@ JSON
 The same fragment can be saved unchanged as `archbird.json`. Explicit
 project-model sections replace discovery; omitted sections inherit it.
 
+<!-- archbird-example: tested-pass node-saved-plans covers=query,verify -->
 ```bash
 # Run one saved Query plan or an ad-hoc query.
 npx archbird query public-api-impact
@@ -336,6 +346,7 @@ canonical Verification result.
 Run each case in isolation with V8 or Istanbul coverage, then convert the
 project-owned reports without rerunning the project:
 
+<!-- archbird-example: template node-observe -->
 ```bash
 npx archbird observe . --map .archbird/map.json \
   --request .archbird/coverage-request.json \
@@ -379,6 +390,7 @@ must remove the relation from the fresh after-Map. Act rejects any unrelated
 edge addition or removal even when Verify passes. Component edges, incomplete
 evidence, and external or unmapped targets remain redirect/manual work.
 
+<!-- archbird-example: template node-plan-act -->
 ```bash
 npx archbird plan --format markdown
 npx archbird plan --output .archbird/plan.json
@@ -542,6 +554,7 @@ Run the local application while source changes:
 
 
 
+<!-- archbird-example: template node-serve -->
 ```bash
 npx archbird serve
 ```
@@ -557,6 +570,7 @@ Normal exploration does not download the canonical Map; saving it is explicit.
 Save complete evidence when subsequent operations must use the exact same
 repository state:
 
+<!-- archbird-example: tested-pass node-saved-evidence covers=config,impact,map,path,query,search -->
 ```bash
 mkdir -p .archbird
 npx archbird map . --format json --pretty \
@@ -574,7 +588,7 @@ npx archbird impact --map .archbird/map.json \
   --path src/runtime.c --depth 2
 
 npx archbird path 'src/cli.c' 'src/runtime.c' \
-  --map .archbird/map.json --relation calls --direction downstream --check
+  --map .archbird/map.json --relation calls --direction downstream
 
 npx archbird query --map .archbird/map.json \
   --symbol 'src/runtime.c:runtime_start' \
@@ -597,6 +611,7 @@ when the result will drive a decision; the shared core then requires the saved
 producer digest to match the active core. Run `freshness` before treating the
 saved source/config evidence as current:
 
+<!-- archbird-example: tested-pass node-freshness covers=freshness -->
 ```bash
 npx archbird freshness --root . --snapshot .archbird/map.json --check
 ```
@@ -771,6 +786,7 @@ Archbird works without config. Add `archbird.json` when names and boundaries
 are reviewed project intent. CLI arguments override project config, which
 overrides versioned discovery defaults.
 
+<!-- archbird-example: tested-pass node-config covers=config -->
 ```bash
 npx archbird config show . --pretty
 npx archbird config init . --output archbird.json
@@ -906,6 +922,7 @@ Linux x64 glibc Node-API prebuild when available and otherwise the bundled Wasm
 core. `npm run build:native` is an explicit source build. Select or inspect the
 engine with:
 
+<!-- archbird-example: tested-pass node-engine covers=map,support -->
 ```bash
 ARCHBIRD_ENGINE=native npx archbird support --pretty
 ARCHBIRD_ENGINE=wasm npx archbird map . --check
@@ -934,6 +951,7 @@ available. A full cache warns without changing canonical output.
 
 ## Visualization, interchange, and commands
 
+<!-- archbird-example: template node-export -->
 ```bash
 npx archbird export json --map .archbird/map.json --view components \
   --output .archbird/components.json
