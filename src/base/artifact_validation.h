@@ -24,5 +24,9 @@ int ab_artifact_object_exact(const AbValue *value, const char *const *fields,
 ArchbirdStatus ab_artifact_json_sha256(ArchbirdEngine *engine,
                                        const uint8_t *json, size_t length,
                                        char out[65]);
+ArchbirdStatus ab_artifact_value_sha256_without_field(ArchbirdEngine *engine,
+                                                      const AbValue *value,
+                                                      const char *field_name,
+                                                      char out[65]);
 
 #endif

@@ -181,6 +181,13 @@ static int count_write(void *user_data, const uint8_t *bytes, size_t length) {
   return 0;
 }
 
+static int reject_write(void *user_data, const uint8_t *bytes, size_t length) {
+  (void)user_data;
+  (void)bytes;
+  (void)length;
+  return 1;
+}
+
 static int heap_write(void *user_data, const uint8_t *bytes, size_t length) {
   HeapOutput *output = (HeapOutput *)user_data;
   uint8_t *resized;
@@ -896,6 +903,35 @@ static int generate_report_path(void) {
   return 1;
 }
 
+static void test_path_writer_failures(void) {
+  static const char path[] =
+      "{\"artifact\":\"path-request\",\"relations\":[\"imports\"],"
+      "\"schema_version\":1,\"source\":{\"kind\":\"file\","
+      "\"patterns\":[\"py/sample/__init__.py\"]},\"target\":{"
+      "\"kind\":\"file\",\"patterns\":[\"py/sample/api.py\"]}}";
+  ArchbirdEngineOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  archbird_engine_options_init(&options);
+  status = archbird_engine_create(&options, &engine);
+  if (status != ARCHBIRD_OK) {
+    fail("path-writer-failure", "cannot create engine");
+    return;
+  }
+  status = archbird_map_path_markdown(
+      engine, report_map, report_map_length, NULL, 0, (const uint8_t *)path,
+      sizeof(path) - 1, 4096, reject_write, NULL);
+  if (status != ARCHBIRD_WRITE_FAILED)
+    fail("path-markdown-writer-failure",
+         "live Path Markdown did not report ARCHBIRD_WRITE_FAILED");
+  status = archbird_path_render_markdown(
+      engine, report_path, report_path_length, 4096, reject_write, NULL);
+  if (status != ARCHBIRD_WRITE_FAILED)
+    fail("path-artifact-writer-failure",
+         "artifact Path Markdown did not report ARCHBIRD_WRITE_FAILED");
+  archbird_engine_destroy(engine);
+}
+
 int main(void) {
   if (!load_fixture(ARCHBIRD_ALLOCATOR_REPORT_MAP, &report_map,
                     &report_map_length) ||
@@ -908,6 +944,7 @@ int main(void) {
   }
   test_invalid_options();
   test_invalid_okf_layer_cleanup();
+  test_path_writer_failures();
   run_failure_sweep("json-every-n", exercise_json);
   run_failure_sweep("json-pointer-edit-every-n", exercise_json_pointer_edit);
   run_failure_sweep("pattern-every-n", exercise_pattern);

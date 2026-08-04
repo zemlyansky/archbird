@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import contextlib
+import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -62,6 +64,35 @@ def assert_path_shape(document: dict[str, object]) -> None:
                 or not relation["evidence"]
             ):
                 raise AssertionError("Path step lost relation direction or evidence")
+
+
+def encode_path_artifact(document: dict[str, object]) -> bytes:
+    base = copy.deepcopy(document)
+    base.pop("path_sha256", None)
+    canonical = json.dumps(
+        base, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    base["path_sha256"] = hashlib.sha256(canonical).hexdigest()
+    return json.dumps(
+        base, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+
+
+def assert_path_artifact_rejected(
+    document: dict[str, object], description: str, *, redigest: bool = True
+) -> None:
+    encoded = (
+        encode_path_artifact(document)
+        if redigest
+        else json.dumps(
+            document, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+    )
+    try:
+        render_path_markdown(encoded)
+    except Exception:
+        return
+    raise AssertionError(f"Path renderer accepted {description}")
 
 
 def main() -> None:
@@ -292,6 +323,17 @@ def main() -> None:
             or incomplete["graph"]["classification"] != "incomplete"
         ):
             raise AssertionError("incomplete repository coverage proved absence")
+        incomplete_json = incomplete_project.path_json(
+            endpoint(["d.js"]),
+            endpoint(["a.js"]),
+            relations=["imports"],
+        )
+        if b"Outcome: `unknown` (`graph-incomplete`)" not in (
+            render_path_markdown(incomplete_json)
+        ):
+            raise AssertionError(
+                "Path renderer rejected valid contextual coverage downgrade"
+            )
 
         canonical_markdown_path = project.path_json(
             endpoint(["a.js"]),
@@ -316,6 +358,72 @@ def main() -> None:
             or "provenance=derived" not in markdown
         ):
             raise AssertionError("Path Markdown hides canonical evidence")
+
+        canonical_document = json.loads(canonical_markdown_path)
+        missing_digest = copy.deepcopy(canonical_document)
+        missing_digest.pop("path_sha256")
+        assert_path_artifact_rejected(
+            missing_digest, "an artifact without its digest", redigest=False
+        )
+        stale_digest = copy.deepcopy(canonical_document)
+        stale_digest["outcome"] = "unknown"
+        assert_path_artifact_rejected(
+            stale_digest, "content with a stale digest", redigest=False
+        )
+        forged_empty = copy.deepcopy(canonical_document)
+        forged_empty["paths"] = []
+        forged_empty["search"]["path_count"] = 0
+        forged_empty["search"]["shortest_length"] = None
+        assert_path_artifact_rejected(
+            forged_empty, "a redigested found outcome without witnesses"
+        )
+        forged_count = copy.deepcopy(canonical_document)
+        forged_count["search"]["path_count"] += 1
+        assert_path_artifact_rejected(
+            forged_count, "a redigested inconsistent path count"
+        )
+        forged_hop = copy.deepcopy(canonical_document)
+        forged_hop["paths"][0]["steps"][0]["relation"]["attributes"][
+            "target"
+        ] = "file:unrelated.js"
+        assert_path_artifact_rejected(
+            forged_hop, "a redigested disconnected witness hop"
+        )
+        forged_state = copy.deepcopy(canonical_document)
+        forged_state["paths"][0]["state"] = "unknown"
+        assert_path_artifact_rejected(
+            forged_state, "a redigested witness with contradictory state"
+        )
+        forged_evidence = copy.deepcopy(canonical_document)
+        forged_evidence["paths"][0]["steps"][0]["relation"]["evidence"] = []
+        assert_path_artifact_rejected(
+            forged_evidence,
+            "a redigested current witness without relation evidence",
+        )
+        forged_resolution = copy.deepcopy(canonical_document)
+        forged_resolution["paths"][0]["steps"][0]["relation"]["attributes"][
+            "resolution"
+        ] = "candidate"
+        assert_path_artifact_rejected(
+            forged_resolution,
+            "a redigested current witness with candidate resolution",
+        )
+        forged_endpoint_evidence = copy.deepcopy(canonical_document)
+        forged_endpoint_evidence["source"]["candidates"][0]["state"] = "unknown"
+        assert_path_artifact_rejected(
+            forged_endpoint_evidence,
+            "a redigested current witness with an unknown endpoint",
+        )
+        forged_item_state = copy.deepcopy(canonical_document)
+        forged_item_state["source"]["candidates"][0]["state"] = "invented"
+        assert_path_artifact_rejected(
+            forged_item_state, "a redigested noncanonical evidence state"
+        )
+        forged_endpoint = copy.deepcopy(canonical_document)
+        forged_endpoint["source"]["state"] = "unresolved"
+        assert_path_artifact_rejected(
+            forged_endpoint, "a redigested inconsistent endpoint"
+        )
 
         map_path = artifacts / "map.json"
         live_path = artifacts / "live-path.json"

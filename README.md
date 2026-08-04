@@ -117,7 +117,8 @@ you want to save the canonical Map for later commands.
 relationships, and returns a focused neighborhood. Use typed selectors such as
 `--symbol`, `--path`, `--component`, `--package`, or `--artifact` when you know
 what you are looking for. File ordering prefers routes with stronger evidence
-state and semantic resolution before distance. Each selected file exposes the
+state (`current`, then `unknown`, then `stale`) and semantic resolution before
+distance. Each selected file exposes the
 best route's state, resolution counts, provenance count, and last hop; the
 canonical Query still retains the underlying candidate edges and their full
 evidence. Repository discovery/completeness remains a separate property rather
@@ -140,6 +141,12 @@ renders those witnesses as `unknown` with reason `candidate-witnesses`, and
 `--check` fails. A missing route is reported as `absent` only when the selected
 graph and bounded search are complete; unresolved endpoints, unsupported
 evidence, or a depth frontier remain `unknown`.
+
+Rendering a saved Path validates its exact artifact shape, content digest, and
+cross-field proof invariants before producing Markdown. A `current` witness
+requires current endpoints and relations, nonempty relation evidence, and
+`unique`, `builtin`, or not-applicable resolution; the renderer never trusts an
+`outcome` label by itself.
 
 `serve` starts a browser-based architecture explorer and immediately prints its
 loopback URL. Use it to expand selected components into files and selected files

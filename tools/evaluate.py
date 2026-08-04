@@ -222,39 +222,141 @@ def validate_case(value: Mapping[str, Any], source: Path | None = None) -> Mappi
         raise EvaluationError(f"{where}.analysis must be an object")
     exact_keys(
         analysis,
-        {"track", "selectors", "seed_rationale", "depth", "test_depth"},
-        {"config"},
+        {"track", "seed_rationale"},
+        {
+            "config",
+            "depth",
+            "direction",
+            "level",
+            "max_depth",
+            "max_paths",
+            "relations",
+            "selectors",
+            "source",
+            "target",
+            "test_depth",
+        },
         f"{where}.analysis",
     )
-    if analysis["track"] not in {"exact_query", "exact_impact"}:
+    if analysis["track"] not in {"exact_query", "exact_impact", "exact_path"}:
         raise EvaluationError(f"{where}.analysis.track is invalid")
-    selectors = analysis["selectors"]
-    if not isinstance(selectors, list) or not selectors:
-        raise EvaluationError(f"{where}.analysis.selectors must be non-empty")
-    selector_keys: list[tuple[str, str]] = []
-    for index, selector in enumerate(selectors):
-        if not isinstance(selector, dict):
-            raise EvaluationError(f"{where}.analysis.selectors[{index}] must be an object")
-        exact_keys(
-            selector,
-            {"kind", "value"},
-            set(),
-            f"{where}.analysis.selectors[{index}]",
-        )
-        if selector["kind"] not in {"path", "symbol", "test"}:
-            raise EvaluationError(f"{where}.analysis.selectors[{index}].kind is invalid")
-        if not isinstance(selector["value"], str) or not selector["value"]:
-            raise EvaluationError(f"{where}.analysis.selectors[{index}].value is empty")
-        selector_keys.append((selector["kind"], selector["value"]))
-    if selector_keys != sorted(set(selector_keys), key=lambda item: (item[0].encode(), item[1].encode())):
-        raise EvaluationError(f"{where}.analysis.selectors must be sorted and unique")
     if not isinstance(analysis["seed_rationale"], str) or not analysis["seed_rationale"]:
         raise EvaluationError(f"{where}.analysis.seed_rationale must be non-empty")
-    for key in ("depth", "test_depth"):
-        if not isinstance(analysis[key], int) or isinstance(analysis[key], bool) or not 0 <= analysis[key] <= 16:
-            raise EvaluationError(f"{where}.analysis.{key} must be an integer from 0 to 16")
     if analysis.get("config") is not None and not isinstance(analysis.get("config"), dict):
         raise EvaluationError(f"{where}.analysis.config must be an object or null")
+    if analysis["track"] == "exact_path":
+        exact_keys(
+            analysis,
+            {
+                "track",
+                "seed_rationale",
+                "source",
+                "target",
+                "level",
+                "relations",
+                "direction",
+                "max_depth",
+                "max_paths",
+            },
+            {"config"},
+            f"{where}.analysis",
+        )
+        for endpoint_name in ("source", "target"):
+            endpoint = analysis[endpoint_name]
+            if not isinstance(endpoint, dict):
+                raise EvaluationError(
+                    f"{where}.analysis.{endpoint_name} must be an object"
+                )
+            exact_keys(
+                endpoint,
+                {"kind", "value"},
+                set(),
+                f"{where}.analysis.{endpoint_name}",
+            )
+            kind = endpoint["kind"]
+            if (
+                not isinstance(kind, str)
+                or not re.fullmatch(r"(?:any|[a-z][a-z0-9]*(?:-[a-z0-9]+)*)", kind)
+            ):
+                raise EvaluationError(
+                    f"{where}.analysis.{endpoint_name}.kind is invalid"
+                )
+            if not isinstance(endpoint["value"], str) or not endpoint["value"]:
+                raise EvaluationError(
+                    f"{where}.analysis.{endpoint_name}.value is empty"
+                )
+        if analysis["level"] not in {"component", "file", "symbol"}:
+            raise EvaluationError(f"{where}.analysis.level is invalid")
+        relations = analysis["relations"]
+        allowed_relations = {
+            "bridges",
+            "builds",
+            "calls",
+            "declarations",
+            "imports",
+            "packages",
+            "references",
+            "tests",
+        }
+        if (
+            not isinstance(relations, list)
+            or not relations
+            or any(relation not in allowed_relations for relation in relations)
+            or relations != sorted(set(relations), key=str.encode)
+        ):
+            raise EvaluationError(
+                f"{where}.analysis.relations must be sorted, unique, and valid"
+            )
+        if analysis["level"] == "symbol" and any(
+            relation not in {"calls", "references"} for relation in relations
+        ):
+            raise EvaluationError(
+                f"{where}.analysis.relations contains a non-symbol relation"
+            )
+        if analysis["direction"] not in {"downstream", "upstream", "both"}:
+            raise EvaluationError(f"{where}.analysis.direction is invalid")
+        if (
+            not isinstance(analysis["max_depth"], int)
+            or isinstance(analysis["max_depth"], bool)
+            or not 0 <= analysis["max_depth"] <= 64
+        ):
+            raise EvaluationError(f"{where}.analysis.max_depth is invalid")
+        if (
+            not isinstance(analysis["max_paths"], int)
+            or isinstance(analysis["max_paths"], bool)
+            or not 1 <= analysis["max_paths"] <= 100
+        ):
+            raise EvaluationError(f"{where}.analysis.max_paths is invalid")
+    else:
+        exact_keys(
+            analysis,
+            {"track", "selectors", "seed_rationale", "depth", "test_depth"},
+            {"config"},
+            f"{where}.analysis",
+        )
+        selectors = analysis["selectors"]
+        if not isinstance(selectors, list) or not selectors:
+            raise EvaluationError(f"{where}.analysis.selectors must be non-empty")
+        selector_keys: list[tuple[str, str]] = []
+        for index, selector in enumerate(selectors):
+            if not isinstance(selector, dict):
+                raise EvaluationError(f"{where}.analysis.selectors[{index}] must be an object")
+            exact_keys(
+                selector,
+                {"kind", "value"},
+                set(),
+                f"{where}.analysis.selectors[{index}]",
+            )
+            if selector["kind"] not in {"path", "symbol", "test"}:
+                raise EvaluationError(f"{where}.analysis.selectors[{index}].kind is invalid")
+            if not isinstance(selector["value"], str) or not selector["value"]:
+                raise EvaluationError(f"{where}.analysis.selectors[{index}].value is empty")
+            selector_keys.append((selector["kind"], selector["value"]))
+        if selector_keys != sorted(set(selector_keys), key=lambda item: (item[0].encode(), item[1].encode())):
+            raise EvaluationError(f"{where}.analysis.selectors must be sorted and unique")
+        for key in ("depth", "test_depth"):
+            if not isinstance(analysis[key], int) or isinstance(analysis[key], bool) or not 0 <= analysis[key] <= 16:
+                raise EvaluationError(f"{where}.analysis.{key} must be an integer from 0 to 16")
 
     truth = value["ground_truth"]
     if not isinstance(truth, dict):
@@ -268,7 +370,7 @@ def validate_case(value: Mapping[str, Any], source: Path | None = None) -> Mappi
             "architecture_obligations",
             "notes",
         },
-        {"introduced_tests"},
+        {"introduced_tests", "path"},
         f"{where}.ground_truth",
     )
     sorted_unique_strings(truth["relevant_files"], f"{where}.ground_truth.relevant_files", paths=True)
@@ -280,6 +382,73 @@ def validate_case(value: Mapping[str, Any], source: Path | None = None) -> Mappi
         )
     if not isinstance(truth["notes"], str):
         raise EvaluationError(f"{where}.ground_truth.notes must be a string")
+    path_truth = truth.get("path")
+    if analysis["track"] == "exact_path" and path_truth is None:
+        raise EvaluationError(f"{where}.ground_truth.path is required")
+    if analysis["track"] != "exact_path" and path_truth is not None:
+        raise EvaluationError(
+            f"{where}.ground_truth.path requires the exact_path track"
+        )
+    if path_truth is not None:
+        if not isinstance(path_truth, dict):
+            raise EvaluationError(f"{where}.ground_truth.path must be an object")
+        exact_keys(
+            path_truth,
+            {"outcome", "reason", "shortest_length", "path_state", "nodes"},
+            set(),
+            f"{where}.ground_truth.path",
+        )
+        if path_truth["outcome"] not in {"found", "absent", "unknown"}:
+            raise EvaluationError(
+                f"{where}.ground_truth.path.outcome is invalid"
+            )
+        if path_truth["reason"] not in {
+            "witnesses",
+            "path-limit",
+            "candidate-witnesses",
+            "endpoint-unresolved",
+            "graph-incomplete",
+            "depth-frontier",
+            "exhaustive",
+        }:
+            raise EvaluationError(
+                f"{where}.ground_truth.path.reason is invalid"
+            )
+        shortest = path_truth["shortest_length"]
+        if (
+            shortest is not None
+            and (
+                not isinstance(shortest, int)
+                or isinstance(shortest, bool)
+                or not 0 <= shortest <= 64
+            )
+        ):
+            raise EvaluationError(
+                f"{where}.ground_truth.path.shortest_length is invalid"
+            )
+        if path_truth["path_state"] not in {None, "current", "unknown"}:
+            raise EvaluationError(
+                f"{where}.ground_truth.path.path_state is invalid"
+            )
+        nodes = path_truth["nodes"]
+        if (
+            not isinstance(nodes, list)
+            or any(
+                not isinstance(path, list)
+                or not path
+                or any(not isinstance(node, str) or not node for node in path)
+                for path in nodes
+            )
+        ):
+            raise EvaluationError(f"{where}.ground_truth.path.nodes is invalid")
+        if (
+            bool(nodes) != (shortest is not None)
+            or (nodes and any(len(path) != shortest + 1 for path in nodes))
+            or (bool(nodes) != (path_truth["path_state"] is not None))
+        ):
+            raise EvaluationError(
+                f"{where}.ground_truth.path witness ledger is inconsistent"
+            )
 
     review = value["review"]
     if not isinstance(review, dict):
@@ -1215,6 +1384,71 @@ def rank_metrics(prefix: str, ranked: Sequence[str], relevant: Sequence[str]) ->
     return result
 
 
+def exact_path_metrics(
+    document: Mapping[str, Any], expected: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    paths = document.get("paths")
+    search = document.get("search")
+    if not isinstance(paths, list) or not isinstance(search, dict):
+        raise EvaluationError("case Path artifact has an invalid result shape")
+    actual_nodes: list[list[str]] = []
+    actual_states: set[str] = set()
+    for index, path in enumerate(paths):
+        if not isinstance(path, dict):
+            raise EvaluationError(f"case Path paths[{index}] must be an object")
+        nodes = path.get("nodes")
+        state = path.get("state")
+        if (
+            not isinstance(nodes, list)
+            or any(not isinstance(node, str) for node in nodes)
+            or state not in {"current", "unknown"}
+        ):
+            raise EvaluationError(
+                f"case Path paths[{index}] has invalid nodes or state"
+            )
+        actual_nodes.append(nodes)
+        actual_states.add(state)
+    expected_state = expected["path_state"]
+    actual_state = (
+        next(iter(actual_states))
+        if len(actual_states) == 1
+        else None
+    )
+    outcome_accuracy = float(document.get("outcome") == expected["outcome"])
+    reason_accuracy = float(document.get("reason") == expected["reason"])
+    shortest_accuracy = float(
+        search.get("shortest_length") == expected["shortest_length"]
+    )
+    state_accuracy = float(actual_state == expected_state)
+    witness_accuracy = float(actual_nodes == expected["nodes"])
+    flattened_actual = [
+        node for witness in actual_nodes for node in witness
+    ]
+    flattened_expected = [
+        node for witness in expected["nodes"] for node in witness
+    ]
+    metrics: dict[str, Any] = {
+        "path_accuracy": float(
+            outcome_accuracy
+            and reason_accuracy
+            and shortest_accuracy
+            and state_accuracy
+            and witness_accuracy
+        ),
+        "path_outcome_accuracy": outcome_accuracy,
+        "path_reason_accuracy": reason_accuracy,
+        "path_shortest_accuracy": shortest_accuracy,
+        "path_state_accuracy": state_accuracy,
+        "path_witness_accuracy": witness_accuracy,
+        "path_witnesses_returned": len(actual_nodes),
+        "path_witnesses_truth": len(expected["nodes"]),
+    }
+    metrics.update(
+        rank_metrics("path_node", flattened_actual, flattened_expected)
+    )
+    return metrics
+
+
 def symbol_identity(value: object, *, inherited_path: str | None = None) -> str | None:
     if not isinstance(value, dict) or not isinstance(value.get("name"), str):
         return None
@@ -1251,23 +1485,178 @@ def selector_truth(
 
 def extract_rankings(
     query: Mapping[str, Any],
-) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str]]:
-    files = [
-        str(item["path"])
+) -> tuple[
+    list[str],
+    list[str],
+    list[str],
+    list[str],
+    list[str],
+    list[str],
+    Mapping[str, int],
+]:
+    canonical_file_rows = [
+        item
         for item in query.get("files", [])
         if isinstance(item, dict) and isinstance(item.get("path"), str)
     ]
-    seed_files = [
-        str(item["path"])
-        for item in query.get("files", [])
+    canonical_test_rows = [
+        item
+        for item in query.get("test_matches", [])
         if isinstance(item, dict)
         and isinstance(item.get("path"), str)
-        and item.get("distance") == 0
+        and isinstance(item.get("selector"), str)
+    ]
+    metadata = query.get("query")
+    raw_context = metadata.get("context") if isinstance(metadata, dict) else None
+    if raw_context is not None and not isinstance(raw_context, dict):
+        raise EvaluationError("case Query context must be an object")
+    context = raw_context if isinstance(raw_context, dict) else {}
+    profile = context.get("profile", "change")
+    profile_defaults: Mapping[str, tuple[int | None, str, str, int | None]] = {
+        "exact": (0, "exclude", "exclude", 12),
+        "change": (1, "expand", "collapse", 24),
+        "architecture": (None, "expand", "collapse", 64),
+        "audit": (None, "expand", "expand", None),
+    }
+    if profile not in profile_defaults:
+        raise EvaluationError("case Query has an invalid context profile")
+    max_distance, candidate_policy, conservative_policy, default_quota = (
+        profile_defaults.get(str(profile), profile_defaults["change"])
+    )
+    if "max_seed_distance" in context:
+        if (
+            not isinstance(context["max_seed_distance"], int)
+            or isinstance(context["max_seed_distance"], bool)
+            or context["max_seed_distance"] < 0
+        ):
+            raise EvaluationError(
+                "case Query context max_seed_distance is invalid"
+            )
+        max_distance = int(context["max_seed_distance"])
+    for name in ("candidate", "conservative"):
+        if name in context and context[name] not in {
+            "collapse",
+            "expand",
+            "exclude",
+        }:
+            raise EvaluationError(f"case Query context {name} policy is invalid")
+    if "candidate" in context:
+        candidate_policy = str(context["candidate"])
+    if "conservative" in context:
+        conservative_policy = str(context["conservative"])
+    quotas = context.get("quotas", {})
+    offsets = context.get("offsets", {})
+    if not isinstance(quotas, dict) or not isinstance(offsets, dict):
+        raise EvaluationError("case Query context counts are invalid")
+
+    def context_count(values: Mapping[str, Any], name: str, default: int) -> int:
+        value = values.get(name, default)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 0
+        ):
+            raise EvaluationError(
+                f"case Query context {name} count is invalid"
+            )
+        return int(value)
+
+    eligible_file_rows = []
+    for row in canonical_file_rows:
+        distance = row.get("distance")
+        if (
+            not isinstance(distance, int)
+            or isinstance(distance, bool)
+            or distance < 0
+        ):
+            raise EvaluationError("case Query file distance is invalid")
+        if max_distance is not None and distance > max_distance:
+            break
+        eligible_file_rows.append(row)
+    file_offset = context_count(offsets, "files", 0)
+    file_quota = context_count(
+        quotas,
+        "files",
+        len(eligible_file_rows) if default_quota is None else default_quota,
+    )
+    presented_file_rows = eligible_file_rows[
+        file_offset : file_offset + file_quota
+    ]
+    allowed_provenance = context.get("provenance")
+    if not isinstance(allowed_provenance, list):
+        allowed_provenance = None
+    allowed_confidence = context.get("confidence")
+    if not isinstance(allowed_confidence, list):
+        allowed_confidence = None
+
+    def test_presented(row: Mapping[str, Any]) -> bool:
+        axes = (
+            row.get("provenance"),
+            row.get("confidence"),
+            row.get("evidence_scope"),
+            row.get("target_role"),
+            row.get("target"),
+        )
+        if not any(value is not None for value in axes):
+            return True
+        if any(value is None for value in axes):
+            raise EvaluationError(
+                "case Query test route axes are partially specified"
+            )
+        provenance = row["provenance"]
+        confidence = row["confidence"]
+        if allowed_provenance is not None and provenance not in allowed_provenance:
+            return False
+        if allowed_confidence is not None:
+            if confidence not in allowed_confidence:
+                return False
+        elif profile == "exact" and confidence != "exact":
+            return False
+        seed_distance = row.get("seed_distance")
+        if (
+            isinstance(seed_distance, int)
+            and not isinstance(seed_distance, bool)
+            and max_distance is not None
+            and seed_distance > max_distance
+        ):
+            return False
+        if confidence == "candidate" and candidate_policy != "expand":
+            return False
+        if confidence == "conservative" and conservative_policy != "expand":
+            return False
+        return True
+
+    eligible_test_rows = [
+        row for row in canonical_test_rows if test_presented(row)
+    ]
+    test_offset = context_count(offsets, "test_matches", 0)
+    test_quota = context_count(
+        quotas,
+        "test_matches",
+        len(eligible_test_rows) if default_quota is None else default_quota,
+    )
+    presented_test_rows = eligible_test_rows[
+        test_offset : test_offset + test_quota
+    ]
+    files = [
+        str(item["path"])
+        for item in presented_file_rows
+    ]
+    seed_files = [
+        str(item["path"])
+        for item in canonical_file_rows
+        if item.get("distance") == 0
     ]
     symbols = []
-    for file in query.get("files", []):
-        if not isinstance(file, dict) or not isinstance(file.get("path"), str):
-            continue
+    canonical_symbols = 0
+    for file in canonical_file_rows:
+        canonical_symbols += sum(
+            1
+            for symbol in file.get("symbols", [])
+            if symbol_identity(symbol, inherited_path=str(file["path"]))
+            is not None
+        )
+    for file in presented_file_rows:
         for symbol in file.get("symbols", []):
             identity = symbol_identity(symbol, inherited_path=str(file["path"]))
             if identity is not None:
@@ -1284,10 +1673,9 @@ def extract_rankings(
     ]
     tests = []
     test_files = []
-    for test in query.get("test_matches", []):
-        if isinstance(test, dict) and isinstance(test.get("path"), str) and isinstance(test.get("selector"), str):
-            test_files.append(str(test["path"]))
-            tests.append(f"{test['path']}::{test['selector']}")
+    for test in presented_test_rows:
+        test_files.append(str(test["path"]))
+        tests.append(f"{test['path']}::{test['selector']}")
     context_files = deduplicate([*files, *matched_symbol_files, *test_files])
     return (
         deduplicate(files),
@@ -1296,6 +1684,11 @@ def extract_rankings(
         deduplicate(symbols),
         deduplicate(matched_symbols),
         deduplicate(tests),
+        {
+            "canonical_file_evidence_returned": len(canonical_file_rows),
+            "canonical_symbol_evidence_returned": canonical_symbols,
+            "canonical_test_evidence_returned": len(canonical_test_rows),
+        },
     )
 
 
@@ -1912,52 +2305,106 @@ def run_case(
                 "status": "error",
             }
         map_document = read_json(map_path, "case Map")
-        command_name = "query" if case["analysis"]["track"] == "exact_query" else "impact"
-        query_path = case_output / "query.json"
-        query_command = [str(archbird), command_name, "--map", str(map_path)]
-        for selector in case["analysis"]["selectors"]:
-            query_command.extend((f"--{selector['kind']}", selector["value"]))
-        query_command.extend(
-            (
-                "--depth",
-                str(case["analysis"]["depth"]),
-                "--test-depth",
-                str(case["analysis"]["test_depth"]),
-                "--format",
-                "json",
-                "--output",
-                str(query_path),
+        analysis = case["analysis"]
+        path_track = analysis["track"] == "exact_path"
+        if path_track:
+            analysis_kind = "path"
+            analysis_path = case_output / "path.json"
+            analysis_command = [
+                str(archbird),
+                "path",
+                str(analysis["source"]["value"]),
+                str(analysis["target"]["value"]),
+                "--map",
+                str(map_path),
+                "--source-kind",
+                str(analysis["source"]["kind"]),
+                "--target-kind",
+                str(analysis["target"]["kind"]),
+                "--level",
+                str(analysis["level"]),
+                "--direction",
+                str(analysis["direction"]),
+                "--max-depth",
+                str(analysis["max_depth"]),
+                "--max-paths",
+                str(analysis["max_paths"]),
+            ]
+            for relation in analysis["relations"]:
+                analysis_command.extend(("--relation", str(relation)))
+        else:
+            analysis_kind = "query"
+            analysis_path = case_output / "query.json"
+            command_name = (
+                "query" if analysis["track"] == "exact_query" else "impact"
             )
+            analysis_command = [
+                str(archbird),
+                command_name,
+                "--map",
+                str(map_path),
+            ]
+            for selector in analysis["selectors"]:
+                analysis_command.extend(
+                    (f"--{selector['kind']}", selector["value"])
+                )
+            analysis_command.extend(
+                (
+                    "--depth",
+                    str(analysis["depth"]),
+                    "--test-depth",
+                    str(analysis["test_depth"]),
+                )
+            )
+        analysis_command.extend(
+            ("--format", "json", "--output", str(analysis_path))
         )
-        query_observation = run_process(
-            query_command,
+        analysis_observation = run_process(
+            analysis_command,
             worktree,
-            case_output / "query.stdout",
-            case_output / "query.stderr",
+            case_output / f"{analysis_kind}.stdout",
+            case_output / f"{analysis_kind}.stderr",
         )
-        if query_observation["returncode"] != 0 or not query_path.is_file():
+        if (
+            analysis_observation["returncode"] != 0
+            or not analysis_path.is_file()
+        ):
             return {
                 "case_sha256": entry["case_sha256"],
-                "error": "query command failed",
+                "error": f"{analysis_kind} command failed",
                 "id": case_id,
                 "map": map_observation,
-                "query": query_observation,
+                analysis_kind: analysis_observation,
                 "review_status": entry["review_status"],
                 "split": entry["split"],
                 "status": "error",
             }
-        query_document = read_json(query_path, "case Query")
-        (
-            ranked_files,
-            ranked_context_files,
-            seed_files,
-            ranked_symbols,
-            matched_symbols,
-            ranked_tests,
-        ) = extract_rankings(query_document)
-        seed_truth, matched_symbol_truth = selector_truth(
-            case["analysis"]["selectors"], worktree
+        analysis_document = read_json(
+            analysis_path, f"case {analysis_kind.title()}"
         )
+        if path_track:
+            ranked_files: list[str] = []
+            ranked_context_files: list[str] = []
+            seed_files: list[str] = []
+            ranked_symbols: list[str] = []
+            matched_symbols: list[str] = []
+            ranked_tests: list[str] = []
+            canonical_evidence_counts: Mapping[str, int] = {}
+            seed_truth: list[str] = []
+            matched_symbol_truth: list[str] = []
+        else:
+            (
+                ranked_files,
+                ranked_context_files,
+                seed_files,
+                ranked_symbols,
+                matched_symbols,
+                ranked_tests,
+                canonical_evidence_counts,
+            ) = extract_rankings(analysis_document)
+            seed_truth, matched_symbol_truth = selector_truth(
+                analysis["selectors"], worktree
+            )
         issue_query_path = case_output / "issue-query.json"
         issue_query_command = [
             str(archbird),
@@ -1993,7 +2440,7 @@ def run_case(
                 "id": case_id,
                 "issue_query": issue_query_observation,
                 "map": map_observation,
-                "query": query_observation,
+                analysis_kind: analysis_observation,
                 "review_status": entry["review_status"],
                 "split": entry["split"],
                 "status": "error",
@@ -2006,64 +2453,91 @@ def run_case(
             issue_symbols,
             _issue_matched_symbols,
             issue_tests,
+            issue_canonical_evidence_counts,
         ) = extract_rankings(issue_query_document)
         issue_retrieval_files, issue_retrieval_symbols = (
             extract_retrieval_rankings(issue_query_document)
         )
-        test_tiers = extract_test_tiers(query_document)
+        test_tiers = (
+            {} if path_track else extract_test_tiers(analysis_document)
+        )
         truth = case["ground_truth"]
         line_budgets = protocol["metrics"].get(
             "line_budgets", [200, 500, 1000, 2000]
         )
         metrics: dict[str, Any] = {}
-        metrics.update(rank_metrics("relevant_file", ranked_files, truth["relevant_files"]))
-        metrics.update(
-            rank_metrics(
-                "relevant_context_file",
-                ranked_context_files,
-                truth["relevant_files"],
+        if path_track:
+            metrics.update(
+                exact_path_metrics(analysis_document, truth["path"])
             )
-        )
-        metrics.update(rank_metrics("seed_file", seed_files, seed_truth))
-        metrics.update(rank_metrics("diff_file", ranked_files, entry["diff_files"]))
-        metrics.update(
-            rank_metrics(
-                "diff_context_file",
-                ranked_context_files,
-                entry["diff_files"],
-            )
-        )
-        metrics.update(rank_metrics("relevant_symbol", ranked_symbols, truth["relevant_symbols"]))
-        metrics.update(
-            rank_metrics(
-                "matched_symbol", matched_symbols, matched_symbol_truth
-            )
-        )
-        metrics.update(rank_metrics("relevant_test", ranked_tests, truth["relevant_tests"]))
-        for tier, values in test_tiers.items():
+        else:
             metrics.update(
                 rank_metrics(
-                    f"relevant_test_{tier}", values, truth["relevant_tests"]
+                    "relevant_file", ranked_files, truth["relevant_files"]
                 )
             )
-        metrics.update(
-            line_budget_metrics(
-                "relevant_file_context",
-                ranked_context_files,
-                truth["relevant_files"],
-                worktree,
-                line_budgets,
+            metrics.update(
+                rank_metrics(
+                    "relevant_context_file",
+                    ranked_context_files,
+                    truth["relevant_files"],
+                )
             )
-        )
-        metrics.update(
-            line_budget_metrics(
-                "diff_file_context",
-                ranked_context_files,
-                entry["diff_files"],
-                worktree,
-                line_budgets,
+            metrics.update(rank_metrics("seed_file", seed_files, seed_truth))
+            metrics.update(
+                rank_metrics("diff_file", ranked_files, entry["diff_files"])
             )
-        )
+            metrics.update(
+                rank_metrics(
+                    "diff_context_file",
+                    ranked_context_files,
+                    entry["diff_files"],
+                )
+            )
+            metrics.update(
+                rank_metrics(
+                    "relevant_symbol",
+                    ranked_symbols,
+                    truth["relevant_symbols"],
+                )
+            )
+            metrics.update(
+                rank_metrics(
+                    "matched_symbol", matched_symbols, matched_symbol_truth
+                )
+            )
+            metrics.update(
+                rank_metrics(
+                    "relevant_test", ranked_tests, truth["relevant_tests"]
+                )
+            )
+            for tier, values in test_tiers.items():
+                metrics.update(
+                    rank_metrics(
+                        f"relevant_test_{tier}",
+                        values,
+                        truth["relevant_tests"],
+                    )
+                )
+            metrics.update(canonical_evidence_counts)
+            metrics.update(
+                line_budget_metrics(
+                    "relevant_file_context",
+                    ranked_context_files,
+                    truth["relevant_files"],
+                    worktree,
+                    line_budgets,
+                )
+            )
+            metrics.update(
+                line_budget_metrics(
+                    "diff_file_context",
+                    ranked_context_files,
+                    entry["diff_files"],
+                    worktree,
+                    line_budgets,
+                )
+            )
         metrics.update(
             rank_metrics(
                 "issue_retrieval_file",
@@ -2092,12 +2566,22 @@ def run_case(
         metrics.update(rank_metrics("issue_test", issue_tests, truth["relevant_tests"]))
         metrics.update(
             {
+                f"issue_{name}": value
+                for name, value in issue_canonical_evidence_counts.items()
+            }
+        )
+        metrics.update(
+            {
                 "issue_query_duration_ms": issue_query_observation["duration_ms"],
                 "issue_query_max_rss_kib": issue_query_observation["max_rss_kib"],
                 "map_duration_ms": map_observation["duration_ms"],
                 "map_max_rss_kib": map_observation["max_rss_kib"],
-                "query_duration_ms": query_observation["duration_ms"],
-                "query_max_rss_kib": query_observation["max_rss_kib"],
+                f"{analysis_kind}_duration_ms": analysis_observation[
+                    "duration_ms"
+                ],
+                f"{analysis_kind}_max_rss_kib": analysis_observation[
+                    "max_rss_kib"
+                ],
             }
         )
         remove_checkout(repository, worktree)
@@ -2132,7 +2616,7 @@ def run_case(
                 "id": case_id,
                 "map": map_observation,
                 "map_after": after_map_observation,
-                "query": query_observation,
+                analysis_kind: analysis_observation,
                 "review_status": entry["review_status"],
                 "split": entry["split"],
                 "status": "error",
@@ -2167,7 +2651,10 @@ def run_case(
                     "sha256": sha256_file(issue_query_path),
                 },
                 "map": {"bytes": map_path.stat().st_size, "sha256": sha256_file(map_path)},
-                "query": {"bytes": query_path.stat().st_size, "sha256": sha256_file(query_path)},
+                analysis_kind: {
+                    "bytes": analysis_path.stat().st_size,
+                    "sha256": sha256_file(analysis_path),
+                },
                 **extra_artifacts,
             },
             "case_sha256": entry["case_sha256"],
@@ -2177,7 +2664,7 @@ def run_case(
             "map_after": after_map_observation,
             "map_tool": map_document.get("source_tool", map_document.get("tool")),
             "metrics": metrics,
-            "query": query_observation,
+            analysis_kind: analysis_observation,
             "review_status": entry["review_status"],
             "split": entry["split"],
             "status": "ok",
@@ -2228,6 +2715,7 @@ def aggregate_cases(
         "issue_symbol",
         "issue_test",
         "matched_symbol",
+        "path_node",
         "plan_candidate_path",
         "relevant_context_file",
         "relevant_file",
@@ -2423,6 +2911,13 @@ def run_evaluation(
         shutil.rmtree(cache_stage, ignore_errors=True)
 
 
+def canonical_test_tier_metric(name: str) -> bool:
+    return any(
+        name.startswith(f"relevant_test_{tier}_")
+        for tier in ("all", "candidate", "direct", "observed_asserted")
+    )
+
+
 def metric_direction(name: str) -> str | None:
     if name in {
         "act_preview_available",
@@ -2431,6 +2926,8 @@ def metric_direction(name: str) -> str | None:
         "plan_generation_success",
     }:
         return "higher"
+    if canonical_test_tier_metric(name):
+        return None
     if any(
         token in name
         for token in ("recall", "mrr", "precision", "accuracy", "satisfied")
@@ -2454,6 +2951,8 @@ def metric_family(name: str) -> str:
         return "quality"
     if any(token in name for token in ("duration", "rss")):
         return "performance"
+    if canonical_test_tier_metric(name):
+        return "scale"
     if "distractor" in name:
         return "context"
     if "false_findings" in name:

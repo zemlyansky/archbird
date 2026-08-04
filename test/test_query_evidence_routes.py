@@ -165,17 +165,20 @@ def main() -> None:
         if row["path"] == "include/Acme/detail.hpp"
     )
     if (
-        stale_detail["distance"] != 2
-        or stale_detail["route"]["evidence_state"] != "stale"
+        stale_detail["distance"] != 1
+        or stale_detail["route"]["evidence_state"] != "unknown"
         or stale_detail["route"]["via"]
         != {
             "kind": "import",
-            "source": "src/local.hpp",
+            "source": "src/main.cpp",
             "target": "include/Acme/detail.hpp",
             "traversal": "forward",
         }
     ):
-        raise AssertionError("Query preferred unknown evidence over stale evidence")
+        raise AssertionError(
+            "Query preferred stale evidence over a current-source candidate: "
+            f"{stale_detail!r}"
+        )
 
     established_path = zero.path(
         endpoint("src/main.cpp"),

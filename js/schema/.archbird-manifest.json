@@ -26,9 +26,9 @@
       "source": "schema/coverage-observation-request.schema.json"
     },
     {
-      "bytes": 4416,
+      "bytes": 8270,
       "path": "evaluation-case.schema.json",
-      "sha256": "6914460896c63f7c81b06fed8b081e758d8094a51adbdcf3587596f9943093d8",
+      "sha256": "99362f5419ad738a7a875e882d8b9651989b3104ff377ff0b675eea36f1a3a01",
       "source": "schema/evaluation-case.schema.json"
     },
     {
@@ -128,9 +128,9 @@
       "source": "schema/path-request.schema.json"
     },
     {
-      "bytes": 4667,
+      "bytes": 4690,
       "path": "path.schema.json",
-      "sha256": "585e259064793b413bd3937e3f4d248e6cdebdc244e33cca1040fd88661fb591",
+      "sha256": "c1ad24c735ddf620b42a8211215c10cda8a082ef9b93d632c8c11b3245b82396",
       "source": "schema/path.schema.json"
     },
     {

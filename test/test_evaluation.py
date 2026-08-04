@@ -144,15 +144,43 @@ elif command == 'map':
            'source_tool':{'name':'archbird','version':'0.test',
              'implementation_sha256':'1'*64}}
 elif command in ('query', 'impact'):
-  good = variant in ('good', 'context')
+  good = variant in ('good', 'context', 'retained')
   files = ([{'distance':0,'path':'src/a.py','symbols':[{'name':'target'}]}]
            if good else [{'distance':0,'path':'src/other.py','symbols':[{'name':'other'}]}])
   if variant == 'context':
     files[0]['symbols'].append({'name':'direct_caller'})
   matches = ([{'path':'tests/test_a.py','selector':'test_target'}] if good else [])
+  if variant == 'retained':
+    files.append({
+      'distance':2,
+      'path':'src/canonical-candidate.py',
+      'symbols':[{'name':'candidate_symbol'}],
+    })
+    matches.append({
+      'confidence':'conservative',
+      'evidence_scope':'file',
+      'path':'tests/test_canonical_candidate.py',
+      'provenance':'derived',
+      'seed_distance':2,
+      'selector':'test_candidate',
+      'target':'src/canonical-candidate.py',
+      'target_role':'transitive-context',
+    })
   matched = ([{'path':'src/a.py','name':'target'}] if good else [])
   value = {'artifact':'query','schema_version':7,'files':files,
+           'query':{'context':{}},
            'matched_symbols':matched,'test_matches':matches}
+elif command == 'path':
+  value = {
+    'artifact':'path',
+    'outcome':'found',
+    'reason':'witnesses',
+    'paths':[{
+      'nodes':['file:src/a.py','file:src/other.py'],
+      'state':'current',
+    }],
+    'search':{'shortest_length':1},
+  }
 elif command == 'verify':
   before = pathlib.Path.cwd().name == 'before'
   variant = os.environ.get('ARCHBIRD_EVAL_TEST_VARIANT')
@@ -335,6 +363,36 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     held_out_case["id"] = "fixture-held-out-change"
     held_out_case["split"] = "held_out"
     write_json(root / "authoring/cases/fixture-held-out-change.json", held_out_case)
+    path_case = json.loads(json.dumps(case))
+    path_case["id"] = "zz-fixture-path-change"
+    path_case["analysis"] = {
+        "direction": "downstream",
+        "level": "file",
+        "max_depth": 4,
+        "max_paths": 4,
+        "relations": ["references"],
+        "seed_rationale": "The task names both historical endpoints.",
+        "source": {"kind": "file", "value": "src/a.py"},
+        "target": {"kind": "file", "value": "src/other.py"},
+        "track": "exact_path",
+    }
+    path_case["ground_truth"]["path"] = {
+        "nodes": [["file:src/a.py", "file:src/other.py"]],
+        "outcome": "found",
+        "path_state": "current",
+        "reason": "witnesses",
+        "shortest_length": 1,
+    }
+    path_case["review"] = {
+        "rationale": "Synthetic exact-Path evaluator integration fixture.",
+        "status": "candidate",
+    }
+    path_case["task"] = {
+        "description": "Explain the exact historical endpoint connection.",
+        "source": "fixture:path",
+        "title": "Connect a.py to other.py",
+    }
+    write_json(root / "authoring/cases/zz-fixture-path-change.json", path_case)
     run("sync", "--fetch", "--reservations", "validation", environment=environment)
     run("validate", environment=environment)
     run("freeze", environment=environment)
@@ -367,6 +425,12 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     }
     assert first["held_out_opened"] is False
     assert first["cases"][0]["metrics"]["relevant_file_recall_all"] == 0.0
+    path_result = next(
+        row for row in first["cases"] if row["id"] == "zz-fixture-path-change"
+    )
+    assert path_result["metrics"]["path_accuracy"] == 1.0
+    assert path_result["metrics"]["path_node_recall_all"] == 1.0
+    assert path_result["artifacts"]["path"]["bytes"] > 0
     assert first["tool"]["launcher"] == {
         "path": str(fake.resolve()),
         "sha256": __import__("hashlib").sha256(fake.read_bytes()).hexdigest(),
@@ -613,6 +677,27 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert second["cases"][0]["metrics"]["plan_origin_recall"] == 1.0
     assert second["cases"][0]["metrics"]["plan_after_acceptance_satisfied"] == 1.0
     assert second["cases"][0]["metrics"]["act_preview_available"] == 1.0
+
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "retained"
+    run("run", "--archbird", str(fake), "--label", "retained", environment=environment)
+    state = json.loads((root / "state.json").read_text())
+    retained_run = json.loads(
+        (root / f"runs/{state['current_run_sha256']}/result.json").read_text()
+    )
+    retained_comparison = json.loads(
+        (root / state["current_run_comparison"]).read_text()
+    )
+    assert retained_comparison["cases"][0]["status"] == "unchanged"
+    assert retained_comparison["cases"][0]["context_status"] == "unchanged"
+    assert retained_comparison["summary"]["reviewed_context"]["unchanged"] == 1
+    assert retained_run["cases"][0]["metrics"][
+        "canonical_file_evidence_returned"
+    ] == 2
+    assert retained_run["cases"][0]["metrics"][
+        "canonical_test_evidence_returned"
+    ] == 2
+    assert retained_run["cases"][0]["metrics"]["relevant_file_returned"] == 1
+    assert retained_run["cases"][0]["metrics"]["relevant_test_returned"] == 1
 
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "context"
     run("run", "--archbird", str(fake), "--label", "context", environment=environment)

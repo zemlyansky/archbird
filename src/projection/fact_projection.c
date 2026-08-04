@@ -1480,13 +1480,9 @@ add_relation_item_state(ArchbirdEngine *engine, AbProjectionData *fact,
     return status;
   }
   if (existing) {
-    int existing_rank =
-        string_literal(&existing->state, "current")
-            ? 2
-            : (string_literal(&existing->state, "unknown") ? 1 : 0);
-    int incoming_rank = strcmp(state, "current") == 0
-                            ? 2
-                            : (strcmp(state, "unknown") == 0 ? 1 : 0);
+    AbString incoming = {(char *)state, strlen(state)};
+    int existing_rank = ab_projection_evidence_state_strength(&existing->state);
+    int incoming_rank = ab_projection_evidence_state_strength(&incoming);
     status = ab_projection_item_add_evidence(engine, existing, evidence);
     if (status == ARCHBIRD_OK && incoming_rank > existing_rank)
       status = ab_projection_item_set_state(engine, existing, state, message);

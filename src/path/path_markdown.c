@@ -1,6 +1,7 @@
 #include <archbird/archbird.h>
 
 #include "json_value.h"
+#include "path_artifact.h"
 #include "path_internal.h"
 #include "render_internal.h"
 
@@ -201,24 +202,24 @@ ArchbirdStatus archbird_path_render_markdown(ArchbirdEngine *engine,
                                              size_t max_chars,
                                              ArchbirdWriteFn write_fn,
                                              void *user_data) {
-  AbValue artifact = {0};
+  AbPathArtifact artifact = {0};
   AbBuffer markdown;
   ArchbirdStatus status;
   if (!engine || !artifact_json || !artifact_length || !write_fn)
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&markdown, engine);
   status =
-      ab_json_value_decode(engine, artifact_json, artifact_length, &artifact);
+      ab_path_artifact_load(engine, artifact_json, artifact_length, &artifact);
   if (status == ARCHBIRD_OK)
-    status =
-        ab_path_render_markdown_value(engine, &artifact, max_chars, &markdown);
+    status = ab_path_render_markdown_value(engine, &artifact.root, max_chars,
+                                           &markdown);
   if (status == ARCHBIRD_OK &&
       write_fn(user_data, markdown.data, markdown.length))
     status =
         archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
                            "Path report callback failed");
   ab_buffer_free(&markdown);
-  ab_value_free(engine, &artifact);
+  ab_path_artifact_free(&artifact);
   return status;
 }
 
@@ -253,10 +254,15 @@ ArchbirdStatus archbird_map_path_markdown(
   if (status == ARCHBIRD_OK)
     status = ab_json_value_decode(engine, json.data, json.length, &artifact);
   if (status == ARCHBIRD_OK)
+    status = ab_path_artifact_validate(engine, &artifact);
+  if (status == ARCHBIRD_OK)
     status =
         ab_path_render_markdown_value(engine, &artifact, max_chars, &markdown);
-  if (status == ARCHBIRD_OK)
-    status = write_fn(user_data, markdown.data, markdown.length);
+  if (status == ARCHBIRD_OK &&
+      write_fn(user_data, markdown.data, markdown.length))
+    status =
+        archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
+                           "Path report callback failed");
   ab_value_free(engine, &artifact);
   ab_value_free(engine, &request);
   ab_value_free(engine, &resolution);

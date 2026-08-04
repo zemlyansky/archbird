@@ -171,6 +171,7 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_path.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_path_evaluation.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_evidence_routes.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_adjacency_scaling.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_readme_examples.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) py/tests/test_repository.py \
 		$(PYTHON_NATIVE) $(CURDIR)

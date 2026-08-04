@@ -7,6 +7,9 @@
 int ab_projection_value_is(const AbValue *value, const char *literal);
 int ab_projection_nonblank(const AbValue *value);
 int ab_projection_path_is_repository(const AbValue *value);
+/* Stronger current-source evidence has the larger value:
+ * current (2) > unknown (1) > stale (0). */
+int ab_projection_evidence_state_strength(const AbString *state);
 
 typedef struct AbProjectionEvidence {
   AbString provenance;

@@ -12,6 +12,19 @@ int ab_projection_value_is(const AbValue *value, const char *literal) {
          (!length || memcmp(value->as.text.data, literal, length) == 0);
 }
 
+int ab_projection_evidence_state_strength(const AbString *state) {
+  if (state && state->length == 7 &&
+      !memcmp(state->data, "current", state->length))
+    return 2;
+  if (state && state->length == 7 &&
+      !memcmp(state->data, "unknown", state->length))
+    return 1;
+  if (state && state->length == 5 &&
+      !memcmp(state->data, "stale", state->length))
+    return 0;
+  return -1;
+}
+
 int ab_projection_nonblank(const AbValue *value) {
   size_t index;
   if (!value || value->kind != AB_VALUE_STRING || !value->as.text.length)

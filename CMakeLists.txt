@@ -1294,6 +1294,14 @@ if(Python3_Development.Module_FOUND)
               $<TARGET_FILE:archbird_python>
     )
     add_test(
+      NAME archbird_native_query_adjacency_scaling
+      COMMAND ${CMAKE_COMMAND} -E env
+              ${ARCHBIRD_REPOSITORY_TEST_ENV}
+              ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_query_adjacency_scaling.py
+              $<TARGET_FILE:archbird_python>
+    )
+    add_test(
       NAME archbird_native_fuzz_seeds
       COMMAND ${CMAKE_COMMAND} -E env
               ${ARCHBIRD_REPOSITORY_TEST_ENV}

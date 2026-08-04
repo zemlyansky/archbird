@@ -170,6 +170,10 @@ typedef struct QueryContext {
   size_t file_count;
   QueryEdge *edges;
   size_t edge_count;
+  size_t *outgoing_edge_offsets;
+  size_t *outgoing_edges;
+  size_t *incoming_edge_offsets;
+  size_t *incoming_edges;
   QuerySymbol *symbols;
   size_t symbol_count;
   size_t symbol_capacity;
@@ -216,8 +220,8 @@ static int route_quality_compare(const QueryRouteQuality *left,
     return left->valid ? -1 : 1;
   if (!left->valid)
     return 0;
-  COMPARE_FIELD(unknown_edges);
   COMPARE_FIELD(stale_edges);
+  COMPARE_FIELD(unknown_edges);
   COMPARE_FIELD(unresolved_relations);
   COMPARE_FIELD(ambiguous_relations);
   COMPARE_FIELD(candidate_relations);
@@ -926,11 +930,90 @@ static ArchbirdStatus build_edges(QueryContext *context) {
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus build_edge_index(QueryContext *context) {
+  size_t mapped_count = 0;
+  size_t index;
+  size_t *outgoing_cursor = NULL;
+  size_t *incoming_cursor = NULL;
+  if (context->file_count == SIZE_MAX ||
+      context->file_count + 1 > SIZE_MAX / sizeof(size_t))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  context->outgoing_edge_offsets =
+      (size_t *)ab_calloc(context->engine, context->file_count + 1,
+                          sizeof(*context->outgoing_edge_offsets));
+  context->incoming_edge_offsets =
+      (size_t *)ab_calloc(context->engine, context->file_count + 1,
+                          sizeof(*context->incoming_edge_offsets));
+  if (!context->outgoing_edge_offsets || !context->incoming_edge_offsets)
+    return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory indexing query adjacency");
+  for (index = 0; index < context->edge_count; index++) {
+    const QueryEdge *edge = &context->edges[index];
+    if (!edge->target_mapped || edge->source_index == SIZE_MAX)
+      continue;
+    if (mapped_count == SIZE_MAX)
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    mapped_count++;
+    context->outgoing_edge_offsets[edge->source_index + 1]++;
+    context->incoming_edge_offsets[edge->target_index + 1]++;
+  }
+  for (index = 1; index <= context->file_count; index++) {
+    if (context->outgoing_edge_offsets[index] >
+            SIZE_MAX - context->outgoing_edge_offsets[index - 1] ||
+        context->incoming_edge_offsets[index] >
+            SIZE_MAX - context->incoming_edge_offsets[index - 1])
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    context->outgoing_edge_offsets[index] +=
+        context->outgoing_edge_offsets[index - 1];
+    context->incoming_edge_offsets[index] +=
+        context->incoming_edge_offsets[index - 1];
+  }
+  if (mapped_count > SIZE_MAX / sizeof(size_t))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  if (mapped_count) {
+    context->outgoing_edges = (size_t *)ab_malloc(
+        context->engine, mapped_count * sizeof(*context->outgoing_edges));
+    context->incoming_edges = (size_t *)ab_malloc(
+        context->engine, mapped_count * sizeof(*context->incoming_edges));
+    outgoing_cursor = (size_t *)ab_malloc(
+        context->engine, context->file_count * sizeof(*outgoing_cursor));
+    incoming_cursor = (size_t *)ab_malloc(
+        context->engine, context->file_count * sizeof(*incoming_cursor));
+    if (!context->outgoing_edges || !context->incoming_edges ||
+        (context->file_count && (!outgoing_cursor || !incoming_cursor))) {
+      ab_free(context->engine, incoming_cursor);
+      ab_free(context->engine, outgoing_cursor);
+      return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory storing query adjacency");
+    }
+    memcpy(outgoing_cursor, context->outgoing_edge_offsets,
+           context->file_count * sizeof(*outgoing_cursor));
+    memcpy(incoming_cursor, context->incoming_edge_offsets,
+           context->file_count * sizeof(*incoming_cursor));
+    for (index = 0; index < context->edge_count; index++) {
+      const QueryEdge *edge = &context->edges[index];
+      if (!edge->target_mapped || edge->source_index == SIZE_MAX)
+        continue;
+      context->outgoing_edges[outgoing_cursor[edge->source_index]++] = index;
+      context->incoming_edges[incoming_cursor[edge->target_index]++] = index;
+    }
+    ab_free(context->engine, incoming_cursor);
+    ab_free(context->engine, outgoing_cursor);
+  }
+  return ARCHBIRD_OK;
+}
+
 static void query_context_free(QueryContext *context) {
   ab_query_projection_set_free(context->engine, &context->projections);
   ab_value_free(context->engine, &context->owned_plan);
   ab_free(context->engine, context->files);
   ab_free(context->engine, context->edges);
+  ab_free(context->engine, context->outgoing_edge_offsets);
+  ab_free(context->engine, context->outgoing_edges);
+  ab_free(context->engine, context->incoming_edge_offsets);
+  ab_free(context->engine, context->incoming_edges);
   ab_free(context->engine, context->symbols);
   ab_free(context->engine, context->related_symbols);
   ab_free(context->engine, context->test_rows);
@@ -2530,33 +2613,29 @@ static ArchbirdStatus find_test_matches(QueryContext *context) {
   }
   while (queued) {
     size_t current = queue[head];
-    size_t source;
     head = (head + 1) % context->file_count;
     queued--;
     in_queue[current] = 0;
     if (distance[current] >= context->request.test_depth)
       continue;
-    for (source = 0; source < context->file_count; source++) {
-      size_t edge_index;
+    {
+      size_t adjacent;
       size_t candidate_distance = distance[current] + 1;
-      int connected = 0;
-      for (edge_index = 0; edge_index < context->edge_count; edge_index++) {
+      for (adjacent = context->incoming_edge_offsets[current];
+           adjacent < context->incoming_edge_offsets[current + 1]; adjacent++) {
+        size_t edge_index = context->incoming_edges[adjacent];
         const QueryEdge *edge = &context->edges[edge_index];
-        if (edge->target_mapped && edge->source_index == source &&
-            edge->target_index == current) {
-          connected = 1;
-          break;
+        size_t source = edge->source_index;
+        if (candidate_distance >= distance[source])
+          continue;
+        distance[source] = candidate_distance;
+        next_hop[source] = current;
+        if (!in_queue[source]) {
+          queue[tail] = source;
+          tail = (tail + 1) % context->file_count;
+          queued++;
+          in_queue[source] = 1;
         }
-      }
-      if (!connected || candidate_distance >= distance[source])
-        continue;
-      distance[source] = candidate_distance;
-      next_hop[source] = current;
-      if (!in_queue[source]) {
-        queue[tail] = source;
-        tail = (tail + 1) % context->file_count;
-        queued++;
-        in_queue[source] = 1;
       }
     }
   }
@@ -3113,7 +3192,10 @@ static ArchbirdStatus traverse_file_edges(QueryContext *context) {
   if (max_hop > context->request.depth)
     max_hop = context->request.depth;
   for (hop = 0;; hop++) {
-    size_t edge_index;
+    int downstream = string_literal(context->request.direction, "downstream") ||
+                     string_literal(context->request.direction, "both");
+    int upstream = string_literal(context->request.direction, "upstream") ||
+                   string_literal(context->request.direction, "both");
     for (index = 0; index < context->file_count; index++) {
       if (starts[index].quality.valid &&
           starts[index].quality.distance == hop &&
@@ -3125,22 +3207,26 @@ static ArchbirdStatus traverse_file_edges(QueryContext *context) {
     if (hop >= max_hop)
       break;
     memset(next, 0, bytes);
-    for (edge_index = 0; edge_index < context->edge_count; edge_index++) {
-      const QueryEdge *edge = &context->edges[edge_index];
-      if (!edge->target_mapped || edge->source_index == SIZE_MAX)
+    for (index = 0; index < context->file_count; index++) {
+      size_t adjacent;
+      if (!current[index].quality.valid)
         continue;
-      if ((string_literal(context->request.direction, "downstream") ||
-           string_literal(context->request.direction, "both")) &&
-          current[edge->source_index].quality.valid)
-        route_state_relax(context, &current[edge->source_index],
-                          edge->source_index, edge_index, hop + 1, 0,
-                          &next[edge->target_index]);
-      if ((string_literal(context->request.direction, "upstream") ||
-           string_literal(context->request.direction, "both")) &&
-          current[edge->target_index].quality.valid)
-        route_state_relax(context, &current[edge->target_index],
-                          edge->target_index, edge_index, hop + 1, 1,
-                          &next[edge->source_index]);
+      if (downstream)
+        for (adjacent = context->outgoing_edge_offsets[index];
+             adjacent < context->outgoing_edge_offsets[index + 1]; adjacent++) {
+          size_t edge_index = context->outgoing_edges[adjacent];
+          const QueryEdge *edge = &context->edges[edge_index];
+          route_state_relax(context, &current[index], index, edge_index,
+                            hop + 1, 0, &next[edge->target_index]);
+        }
+      if (upstream)
+        for (adjacent = context->incoming_edge_offsets[index];
+             adjacent < context->incoming_edge_offsets[index + 1]; adjacent++) {
+          size_t edge_index = context->incoming_edges[adjacent];
+          const QueryEdge *edge = &context->edges[edge_index];
+          route_state_relax(context, &current[index], index, edge_index,
+                            hop + 1, 1, &next[edge->source_index]);
+        }
     }
     {
       QueryRouteState *swap = current;
@@ -3475,8 +3561,8 @@ static ArchbirdStatus render_query_file_symbols(AbBuffer *buffer,
 }
 
 static const char *route_evidence_state(const QueryRouteQuality *route) {
-  return route->unknown_edges ? "unknown"
-                              : (route->stale_edges ? "stale" : "current");
+  return route->stale_edges ? "stale"
+                            : (route->unknown_edges ? "unknown" : "current");
 }
 
 static ArchbirdStatus render_file_route(AbBuffer *buffer,
@@ -5082,6 +5168,8 @@ ArchbirdStatus ab_query_execute_value(ArchbirdEngine *engine,
     status = build_files(&context);
   if (status == ARCHBIRD_OK)
     status = build_edges(&context);
+  if (status == ARCHBIRD_OK)
+    status = build_edge_index(&context);
   if (status == ARCHBIRD_OK)
     status = build_symbol_calls(&context);
   if (status == ARCHBIRD_OK)

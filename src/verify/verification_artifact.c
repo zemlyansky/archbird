@@ -1,6 +1,7 @@
 #include "verification_artifact.h"
 
 /* This module validates saved Verification identity, not constraint policy. */
+#include "artifact_validation.h"
 #include "render_internal.h"
 #include "sha256.h"
 #include "verify_checks.h"
@@ -87,48 +88,6 @@ static ArchbirdStatus value_digest(ArchbirdEngine *engine, const AbValue *value,
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&buffer, engine);
   status = ab_value_render(&buffer, value);
-  if (status == ARCHBIRD_OK)
-    status = archbird_sha256(buffer.data, buffer.length, digest);
-  if (status == ARCHBIRD_OK)
-    archbird_sha256_hex(digest, output);
-  ab_buffer_free(&buffer);
-  return status;
-}
-
-static ArchbirdStatus value_digest_without_field(ArchbirdEngine *engine,
-                                                 const AbValue *value,
-                                                 const char *field_name,
-                                                 char output[65]) {
-  AbBuffer buffer;
-  uint8_t digest[32];
-  ArchbirdStatus status;
-  size_t field_name_length;
-  size_t index;
-  size_t written = 0;
-  if (!engine || !value || value->kind != AB_VALUE_OBJECT || !field_name ||
-      !output)
-    return ARCHBIRD_INVALID_ARGUMENT;
-  field_name_length = strlen(field_name);
-  ab_buffer_init(&buffer, engine);
-  status = ab_buffer_literal(&buffer, "{");
-  for (index = 0; status == ARCHBIRD_OK && index < value->as.object.count;
-       index++) {
-    const AbObjectField *field = &value->as.object.fields[index];
-    if (field->name.length == field_name_length &&
-        memcmp(field->name.data, field_name, field_name_length) == 0)
-      continue;
-    if (written++)
-      status = ab_buffer_literal(&buffer, ",");
-    if (status == ARCHBIRD_OK)
-      status =
-          ab_buffer_json_string(&buffer, field->name.data, field->name.length);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(&buffer, ":");
-    if (status == ARCHBIRD_OK)
-      status = ab_value_render(&buffer, &field->value);
-  }
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, "}");
   if (status == ARCHBIRD_OK)
     status = archbird_sha256(buffer.data, buffer.length, digest);
   if (status == ARCHBIRD_OK)
@@ -414,7 +373,7 @@ ArchbirdStatus ab_verification_artifact_load(ArchbirdEngine *engine,
     status = invalid(engine, "invalid canonical verification artifact");
     goto fail;
   }
-  status = value_digest_without_field(
+  status = ab_artifact_value_sha256_without_field(
       engine, &out->root, "verification_result_sha256", actual_result_sha);
   if (status != ARCHBIRD_OK)
     goto fail;

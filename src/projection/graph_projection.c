@@ -168,18 +168,11 @@ static ArchbirdStatus copy_evidence(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
-static int state_rank(const AbString *state) {
-  if (string_is(state, "unknown"))
-    return 2;
-  if (string_is(state, "stale"))
-    return 1;
-  return 0;
-}
-
 static ArchbirdStatus preserve_weaker_state(ArchbirdEngine *engine,
                                             AbProjectionItem *target,
                                             const AbProjectionItem *source) {
-  if (state_rank(&source->state) > state_rank(&target->state))
+  if (ab_projection_evidence_state_strength(&source->state) <
+      ab_projection_evidence_state_strength(&target->state))
     return ab_projection_item_set_state(engine, target, source->state.data,
                                         source->message.data);
   return ARCHBIRD_OK;

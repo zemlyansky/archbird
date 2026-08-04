@@ -118,7 +118,7 @@
         "key": {"type": "string"},
         "label": {"type": "string"},
         "message": {"type": "string"},
-        "state": {"type": "string"},
+        "state": {"enum": ["current", "stale", "unknown"]},
         "value": {}
       },
       "additionalProperties": false

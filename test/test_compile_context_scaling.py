@@ -8,7 +8,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import statistics
+import resource
+import subprocess
 import sys
 from time import perf_counter
 
@@ -122,53 +123,124 @@ def render(extension, command_count: int, file_count: int) -> tuple[bytes, float
     return mapped, elapsed
 
 
+def maximum_rss_kib() -> int:
+    rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    if sys.platform == "darwin":
+        rss //= 1024
+    return rss
+
+
+def run_worker(extension: Path, command_count: int, file_count: int) -> dict:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--worker",
+            str(extension),
+            str(command_count),
+            str(file_count),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+    if (
+        not isinstance(result, dict)
+        or not isinstance(result.get("sha256"), str)
+        or not isinstance(result.get("elapsed"), (int, float))
+        or not isinstance(result.get("rss_kib"), int)
+    ):
+        raise AssertionError("compile-context worker returned invalid metrics")
+    return result
+
+
+def worker_main() -> None:
+    if len(sys.argv) != 5:
+        raise SystemExit(
+            "usage: test_compile_context_scaling.py "
+            "--worker EXTENSION COMMANDS FILES"
+        )
+    extension = load_extension(Path(sys.argv[2]).resolve())
+    output, elapsed = render(extension, int(sys.argv[3]), int(sys.argv[4]))
+    print(
+        json.dumps(
+            {
+                "elapsed": elapsed,
+                "rss_kib": maximum_rss_kib(),
+                "sha256": hashlib.sha256(output).hexdigest(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--worker":
+        worker_main()
+        return
     if len(sys.argv) != 2:
         raise SystemExit("usage: test_compile_context_scaling.py EXTENSION")
-    extension = load_extension(Path(sys.argv[1]).resolve())
+    extension = Path(sys.argv[1]).resolve()
     large_commands = int(
-        os.environ.get("ARCHBIRD_COMPILE_CONTEXT_COMMANDS", "2000")
+        os.environ.get("ARCHBIRD_COMPILE_CONTEXT_COMMANDS", "10000")
     )
     large_files = int(
-        os.environ.get("ARCHBIRD_COMPILE_CONTEXT_FILES", "4000")
+        os.environ.get("ARCHBIRD_COMPILE_CONTEXT_FILES", "20000")
     )
     if large_commands < 2 or large_files < large_commands:
         raise AssertionError("invalid compile-context scaling dimensions")
     small_commands = max(1, large_commands // 2)
     small_files = max(small_commands, large_files // 2)
 
-    durations: dict[str, float] = {}
+    measurements: dict[str, dict] = {}
     for label, command_count, file_count in (
         ("small", small_commands, small_files),
         ("large", large_commands, large_files),
     ):
-        samples = []
-        outputs = []
-        for _ in range(2):
-            output, elapsed = render(extension, command_count, file_count)
-            outputs.append(output)
-            samples.append(elapsed)
-        if outputs[0] != outputs[1]:
+        first = run_worker(extension, command_count, file_count)
+        second = run_worker(extension, command_count, file_count)
+        if first["sha256"] != second["sha256"]:
             raise AssertionError(
                 f"{label} compile-context Map is not deterministic"
             )
-        durations[label] = statistics.median(samples)
+        measurements[label] = {
+            "elapsed": min(first["elapsed"], second["elapsed"]),
+            "rss_kib": max(first["rss_kib"], second["rss_kib"]),
+        }
 
     if (
-        durations["large"] > durations["small"] * 3.2 + 0.15
-        or durations["large"] >= 8.0
+        measurements["large"]["elapsed"]
+        > measurements["small"]["elapsed"] * 3.2 + 0.15
+        or measurements["large"]["elapsed"] >= 8.0
     ):
         raise AssertionError(
             "equivalent compile contexts no longer scale near-linearly: "
-            f"{small_commands}x{small_files}={durations['small']:.3f}s "
-            f"{large_commands}x{large_files}={durations['large']:.3f}s"
+            f"{small_commands}x{small_files}="
+            f"{measurements['small']['elapsed']:.3f}s "
+            f"{large_commands}x{large_files}="
+            f"{measurements['large']['elapsed']:.3f}s"
+        )
+    memory_allowance_kib = measurements["small"]["rss_kib"] * 2 + 16384
+    if measurements["large"]["rss_kib"] > memory_allowance_kib:
+        raise AssertionError(
+            "equivalent compile-context memory grows faster than the doubled "
+            "input: "
+            f"{small_commands}x{small_files}="
+            f"{measurements['small']['rss_kib']} KiB "
+            f"{large_commands}x{large_files}="
+            f"{measurements['large']['rss_kib']} KiB "
+            f"(allowance {memory_allowance_kib} KiB)"
         )
     print(
         "compile-context interning scaling passed "
         f"({small_commands} commands/{small_files} files="
-        f"{durations['small']:.3f}s; "
+        f"{measurements['small']['elapsed']:.3f}s/"
+        f"{measurements['small']['rss_kib']} KiB; "
         f"{large_commands} commands/{large_files} files="
-        f"{durations['large']:.3f}s)"
+        f"{measurements['large']['elapsed']:.3f}s/"
+        f"{measurements['large']['rss_kib']} KiB)"
     )
 
 
