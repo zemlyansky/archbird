@@ -1,0 +1,361 @@
+{
+  "artifact": "archbird-path-evaluation-track",
+  "held_out_policy": "sealed_external",
+  "provenance": "asserted",
+  "schema_version": 1,
+  "subjects": {
+    "cpp": {
+      "sources": {
+        "include/Acme/detail.hpp": "inline int detail() { return 1; }\n",
+        "src/candidate.cpp": "#include <Acme/detail.hpp>\nint candidate() { return 0; }\n"
+      }
+    },
+    "cpp-build": {
+      "config": {
+        "builds": [
+          {
+            "kind": "compile_commands",
+            "name": "commands",
+            "path": "compile_commands.json",
+            "variant": "default"
+          }
+        ],
+        "layers": [
+          {
+            "globs": [
+              "include/**/*.hpp",
+              "src/**/*.cpp"
+            ],
+            "language": "cpp",
+            "name": "cpp"
+          }
+        ],
+        "project": "path-evaluation-cpp-build"
+      },
+      "sources": {
+        "compile_commands.json": "[{\"arguments\":[\"c++\",\"-Iinclude\",\"-c\",\"src/candidate.cpp\"],\"directory\":\".\",\"file\":\"src/candidate.cpp\"}]",
+        "include/Acme/detail.hpp": "inline int detail() { return 1; }\n",
+        "src/candidate.cpp": "#include <Acme/detail.hpp>\nint candidate() { return 0; }\n"
+      }
+    },
+    "ecmascript": {
+      "sources": {
+        "a.js": "import { b } from \"./b.js\";\nimport \"./c.js\";\nexport function a() { return b() + d(); }\n",
+        "b.js": "import \"./d.js\";\nexport function b() { return 1; }\n",
+        "c.js": "import \"./d.js\";\n",
+        "d.js": "export function d() { return 1; }\n"
+      }
+    },
+    "ecmascript-incomplete": {
+      "sources": {
+        "a.js": "import { b } from \"./b.js\";\nimport \"./c.js\";\nexport function a() { return b() + d(); }\n",
+        "b.js": "import \"./d.js\";\nexport function b() { return 1; }\n",
+        "c.js": "import \"./d.js\";\n",
+        "d.js": "export function d() { return 1; }\n",
+        "unsupported.go": "package incomplete\n"
+      }
+    }
+  },
+  "cases": [
+    {
+      "expected": {
+        "nodes": [
+          [
+            "file:a.js",
+            "file:b.js",
+            "file:d.js"
+          ],
+          [
+            "file:a.js",
+            "file:c.js",
+            "file:d.js"
+          ]
+        ],
+        "outcome": "found",
+        "path_state": "current",
+        "reason": "witnesses",
+        "shortest_length": 2
+      },
+      "id": "proven-equal-shortest",
+      "provenance": "asserted-from-source",
+      "request": {
+        "relations": [
+          "imports"
+        ],
+        "source": {
+          "kind": "file",
+          "patterns": [
+            "a.js"
+          ]
+        },
+        "target": {
+          "kind": "file",
+          "patterns": [
+            "d.js"
+          ]
+        }
+      },
+      "split": "validation",
+      "subject": "ecmascript"
+    },
+    {
+      "expected": {
+        "nodes": [
+          [
+            "symbol:symbol:[\"a.js\",\"a\"]",
+            "symbol:symbol:[\"b.js\",\"b\"]"
+          ]
+        ],
+        "outcome": "unknown",
+        "path_state": "unknown",
+        "reason": "candidate-witnesses",
+        "shortest_length": 1
+      },
+      "id": "candidate-only-call",
+      "provenance": "asserted-from-source",
+      "request": {
+        "level": "symbol",
+        "relations": [
+          "calls"
+        ],
+        "source": {
+          "kind": "symbol",
+          "patterns": [
+            "a"
+          ]
+        },
+        "target": {
+          "kind": "symbol",
+          "patterns": [
+            "b"
+          ]
+        }
+      },
+      "split": "development",
+      "subject": "ecmascript"
+    },
+    {
+      "expected": {
+        "nodes": [
+          [
+            "file:a.js",
+            "file:b.js",
+            "file:d.js"
+          ],
+          [
+            "file:a.js",
+            "file:c.js",
+            "file:d.js"
+          ]
+        ],
+        "outcome": "found",
+        "path_state": "current",
+        "reason": "witnesses",
+        "shortest_length": 2
+      },
+      "id": "proven-behind-candidate-shortcut",
+      "provenance": "asserted-from-source",
+      "request": {
+        "relations": [
+          "calls",
+          "imports"
+        ],
+        "source": {
+          "kind": "file",
+          "patterns": [
+            "a.js"
+          ]
+        },
+        "target": {
+          "kind": "file",
+          "patterns": [
+            "d.js"
+          ]
+        }
+      },
+      "split": "development",
+      "subject": "ecmascript"
+    },
+    {
+      "expected": {
+        "nodes": [],
+        "outcome": "absent",
+        "path_state": null,
+        "reason": "exhaustive",
+        "shortest_length": null
+      },
+      "id": "true-directed-absence",
+      "provenance": "asserted-from-source",
+      "request": {
+        "relations": [
+          "imports"
+        ],
+        "source": {
+          "kind": "file",
+          "patterns": [
+            "d.js"
+          ]
+        },
+        "target": {
+          "kind": "file",
+          "patterns": [
+            "a.js"
+          ]
+        }
+      },
+      "split": "validation",
+      "subject": "ecmascript"
+    },
+    {
+      "expected": {
+        "nodes": [],
+        "outcome": "unknown",
+        "path_state": null,
+        "reason": "graph-incomplete",
+        "shortest_length": null
+      },
+      "id": "incomplete-graph-cannot-prove-absence",
+      "provenance": "asserted-from-source",
+      "request": {
+        "relations": [
+          "imports"
+        ],
+        "source": {
+          "kind": "file",
+          "patterns": [
+            "d.js"
+          ]
+        },
+        "target": {
+          "kind": "file",
+          "patterns": [
+            "a.js"
+          ]
+        }
+      },
+      "split": "validation",
+      "subject": "ecmascript-incomplete"
+    },
+    {
+      "expected": {
+        "nodes": [
+          [
+            "file:src/candidate.cpp",
+            "file:include/Acme/detail.hpp"
+          ]
+        ],
+        "outcome": "unknown",
+        "path_state": "unknown",
+        "reason": "candidate-witnesses",
+        "shortest_length": 1
+      },
+      "id": "conventional-include-candidate",
+      "provenance": "asserted-from-source",
+      "request": {
+        "relations": [
+          "imports"
+        ],
+        "source": {
+          "kind": "file",
+          "patterns": [
+            "src/candidate.cpp"
+          ]
+        },
+        "target": {
+          "kind": "file",
+          "patterns": [
+            "include/Acme/detail.hpp"
+          ]
+        }
+      },
+      "split": "development",
+      "subject": "cpp"
+    },
+    {
+      "config": {
+        "layers": [
+          {
+            "globs": [
+              "include/**/*.hpp",
+              "src/**/*.cpp"
+            ],
+            "import_roots": [
+              "include"
+            ],
+            "language": "cpp",
+            "name": "cpp"
+          }
+        ],
+        "project": "path-evaluation-explicit"
+      },
+      "expected": {
+        "nodes": [
+          [
+            "file:src/candidate.cpp",
+            "file:include/Acme/detail.hpp"
+          ]
+        ],
+        "outcome": "found",
+        "path_state": "current",
+        "reason": "witnesses",
+        "shortest_length": 1
+      },
+      "id": "authored-include-root-proven",
+      "provenance": "asserted-from-reviewed-config",
+      "request": {
+        "relations": [
+          "imports"
+        ],
+        "source": {
+          "kind": "file",
+          "patterns": [
+            "src/candidate.cpp"
+          ]
+        },
+        "target": {
+          "kind": "file",
+          "patterns": [
+            "include/Acme/detail.hpp"
+          ]
+        }
+      },
+      "split": "validation",
+      "subject": "cpp"
+    },
+    {
+      "expected": {
+        "nodes": [
+          [
+            "file:src/candidate.cpp",
+            "file:include/Acme/detail.hpp"
+          ]
+        ],
+        "outcome": "found",
+        "path_state": "current",
+        "reason": "witnesses",
+        "shortest_length": 1
+      },
+      "id": "compile-command-include-proven",
+      "provenance": "asserted-from-build-evidence",
+      "request": {
+        "relations": [
+          "imports"
+        ],
+        "source": {
+          "kind": "file",
+          "patterns": [
+            "src/candidate.cpp"
+          ]
+        },
+        "target": {
+          "kind": "file",
+          "patterns": [
+            "include/Acme/detail.hpp"
+          ]
+        }
+      },
+      "split": "validation",
+      "subject": "cpp-build"
+    }
+  ]
+}

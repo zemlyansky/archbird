@@ -845,10 +845,7 @@ class Project {
   }
 
   pathMarkdown(options = {}) {
-    return pathMapMarkdown(this.mapJson(), {
-      ...options,
-      resolutionJson: options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
-    });
+    return renderPathMarkdown(this.pathJson(options), options);
   }
 
   verifyJson({
@@ -1547,6 +1544,13 @@ function pathMapMarkdown(mapJson, options = {}) {
   );
 }
 
+function renderPathMarkdown(pathJson, options = {}) {
+  return native.pathRenderMarkdown(
+    Buffer.from(pathJson),
+    options.maxChars ?? 0,
+  );
+}
+
 function renderMapMarkdown(
   mapJson,
   options = {},
@@ -1973,6 +1977,7 @@ module.exports = {
   queryMapMarkdown,
   reportConstraints,
   renderMapMarkdown,
+  renderPathMarkdown,
   renderPlanMarkdown,
   renderSourceMarkdown,
   freezeConstraints,

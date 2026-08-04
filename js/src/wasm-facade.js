@@ -659,6 +659,12 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
           )),
       );
     },
+    pathRenderMarkdown: (artifact, maxChars = 0) =>
+      oneInput(
+        artifact,
+        "_ab_wasm_path_render_markdown",
+        sizeValue(maxChars, "maxChars"),
+      ),
     mapPathMarkdown(map, resolution, request, maxChars = 0) {
       return withInputs(
         [map, resolution, request],

@@ -522,10 +522,8 @@ async function createBrowserArchbird(moduleOptions = {}) {
     }
 
     pathMarkdown(options = {}) {
-      return core.mapPathMarkdown(
-        this.mapJson(),
-        this.resolutionJson ?? Buffer.alloc(0),
-        Buffer.from(JSON.stringify(pathRequest(options))),
+      return core.pathRenderMarkdown(
+        this.pathJson({ ...options, pretty: false }),
         options.maxChars ?? 0,
       );
     }

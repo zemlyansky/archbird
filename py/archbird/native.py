@@ -1208,8 +1208,7 @@ class Project:
         producer_policy: str = "compatible",
         max_chars: int = 0,
     ) -> bytes:
-        return path_map_markdown(
-            self.map_json(),
+        artifact = self.path_json(
             source,
             target,
             level=level,
@@ -1218,9 +1217,8 @@ class Project:
             max_depth=max_depth,
             max_paths=max_paths,
             producer_policy=producer_policy,
-            max_chars=max_chars,
-            resolution_json=self.resolution_json or b"",
         )
+        return render_path_markdown(artifact, max_chars=max_chars)
 
     def verify_json(
         self,
@@ -1577,6 +1575,11 @@ def path_map_json(
     return _native.map_path(
         map_json, request, pretty=pretty, resolution=resolution_json
     )
+
+
+def render_path_markdown(path_json: bytes, *, max_chars: int = 0) -> bytes:
+    """Render one canonical Path artifact without evaluating its Map again."""
+    return _native.path_render_markdown(path_json, max_chars=max_chars)
 
 
 def path_map_markdown(
@@ -3101,6 +3104,7 @@ __all__ = [
     "query_map_json",
     "path_map_json",
     "path_map_markdown",
+    "render_path_markdown",
     "render_map_markdown",
     "render_plan_markdown",
     "render_source_markdown",

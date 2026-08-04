@@ -21,6 +21,67 @@ static ArchbirdStatus markdown_string(AbBuffer *buffer, const AbValue *object,
   return ab_buffer_append(buffer, value->as.text.data, value->as.text.length);
 }
 
+static ArchbirdStatus markdown_text(AbBuffer *buffer, const AbString *value) {
+  size_t index;
+  for (index = 0; index < value->length; index++) {
+    unsigned char byte = (unsigned char)value->data[index];
+    if (byte == '\r')
+      continue;
+    if (byte == '\n' || byte == '\t')
+      TRY(ab_buffer_literal(buffer, " "));
+    else {
+      if (byte == '\\' || byte == '`' || byte == '*' || byte == '_' ||
+          byte == '[' || byte == ']' || byte == '<' || byte == '>' ||
+          byte == '#')
+        TRY(ab_buffer_literal(buffer, "\\"));
+      TRY(ab_buffer_append(buffer, &byte, 1));
+    }
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus markdown_evidence(AbBuffer *buffer,
+                                        const AbValue *evidence) {
+  size_t index;
+  if (!evidence || evidence->kind != AB_VALUE_ARRAY)
+    return ARCHBIRD_INVALID_SCHEMA;
+  for (index = 0; index < evidence->as.array.count; index++) {
+    const AbValue *row = &evidence->as.array.items[index];
+    const AbValue *provenance;
+    const AbValue *path;
+    const AbValue *line_value;
+    const AbValue *detail;
+    uint64_t line = 0;
+    if (row->kind != AB_VALUE_OBJECT)
+      return ARCHBIRD_INVALID_SCHEMA;
+    provenance = ab_value_member(row, "provenance");
+    path = ab_value_member(row, "path");
+    line_value = ab_value_member(row, "line");
+    detail = ab_value_member(row, "detail");
+    if (!provenance || provenance->kind != AB_VALUE_STRING || !path ||
+        path->kind != AB_VALUE_STRING || !line_value ||
+        !ab_value_u64(line_value, &line) || !detail ||
+        detail->kind != AB_VALUE_STRING)
+      return ARCHBIRD_INVALID_SCHEMA;
+    TRY(ab_buffer_literal(buffer, "  - provenance="));
+    TRY(markdown_text(buffer, &provenance->as.text));
+    if (path->as.text.length) {
+      TRY(ab_buffer_literal(buffer, "; source="));
+      TRY(markdown_text(buffer, &path->as.text));
+      if (line) {
+        TRY(ab_buffer_literal(buffer, ":"));
+        TRY(ab_buffer_u64(buffer, line));
+      }
+    }
+    if (detail->as.text.length) {
+      TRY(ab_buffer_literal(buffer, "; detail="));
+      TRY(markdown_text(buffer, &detail->as.text));
+    }
+    TRY(ab_buffer_literal(buffer, "\n"));
+  }
+  return ARCHBIRD_OK;
+}
+
 ArchbirdStatus ab_path_render_markdown_value(ArchbirdEngine *engine,
                                              const AbValue *artifact,
                                              size_t max_chars, AbBuffer *out) {
@@ -58,14 +119,19 @@ ArchbirdStatus ab_path_render_markdown_value(ArchbirdEngine *engine,
   for (index = 0; index < paths->as.array.count; index++) {
     const AbValue *path = &paths->as.array.items[index];
     const AbValue *nodes = ab_value_member(path, "nodes");
+    const AbValue *path_state = ab_value_member(path, "state");
     const AbValue *steps = ab_value_member(path, "steps");
     size_t node_index;
     if (!nodes || nodes->kind != AB_VALUE_ARRAY || !steps ||
-        steps->kind != AB_VALUE_ARRAY)
+        steps->kind != AB_VALUE_ARRAY || !path_state ||
+        path_state->kind != AB_VALUE_STRING)
       return ARCHBIRD_INVALID_SCHEMA;
     TRY(ab_buffer_literal(out, "## Witness "));
     TRY(ab_buffer_u64(out, index + 1));
-    TRY(ab_buffer_literal(out, "\n\n"));
+    TRY(ab_buffer_literal(out, " · state `"));
+    TRY(ab_buffer_append(out, path_state->as.text.data,
+                         path_state->as.text.length));
+    TRY(ab_buffer_literal(out, "`\n\n"));
     for (node_index = 0; node_index < nodes->as.array.count; node_index++) {
       const AbValue *node = &nodes->as.array.items[node_index];
       if (node->kind != AB_VALUE_STRING)
@@ -81,13 +147,21 @@ ArchbirdStatus ab_path_render_markdown_value(ArchbirdEngine *engine,
       const AbValue *relation = ab_value_member(step, "relation");
       const AbValue *attributes =
           relation ? ab_value_member(relation, "attributes") : NULL;
+      const AbValue *state =
+          relation ? ab_value_member(relation, "state") : NULL;
+      const AbValue *evidence =
+          relation ? ab_value_member(relation, "evidence") : NULL;
       const AbValue *family =
           attributes ? ab_value_member(attributes, "family") : NULL;
       const AbValue *kind =
           attributes ? ab_value_member(attributes, "relation_kind") : NULL;
+      const AbValue *resolution =
+          attributes ? ab_value_member(attributes, "resolution") : NULL;
       if (!traversal || traversal->kind != AB_VALUE_STRING || !family ||
           family->kind != AB_VALUE_STRING || !kind ||
-          kind->kind != AB_VALUE_STRING)
+          kind->kind != AB_VALUE_STRING || !state ||
+          state->kind != AB_VALUE_STRING || !evidence ||
+          evidence->kind != AB_VALUE_ARRAY)
         return ARCHBIRD_INVALID_SCHEMA;
       TRY(ab_buffer_literal(out, "- `"));
       TRY(ab_buffer_append(out, family->as.text.data, family->as.text.length));
@@ -96,7 +170,20 @@ ArchbirdStatus ab_path_render_markdown_value(ArchbirdEngine *engine,
       TRY(ab_buffer_literal(out, "` traversed "));
       TRY(ab_buffer_append(out, traversal->as.text.data,
                            traversal->as.text.length));
+      TRY(ab_buffer_literal(out, "; state `"));
+      TRY(ab_buffer_append(out, state->as.text.data, state->as.text.length));
+      TRY(ab_buffer_literal(out, "`; resolution `"));
+      if (resolution && resolution->kind == AB_VALUE_STRING)
+        TRY(ab_buffer_append(out, resolution->as.text.data,
+                             resolution->as.text.length));
+      else if (!resolution)
+        TRY(ab_buffer_literal(out, "not-applicable"));
+      else
+        return ARCHBIRD_INVALID_SCHEMA;
+      TRY(ab_buffer_literal(out, "`; evidence="));
+      TRY(ab_buffer_u64(out, evidence->as.array.count));
       TRY(ab_buffer_literal(out, "\n"));
+      TRY(markdown_evidence(out, evidence));
     }
     TRY(ab_buffer_literal(out, "\n"));
   }
@@ -106,6 +193,33 @@ ArchbirdStatus ab_path_render_markdown_value(ArchbirdEngine *engine,
         "path Markdown exceeds max_chars; request canonical JSON or raise the "
         "presentation budget");
   return ARCHBIRD_OK;
+}
+
+ArchbirdStatus archbird_path_render_markdown(ArchbirdEngine *engine,
+                                             const uint8_t *artifact_json,
+                                             size_t artifact_length,
+                                             size_t max_chars,
+                                             ArchbirdWriteFn write_fn,
+                                             void *user_data) {
+  AbValue artifact = {0};
+  AbBuffer markdown;
+  ArchbirdStatus status;
+  if (!engine || !artifact_json || !artifact_length || !write_fn)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  ab_buffer_init(&markdown, engine);
+  status =
+      ab_json_value_decode(engine, artifact_json, artifact_length, &artifact);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_path_render_markdown_value(engine, &artifact, max_chars, &markdown);
+  if (status == ARCHBIRD_OK &&
+      write_fn(user_data, markdown.data, markdown.length))
+    status =
+        archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
+                           "Path report callback failed");
+  ab_buffer_free(&markdown);
+  ab_value_free(engine, &artifact);
+  return status;
 }
 
 ArchbirdStatus archbird_map_path_markdown(

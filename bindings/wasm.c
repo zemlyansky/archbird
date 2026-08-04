@@ -925,6 +925,19 @@ AB_WASM_EXPORT int ab_wasm_map_path(const uint8_t *map, size_t map_length,
   return stateless_end(engine, status);
 }
 
+AB_WASM_EXPORT int ab_wasm_path_render_markdown(const uint8_t *artifact,
+                                                size_t artifact_length,
+                                                size_t max_chars) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status =
+      stateless_begin_saved_artifact(artifact_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_path_render_markdown(engine, artifact, artifact_length,
+                                      max_chars, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
 AB_WASM_EXPORT int
 ab_wasm_map_path_markdown(const uint8_t *map, size_t map_length,
                           const uint8_t *resolution, size_t resolution_length,

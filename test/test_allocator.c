@@ -53,6 +53,8 @@ static uint8_t *report_map;
 static size_t report_map_length;
 static uint8_t *report_verification;
 static size_t report_verification_length;
+static uint8_t *report_path;
+static size_t report_path_length;
 
 static void fail(const char *name, const char *message) {
   fprintf(stderr, "FAIL %s: %s\n", name, message);
@@ -476,7 +478,8 @@ typedef enum ReportExerciseKind {
   REPORT_EXERCISE_QUERY_VERIFICATION,
   REPORT_EXERCISE_QUERY_BUDGET,
   REPORT_EXERCISE_PATH,
-  REPORT_EXERCISE_PATH_MARKDOWN
+  REPORT_EXERCISE_PATH_MARKDOWN,
+  REPORT_EXERCISE_PATH_ARTIFACT_MARKDOWN
 } ReportExerciseKind;
 
 static ArchbirdStatus exercise_report(TestAllocator *allocator,
@@ -559,6 +562,10 @@ static ArchbirdStatus exercise_report(TestAllocator *allocator,
         engine, report_map, report_map_length, NULL, 0, (const uint8_t *)path,
         sizeof(path) - 1, 4096, count_write, &output);
     break;
+  case REPORT_EXERCISE_PATH_ARTIFACT_MARKDOWN:
+    status = archbird_path_render_markdown(
+        engine, report_path, report_path_length, 4096, count_write, &output);
+    break;
   default:
     status = ARCHBIRD_INVALID_ARGUMENT;
     break;
@@ -618,6 +625,11 @@ static ArchbirdStatus exercise_path(TestAllocator *allocator) {
 
 static ArchbirdStatus exercise_path_markdown(TestAllocator *allocator) {
   return exercise_report(allocator, REPORT_EXERCISE_PATH_MARKDOWN);
+}
+
+static ArchbirdStatus
+exercise_path_artifact_markdown(TestAllocator *allocator) {
+  return exercise_report(allocator, REPORT_EXERCISE_PATH_ARTIFACT_MARKDOWN);
 }
 
 static ArchbirdStatus exercise_verify(TestAllocator *allocator) {
@@ -858,13 +870,40 @@ static int generate_report_verification(void) {
   return 1;
 }
 
+static int generate_report_path(void) {
+  static const char path[] =
+      "{\"artifact\":\"path-request\",\"relations\":[\"imports\"],"
+      "\"schema_version\":1,\"source\":{\"kind\":\"file\","
+      "\"patterns\":[\"py/sample/__init__.py\"]},\"target\":{"
+      "\"kind\":\"file\",\"patterns\":[\"py/sample/api.py\"]}}";
+  ArchbirdEngineOptions options;
+  ArchbirdEngine *engine = NULL;
+  HeapOutput output = {0};
+  ArchbirdStatus status;
+  archbird_engine_options_init(&options);
+  status = archbird_engine_create(&options, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_map_path(engine, report_map, report_map_length, NULL, 0,
+                               (const uint8_t *)path, sizeof(path) - 1, 0,
+                               heap_write, &output);
+  archbird_engine_destroy(engine);
+  if (status != ARCHBIRD_OK) {
+    free(output.bytes);
+    return 0;
+  }
+  report_path = output.bytes;
+  report_path_length = output.length;
+  return 1;
+}
+
 int main(void) {
   if (!load_fixture(ARCHBIRD_ALLOCATOR_REPORT_MAP, &report_map,
                     &report_map_length) ||
-      !generate_report_verification()) {
+      !generate_report_verification() || !generate_report_path()) {
     fail("report-fixtures", "cannot load report allocator fixtures");
     free(report_map);
     free(report_verification);
+    free(report_path);
     return 1;
   }
   test_invalid_options();
@@ -893,14 +932,19 @@ int main(void) {
                     exercise_budgeted_query_report);
   run_failure_sweep("path-every-n", exercise_path);
   run_failure_sweep("path-markdown-every-n", exercise_path_markdown);
+  run_failure_sweep("path-artifact-markdown-every-n",
+                    exercise_path_artifact_markdown);
   run_failure_sweep("verify-every-n", exercise_verify);
   run_failure_sweep("verify-authoring-every-n", exercise_verify_authoring);
   free(report_map);
   free(report_verification);
+  free(report_path);
   report_map = NULL;
   report_map_length = 0;
   report_verification = NULL;
   report_verification_length = 0;
+  report_path = NULL;
+  report_path_length = 0;
   if (failures)
     return 1;
   puts("native allocator tests passed: JSON/edit, PCRE2, config resolution, "

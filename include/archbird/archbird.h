@@ -735,15 +735,27 @@ ARCHBIRD_API ArchbirdStatus archbird_map_query(
  * Resolve two explicit endpoint sets and find bounded shortest connection
  * witnesses over one exhaustive typed graph ProjectionResult. Relation
  * direction, parallel relation kinds, projection evidence, and incomplete
- * frontiers remain explicit in the Path artifact. An absent outcome is
- * emitted only when the selected graph is complete and the search frontier is
- * exhausted.
+ * frontiers remain explicit in the Path artifact. Found requires an
+ * all-current evidence-backed route. Candidate-only witnesses remain visible
+ * with an unknown outcome, while a shorter candidate shortcut cannot hide a
+ * longer established route. An absent outcome is emitted only when the
+ * selected graph is complete and the search frontier is exhausted.
  */
 ARCHBIRD_API ArchbirdStatus archbird_map_path(
     ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
     const uint8_t *resolution_json, size_t resolution_length,
     const uint8_t *request_json, size_t request_length, uint32_t json_flags,
     ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Render one canonical Path artifact as deterministic Markdown. This is the
+ * artifact renderer used when a host evaluates and checks Path once before
+ * selecting its presentation.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_path_render_markdown(
+    ArchbirdEngine *engine, const uint8_t *artifact_json,
+    size_t artifact_length, size_t max_chars, ArchbirdWriteFn write_fn,
+    void *user_data);
 
 /*
  * Render the same canonical Path artifact as deterministic Markdown.

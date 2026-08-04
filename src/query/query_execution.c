@@ -30,6 +30,32 @@ typedef struct QueryRequest {
   size_t search_limit;
 } QueryRequest;
 
+typedef struct QueryRouteQuality {
+  size_t stale_edges;
+  size_t unknown_edges;
+  size_t unresolved_relations;
+  size_t ambiguous_relations;
+  size_t candidate_relations;
+  size_t provenance_count;
+  size_t distance;
+  int valid;
+} QueryRouteQuality;
+
+typedef struct QueryRouteState {
+  QueryRouteQuality quality;
+  size_t from;
+  size_t edge;
+  int reverse;
+  int has_edge;
+  int symbol_kind;
+} QueryRouteState;
+
+enum {
+  QUERY_ROUTE_SYMBOL_NONE = 0,
+  QUERY_ROUTE_SYMBOL_CALL = 1,
+  QUERY_ROUTE_SYMBOL_REFERENCE = 2
+};
+
 typedef struct QueryFile {
   const AbValue *row;
   const AbString *path;
@@ -44,6 +70,12 @@ typedef struct QueryFile {
   uint64_t retrieval_score;
   size_t ordering_retrieval_rank;
   uint64_t ordering_retrieval_score;
+  QueryRouteQuality route;
+  size_t route_from;
+  size_t route_edge;
+  int route_reverse;
+  int route_has_edge;
+  int route_symbol_kind;
   int seed;
   int symbol_seed;
   int matched_symbol_seed;
@@ -58,6 +90,11 @@ typedef struct QueryEdge {
   const AbString *source;
   const AbString *target;
   const AbValue *names;
+  const AbValue *evidence;
+  const AbValue *sites;
+  size_t stale_cost;
+  size_t unknown_cost;
+  size_t provenance_count;
   size_t source_index;
   size_t target_index;
   int target_mapped;
@@ -83,6 +120,7 @@ typedef struct QueryRelatedSymbol {
   size_t distance;
   size_t retrieval_rank;
   uint64_t retrieval_score;
+  QueryRouteQuality route;
   int explicit_seed;
 } QueryRelatedSymbol;
 
@@ -165,6 +203,99 @@ static int string_literal(const AbString *value, const char *literal) {
   size_t length = strlen(literal);
   return value && value->length == length &&
          (!length || memcmp(value->data, literal, length) == 0);
+}
+
+static int route_quality_compare(const QueryRouteQuality *left,
+                                 const QueryRouteQuality *right) {
+#define COMPARE_FIELD(name)                                                    \
+  do {                                                                         \
+    if (left->name != right->name)                                             \
+      return (left->name > right->name) - (left->name < right->name);          \
+  } while (0)
+  if (left->valid != right->valid)
+    return left->valid ? -1 : 1;
+  if (!left->valid)
+    return 0;
+  COMPARE_FIELD(unknown_edges);
+  COMPARE_FIELD(stale_edges);
+  COMPARE_FIELD(unresolved_relations);
+  COMPARE_FIELD(ambiguous_relations);
+  COMPARE_FIELD(candidate_relations);
+  COMPARE_FIELD(distance);
+#undef COMPARE_FIELD
+  return 0;
+}
+
+static int route_quality_better(const QueryRouteQuality *candidate,
+                                const QueryRouteQuality *current) {
+  return route_quality_compare(candidate, current) < 0;
+}
+
+static QueryRouteQuality route_seed(size_t distance) {
+  QueryRouteQuality quality = {0};
+  quality.distance = distance;
+  quality.valid = 1;
+  return quality;
+}
+
+static size_t route_add_count(size_t left, size_t right) {
+  return left > SIZE_MAX - right ? SIZE_MAX : left + right;
+}
+
+static void route_add_resolution(QueryRouteQuality *quality,
+                                 const AbString *resolution) {
+  if (string_literal(resolution, "candidate")) {
+    quality->candidate_relations =
+        route_add_count(quality->candidate_relations, 1);
+  } else if (string_literal(resolution, "ambiguous")) {
+    quality->ambiguous_relations =
+        route_add_count(quality->ambiguous_relations, 1);
+  } else if (string_literal(resolution, "unresolved")) {
+    quality->unresolved_relations =
+        route_add_count(quality->unresolved_relations, 1);
+  }
+}
+
+static ArchbirdStatus route_add_evidence(QueryContext *context,
+                                         QueryRouteQuality *quality,
+                                         const AbValue *evidence,
+                                         int state_required,
+                                         const char *where) {
+  size_t index;
+  int current = 0;
+  int unknown = 0;
+  int stale = 0;
+  if (!evidence || evidence->kind != AB_VALUE_ARRAY)
+    return query_error(context, where);
+  if (!evidence->as.array.count)
+    return state_required ? query_error(context, where) : ARCHBIRD_OK;
+  for (index = 0; index < evidence->as.array.count; index++) {
+    const AbValue *row = &evidence->as.array.items[index];
+    const AbValue *state;
+    if (row->kind != AB_VALUE_OBJECT)
+      return query_error(context, where);
+    state = ab_value_member(row, "state");
+    if (!state && !state_required) {
+      current = 1;
+      continue;
+    }
+    if (!state || state->kind != AB_VALUE_STRING)
+      return query_error(context, where);
+    current = current || string_literal(&state->as.text, "current");
+    unknown = unknown || string_literal(&state->as.text, "unknown");
+    stale = stale || string_literal(&state->as.text, "stale");
+    if (!string_literal(&state->as.text, "current") &&
+        !string_literal(&state->as.text, "unknown") &&
+        !string_literal(&state->as.text, "stale"))
+      return query_error(context, where);
+  }
+  quality->provenance_count =
+      route_add_count(quality->provenance_count, evidence->as.array.count);
+  quality->unknown_edges =
+      route_add_count(quality->unknown_edges, !current && unknown);
+  quality->stale_edges =
+      route_add_count(quality->stale_edges, !current && !unknown && stale);
+  return ARCHBIRD_OK;
 }
 
 static int valid_sha256(const AbString *value) {
@@ -319,11 +450,10 @@ static const AbString *match_target_symbol(const QueryContext *context,
                                            const QueryTestMatch *match);
 static size_t match_symbol_distance(const QueryContext *context,
                                     const QueryTestMatch *match);
-static ArchbirdStatus
-append_related_symbol_row(QueryContext *context, size_t file_index,
-                          const AbValue *row, const AbString *name,
-                          uint64_t retrieval_score, size_t retrieval_rank,
-                          size_t distance, int explicit_seed);
+static ArchbirdStatus append_related_symbol_row(
+    QueryContext *context, size_t file_index, const AbValue *row,
+    const AbString *name, uint64_t retrieval_score, size_t retrieval_rank,
+    size_t distance, int explicit_seed, const QueryRouteQuality *route);
 
 static int symbol_scoped_file(const QueryContext *context, size_t file_index) {
   return file_index < context->file_count &&
@@ -717,6 +847,8 @@ static ArchbirdStatus build_files(QueryContext *context) {
     file->symbols = required_array(context, row, "symbols", "map.files[]");
     file->original_index = index;
     file->distance = SIZE_MAX;
+    file->route_from = SIZE_MAX;
+    file->route_edge = SIZE_MAX;
     file->retrieval_rank = SIZE_MAX;
     file->ordering_retrieval_rank = SIZE_MAX;
     if (!file->path || !file->layer || !file->language || !file->sha256 ||
@@ -758,9 +890,31 @@ static ArchbirdStatus build_edges(QueryContext *context) {
     edge->source = required_string(context, row, "source", "map.edges[]");
     edge->target = required_string(context, row, "target", "map.edges[]");
     edge->names = required_array(context, row, "names", "map.edges[]");
+    edge->evidence = ab_value_member(row, "evidence");
+    edge->sites = ab_value_member(row, "sites");
     if (!edge->kind || !edge->source || !edge->target || !edge->names ||
         !string_array_valid(edge->names))
       return ARCHBIRD_INVALID_SCHEMA;
+    if ((edge->evidence && edge->evidence->kind != AB_VALUE_ARRAY) ||
+        (edge->sites && edge->sites->kind != AB_VALUE_ARRAY))
+      return query_error(context, "map.edges[] evidence is malformed");
+    if (edge->evidence) {
+      QueryRouteQuality evidence_quality = {0};
+      ArchbirdStatus status =
+          route_add_evidence(context, &evidence_quality, edge->evidence, 1,
+                             "map.edges[] evidence state is invalid");
+      if (status != ARCHBIRD_OK)
+        return status;
+      edge->unknown_cost = evidence_quality.unknown_edges;
+      edge->stale_cost = evidence_quality.stale_edges;
+    }
+    if ((edge->evidence &&
+         edge->evidence->as.array.count >
+             SIZE_MAX - (edge->sites ? edge->sites->as.array.count : 0)))
+      return query_error(context, "map.edges[] has too much evidence");
+    edge->provenance_count =
+        (edge->evidence ? edge->evidence->as.array.count : 0) +
+        (edge->sites ? edge->sites->as.array.count : 0);
     edge->source_index = find_file(context, edge->source);
     edge->target_index = find_file(context, edge->target);
     edge->target_mapped = edge->target_index != SIZE_MAX;
@@ -1442,7 +1596,7 @@ static ArchbirdStatus select_contained_symbols(QueryContext *context) {
         ArchbirdStatus status = append_related_symbol_row(
             context, selected->file_index, row, &name->as.text,
             selected->retrieval_score, selected->retrieval_rank, 0,
-            selected->explicit_seed);
+            selected->explicit_seed, NULL);
         if (status != ARCHBIRD_OK)
           return status;
       }
@@ -2535,11 +2689,10 @@ done:
   return status;
 }
 
-static ArchbirdStatus
-append_related_symbol_row(QueryContext *context, size_t file_index,
-                          const AbValue *row, const AbString *name,
-                          uint64_t retrieval_score, size_t retrieval_rank,
-                          size_t distance, int explicit_seed) {
+static ArchbirdStatus append_related_symbol_row(
+    QueryContext *context, size_t file_index, const AbValue *row,
+    const AbString *name, uint64_t retrieval_score, size_t retrieval_rank,
+    size_t distance, int explicit_seed, const QueryRouteQuality *route) {
   QueryRelatedSymbol *resized;
   QueryRelatedSymbol *symbol;
   size_t index;
@@ -2559,6 +2712,8 @@ append_related_symbol_row(QueryContext *context, size_t file_index,
     }
     if (distance < symbol->distance)
       symbol->distance = distance;
+    if (route && route_quality_better(route, &symbol->route))
+      symbol->route = *route;
     symbol->explicit_seed |= explicit_seed;
     return ARCHBIRD_OK;
   }
@@ -2588,6 +2743,7 @@ append_related_symbol_row(QueryContext *context, size_t file_index,
   symbol->distance = distance;
   symbol->retrieval_rank = retrieval_rank;
   symbol->retrieval_score = retrieval_score;
+  symbol->route = route ? *route : route_seed(distance);
   symbol->explicit_seed = explicit_seed;
   return ARCHBIRD_OK;
 }
@@ -2595,7 +2751,8 @@ append_related_symbol_row(QueryContext *context, size_t file_index,
 static int selected_symbol_state(const QueryContext *context,
                                  const AbString *path, const AbString *name,
                                  uint64_t *score, size_t *rank,
-                                 size_t *distance, int *explicit_seed) {
+                                 size_t *distance, int *explicit_seed,
+                                 QueryRouteQuality *route) {
   size_t file_index = find_file(context, path);
   size_t index;
   int found = 0;
@@ -2603,6 +2760,7 @@ static int selected_symbol_state(const QueryContext *context,
   *rank = SIZE_MAX;
   *distance = SIZE_MAX;
   *explicit_seed = 0;
+  memset(route, 0, sizeof(*route));
   for (index = 0; index < context->symbol_count; index++) {
     const QuerySymbol *symbol = &context->symbols[index];
     if (!ab_string_equal(symbol->path, path) ||
@@ -2610,6 +2768,8 @@ static int selected_symbol_state(const QueryContext *context,
       continue;
     found = 1;
     *distance = 0;
+    if (!route->valid)
+      *route = route_seed(0);
     *explicit_seed |= symbol->explicit_seed;
     if (symbol->retrieval_score > *score ||
         (symbol->retrieval_score == *score && symbol->retrieval_rank < *rank)) {
@@ -2624,14 +2784,16 @@ static int selected_symbol_state(const QueryContext *context,
       continue;
     found = 1;
     *explicit_seed |= symbol->explicit_seed;
-    if (symbol->distance < *distance)
-      *distance = symbol->distance;
+    if (route_quality_better(&symbol->route, route))
+      *route = symbol->route;
     if (symbol->retrieval_score > *score ||
         (symbol->retrieval_score == *score && symbol->retrieval_rank < *rank)) {
       *score = symbol->retrieval_score;
       *rank = symbol->retrieval_rank;
     }
   }
+  if (route->valid)
+    *distance = route->distance;
   if (found && file_index != SIZE_MAX &&
       (context->files[file_index].retrieval_score > *score ||
        (context->files[file_index].retrieval_score == *score &&
@@ -2642,11 +2804,11 @@ static int selected_symbol_state(const QueryContext *context,
   return found;
 }
 
-static ArchbirdStatus
-select_related_symbol(QueryContext *context, const AbString *path,
-                      const AbString *name, uint64_t retrieval_score,
-                      size_t retrieval_rank, size_t distance, int explicit_seed,
-                      size_t *queue, size_t *tail) {
+static ArchbirdStatus select_related_symbol(
+    QueryContext *context, const AbString *path, const AbString *name,
+    uint64_t retrieval_score, size_t retrieval_rank, size_t distance,
+    int explicit_seed, const QueryRouteQuality *route, size_t route_from,
+    int route_reverse, int route_symbol_kind, size_t *queue, size_t *tail) {
   size_t file_index = find_file(context, path);
   const AbValue *symbols;
   size_t index;
@@ -2673,7 +2835,7 @@ select_related_symbol(QueryContext *context, const AbString *path,
     matched++;
     status = append_related_symbol_row(
         context, file_index, row, &candidate_name->as.text, retrieval_score,
-        retrieval_rank, distance, explicit_seed);
+        retrieval_rank, distance, explicit_seed, route);
   }
   if (status != ARCHBIRD_OK || !matched)
     return status;
@@ -2687,18 +2849,30 @@ select_related_symbol(QueryContext *context, const AbString *path,
   }
   if (!context->files[file_index].selected) {
     context->files[file_index].selected = 1;
-    context->files[file_index].distance = distance;
+    context->files[file_index].distance = route->distance;
+    context->files[file_index].route = *route;
+    context->files[file_index].route_from = route_from;
+    context->files[file_index].route_edge = SIZE_MAX;
+    context->files[file_index].route_reverse = route_reverse;
+    context->files[file_index].route_has_edge = 0;
+    context->files[file_index].route_symbol_kind = route_symbol_kind;
     queue[(*tail)++] = file_index;
-  } else if (distance < context->files[file_index].distance) {
-    context->files[file_index].distance = distance;
+  } else if (route_quality_better(route, &context->files[file_index].route)) {
+    context->files[file_index].distance = route->distance;
+    context->files[file_index].route = *route;
+    context->files[file_index].route_from = route_from;
+    context->files[file_index].route_edge = SIZE_MAX;
+    context->files[file_index].route_reverse = route_reverse;
+    context->files[file_index].route_has_edge = 0;
+    context->files[file_index].route_symbol_kind = route_symbol_kind;
   }
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus
-select_related_file(QueryContext *context, const AbString *path,
-                    uint64_t retrieval_score, size_t retrieval_rank,
-                    size_t distance, size_t *queue, size_t *tail) {
+static ArchbirdStatus select_related_file(
+    QueryContext *context, const AbString *path, uint64_t retrieval_score,
+    size_t retrieval_rank, const QueryRouteQuality *route, size_t route_from,
+    int route_reverse, int route_symbol_kind, size_t *queue, size_t *tail) {
   size_t file_index = find_file(context, path);
   if (file_index == SIZE_MAX)
     return ARCHBIRD_OK;
@@ -2709,12 +2883,25 @@ select_related_file(QueryContext *context, const AbString *path,
     context->files[file_index].retrieval_rank = retrieval_rank;
   }
   if (context->files[file_index].selected) {
-    if (distance < context->files[file_index].distance)
-      context->files[file_index].distance = distance;
+    if (route_quality_better(route, &context->files[file_index].route)) {
+      context->files[file_index].distance = route->distance;
+      context->files[file_index].route = *route;
+      context->files[file_index].route_from = route_from;
+      context->files[file_index].route_edge = SIZE_MAX;
+      context->files[file_index].route_reverse = route_reverse;
+      context->files[file_index].route_has_edge = 0;
+      context->files[file_index].route_symbol_kind = route_symbol_kind;
+    }
     return ARCHBIRD_OK;
   }
   context->files[file_index].selected = 1;
-  context->files[file_index].distance = distance;
+  context->files[file_index].distance = route->distance;
+  context->files[file_index].route = *route;
+  context->files[file_index].route_from = route_from;
+  context->files[file_index].route_edge = SIZE_MAX;
+  context->files[file_index].route_reverse = route_reverse;
+  context->files[file_index].route_has_edge = 0;
+  context->files[file_index].route_symbol_kind = route_symbol_kind;
   queue[(*tail)++] = file_index;
   return ARCHBIRD_OK;
 }
@@ -2727,6 +2914,9 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
                    string_literal(context->request.direction, "both");
   int upstream = string_literal(context->request.direction, "upstream") ||
                  string_literal(context->request.direction, "both");
+  int symbol_kind = relations == context->symbol_calls
+                        ? QUERY_ROUTE_SYMBOL_CALL
+                        : QUERY_ROUTE_SYMBOL_REFERENCE;
   size_t index;
   for (index = 0; index < relations->as.array.count; index++) {
     const AbValue *row = &relations->as.array.items[index];
@@ -2735,20 +2925,24 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
     const AbValue *source_symbol;
     const AbValue *candidates;
     const AbValue *resolution;
+    const AbValue *evidence;
     size_t candidate;
     int source_selected = 0;
     int source_explicit = 0;
     uint64_t source_retrieval_score = 0;
     size_t source_retrieval_rank = SIZE_MAX;
     size_t source_distance = SIZE_MAX;
+    QueryRouteQuality source_route = {0};
     if (row->kind != AB_VALUE_OBJECT)
       return query_error(context, "map symbol relation must be an object");
     source = ab_value_member(row, "source");
     candidates = ab_value_member(row, "candidates");
     resolution = ab_value_member(row, "resolution");
+    evidence = ab_value_member(row, "evidence");
     if (!source || source->kind != AB_VALUE_OBJECT || !candidates ||
         candidates->kind != AB_VALUE_ARRAY || !resolution ||
-        resolution->kind != AB_VALUE_STRING)
+        resolution->kind != AB_VALUE_STRING || !evidence ||
+        evidence->kind != AB_VALUE_ARRAY)
       return query_error(context, "map symbol relation shape is invalid");
     source_path = ab_value_member(source, "path");
     source_symbol = ab_value_member(source, "symbol");
@@ -2763,7 +2957,7 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
       source_selected = selected_symbol_state(
           context, &source_path->as.text, &source_symbol->as.text,
           &source_retrieval_score, &source_retrieval_rank, &source_distance,
-          &source_explicit);
+          &source_explicit, &source_route);
     for (candidate = 0; candidate < candidates->as.array.count; candidate++) {
       const AbValue *target = &candidates->as.array.items[candidate];
       const AbValue *target_path;
@@ -2773,6 +2967,7 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
       uint64_t retrieval_score = 0;
       size_t retrieval_rank = SIZE_MAX;
       size_t target_distance = SIZE_MAX;
+      QueryRouteQuality target_route = {0};
       ArchbirdStatus status;
       if (target->kind != AB_VALUE_OBJECT)
         return query_error(context,
@@ -2784,25 +2979,45 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
         return query_error(context, "map symbol relation candidate is invalid");
       target_selected = selected_symbol_state(
           context, &target_path->as.text, &target_symbol->as.text,
-          &retrieval_score, &retrieval_rank, &target_distance,
-          &target_explicit);
+          &retrieval_score, &retrieval_rank, &target_distance, &target_explicit,
+          &target_route);
       if (upstream && target_selected && target_distance == hop - 1) {
-        status = source_symbol
-                     ? select_related_symbol(context, &source_path->as.text,
-                                             &source_symbol->as.text,
-                                             retrieval_score, retrieval_rank,
-                                             hop, target_explicit, queue, tail)
-                     : select_related_file(context, &source_path->as.text,
-                                           retrieval_score, retrieval_rank, hop,
-                                           queue, tail);
+        QueryRouteQuality proposed = target_route;
+        size_t target_file_index = find_file(context, &target_path->as.text);
+        proposed.distance = hop;
+        route_add_resolution(&proposed, &resolution->as.text);
+        status =
+            route_add_evidence(context, &proposed, evidence, 0,
+                               "map symbol relation evidence state is invalid");
+        if (status != ARCHBIRD_OK)
+          return status;
+        status =
+            source_symbol
+                ? select_related_symbol(
+                      context, &source_path->as.text, &source_symbol->as.text,
+                      retrieval_score, retrieval_rank, hop, target_explicit,
+                      &proposed, target_file_index, 1, symbol_kind, queue, tail)
+                : select_related_file(context, &source_path->as.text,
+                                      retrieval_score, retrieval_rank,
+                                      &proposed, target_file_index, 1,
+                                      symbol_kind, queue, tail);
         if (status != ARCHBIRD_OK)
           return status;
       }
       if (downstream && source_selected && source_distance == hop - 1) {
+        QueryRouteQuality proposed = source_route;
+        size_t source_file_index = find_file(context, &source_path->as.text);
+        proposed.distance = hop;
+        route_add_resolution(&proposed, &resolution->as.text);
+        status =
+            route_add_evidence(context, &proposed, evidence, 0,
+                               "map symbol relation evidence state is invalid");
+        if (status != ARCHBIRD_OK)
+          return status;
         status = select_related_symbol(
             context, &target_path->as.text, &target_symbol->as.text,
             source_retrieval_score, source_retrieval_rank, hop, source_explicit,
-            queue, tail);
+            &proposed, source_file_index, 0, symbol_kind, queue, tail);
         if (status != ARCHBIRD_OK)
           return status;
       }
@@ -2811,16 +3026,168 @@ static ArchbirdStatus select_symbol_relations(QueryContext *context,
   return ARCHBIRD_OK;
 }
 
+static void route_state_relax(const QueryContext *context,
+                              const QueryRouteState *source,
+                              size_t source_index, size_t edge_index,
+                              size_t distance, int reverse,
+                              QueryRouteState *target) {
+  const QueryEdge *edge = &context->edges[edge_index];
+  QueryRouteState candidate = *source;
+  candidate.quality.stale_edges =
+      route_add_count(candidate.quality.stale_edges, edge->stale_cost);
+  candidate.quality.unknown_edges =
+      route_add_count(candidate.quality.unknown_edges, edge->unknown_cost);
+  candidate.quality.provenance_count = route_add_count(
+      candidate.quality.provenance_count, edge->provenance_count);
+  candidate.quality.distance = distance;
+  candidate.from = source_index;
+  candidate.edge = edge_index;
+  candidate.reverse = reverse;
+  candidate.has_edge = 1;
+  candidate.symbol_kind = QUERY_ROUTE_SYMBOL_NONE;
+  if (route_quality_better(&candidate.quality, &target->quality))
+    *target = candidate;
+}
+
+static ArchbirdStatus traverse_file_edges(QueryContext *context) {
+  QueryRouteState *starts = NULL;
+  QueryRouteState *current = NULL;
+  QueryRouteState *next = NULL;
+  QueryRouteState *best = NULL;
+  size_t bytes;
+  size_t hop;
+  size_t index;
+  size_t max_start = 0;
+  size_t max_hop;
+  if (!context->file_count)
+    return ARCHBIRD_OK;
+  if (context->file_count > SIZE_MAX / sizeof(*starts))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  bytes = context->file_count * sizeof(*starts);
+  starts = (QueryRouteState *)ab_calloc(context->engine, context->file_count,
+                                        sizeof(*starts));
+  current = (QueryRouteState *)ab_calloc(context->engine, context->file_count,
+                                         sizeof(*current));
+  next = (QueryRouteState *)ab_calloc(context->engine, context->file_count,
+                                      sizeof(*next));
+  best = (QueryRouteState *)ab_calloc(context->engine, context->file_count,
+                                      sizeof(*best));
+  if (!starts || !current || !next || !best) {
+    ab_free(context->engine, best);
+    ab_free(context->engine, next);
+    ab_free(context->engine, current);
+    ab_free(context->engine, starts);
+    return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory ranking query graph routes");
+  }
+  for (index = 0; index < context->file_count; index++) {
+    QueryFile *file = &context->files[index];
+    if (!file->selected || file->distance > context->request.depth)
+      continue;
+    if (!file->route.valid)
+      file->route = route_seed(file->distance);
+    if (file->distance > max_start)
+      max_start = file->distance;
+    starts[index].quality = file->route;
+    starts[index].from = file->route_from;
+    starts[index].edge = file->route_edge;
+    starts[index].reverse = file->route_reverse;
+    starts[index].has_edge = file->route_has_edge;
+    starts[index].symbol_kind = file->route_symbol_kind;
+    /*
+     * A symbol-only seed is selected for output but enters the file graph
+     * through a selected symbol relation, not through every structural edge
+     * incident to its containing file.  This keeps a declaration query focused
+     * on declaration-definition evidence instead of also admitting every
+     * importer at the first hop.
+     */
+    if (!file->seed && file->distance == 0 &&
+        symbol_scoped_file(context, index)) {
+      best[index] = starts[index];
+      memset(&starts[index], 0, sizeof(starts[index]));
+    }
+  }
+  max_hop = route_add_count(max_start,
+                            context->file_count ? context->file_count - 1 : 0);
+  if (max_hop > context->request.depth)
+    max_hop = context->request.depth;
+  for (hop = 0;; hop++) {
+    size_t edge_index;
+    for (index = 0; index < context->file_count; index++) {
+      if (starts[index].quality.valid &&
+          starts[index].quality.distance == hop &&
+          route_quality_better(&starts[index].quality, &current[index].quality))
+        current[index] = starts[index];
+      if (route_quality_better(&current[index].quality, &best[index].quality))
+        best[index] = current[index];
+    }
+    if (hop >= max_hop)
+      break;
+    memset(next, 0, bytes);
+    for (edge_index = 0; edge_index < context->edge_count; edge_index++) {
+      const QueryEdge *edge = &context->edges[edge_index];
+      if (!edge->target_mapped || edge->source_index == SIZE_MAX)
+        continue;
+      if ((string_literal(context->request.direction, "downstream") ||
+           string_literal(context->request.direction, "both")) &&
+          current[edge->source_index].quality.valid)
+        route_state_relax(context, &current[edge->source_index],
+                          edge->source_index, edge_index, hop + 1, 0,
+                          &next[edge->target_index]);
+      if ((string_literal(context->request.direction, "upstream") ||
+           string_literal(context->request.direction, "both")) &&
+          current[edge->target_index].quality.valid)
+        route_state_relax(context, &current[edge->target_index],
+                          edge->target_index, edge_index, hop + 1, 1,
+                          &next[edge->source_index]);
+    }
+    {
+      QueryRouteState *swap = current;
+      current = next;
+      next = swap;
+    }
+  }
+  for (index = 0; index < context->file_count; index++) {
+    QueryFile *file = &context->files[index];
+    file->selected = best[index].quality.valid;
+    if (!file->selected) {
+      file->distance = SIZE_MAX;
+      memset(&file->route, 0, sizeof(file->route));
+      file->route_from = SIZE_MAX;
+      file->route_edge = SIZE_MAX;
+      file->route_reverse = 0;
+      file->route_has_edge = 0;
+      file->route_symbol_kind = QUERY_ROUTE_SYMBOL_NONE;
+      continue;
+    }
+    file->route = best[index].quality;
+    file->distance = best[index].quality.distance;
+    file->route_from = best[index].from;
+    file->route_edge = best[index].edge;
+    file->route_reverse = best[index].reverse;
+    file->route_has_edge = best[index].has_edge;
+    file->route_symbol_kind = best[index].symbol_kind;
+  }
+  ab_free(context->engine, best);
+  ab_free(context->engine, next);
+  ab_free(context->engine, current);
+  ab_free(context->engine, starts);
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus traverse(QueryContext *context) {
   size_t *queue = NULL;
-  size_t head = 0;
   size_t tail = 0;
   size_t index;
   size_t hop;
-  int downstream = string_literal(context->request.direction, "downstream") ||
-                   string_literal(context->request.direction, "both");
-  int upstream = string_literal(context->request.direction, "upstream") ||
-                 string_literal(context->request.direction, "both");
+  size_t symbol_bound = route_add_count(
+      context->file_count,
+      route_add_count(context->symbol_calls->as.array.count,
+                      context->symbol_references->as.array.count));
+  size_t symbol_depth = context->request.depth < symbol_bound
+                            ? context->request.depth
+                            : symbol_bound;
   if (context->file_count) {
     queue = (size_t *)ab_malloc(context->engine,
                                 context->file_count * sizeof(*queue));
@@ -2834,6 +3201,7 @@ static ArchbirdStatus traverse(QueryContext *context) {
       if (symbol_scoped_file(context, index)) {
         context->files[index].distance = 0;
         context->files[index].selected = 1;
+        context->files[index].route = route_seed(0);
         continue;
       } else {
         continue;
@@ -2841,10 +3209,11 @@ static ArchbirdStatus traverse(QueryContext *context) {
     }
     context->files[index].distance = 0;
     context->files[index].selected = 1;
+    context->files[index].route = route_seed(0);
     queue[tail++] = index;
   }
   if (has_symbol_scoped_files(context)) {
-    for (hop = 1; hop <= context->request.depth; hop++) {
+    for (hop = 1; hop <= symbol_depth; hop++) {
       ArchbirdStatus status = select_symbol_relations(
           context, context->symbol_calls, hop, queue, &tail);
       if (status == ARCHBIRD_OK)
@@ -2856,29 +3225,8 @@ static ArchbirdStatus traverse(QueryContext *context) {
       }
     }
   }
-  while (head < tail) {
-    size_t current = queue[head++];
-    size_t edge_index;
-    if (context->files[current].distance >= context->request.depth)
-      continue;
-    for (edge_index = 0; edge_index < context->edge_count; edge_index++) {
-      const QueryEdge *edge = &context->edges[edge_index];
-      size_t target = SIZE_MAX;
-      if (!edge->target_mapped || edge->source_index == SIZE_MAX)
-        continue;
-      if (downstream && edge->source_index == current)
-        target = edge->target_index;
-      if (upstream && edge->target_index == current)
-        target = edge->source_index;
-      if (target == SIZE_MAX || context->files[target].selected)
-        continue;
-      context->files[target].selected = 1;
-      context->files[target].distance = context->files[current].distance + 1;
-      queue[tail++] = target;
-    }
-  }
   ab_free(context->engine, queue);
-  return ARCHBIRD_OK;
+  return traverse_file_edges(context);
 }
 
 static int any_initial_match(const QueryContext *context) {
@@ -2903,9 +3251,9 @@ typedef struct QueryOrder {
 static int order_compare(const void *left_raw, const void *right_raw) {
   const QueryFile *left = ((const QueryOrder *)left_raw)->file;
   const QueryFile *right = ((const QueryOrder *)right_raw)->file;
-  if (left->distance != right->distance)
-    return (left->distance > right->distance) -
-           (left->distance < right->distance);
+  int route_compared = route_quality_compare(&left->route, &right->route);
+  if (route_compared)
+    return route_compared;
   /*
    * Retrieval is already a deterministic evidence-ranked projection. Preserve
    * that order among files at the same graph distance; graph degree is only a
@@ -3126,6 +3474,101 @@ static ArchbirdStatus render_query_file_symbols(AbBuffer *buffer,
   return status;
 }
 
+static const char *route_evidence_state(const QueryRouteQuality *route) {
+  return route->unknown_edges ? "unknown"
+                              : (route->stale_edges ? "stale" : "current");
+}
+
+static ArchbirdStatus render_file_route(AbBuffer *buffer,
+                                        const QueryContext *context,
+                                        const QueryFile *file) {
+  const char *state = route_evidence_state(&file->route);
+  ArchbirdStatus status = ab_buffer_literal(buffer, "{\"evidence_state\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, state, strlen(state));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"provenance_count\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, file->route.provenance_count);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"resolution\":{\"ambiguous\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, file->route.ambiguous_relations);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"candidate\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, file->route.candidate_relations);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"unresolved\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, file->route.unresolved_relations);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "},\"via\":");
+  if (status == ARCHBIRD_OK && !file->route_has_edge &&
+      file->route_symbol_kind == QUERY_ROUTE_SYMBOL_NONE)
+    status = ab_buffer_literal(buffer, "null");
+  if (status == ARCHBIRD_OK && file->route_has_edge) {
+    const QueryEdge *edge;
+    if (file->route_edge >= context->edge_count ||
+        file->route_from >= context->file_count)
+      return ARCHBIRD_INVALID_SCHEMA;
+    edge = &context->edges[file->route_edge];
+    status = ab_buffer_literal(buffer, "{\"kind\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string(buffer, edge->kind);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"source\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string(buffer, edge->source);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"target\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string(buffer, edge->target);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"traversal\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(
+          buffer, file->route_reverse ? "reverse" : "forward", 7);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "}");
+  }
+  if (status == ARCHBIRD_OK && !file->route_has_edge &&
+      file->route_symbol_kind != QUERY_ROUTE_SYMBOL_NONE) {
+    const QueryFile *from;
+    const AbString *source;
+    const AbString *target;
+    const char *kind = file->route_symbol_kind == QUERY_ROUTE_SYMBOL_CALL
+                           ? "call"
+                           : "reference";
+    if (file->route_from >= context->file_count)
+      return ARCHBIRD_INVALID_SCHEMA;
+    from = &context->files[file->route_from];
+    source = file->route_reverse ? file->path : from->path;
+    target = file->route_reverse ? from->path : file->path;
+    status = ab_buffer_literal(buffer, "{\"kind\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, kind, strlen(kind));
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"source\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string(buffer, source);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"target\":");
+    if (status == ARCHBIRD_OK)
+      status = render_string(buffer, target);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"traversal\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(
+          buffer, file->route_reverse ? "reverse" : "forward", 7);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  return status;
+}
+
 static ArchbirdStatus render_file_rows(AbBuffer *buffer,
                                        const QueryContext *context,
                                        const QueryOrder *order,
@@ -3152,6 +3595,10 @@ static ArchbirdStatus render_file_rows(AbBuffer *buffer,
       status = ab_buffer_literal(buffer, ",\"path\":");
     if (status == ARCHBIRD_OK)
       status = render_string(buffer, file->path);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"route\":");
+    if (status == ARCHBIRD_OK)
+      status = render_file_route(buffer, context, file);
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"sha256\":");
     if (status == ARCHBIRD_OK)

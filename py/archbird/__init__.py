@@ -61,6 +61,7 @@ _NATIVE_EXPORTS = (
     "publish_okf_bundle",
     "path_map_json",
     "path_map_markdown",
+    "render_path_markdown",
     "query_map_markdown",
     "query_map_json",
     "render_map_markdown",

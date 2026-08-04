@@ -177,8 +177,20 @@ typedef struct AbMapCompileCommand {
   const AbString *database;
   AbMapCompileRoot *roots;
   size_t root_count;
-  size_t context_leader;
+  size_t context_id;
 } AbMapCompileCommand;
+
+typedef struct AbMapCompileContext {
+  size_t representative_command;
+  size_t *sources;
+  size_t source_count;
+  size_t source_capacity;
+  size_t *files;
+  size_t file_count;
+  const AbString **providers;
+  size_t provider_count;
+  size_t provider_capacity;
+} AbMapCompileContext;
 
 typedef struct AbMapArtifactInput {
   AbString path;
@@ -376,7 +388,14 @@ typedef struct AbMapState {
   size_t build_count;
   AbMapCompileCommand *compile_commands;
   size_t compile_command_count;
-  unsigned char *compile_contexts;
+  AbMapCompileContext *compile_contexts;
+  size_t compile_context_count;
+  size_t *compile_file_context_offsets;
+  size_t *compile_file_context_ids;
+  size_t *compile_file_direct_context_offsets;
+  size_t *compile_file_direct_context_ids;
+  size_t *compile_file_command_offsets;
+  size_t *compile_file_command_ids;
   AbMapArtifact *artifacts;
   size_t artifact_count;
   AbMapSurface *surfaces;

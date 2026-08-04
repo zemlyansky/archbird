@@ -128,9 +128,9 @@
       "source": "schema/path-request.schema.json"
     },
     {
-      "bytes": 4576,
+      "bytes": 4667,
       "path": "path.schema.json",
-      "sha256": "d6ec8d1bc669bdca7b897ad84b7ee99a219f93c332b7141679ccf95020c8deb2",
+      "sha256": "585e259064793b413bd3937e3f4d248e6cdebdc244e33cca1040fd88661fb591",
       "source": "schema/path.schema.json"
     },
     {

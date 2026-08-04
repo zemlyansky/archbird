@@ -43,10 +43,10 @@ from .native import (
     freeze_constraints_json,
     analyze_okf_source,
     path_map_json,
-    path_map_markdown,
     query_map_markdown,
     query_map_json,
     render_map_markdown,
+    render_path_markdown,
     render_plan_markdown,
     render_source_markdown,
     resolve_discovery,
@@ -2354,24 +2354,9 @@ def _path_main(argv: Sequence[str]) -> int:
             "kind": args.target_kind or endpoint_kind,
             "patterns": [args.target_pattern],
         }
-        if args.format == "json":
-            encoded = path_map_json(
-                map_json, source, target, pretty=args.pretty, **options
-            )
-        else:
-            encoded = path_map_markdown(
-                map_json,
-                source,
-                target,
-                max_chars=args.max_chars,
-                **options,
-            )
+        canonical = path_map_json(map_json, source, target, **options)
+        artifact = json.loads(canonical)
         if args.check:
-            artifact = json.loads(
-                path_map_json(map_json, source, target, **options)
-                if args.format == "markdown"
-                else encoded
-            )
             if artifact.get("outcome") != "found":
                 progress.clear()
                 print(
@@ -2380,6 +2365,17 @@ def _path_main(argv: Sequence[str]) -> int:
                     file=sys.stderr,
                 )
                 return 1
+        if args.format == "json":
+            encoded = (
+                _native.json_canonicalize(canonical, pretty=True)
+                if args.pretty
+                else canonical
+            )
+        else:
+            encoded = render_path_markdown(
+                canonical,
+                max_chars=args.max_chars,
+            )
         progress.finish()
         _write(encoded, args.output)
         return 0

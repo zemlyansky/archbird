@@ -785,7 +785,7 @@ remain in the native core.
 | Area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map, Query, and Path | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `pathMap`, `pathMapMarkdown`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
+| Map, Query, and Path | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `pathMap`, `pathMapMarkdown`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderPathMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
 | Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `runActGates`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |

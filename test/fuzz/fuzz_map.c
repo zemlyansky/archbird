@@ -4,6 +4,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   ArchbirdEngine *engine = fuzz_engine();
   if (!engine)
     return 0;
+  (void)archbird_path_render_markdown(engine, data, size, 4096, fuzz_discard,
+                                      NULL);
 #ifdef ARCHBIRD_FUZZ_QUERY_INPUT
   (void)archbird_map_query(engine, fuzz_map_json, sizeof(fuzz_map_json) - 1,
                            NULL, 0, data, size, 0, fuzz_discard, NULL);

@@ -13,11 +13,11 @@
 static const char default_project_configuration[] =
     "{\"layers\":["
     "{\"globs\":[\"**/*.c\",\"**/"
-    "*.h\"],\"import_roots\":[\"include\"],\"language\":\"c\","
+    "*.h\"],\"language\":\"c\","
     "\"name\":\"auto-c\",\"required\":false},"
     "{\"globs\":[\"**/*.cc\",\"**/*.cpp\",\"**/*.cxx\",\"**/*.hh\",\"**/"
     "*.hpp\",\"**/"
-    "*.hxx\"],\"import_roots\":[\"include\"],\"language\":\"cpp\","
+    "*.hxx\"],\"language\":\"cpp\","
     "\"name\":\"auto-cpp\",\"required\":false},"
     "{\"globs\":[\"**/*.py\",\"**/*.pyi\",\"**/"
     "*.pyw\"],\"language\":\"python\",\"name\":\"auto-python\",\"required\":"

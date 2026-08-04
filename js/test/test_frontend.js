@@ -29,6 +29,7 @@ const {
   IMPLEMENTATION_SHA256,
   pathMap,
   pathMapMarkdown,
+  renderPathMarkdown,
   Project,
   publishOkfBundle,
   queryMap,
@@ -1748,8 +1749,13 @@ assert.deepEqual(
     resolutionJson: repositoryProject.resolutionJson,
   }),
 );
+const connectionPathJson = repositoryProject.pathJson(connectionOptions);
 assert.deepEqual(
   repositoryProject.pathMarkdown(connectionOptions),
+  renderPathMarkdown(connectionPathJson),
+);
+assert.deepEqual(
+  renderPathMarkdown(connectionPathJson),
   pathMapMarkdown(repositoryMapJson, {
     ...connectionOptions,
     resolutionJson: repositoryProject.resolutionJson,

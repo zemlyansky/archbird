@@ -48,7 +48,8 @@ enum AbMapCompileImportResolution {
   C_IMPORT_COMPILE_NONE = 0,
   C_IMPORT_COMPILE_RESOLVED = 1,
   C_IMPORT_COMPILE_MISS = 2,
-  C_IMPORT_COMPILE_INCONSISTENT = 3
+  C_IMPORT_COMPILE_INCONSISTENT = 3,
+  C_IMPORT_CONVENTIONAL = 4
 };
 
 #define MAP_TRY(expression)                                                    \
@@ -907,36 +908,14 @@ static int c_header_file(const AbManifestFile *file) {
 
 static int has_direct_compile_command(const AbMapState *state,
                                       const AbManifestFile *file) {
-  size_t index;
-  for (index = 0; index < state->compile_command_count; index++)
-    if (state->compile_commands[index].source == file)
-      return 1;
-  return 0;
-}
-
-static int compile_context_contains(const AbMapState *state,
-                                    size_t command_index,
-                                    const AbManifestFile *file) {
   size_t file_index;
-  if (!state->compile_contexts ||
-      command_index >= state->compile_command_count ||
+  if (!state->compile_file_direct_context_offsets ||
       file < state->manifest->files ||
       file >= state->manifest->files + state->manifest->file_count)
     return 0;
   file_index = (size_t)(file - state->manifest->files);
-  return state->compile_contexts[command_index * state->manifest->file_count +
-                                 file_index] != 0;
-}
-
-static int compile_command_applies(const AbMapState *state,
-                                   size_t command_index,
-                                   const AbManifestFile *file,
-                                   int direct_commands) {
-  const AbMapCompileCommand *command = &state->compile_commands[command_index];
-  if (direct_commands)
-    return command->source == file;
-  return c_header_file(file) &&
-         compile_context_contains(state, command_index, file);
+  return state->compile_file_direct_context_offsets[file_index] !=
+         state->compile_file_direct_context_offsets[file_index + 1];
 }
 
 static ArchbirdStatus resolve_compile_command_import(
@@ -1019,80 +998,235 @@ static void named_reference_file_range(const NamedReference *imports,
   *out_end = low;
 }
 
-static int same_compile_roots(const AbMapCompileCommand *left,
-                              const AbMapCompileCommand *right) {
-  size_t index;
+static int same_compile_context(const AbMapCompileCommand *left,
+                                const AbMapCompileCommand *right) {
+  AbMapCompileRootKind kind;
   if (left->root_count != right->root_count)
     return 0;
-  for (index = 0; index < left->root_count; index++)
-    if (left->roots[index].kind != right->roots[index].kind ||
-        !ab_string_equal(&left->roots[index].path, &right->roots[index].path))
-      return 0;
+  for (kind = AB_MAP_COMPILE_ROOT_QUOTE; kind <= AB_MAP_COMPILE_ROOT_AFTER;
+       kind++) {
+    size_t left_index = 0;
+    size_t right_index = 0;
+    for (;;) {
+      while (left_index < left->root_count &&
+             left->roots[left_index].kind != kind)
+        left_index++;
+      while (right_index < right->root_count &&
+             right->roots[right_index].kind != kind)
+        right_index++;
+      if (left_index == left->root_count || right_index == right->root_count) {
+        if (left_index != left->root_count || right_index != right->root_count)
+          return 0;
+        break;
+      }
+      if (!ab_string_equal(&left->roots[left_index].path,
+                           &right->roots[right_index].path))
+        return 0;
+      left_index++;
+      right_index++;
+    }
+  }
   return 1;
 }
 
-static ArchbirdStatus build_compile_contexts(AbMapState *state,
-                                             const NamedReference *imports,
-                                             size_t import_count) {
-  size_t context_size;
-  size_t *queue = NULL;
+static uint64_t compile_context_hash(const AbMapCompileCommand *command) {
+  uint64_t hash = UINT64_C(1469598103934665603);
+  AbMapCompileRootKind kind;
+  for (kind = AB_MAP_COMPILE_ROOT_QUOTE; kind <= AB_MAP_COMPILE_ROOT_AFTER;
+       kind++) {
+    size_t root_index;
+    hash ^= (uint64_t)kind;
+    hash *= UINT64_C(1099511628211);
+    for (root_index = 0; root_index < command->root_count; root_index++) {
+      const AbMapCompileRoot *root = &command->roots[root_index];
+      size_t byte;
+      if (root->kind != kind)
+        continue;
+      hash ^= (uint64_t)root->path.length;
+      hash *= UINT64_C(1099511628211);
+      for (byte = 0; byte < root->path.length; byte++) {
+        hash ^= (unsigned char)root->path.data[byte];
+        hash *= UINT64_C(1099511628211);
+      }
+      hash ^= UINT64_C(255);
+      hash *= UINT64_C(1099511628211);
+    }
+  }
+  return hash;
+}
+
+static ArchbirdStatus
+compile_context_append_source(AbMapState *state, AbMapCompileContext *context,
+                              size_t source) {
+  size_t *resized;
+  if (context->source_count == context->source_capacity) {
+    size_t capacity =
+        context->source_capacity ? context->source_capacity * 2 : 4;
+    if (capacity < context->source_capacity ||
+        capacity > SIZE_MAX / sizeof(*context->sources))
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    resized = (size_t *)ab_realloc(state->engine, context->sources,
+                                   capacity * sizeof(*context->sources));
+    if (!resized)
+      return ARCHBIRD_OUT_OF_MEMORY;
+    context->sources = resized;
+    context->source_capacity = capacity;
+  }
+  context->sources[context->source_count++] = source;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus
+compile_context_append_provider(AbMapState *state, AbMapCompileContext *context,
+                                const AbString *provider) {
+  const AbString **resized;
+  if (context->provider_count == context->provider_capacity) {
+    size_t capacity =
+        context->provider_capacity ? context->provider_capacity * 2 : 4;
+    if (capacity < context->provider_capacity ||
+        capacity > SIZE_MAX / sizeof(*context->providers))
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    resized =
+        (const AbString **)ab_realloc(state->engine, context->providers,
+                                      capacity * sizeof(*context->providers));
+    if (!resized)
+      return ARCHBIRD_OUT_OF_MEMORY;
+    context->providers = resized;
+    context->provider_capacity = capacity;
+  }
+  context->providers[context->provider_count++] = provider;
+  return ARCHBIRD_OK;
+}
+
+static int compile_size_compare(const void *left_raw, const void *right_raw) {
+  size_t left = *(const size_t *)left_raw;
+  size_t right = *(const size_t *)right_raw;
+  return (left > right) - (left < right);
+}
+
+static int compile_provider_compare(const void *left_raw,
+                                    const void *right_raw) {
+  const AbString *left = *(const AbString *const *)left_raw;
+  const AbString *right = *(const AbString *const *)right_raw;
+  return ab_string_compare(left, right);
+}
+
+static void compile_context_unique_inputs(AbMapCompileContext *context) {
+  size_t read;
+  size_t write = 0;
+  if (context->source_count > 1)
+    qsort(context->sources, context->source_count, sizeof(*context->sources),
+          compile_size_compare);
+  for (read = 0; read < context->source_count; read++)
+    if (!write || context->sources[read] != context->sources[write - 1])
+      context->sources[write++] = context->sources[read];
+  context->source_count = write;
+  write = 0;
+  if (context->provider_count > 1)
+    qsort(context->providers, context->provider_count,
+          sizeof(*context->providers), compile_provider_compare);
+  for (read = 0; read < context->provider_count; read++)
+    if (!write || !ab_string_equal(context->providers[read],
+                                   context->providers[write - 1]))
+      context->providers[write++] = context->providers[read];
+  context->provider_count = write;
+}
+
+static ArchbirdStatus intern_compile_contexts(AbMapState *state) {
+  size_t table_size = 8;
+  size_t *slots = NULL;
   size_t command_index;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!state->compile_command_count || !state->manifest->file_count)
-    return ARCHBIRD_OK;
-  if (state->compile_command_count > SIZE_MAX / state->manifest->file_count)
-    return archbird_error_set(state->engine, ARCHBIRD_LIMIT_EXCEEDED,
-                              ARCHBIRD_NO_OFFSET,
-                              "compilation context matrix is too large");
-  context_size = state->compile_command_count * state->manifest->file_count;
-  state->compile_contexts =
-      (unsigned char *)ab_calloc(state->engine, context_size, 1);
-  queue = (size_t *)ab_malloc(state->engine,
-                              state->manifest->file_count * sizeof(*queue));
-  if (!state->compile_contexts || !queue) {
-    ab_free(state->engine, queue);
-    return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
-                              ARCHBIRD_NO_OFFSET,
-                              "out of memory deriving compilation contexts");
+  if (state->compile_command_count > SIZE_MAX / 2)
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  while (table_size < state->compile_command_count * 2) {
+    if (table_size > SIZE_MAX / 2)
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    table_size *= 2;
   }
-  for (command_index = 0; command_index < state->compile_command_count;
-       command_index++) {
-    const AbMapCompileCommand *command =
-        &state->compile_commands[command_index];
-    size_t leader = command_index;
-    size_t previous;
-    size_t source_index;
-    for (previous = 0; previous < command_index; previous++)
-      if (same_compile_roots(command, &state->compile_commands[previous])) {
-        leader = previous;
-        break;
-      }
-    state->compile_commands[command_index].context_leader = leader;
-    source_index = (size_t)(command->source - state->manifest->files);
-    state->compile_contexts[leader * state->manifest->file_count +
-                            source_index] = 1;
+  if (state->compile_command_count >
+      SIZE_MAX / sizeof(*state->compile_contexts))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  state->compile_contexts = (AbMapCompileContext *)ab_calloc(
+      state->engine, state->compile_command_count,
+      sizeof(*state->compile_contexts));
+  slots = (size_t *)ab_calloc(state->engine, table_size, sizeof(*slots));
+  if (!state->compile_contexts || !slots) {
+    ab_free(state->engine, slots);
+    return ARCHBIRD_OUT_OF_MEMORY;
   }
   for (command_index = 0;
        status == ARCHBIRD_OK && command_index < state->compile_command_count;
        command_index++) {
+    AbMapCompileCommand *command = &state->compile_commands[command_index];
+    uint64_t hash = compile_context_hash(command);
+    size_t slot = (size_t)hash & (table_size - 1);
+    size_t context_id;
+    while (slots[slot]) {
+      context_id = slots[slot] - 1;
+      if (same_compile_context(
+              command,
+              &state->compile_commands[state->compile_contexts[context_id]
+                                           .representative_command]))
+        break;
+      slot = (slot + 1) & (table_size - 1);
+    }
+    if (!slots[slot]) {
+      context_id = state->compile_context_count++;
+      state->compile_contexts[context_id].representative_command =
+          command_index;
+      slots[slot] = context_id + 1;
+    } else {
+      context_id = slots[slot] - 1;
+    }
+    command->context_id = context_id;
+    status = compile_context_append_source(
+        state, &state->compile_contexts[context_id],
+        (size_t)(command->source - state->manifest->files));
+    if (status == ARCHBIRD_OK)
+      status = compile_context_append_provider(
+          state, &state->compile_contexts[context_id], command->database);
+  }
+  for (command_index = 0; command_index < state->compile_context_count;
+       command_index++)
+    compile_context_unique_inputs(&state->compile_contexts[command_index]);
+  ab_free(state->engine, slots);
+  return status;
+}
+
+static ArchbirdStatus build_compile_context_membership(
+    AbMapState *state, const NamedReference *imports, size_t import_count) {
+  size_t *marks = NULL;
+  size_t *queue = NULL;
+  size_t context_id;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (state->manifest->file_count > SIZE_MAX / sizeof(*marks))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  marks = (size_t *)ab_calloc(state->engine, state->manifest->file_count,
+                              sizeof(*marks));
+  queue = (size_t *)ab_malloc(state->engine,
+                              state->manifest->file_count * sizeof(*queue));
+  if (!marks || !queue) {
+    ab_free(state->engine, queue);
+    ab_free(state->engine, marks);
+    return ARCHBIRD_OUT_OF_MEMORY;
+  }
+  for (context_id = 0;
+       status == ARCHBIRD_OK && context_id < state->compile_context_count;
+       context_id++) {
+    AbMapCompileContext *context = &state->compile_contexts[context_id];
     const AbMapCompileCommand *command =
-        &state->compile_commands[command_index];
-    unsigned char *context =
-        state->compile_contexts + command_index * state->manifest->file_count;
-    size_t previous;
+        &state->compile_commands[context->representative_command];
+    size_t generation = context_id + 1;
     size_t read_index = 0;
     size_t write_index = 0;
-    int leader = 1;
-    for (previous = 0; previous < command_index; previous++)
-      if (same_compile_roots(command, &state->compile_commands[previous])) {
-        leader = 0;
-        break;
-      }
-    if (!leader)
-      continue;
-    for (previous = 0; previous < state->manifest->file_count; previous++)
-      if (context[previous])
-        queue[write_index++] = previous;
+    size_t source_index;
+    for (source_index = 0; source_index < context->source_count;
+         source_index++) {
+      size_t source = context->sources[source_index];
+      marks[source] = generation;
+      queue[write_index++] = source;
+    }
     while (status == ARCHBIRD_OK && read_index < write_index) {
       const AbManifestFile *file = &state->manifest->files[queue[read_index++]];
       size_t import_index;
@@ -1109,19 +1243,171 @@ static ArchbirdStatus build_compile_contexts(AbMapState *state,
         if (status != ARCHBIRD_OK || !target)
           continue;
         target_index = (size_t)(target - state->manifest->files);
-        if (!context[target_index]) {
-          context[target_index] = 1;
+        if (marks[target_index] != generation) {
+          marks[target_index] = generation;
           queue[write_index++] = target_index;
         }
       }
     }
-    for (previous = command_index + 1; previous < state->compile_command_count;
-         previous++)
-      if (same_compile_roots(command, &state->compile_commands[previous]))
-        memcpy(state->compile_contexts + previous * state->manifest->file_count,
-               context, state->manifest->file_count);
+    if (status != ARCHBIRD_OK)
+      break;
+    if (write_index > SIZE_MAX / sizeof(*context->files)) {
+      status = ARCHBIRD_LIMIT_EXCEEDED;
+      break;
+    }
+    context->files = (size_t *)ab_malloc(state->engine,
+                                         write_index * sizeof(*context->files));
+    if (write_index && !context->files) {
+      status = ARCHBIRD_OUT_OF_MEMORY;
+      break;
+    }
+    memcpy(context->files, queue, write_index * sizeof(*context->files));
+    context->file_count = write_index;
+    if (context->file_count > 1)
+      qsort(context->files, context->file_count, sizeof(*context->files),
+            compile_size_compare);
   }
   ab_free(state->engine, queue);
+  ab_free(state->engine, marks);
+  return status;
+}
+
+static ArchbirdStatus build_compile_file_index(AbMapState *state, int direct) {
+  size_t **out_offsets = direct ? &state->compile_file_direct_context_offsets
+                                : &state->compile_file_context_offsets;
+  size_t **out_ids = direct ? &state->compile_file_direct_context_ids
+                            : &state->compile_file_context_ids;
+  size_t *offsets = NULL;
+  size_t *ids = NULL;
+  size_t *cursor = NULL;
+  size_t total = 0;
+  size_t context_id;
+  size_t file;
+  if (state->manifest->file_count == SIZE_MAX ||
+      state->manifest->file_count + 1 > SIZE_MAX / sizeof(*offsets))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  offsets = (size_t *)ab_calloc(state->engine, state->manifest->file_count + 1,
+                                sizeof(*offsets));
+  cursor = (size_t *)ab_calloc(state->engine, state->manifest->file_count,
+                               sizeof(*cursor));
+  if (!offsets || !cursor) {
+    ab_free(state->engine, cursor);
+    ab_free(state->engine, offsets);
+    return ARCHBIRD_OUT_OF_MEMORY;
+  }
+  for (context_id = 0; context_id < state->compile_context_count;
+       context_id++) {
+    const AbMapCompileContext *context = &state->compile_contexts[context_id];
+    const size_t *files = direct ? context->sources : context->files;
+    size_t count = direct ? context->source_count : context->file_count;
+    for (file = 0; file < count; file++) {
+      if (offsets[files[file] + 1] == SIZE_MAX) {
+        ab_free(state->engine, cursor);
+        ab_free(state->engine, offsets);
+        return ARCHBIRD_LIMIT_EXCEEDED;
+      }
+      offsets[files[file] + 1]++;
+    }
+  }
+  for (file = 1; file <= state->manifest->file_count; file++) {
+    if (offsets[file] > SIZE_MAX - offsets[file - 1]) {
+      ab_free(state->engine, cursor);
+      ab_free(state->engine, offsets);
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    }
+    offsets[file] += offsets[file - 1];
+  }
+  total = offsets[state->manifest->file_count];
+  if (total > SIZE_MAX / sizeof(*ids)) {
+    ab_free(state->engine, cursor);
+    ab_free(state->engine, offsets);
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  }
+  ids = (size_t *)ab_malloc(state->engine, total * sizeof(*ids));
+  if (total && !ids) {
+    ab_free(state->engine, cursor);
+    ab_free(state->engine, offsets);
+    return ARCHBIRD_OUT_OF_MEMORY;
+  }
+  memcpy(cursor, offsets, state->manifest->file_count * sizeof(*cursor));
+  for (context_id = 0; context_id < state->compile_context_count;
+       context_id++) {
+    const AbMapCompileContext *context = &state->compile_contexts[context_id];
+    const size_t *files = direct ? context->sources : context->files;
+    size_t count = direct ? context->source_count : context->file_count;
+    for (file = 0; file < count; file++)
+      ids[cursor[files[file]]++] = context_id;
+  }
+  ab_free(state->engine, cursor);
+  *out_offsets = offsets;
+  *out_ids = ids;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus build_compile_command_index(AbMapState *state) {
+  size_t *offsets = NULL;
+  size_t *cursor = NULL;
+  size_t *ids = NULL;
+  size_t file;
+  size_t command;
+  if (state->manifest->file_count == SIZE_MAX ||
+      state->manifest->file_count + 1 > SIZE_MAX / sizeof(*offsets) ||
+      state->compile_command_count > SIZE_MAX / sizeof(*ids))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  offsets = (size_t *)ab_calloc(state->engine, state->manifest->file_count + 1,
+                                sizeof(*offsets));
+  cursor = (size_t *)ab_calloc(state->engine, state->manifest->file_count,
+                               sizeof(*cursor));
+  ids = (size_t *)ab_malloc(state->engine,
+                            state->compile_command_count * sizeof(*ids));
+  if (!offsets || !cursor || (state->compile_command_count && !ids)) {
+    ab_free(state->engine, ids);
+    ab_free(state->engine, cursor);
+    ab_free(state->engine, offsets);
+    return ARCHBIRD_OUT_OF_MEMORY;
+  }
+  for (command = 0; command < state->compile_command_count; command++) {
+    file = (size_t)(state->compile_commands[command].source -
+                    state->manifest->files);
+    offsets[file + 1]++;
+  }
+  for (file = 1; file <= state->manifest->file_count; file++)
+    offsets[file] += offsets[file - 1];
+  memcpy(cursor, offsets, state->manifest->file_count * sizeof(*cursor));
+  for (command = 0; command < state->compile_command_count; command++) {
+    file = (size_t)(state->compile_commands[command].source -
+                    state->manifest->files);
+    ids[cursor[file]++] = command;
+  }
+  ab_free(state->engine, cursor);
+  state->compile_file_command_offsets = offsets;
+  state->compile_file_command_ids = ids;
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus build_compile_contexts(AbMapState *state,
+                                             const NamedReference *imports,
+                                             size_t import_count) {
+  ArchbirdStatus status;
+  if (!state->compile_command_count || !state->manifest->file_count)
+    return ARCHBIRD_OK;
+  status = intern_compile_contexts(state);
+  if (status == ARCHBIRD_OK)
+    status = build_compile_context_membership(state, imports, import_count);
+  if (status == ARCHBIRD_OK)
+    status = build_compile_file_index(state, 0);
+  if (status == ARCHBIRD_OK)
+    status = build_compile_file_index(state, 1);
+  if (status == ARCHBIRD_OK)
+    status = build_compile_command_index(state);
+  if (status == ARCHBIRD_OUT_OF_MEMORY)
+    return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory deriving compilation contexts");
+  if (status == ARCHBIRD_LIMIT_EXCEEDED)
+    return archbird_error_set(state->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "compilation contexts are too large");
   return status;
 }
 
@@ -1133,19 +1419,31 @@ static ArchbirdStatus resolve_compile_import(AbMapState *state,
                                              int *out_compile_resolution) {
   const AbManifestFile *consensus = NULL;
   size_t index;
+  size_t start;
+  size_t end;
+  const size_t *context_ids;
+  const size_t *offsets;
   int missing = 0;
   int inconsistent = 0;
   int direct_commands = has_direct_compile_command(state, file);
   *out = NULL;
   *out_compile_resolution = C_IMPORT_COMPILE_NONE;
-  for (index = 0; index < state->compile_command_count; index++) {
-    const AbMapCompileCommand *command = &state->compile_commands[index];
+  if (!direct_commands && !c_header_file(file))
+    return ARCHBIRD_OK;
+  index = (size_t)(file - state->manifest->files);
+  offsets = direct_commands ? state->compile_file_direct_context_offsets
+                            : state->compile_file_context_offsets;
+  context_ids = direct_commands ? state->compile_file_direct_context_ids
+                                : state->compile_file_context_ids;
+  start = offsets ? offsets[index] : 0;
+  end = offsets ? offsets[index + 1] : 0;
+  for (index = start; index < end; index++) {
+    const AbMapCompileContext *context =
+        &state->compile_contexts[context_ids[index]];
+    const AbMapCompileCommand *command =
+        &state->compile_commands[context->representative_command];
     const AbManifestFile *candidate = NULL;
     ArchbirdStatus status;
-    if (!compile_command_applies(state, index, file, direct_commands))
-      continue;
-    if (!direct_commands && command->context_leader != index)
-      continue;
     *out_compile_resolution = C_IMPORT_COMPILE_MISS;
     status = resolve_compile_command_import(state, command, imported,
                                             delimiter_mask, &candidate);
@@ -1210,8 +1508,13 @@ resolve_c_import(AbMapState *state, const AbManifestFile *file,
       if (status != ARCHBIRD_OK || *out)
         return status;
     }
+    status = resolve_joined_import_with_suffixes(
+        state->engine, state->manifest, "include", 7, imported, suffixes,
+        sizeof(suffixes) / sizeof(suffixes[0]), out);
+    if (status == ARCHBIRD_OK && *out)
+      *out_compile_evidence = C_IMPORT_CONVENTIONAL;
   }
-  return ARCHBIRD_OK;
+  return status;
 }
 
 static ArchbirdStatus
@@ -1860,45 +2163,92 @@ exact_named_call_target(const NamedReference *calls, size_t start, size_t end) {
   return target;
 }
 
+static ArchbirdStatus
+add_import_compile_provider(AbMapState *state, const NamedReference *imported,
+                            const AbManifestFile *target,
+                            const AbString *provider, size_t evidence_start) {
+  static const AbString current = {(char *)"current", 7};
+  size_t evidence_index;
+  for (evidence_index = evidence_start;
+       evidence_index < state->graph.edge_count; evidence_index++) {
+    const EdgeMention *evidence = &state->graph.edges[evidence_index];
+    if (evidence->has_evidence &&
+        ab_string_equal(&evidence->evidence_provider, provider))
+      return ARCHBIRD_OK;
+  }
+  return ab_map_graph_add_edge_evidence_named_site(
+      state->engine, &state->graph, "import", &imported->file->path,
+      target->path.data, target->path.length, imported->name, imported->name,
+      imported->fact_id, imported->line, imported->span_start,
+      imported->span_end, "compile-command-search-path", provider, &current);
+}
+
 static ArchbirdStatus add_import_edge(AbMapState *state,
                                       const NamedReference *imported,
                                       const AbManifestFile *target,
                                       int compile_evidence) {
-  static const AbString current = {(char *)"current", 7};
+  static const AbString unknown = {(char *)"unknown", 7};
+  static const AbString fallback_provider = {(char *)"archbird-discovery-v1",
+                                             21};
   size_t index;
+  size_t start;
+  size_t end;
+  const size_t *context_ids;
+  const size_t *offsets;
   size_t evidence_start = state->graph.edge_count;
   int direct_commands = has_direct_compile_command(state, imported->file);
   ArchbirdStatus status = ARCHBIRD_OK;
+  if (compile_evidence == C_IMPORT_CONVENTIONAL) {
+    const AbString *provider =
+        state->manifest->has_resolution &&
+                state->manifest->resolution.profile_name.length
+            ? &state->manifest->resolution.profile_name
+            : &fallback_provider;
+    return ab_map_graph_add_edge_evidence_named_site(
+        state->engine, &state->graph, "import", &imported->file->path,
+        target->path.data, target->path.length, imported->name, imported->name,
+        imported->fact_id, imported->line, imported->span_start,
+        imported->span_end, "conventional-include-root", provider, &unknown);
+  }
   if (compile_evidence != C_IMPORT_COMPILE_RESOLVED)
     return ab_map_graph_add_edge_site(state->engine, &state->graph, "import",
                                       &imported->file->path, target->path.data,
                                       target->path.length, imported->name,
                                       imported->fact_id, imported->line,
                                       imported->span_start, imported->span_end);
-  for (index = 0; status == ARCHBIRD_OK && index < state->compile_command_count;
-       index++) {
-    const AbMapCompileCommand *command = &state->compile_commands[index];
-    size_t evidence_index;
-    int duplicate = 0;
-    if (!compile_command_applies(state, index, imported->file, direct_commands))
-      continue;
-    for (evidence_index = evidence_start;
-         evidence_index < state->graph.edge_count; evidence_index++) {
-      const EdgeMention *evidence = &state->graph.edges[evidence_index];
-      if (evidence->has_evidence &&
-          ab_string_equal(&evidence->evidence_provider, command->database)) {
-        duplicate = 1;
-        break;
-      }
+  index = (size_t)(imported->file - state->manifest->files);
+  if (direct_commands) {
+    start = state->compile_file_command_offsets
+                ? state->compile_file_command_offsets[index]
+                : 0;
+    end = state->compile_file_command_offsets
+              ? state->compile_file_command_offsets[index + 1]
+              : 0;
+    for (index = start; status == ARCHBIRD_OK && index < end; index++) {
+      const AbMapCompileCommand *command =
+          &state->compile_commands[state->compile_file_command_ids[index]];
+      status = add_import_compile_provider(state, imported, target,
+                                           command->database, evidence_start);
     }
-    if (duplicate)
-      continue;
-    status = ab_map_graph_add_edge_evidence_named_site(
-        state->engine, &state->graph, "import", &imported->file->path,
-        target->path.data, target->path.length, imported->name, imported->name,
-        imported->fact_id, imported->line, imported->span_start,
-        imported->span_end, "compile-command-search-path", command->database,
-        &current);
+    return status;
+  }
+  offsets = direct_commands ? state->compile_file_direct_context_offsets
+                            : state->compile_file_context_offsets;
+  context_ids = direct_commands ? state->compile_file_direct_context_ids
+                                : state->compile_file_context_ids;
+  start = offsets ? offsets[index] : 0;
+  end = offsets ? offsets[index + 1] : 0;
+  for (index = start; status == ARCHBIRD_OK && index < end; index++) {
+    const AbMapCompileContext *context =
+        &state->compile_contexts[context_ids[index]];
+    size_t provider_index;
+    for (provider_index = 0;
+         status == ARCHBIRD_OK && provider_index < context->provider_count;
+         provider_index++) {
+      const AbString *provider = context->providers[provider_index];
+      status = add_import_compile_provider(state, imported, target, provider,
+                                           evidence_start);
+    }
   }
   return status;
 }

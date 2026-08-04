@@ -1545,8 +1545,7 @@ function pathMain(argv) {
   }
   const encoded = options.format === "json"
     ? pathJson
-    : archbird.pathMapMarkdown(mapJson, {
-      ...pathOptions,
+    : archbird.renderPathMarkdown(pathJson, {
       maxChars: options.maxChars,
     });
   progress.finish();

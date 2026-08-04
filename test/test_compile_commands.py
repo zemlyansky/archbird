@@ -97,6 +97,17 @@ def main() -> int:
             "file": "src/c.c",
         },
         {
+            "arguments": [
+                "cc",
+                "-Ifirst",
+                "-Isecond",
+                "-c",
+                "src/order.c",
+            ],
+            "directory": "/checkout",
+            "file": "src/order.c",
+        },
+        {
             "command": "cc -c generated.c",
             "directory": "/checkout",
             "file": "generated.c",
@@ -121,14 +132,25 @@ def main() -> int:
             "arguments": [
                 "clang-cl",
                 "/O2",
-                "-iquotequote headers",
-                "/Iinclude",
                 "/external:Isystem",
+                "/Iinclude",
+                "-iquotequote headers",
                 "/c",
                 "src/b.c",
             ],
             "directory": "C:\\checkout",
             "file": "src/b.c",
+        },
+        {
+            "arguments": [
+                "cc",
+                "-Isecond",
+                "-Ifirst",
+                "-c",
+                "src/order.c",
+            ],
+            "directory": "/checkout",
+            "file": "src/order.c",
         },
     ]
     sources = {
@@ -137,8 +159,10 @@ def main() -> int:
         "include/shared.h": b"#define SHARED 1\n",
         "include/orphan.h": b"#include <shared.h>\n",
         "include/wrapper.h": b"#include <system.h>\n",
+        "first/choice.h": b"#define CHOICE 1\n",
         "quote headers/quoted path.h": b"#define QUOTED 1\n",
         "quotes/quote_a.h": b"#define QUOTE_A 1\n",
+        "second/choice.h": b"#define CHOICE 2\n",
         "src/a.c": (
             b'#include "quote_a.h"\n'
             b"#include <shared.h>\n"
@@ -154,6 +178,10 @@ def main() -> int:
             b"int b(void) { return SHARED + QUOTED; }\n"
         ),
         "src/c.c": b"int c(void) { return 0; }\n",
+        "src/order.c": (
+            b"#include <choice.h>\n"
+            b"int order(void) { return CHOICE; }\n"
+        ),
         "system/system.h": b"#define SYSTEM 1\n",
         "variants/debug/variant.h": b"#define VARIANT 1\n",
         "variants/release/variant.h": b"#define VARIANT 2\n",
@@ -167,8 +195,10 @@ def main() -> int:
                 "language": "c",
                 "globs": [
                     "include/**/*.h",
+                    "first/**/*.h",
                     "quote headers/**/*.h",
                     "quotes/**/*.h",
+                    "second/**/*.h",
                     "src/**/*.c",
                     "system/**/*.h",
                     "variants/**/*.h",
@@ -193,27 +223,33 @@ def main() -> int:
     }
     mapped = build_map(extension, sources, config)
     routes = mapped["builds"]
-    assert len(routes) == 5, routes
+    assert len(routes) == 7, routes
     assert [(row["variant"], row["name"]) for row in routes] == [
         ("debug", "src/a.c"),
         ("debug", "src/b.c"),
         ("debug", "src/c.c"),
+        ("debug", "src/order.c"),
         ("release", "src/a.c"),
         ("release", "src/b.c"),
+        ("release", "src/order.c"),
     ]
     assert [row["command"] for row in routes] == [
         "cc",
         "clang",
         "cc",
         "cc",
+        "cc",
         "clang-cl",
+        "cc",
     ]
     assert all(row["paths"] == [row["name"]] for row in routes)
     assert [row["conditions"][0] for row in routes] == [
         "compile-source:suffix",
         "compile-source:exact",
         "compile-source:exact",
+        "compile-source:exact",
         "compile-source:suffix",
+        "compile-source:exact",
         "compile-source:exact",
     ], routes
     assert all(
@@ -231,6 +267,7 @@ def main() -> int:
     assert [row["code"] for row in mapped["diagnostics"]] == [
         "compile-command-invalid",
         "compile-command-unmapped",
+        "unresolved-import",
         "unresolved-import",
     ], mapped["diagnostics"]
     local_imports = {
@@ -258,6 +295,12 @@ def main() -> int:
         row["source"] == "src/a.c"
         and row["target"] == "unresolved-import"
         and row["names"] == ["variant.h"]
+        for row in mapped["edges"]
+    )
+    assert any(
+        row["source"] == "src/order.c"
+        and row["target"] == "unresolved-import"
+        and row["names"] == ["choice.h"]
         for row in mapped["edges"]
     )
     compile_edges = [

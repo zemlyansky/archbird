@@ -116,7 +116,12 @@ you want to save the canonical Map for later commands.
 `query` loads or builds that Map, selects a starting point, follows its recorded
 relationships, and returns a focused neighborhood. Use typed selectors such as
 `--symbol`, `--path`, `--component`, `--package`, or `--artifact` when you know
-what you are looking for.
+what you are looking for. File ordering prefers routes with stronger evidence
+state and semantic resolution before distance. Each selected file exposes the
+best route's state, resolution counts, provenance count, and last hop; the
+canonical Query still retains the underlying candidate edges and their full
+evidence. Repository discovery/completeness remains a separate property rather
+than an edge-confidence score.
 
 `query --search` helps find that starting point when you do not know its exact
 path or symbol. It ranks lexical matches from repository names, paths,
@@ -127,10 +132,14 @@ match into a proven code relationship.
 
 `path SOURCE TARGET` resolves exact or glob-shaped endpoint sets and finds
 globally shortest witnesses over the Map's exhaustive typed graph projection.
-It preserves parallel relation kinds and traversal direction. A missing route
-is reported as `absent` only when the selected graph and bounded search are
-complete; unresolved endpoints, unsupported evidence, or a depth frontier
-remain `unknown`.
+It preserves parallel relation kinds, traversal direction, evidence state,
+semantic resolution, and provenance. `found` requires an all-current,
+source-evidenced route and prefers it even when a shorter candidate shortcut
+exists. When only candidate/unknown relations connect the endpoints, Path
+renders those witnesses as `unknown` with reason `candidate-witnesses`, and
+`--check` fails. A missing route is reported as `absent` only when the selected
+graph and bounded search are complete; unresolved endpoints, unsupported
+evidence, or a depth frontier remain `unknown`.
 
 `serve` starts a browser-based architecture explorer and immediately prints its
 loopback URL. Use it to expand selected components into files and selected files
@@ -542,6 +551,10 @@ propagates that context through the headers reached by its literal includes.
 Variants must resolve an include to the same selected file; disagreement stays
 unresolved. Resolved edges cite the repository-relative compilation-database
 path, while external roots and absolute machine paths remain private.
+In zero-config mode, a conventional repository `include/` match remains useful
+candidate evidence but does not establish the import. An authored
+`import_roots` entry or agreeing compilation-database evidence promotes the
+same connection to current.
 
 The block above is mirrored by
 [`examples/minimal.archbird.json`](examples/minimal.archbird.json). A complete
@@ -1167,7 +1180,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Python area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map, Query, and Path | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `path_map_json`, `path_map_markdown`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_source_markdown`, `resolve_discovery` |
+| Map, Query, and Path | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `path_map_json`, `path_map_markdown`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_path_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
 | Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `render_plan_markdown`, `run_act_gates`, `validate_act`, `validate_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
@@ -1178,7 +1191,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Node area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map, Query, and Path | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `pathMap`, `pathMapMarkdown`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
+| Map, Query, and Path | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `pathMap`, `pathMapMarkdown`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderPathMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
 | Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `runActGates`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
@@ -1218,7 +1231,7 @@ The complete C ABI is declared in
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
 | Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_constraints_report_with_blocking`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
-| Map, Query, Path, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_path`, `archbird_map_path_markdown`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_unified_diff` |
+| Map, Query, Path, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_path`, `archbird_map_path_markdown`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_path_render_markdown`, `archbird_unified_diff` |
 | Workspace | `archbird_workspace_analyze`, `archbird_workspace_plan` |
 | Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_render_markdown`, `archbird_plan_source_requirements`, `archbird_plan_validate` |
 <!-- archbird-c-api:end -->

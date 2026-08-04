@@ -70,6 +70,7 @@ typedef struct AbPathEnumeration {
   const size_t *distance;
   const uint8_t *reachable;
   const uint8_t *targets;
+  int proven_only;
   size_t shortest;
   size_t max_paths;
   size_t count;
@@ -99,6 +100,33 @@ static const AbValue *attribute(const AbProjectionItem *item,
         !memcmp(item->attributes[index].name.data, name, length))
       return &item->attributes[index].value;
   return NULL;
+}
+
+static int item_current(const AbProjectionItem *item) {
+  return item && string_is(&item->state, "current");
+}
+
+static int relation_proven(const AbProjectionItem *item) {
+  const AbValue *resolution;
+  if (!item_current(item) || !item->evidence_count)
+    return 0;
+  resolution = attribute(item, "resolution");
+  if (!resolution)
+    return 1;
+  return resolution->kind == AB_VALUE_STRING &&
+         (string_is(&resolution->as.text, "unique") ||
+          string_is(&resolution->as.text, "builtin"));
+}
+
+static int arc_allowed(const AbPathGraph *graph, const AbPathArc *arc,
+                       int proven_only) {
+  const AbPathEdge *edge;
+  if (!proven_only)
+    return 1;
+  edge = &graph->edges[arc->edge];
+  return relation_proven(edge->item) &&
+         item_current(graph->nodes[edge->source].item) &&
+         item_current(graph->nodes[edge->target].item);
 }
 
 static int field_allowed(const AbString *name, const char *const *allowed,
@@ -617,7 +645,7 @@ static ArchbirdStatus render_endpoint(AbBuffer *buffer,
 
 static ArchbirdStatus bfs(ArchbirdEngine *engine, const AbPathGraph *graph,
                           const AbPathCandidates *sources, size_t max_depth,
-                          size_t *distance, int *frontier) {
+                          int proven_only, size_t *distance, int *frontier) {
   size_t *queue;
   size_t head = 0;
   size_t tail = 0;
@@ -630,6 +658,8 @@ static ArchbirdStatus bfs(ArchbirdEngine *engine, const AbPathGraph *graph,
   for (index = 0; index < graph->node_count; index++)
     distance[index] = SIZE_MAX;
   for (index = 0; index < sources->count; index++) {
+    if (proven_only && !item_current(graph->nodes[sources->items[index]].item))
+      continue;
     distance[sources->items[index]] = 0;
     queue[tail++] = sources->items[index];
   }
@@ -640,13 +670,18 @@ static ArchbirdStatus bfs(ArchbirdEngine *engine, const AbPathGraph *graph,
     if (distance[node] == max_depth) {
       for (arc_index = graph->arc_offsets[node];
            arc_index < graph->arc_offsets[node + 1]; arc_index++)
-        if (distance[graph->arcs[arc_index].next] == SIZE_MAX)
+        if (arc_allowed(graph, &graph->arcs[arc_index], proven_only) &&
+            distance[graph->arcs[arc_index].next] == SIZE_MAX)
           *frontier = 1;
       continue;
     }
     for (arc_index = graph->arc_offsets[node];
          arc_index < graph->arc_offsets[node + 1]; arc_index++) {
-      size_t next = graph->arcs[arc_index].next;
+      const AbPathArc *arc = &graph->arcs[arc_index];
+      size_t next;
+      if (!arc_allowed(graph, arc, proven_only))
+        continue;
+      next = arc->next;
       if (distance[next] != SIZE_MAX)
         continue;
       distance[next] = distance[node] + 1;
@@ -657,12 +692,16 @@ static ArchbirdStatus bfs(ArchbirdEngine *engine, const AbPathGraph *graph,
   return ARCHBIRD_OK;
 }
 
-static size_t nearest_targets(const AbPathCandidates *targets,
-                              const size_t *distance, uint8_t *target_mask) {
+static size_t nearest_targets(const AbPathGraph *graph,
+                              const AbPathCandidates *targets,
+                              const size_t *distance, int proven_only,
+                              uint8_t *target_mask) {
   size_t shortest = SIZE_MAX;
   size_t index;
   for (index = 0; index < targets->count; index++) {
     size_t target = targets->items[index];
+    if (proven_only && !item_current(graph->nodes[target].item))
+      continue;
     if (distance[target] < shortest)
       shortest = distance[target];
   }
@@ -670,7 +709,8 @@ static size_t nearest_targets(const AbPathCandidates *targets,
     return shortest;
   for (index = 0; index < targets->count; index++) {
     size_t target = targets->items[index];
-    if (distance[target] == shortest)
+    if ((!proven_only || item_current(graph->nodes[target].item)) &&
+        distance[target] == shortest)
       target_mask[target] = 1;
   }
   return shortest;
@@ -678,7 +718,7 @@ static size_t nearest_targets(const AbPathCandidates *targets,
 
 static void shortest_reachable(const AbPathGraph *graph, const size_t *distance,
                                const uint8_t *target_mask, size_t shortest,
-                               uint8_t *reachable) {
+                               int proven_only, uint8_t *reachable) {
   size_t node;
   size_t depth;
   for (node = 0; node < graph->node_count; node++)
@@ -690,7 +730,11 @@ static void shortest_reachable(const AbPathGraph *graph, const size_t *distance,
         continue;
       for (arc_index = graph->arc_offsets[node];
            arc_index < graph->arc_offsets[node + 1]; arc_index++) {
-        size_t next = graph->arcs[arc_index].next;
+        const AbPathArc *arc = &graph->arcs[arc_index];
+        size_t next;
+        if (!arc_allowed(graph, arc, proven_only))
+          continue;
+        next = arc->next;
         if (distance[next] == depth && reachable[next]) {
           reachable[node] = 1;
           break;
@@ -720,6 +764,10 @@ static ArchbirdStatus render_path(AbPathEnumeration *enumeration,
       enumeration->output,
       enumeration->graph->nodes[enumeration->nodes[0]].id->data,
       enumeration->graph->nodes[enumeration->nodes[0]].id->length));
+  TRY(ab_buffer_literal(enumeration->output, ",\"state\":"));
+  TRY(ab_buffer_json_string(enumeration->output,
+                            enumeration->proven_only ? "current" : "unknown",
+                            enumeration->proven_only ? 7 : 7));
   TRY(ab_buffer_literal(enumeration->output, ",\"steps\":["));
   for (index = 0; index < depth; index++) {
     const AbPathArc *arc = &enumeration->graph->arcs[enumeration->arcs[index]];
@@ -761,7 +809,8 @@ static ArchbirdStatus enumerate_shortest(AbPathEnumeration *enumeration,
        arc_index < enumeration->graph->arc_offsets[node + 1];
        arc_index++) {
     const AbPathArc *arc = &enumeration->graph->arcs[arc_index];
-    if (enumeration->distance[arc->next] != depth + 1 ||
+    if (!arc_allowed(enumeration->graph, arc, enumeration->proven_only) ||
+        enumeration->distance[arc->next] != depth + 1 ||
         !enumeration->reachable[arc->next])
       continue;
     enumeration->arcs[depth] = arc_index;
@@ -854,6 +903,7 @@ ArchbirdStatus ab_path_execute_value(ArchbirdEngine *engine, const AbValue *map,
   size_t shortest = SIZE_MAX;
   size_t path_count = 0;
   int frontier = 0;
+  int proven_only = 1;
   int paths_truncated = 0;
   ArchbirdStatus status;
   ab_buffer_init(&paths, engine);
@@ -894,12 +944,27 @@ ArchbirdStatus ab_path_execute_value(ArchbirdEngine *engine, const AbValue *map,
       status = ARCHBIRD_OUT_OF_MEMORY;
   }
   if (status == ARCHBIRD_OK && sources.count && targets.count)
-    status =
-        bfs(engine, &graph, &sources, decoded.max_depth, distance, &frontier);
+    status = bfs(engine, &graph, &sources, decoded.max_depth, 1, distance,
+                 &frontier);
   if (status == ARCHBIRD_OK && sources.count && targets.count) {
-    shortest = nearest_targets(&targets, distance, target_mask);
+    shortest = nearest_targets(&graph, &targets, distance, 1, target_mask);
     if (shortest != SIZE_MAX)
-      shortest_reachable(&graph, distance, target_mask, shortest, reachable);
+      shortest_reachable(&graph, distance, target_mask, shortest, 1, reachable);
+  }
+  if (status == ARCHBIRD_OK && sources.count && targets.count &&
+      shortest == SIZE_MAX) {
+    proven_only = 0;
+    frontier = 0;
+    memset(target_mask, 0, graph.node_count * sizeof(*target_mask));
+    memset(reachable, 0, graph.node_count * sizeof(*reachable));
+    status = bfs(engine, &graph, &sources, decoded.max_depth, 0, distance,
+                 &frontier);
+    if (status == ARCHBIRD_OK) {
+      shortest = nearest_targets(&graph, &targets, distance, 0, target_mask);
+      if (shortest != SIZE_MAX)
+        shortest_reachable(&graph, distance, target_mask, shortest, 0,
+                           reachable);
+    }
   }
   for (source_index = 0; status == ARCHBIRD_OK && shortest != SIZE_MAX &&
                          source_index < sources.count;
@@ -909,6 +974,7 @@ ArchbirdStatus ab_path_execute_value(ArchbirdEngine *engine, const AbValue *map,
         .distance = distance,
         .reachable = reachable,
         .targets = target_mask,
+        .proven_only = proven_only,
         .shortest = shortest,
         .max_paths = decoded.max_paths,
         .count = path_count,
@@ -931,8 +997,9 @@ ArchbirdStatus ab_path_execute_value(ArchbirdEngine *engine, const AbValue *map,
                        : "unknown";
   if (status == ARCHBIRD_OK) {
     if (path_count) {
-      outcome = "found";
-      reason = paths_truncated ? "path-limit" : "witnesses";
+      outcome = proven_only ? "found" : "unknown";
+      reason = proven_only ? (paths_truncated ? "path-limit" : "witnesses")
+                           : "candidate-witnesses";
     } else if (!sources.count || !targets.count) {
       outcome = "unknown";
       reason = "endpoint-unresolved";

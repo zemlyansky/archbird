@@ -1235,6 +1235,14 @@ if(Python3_Development.Module_FOUND)
               ${CMAKE_CURRENT_SOURCE_DIR}/test/test_compile_commands.py
               $<TARGET_FILE:archbird_python>
     )
+    add_test(
+      NAME archbird_native_compile_context_scaling
+      COMMAND ${CMAKE_COMMAND} -E env
+              ${ARCHBIRD_REPOSITORY_TEST_ENV}
+              ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_compile_context_scaling.py
+              $<TARGET_FILE:archbird_python>
+    )
     if(ARCHBIRD_ENABLE_TREE_SITTER_JAVASCRIPT)
       add_test(
         NAME archbird_native_ecmascript_modules
@@ -1267,6 +1275,22 @@ if(Python3_Development.Module_FOUND)
               ${ARCHBIRD_REPOSITORY_TEST_ENV}
               ${Python3_EXECUTABLE}
               ${CMAKE_CURRENT_SOURCE_DIR}/test/test_path.py
+              $<TARGET_FILE:archbird_python>
+    )
+    add_test(
+      NAME archbird_native_path_evaluation
+      COMMAND ${CMAKE_COMMAND} -E env
+              ${ARCHBIRD_REPOSITORY_TEST_ENV}
+              ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_path_evaluation.py
+              $<TARGET_FILE:archbird_python>
+    )
+    add_test(
+      NAME archbird_native_query_evidence_routes
+      COMMAND ${CMAKE_COMMAND} -E env
+              ${ARCHBIRD_REPOSITORY_TEST_ENV}
+              ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_query_evidence_routes.py
               $<TARGET_FILE:archbird_python>
     )
     add_test(

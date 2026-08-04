@@ -379,7 +379,18 @@ void ab_map_state_free(AbMapState *state) {
   for (index = 0; index < state->compile_command_count; index++)
     compile_command_free(state->engine, &state->compile_commands[index]);
   ab_free(state->engine, state->compile_commands);
+  for (index = 0; index < state->compile_context_count; index++) {
+    ab_free(state->engine, state->compile_contexts[index].providers);
+    ab_free(state->engine, state->compile_contexts[index].files);
+    ab_free(state->engine, state->compile_contexts[index].sources);
+  }
   ab_free(state->engine, state->compile_contexts);
+  ab_free(state->engine, state->compile_file_context_ids);
+  ab_free(state->engine, state->compile_file_context_offsets);
+  ab_free(state->engine, state->compile_file_direct_context_ids);
+  ab_free(state->engine, state->compile_file_direct_context_offsets);
+  ab_free(state->engine, state->compile_file_command_ids);
+  ab_free(state->engine, state->compile_file_command_offsets);
   for (index = 0; index < state->artifact_count; index++)
     artifact_free(state->engine, &state->artifacts[index]);
   ab_free(state->engine, state->artifacts);

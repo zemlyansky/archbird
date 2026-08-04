@@ -50,7 +50,10 @@ def main() -> int:
     verification = required_bytes(root / "verification" / "verification.json")
 
     artifact(native.map_query(map_json, query_json), "query")
-    artifact(native.map_path(map_json, path_json), "path")
+    path_artifact = native.map_path(map_json, path_json)
+    artifact(path_artifact, "path")
+    if not native.path_render_markdown(path_artifact):
+        raise AssertionError("Path artifact fuzz seed rendered empty Markdown")
     if not native.map_path_markdown(map_json, path_json):
         raise AssertionError("Path fuzz seed rendered empty Markdown")
     artifact(native.map_diff(map_json, map_json), "diff")

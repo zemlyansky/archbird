@@ -25,7 +25,7 @@ def load_extension(path: Path) -> None:
 if len(sys.argv) > 1:
     load_extension(Path(sys.argv[1]))
 
-from archbird.native import Project  # noqa: E402
+from archbird.native import Project, render_path_markdown  # noqa: E402
 from archbird.cli import main as cli_main  # noqa: E402
 from archbird.schema import read_schema, schema_names  # noqa: E402
 
@@ -48,6 +48,8 @@ def assert_path_shape(document: dict[str, object]) -> None:
     if not paths and search["shortest_length"] is not None:
         raise AssertionError("empty Path artifact claims a shortest length")
     for path in paths:
+        if path["state"] not in {"current", "unknown"}:
+            raise AssertionError("Path witness has no evidence state")
         if path["length"] != len(path["steps"]):
             raise AssertionError("Path length diverges from typed steps")
         if len(path["nodes"]) != path["length"] + 1:
@@ -74,11 +76,11 @@ def main() -> None:
             "a.js": (
                 'import { b } from "./b.js";\n'
                 'import "./c.js";\n'
-                "export function a() { return b(); }\n"
+                "export function a() { return b() + d(); }\n"
             ),
             "b.js": 'import "./d.js";\nexport function b() { return 1; }\n',
             "c.js": 'import "./d.js";\n',
-            "d.js": "export const d = 1;\n",
+            "d.js": "export function d() { return 1; }\n",
         }
         for name, source in sources.items():
             (root / name).write_text(source, encoding="utf-8")
@@ -115,36 +117,33 @@ def main() -> None:
             path["steps"][0]["relation"]["attributes"]["family"]
             for path in parallel["paths"]
         ]
-        semantic_relations = [
-            path["steps"][0]["relation"]
-            for path in parallel["paths"]
-            if path["steps"][0]["relation"]["attributes"]["family"]
-            in {"calls", "references"}
-        ]
         if (
             parallel["search"]["shortest_length"] != 1
             or "imports" not in parallel_families
-            or not semantic_relations
-            or len(parallel_families) < 2
+            or any(path["state"] != "current" for path in parallel["paths"])
         ):
-            raise AssertionError("parallel typed relations were collapsed")
-        for relation in semantic_relations:
-            resolution = relation["attributes"].get("resolution")
-            if resolution not in {
-                "ambiguous",
-                "builtin",
-                "candidate",
-                "unique",
-                "unresolved",
-            }:
-                raise AssertionError("semantic path relation lost resolution state")
-            if (
-                resolution in {"ambiguous", "candidate", "unresolved"}
-                and relation["state"] != "unknown"
-            ):
-                raise AssertionError(
-                    "candidate semantic relation was promoted to current evidence"
-                )
+            raise AssertionError("proven typed relation was not retained")
+
+        proof_over_shortcut = project.path(
+            endpoint(["a.js"]),
+            endpoint(["d.js"]),
+            relations=["calls", "imports"],
+        )
+        assert_path_shape(proof_over_shortcut)
+        if (
+            proof_over_shortcut["outcome"] != "found"
+            or proof_over_shortcut["search"]["shortest_length"] != 2
+            or any(
+                path["state"] != "current"
+                for path in proof_over_shortcut["paths"]
+            )
+            or any(
+                step["relation"]["attributes"]["family"] != "imports"
+                for path in proof_over_shortcut["paths"]
+                for step in path["steps"]
+            )
+        ):
+            raise AssertionError("short candidate shortcut hid a proven path")
 
         symbol_labels = project.path(
             {"kind": "symbol", "patterns": ["a"]},
@@ -154,13 +153,17 @@ def main() -> None:
         )
         assert_path_shape(symbol_labels)
         if (
-            symbol_labels["outcome"] != "found"
+            symbol_labels["outcome"] != "unknown"
+            or symbol_labels["reason"] != "candidate-witnesses"
             or symbol_labels["search"]["shortest_length"] != 1
             or symbol_labels["source"]["candidates"][0]["label"] != "a"
             or symbol_labels["target"]["candidates"][0]["label"] != "b"
+            or symbol_labels["paths"][0]["state"] != "unknown"
+            or symbol_labels["paths"][0]["steps"][0]["relation"]["state"]
+            != "unknown"
         ):
             raise AssertionError(
-                "symbol endpoint labels did not resolve independently of internal IDs"
+                "candidate-only symbol route was promoted to proven"
             )
 
         reverse_only = project.path(
@@ -290,17 +293,29 @@ def main() -> None:
         ):
             raise AssertionError("incomplete repository coverage proved absence")
 
-        markdown = project.path_markdown(
+        canonical_markdown_path = project.path_json(
             endpoint(["a.js"]),
             endpoint(["d.js"]),
             relations=["imports"],
-        ).decode("utf-8")
+        )
+        markdown_bytes = project.path_markdown(
+            endpoint(["a.js"]),
+            endpoint(["d.js"]),
+            relations=["imports"],
+        )
+        if markdown_bytes != render_path_markdown(canonical_markdown_path):
+            raise AssertionError("Path artifact renderer changed the witness")
+        markdown = markdown_bytes.decode("utf-8")
         if (
             "# Connection paths: path-test" not in markdown
             or markdown.count("## Witness") != 2
             or "`imports:import` traversed forward" not in markdown
+            or "state `current`" not in markdown
+            or "resolution `not-applicable`" not in markdown
+            or "evidence=" not in markdown
+            or "provenance=derived" not in markdown
         ):
-            raise AssertionError("Path Markdown diverges from canonical witnesses")
+            raise AssertionError("Path Markdown hides canonical evidence")
 
         map_path = artifacts / "map.json"
         live_path = artifacts / "live-path.json"
@@ -351,6 +366,26 @@ def main() -> None:
             or json.loads(saved_path.read_bytes())["outcome"] != "found"
         ):
             raise AssertionError("live or saved-Map Path CLI failed")
+        candidate_check_status = cli_main(
+            [
+                "path",
+                "a",
+                "b",
+                "--map",
+                str(map_path),
+                "--level",
+                "symbol",
+                "--relation",
+                "calls",
+                "--format",
+                "markdown",
+                "--progress",
+                "never",
+                "--check",
+            ]
+        )
+        if candidate_check_status != 1:
+            raise AssertionError("candidate-only checked Markdown succeeded")
         invalid_stderr = io.StringIO()
         with contextlib.redirect_stderr(invalid_stderr):
             invalid_status = cli_main(

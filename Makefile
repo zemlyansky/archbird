@@ -169,6 +169,8 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_cli_progress.py $(CURDIR)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_mcp_server.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_path.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_path_evaluation.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_evidence_routes.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_readme_examples.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) py/tests/test_repository.py \
 		$(PYTHON_NATIVE) $(CURDIR)
@@ -177,6 +179,8 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_map_correctness.py \
 		$(PYTHON_NATIVE) $(CURDIR) $(CURDIR)/test/fixtures/map_correctness
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_compile_commands.py \
+		$(PYTHON_NATIVE)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_compile_context_scaling.py \
 		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_modules.py \
 		$(PYTHON_NATIVE)

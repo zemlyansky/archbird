@@ -1463,6 +1463,19 @@ def map_path(
     )
 
 
+def path_render_markdown(artifact: bytes, max_chars=0) -> bytes:
+    if max_chars < 0:
+        raise ValueError("path max_chars must be a nonnegative integer")
+    return _simple_render(
+        "archbird_path_render_markdown",
+        [_bytes(artifact)],
+        suffix_types=(ctypes.c_size_t,),
+        suffix_values=(max_chars,),
+        include_flags=False,
+        saved_artifact=True,
+    )
+
+
 def map_path_markdown(
     map: bytes, request: bytes, max_chars=0, resolution: bytes = b""
 ) -> bytes:
