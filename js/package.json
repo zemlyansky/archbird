@@ -26,7 +26,7 @@
   },
   "gypfile": false,
   "scripts": {
-    "build:native": "node-gyp rebuild"
+    "build:native": "node src/prepare-csrc.js && node-gyp rebuild"
   },
   "dependencies": {
     "buffer": "6.0.3",
@@ -35,7 +35,7 @@
   "files": [
     "binding.gyp",
     "app",
-    "csrc",
+    "csrc.snapshot.gz",
     "schema",
     "src",
     "native",

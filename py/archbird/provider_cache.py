@@ -151,7 +151,9 @@ def _temporary_owner_is_dead(candidate: Path) -> bool:
 
 @dataclass
 class ProviderCacheStats:
+    attempted_bytes: int = 0
     bytes: int = 0
+    error_errno: int = 0
     errors: int = 0
     evictions: int = 0
     hits: int = 0
@@ -164,7 +166,9 @@ class ProviderCacheStats:
 
     def as_dict(self) -> Mapping[str, int]:
         return {
+            "attempted_bytes": self.attempted_bytes,
             "bytes": self.bytes,
+            "error_errno": self.error_errno,
             "errors": self.errors,
             "evictions": self.evictions,
             "hits": self.hits,
@@ -179,6 +183,8 @@ class ProviderCacheStats:
 
 @dataclass
 class MapCacheStats:
+    attempted_bytes: int = 0
+    error_errno: int = 0
     errors: int = 0
     hits: int = 0
     invalid: int = 0
@@ -189,6 +195,8 @@ class MapCacheStats:
 
     def as_dict(self) -> Mapping[str, int]:
         return {
+            "attempted_bytes": self.attempted_bytes,
+            "error_errno": self.error_errno,
             "errors": self.errors,
             "hits": self.hits,
             "invalid": self.invalid,
@@ -225,6 +233,7 @@ class _MapCacheWriter:
 
     def _record_error(self, error: OSError) -> None:
         self._cache.map_stats.errors += 1
+        self._cache.map_stats.error_errno = error.errno or 0
         if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)}:
             self._cache.map_stats.no_space += 1
 
@@ -245,6 +254,10 @@ class _MapCacheWriter:
                 self._cache.map_stats.errors += 1
 
     def write(self, data: bytes) -> int:
+        self._cache.map_stats.attempted_bytes = max(
+            self._cache.map_stats.attempted_bytes,
+            self._size + len(data),
+        )
         stream = self._stream
         if stream is None:
             return len(data)
@@ -359,6 +372,8 @@ class ProviderCache:
         self._prune(0)
 
     def _prune(self, incoming: int, *, preserve: Path | None = None) -> None:
+        if self.stats.bytes + incoming <= self.max_bytes:
+            return
         ordered = sorted(
             self._entries.items(),
             key=lambda row: (row[1][1], os.fsencode(str(row[0]))),
@@ -477,6 +492,7 @@ class ProviderCache:
         path: str,
         source_sha256: str,
     ) -> None:
+        self.stats.attempted_bytes = max(self.stats.attempted_bytes, len(data))
         target = self._path(
             namespace=namespace,
             project=project,
@@ -514,6 +530,7 @@ class ProviderCache:
             self.stats.writes += 1
         except OSError as error:
             self.stats.errors += 1
+            self.stats.error_errno = error.errno or 0
             if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)}:
                 self.stats.no_space += 1
         finally:

@@ -14,6 +14,10 @@ import tarfile
 import tempfile
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.csrc_bundle import encode_bundle
+
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 
@@ -294,7 +298,9 @@ def _release_archives(
         npm,
         {
             "package/README.md": node_readme,
-            "package/csrc/.archbird-manifest.json": c_source_manifest,
+            "package/csrc.snapshot.gz": encode_bundle(
+                {".archbird-manifest.json": c_source_manifest}
+            ),
             "package/package.json": (
                 json.dumps(package, ensure_ascii=False, indent=2) + "\n"
             ).encode("utf-8"),

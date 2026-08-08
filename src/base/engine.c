@@ -78,6 +78,11 @@ void ab_free(ArchbirdEngine *engine, void *pointer) {
     engine->options.deallocate(engine->options.allocator_user_data, pointer);
 }
 
+int ab_cancel_requested(ArchbirdEngine *engine) {
+  return engine && engine->options.cancel &&
+         engine->options.cancel(engine->options.cancel_user_data);
+}
+
 int ab_sha256_literal_valid(const char *value) {
   size_t index;
   if (!value)
@@ -194,6 +199,8 @@ void archbird_engine_options_init(ArchbirdEngineOptions *options) {
   options->reallocate = NULL;
   options->deallocate = NULL;
   options->allocator_user_data = NULL;
+  options->cancel = NULL;
+  options->cancel_user_data = NULL;
 }
 
 ArchbirdStatus
@@ -230,6 +237,8 @@ ArchbirdStatus archbird_engine_create(const ArchbirdEngineOptions *options,
   }
   if ((resolved.allocate || resolved.reallocate || resolved.deallocate) &&
       !(resolved.allocate && resolved.reallocate && resolved.deallocate))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  if (!resolved.cancel && resolved.cancel_user_data)
     return ARCHBIRD_INVALID_ARGUMENT;
   if (resolved.max_input_bytes == 0 || resolved.max_depth == 0 ||
       resolved.max_values == 0 || resolved.max_string_bytes == 0 ||

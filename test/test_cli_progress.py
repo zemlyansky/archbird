@@ -167,6 +167,10 @@ def main() -> int:
             bounded.stdout != always.stdout
             or b"canonical Map exceeded the configured cache budget"
             not in bounded.stderr
+            or str(Path(raw) / "bounded").encode() not in bounded.stderr
+            or b"quota=1 bytes" not in bounded.stderr
+            or b"attempted=" not in bounded.stderr
+            or b"free=" not in bounded.stderr
         ):
             raise AssertionError("streaming CLI did not report bounded Map cache")
     verify_adaptive_terminal()

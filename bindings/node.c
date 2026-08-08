@@ -699,12 +699,13 @@ static napi_value project_provider_facts(napi_env env,
 }
 
 static napi_value json_canonicalize(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3];
+  size_t argc = 4;
+  napi_value argv[4];
   const uint8_t *input;
   size_t input_length;
   int pretty;
   int trailing;
+  int saved_artifact;
   uint32_t flags = 0;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
@@ -713,13 +714,15 @@ static napi_value json_canonicalize(napi_env env, napi_callback_info info) {
   NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
   if (argc < 1 || !get_buffer(env, argv[0], &input, &input_length) ||
       !get_optional_bool(env, argc, argv, 1, 0, &pretty) ||
-      !get_optional_bool(env, argc, argv, 2, 0, &trailing))
+      !get_optional_bool(env, argc, argv, 2, 0, &trailing) ||
+      !get_optional_bool(env, argc, argv, 3, 0, &saved_artifact))
     return NULL;
   if (pretty)
     flags |= ARCHBIRD_JSON_PRETTY;
   if (trailing)
     flags |= ARCHBIRD_JSON_TRAILING_NEWLINE;
-  status = input_engine(input_length, &engine);
+  status = saved_artifact ? saved_artifact_engine(input_length, &engine)
+                          : input_engine(input_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, input, input_length, flags,
                                         output_write, &output);

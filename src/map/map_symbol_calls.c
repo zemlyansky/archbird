@@ -266,17 +266,18 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
                                            &row->semantic_provider, &exact);
     if (status != ARCHBIRD_OK)
       goto done;
-    if (exact_evidence && exact.exact && exact.target && exact.target_symbol) {
+    if (exact_evidence && exact.target && exact.target_symbol) {
       row->semantic = exact_evidence;
       row->semantic_path = &exact.target->path;
       row->semantic_symbol = exact.target_symbol;
       row->candidate_count = 1;
-      row->resolution = "unique";
+      row->resolution = exact.exact ? "unique" : "candidate";
       continue;
     }
     if (row->binding && bytes_literal(row->binding, "builtin")) {
       row->resolution = "builtin";
     } else if (row->binding && (bytes_literal(row->binding, "local") ||
+                                bytes_literal(row->binding, "member") ||
                                 bytes_literal(row->binding, "unknown"))) {
       row->resolution = "unresolved";
     } else {

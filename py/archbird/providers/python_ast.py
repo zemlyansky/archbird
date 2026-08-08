@@ -560,6 +560,7 @@ def _constant_members(
 
 @dataclass(frozen=True)
 class _ReceiverScope:
+    classes: frozenset[str]
     origins: Mapping[str, _ReceiverOrigin]
     written: frozenset[str]
 
@@ -600,6 +601,7 @@ class _ReceiverScopeCollector(_ScopeImportCollector):
     def __init__(self, starts: Sequence[int]) -> None:
         super().__init__()
         self.starts = starts
+        self.class_writes: set[str] = set()
         self.writes: Dict[str, List[Optional[_ReceiverOrigin]]] = {}
 
     def _write(self, name: str, origin: Optional[_ReceiverOrigin] = None) -> None:
@@ -664,6 +666,7 @@ class _ReceiverScopeCollector(_ScopeImportCollector):
         self._write(node.name)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.class_writes.add(node.name)
         self._write(node.name)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
@@ -686,7 +689,16 @@ class _ReceiverScopeCollector(_ScopeImportCollector):
             for name, rows in self.writes.items()
             if len(rows) == 1 and rows[0] is not None
         }
-        return _ReceiverScope(origins=origins, written=frozenset(self.writes))
+        classes = frozenset(
+            name
+            for name in self.class_writes
+            if len(self.writes.get(name, ())) == 1
+        )
+        return _ReceiverScope(
+            classes=classes,
+            origins=origins,
+            written=frozenset(self.writes),
+        )
 
 
 def _scope_state(
@@ -720,6 +732,10 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         imports, receivers = _scope_state(tree.body, starts)
         self.imports: List[Dict[str, Tuple[str, str, str]]] = [imports]
         self.receivers: List[_ReceiverScope] = [receivers]
+        self.local_classes: List[Dict[str, str]] = [
+            {name: name for name in receivers.classes}
+        ]
+        self.method_receivers: List[Dict[str, str]] = [{}]
         self.enum_classes: set[str] = set()
         self.module_table = table
         self.child_tables: Dict[
@@ -818,6 +834,107 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 if outer_symbol.is_imported() and not outer_symbol.is_assigned():
                     return imports.get(name)
         return None
+
+    def _local_class_binding(self, name: str) -> Optional[str]:
+        """Resolve one unambiguous class declaration through lexical scope."""
+
+        table = self.tables[-1]
+        if table is None:
+            return None
+        try:
+            symbol = table.lookup(name)
+        except KeyError:
+            return None
+        if table.get_type() == "module" or symbol.is_global():
+            return self.local_classes[0].get(name)
+        if symbol.is_local() or symbol.is_parameter() or symbol.is_imported():
+            return self.local_classes[-1].get(name)
+        if symbol.is_free() or symbol.is_nonlocal():
+            for classes in reversed(self.local_classes[:-1]):
+                qualified = classes.get(name)
+                if qualified is not None:
+                    return qualified
+        return None
+
+    def _method_receiver_binding(self, name: str) -> Optional[str]:
+        table = self.tables[-1]
+        if table is None:
+            return None
+        try:
+            symbol = table.lookup(name)
+        except KeyError:
+            return None
+        if symbol.is_local() or symbol.is_parameter() or symbol.is_imported():
+            return self.method_receivers[-1].get(name)
+        if symbol.is_free() or symbol.is_nonlocal():
+            for receivers in reversed(self.method_receivers[:-1]):
+                qualified = receivers.get(name)
+                if qualified is not None:
+                    return qualified
+        return None
+
+    def _local_member_owner(
+        self, receiver: ast.expr
+    ) -> Optional[Tuple[str, str, str]]:
+        """Return owner, confidence, and derivation for bounded local flows."""
+
+        if isinstance(receiver, ast.Name):
+            owner = self._local_class_binding(receiver.id)
+            if owner is not None:
+                return owner, "exact", "class-binding"
+            owner = self._method_receiver_binding(receiver.id)
+            if owner is not None:
+                return owner, "candidate", "method-receiver"
+            return None
+        if (
+            isinstance(receiver, ast.Call)
+            and isinstance(receiver.func, ast.Name)
+        ):
+            owner = self._local_class_binding(receiver.func.id)
+            if owner is not None:
+                return owner, "candidate", "constructor-result"
+        return None
+
+    def _record_local_member_call(
+        self, node: ast.Call, member_span: Tuple[int, int]
+    ) -> bool:
+        if not isinstance(node.func, ast.Attribute):
+            return False
+        resolved = self._local_member_owner(node.func.value)
+        if resolved is None:
+            return False
+        owner, resolution, derivation = resolved
+        member = node.func.attr
+        enclosing = self._qualname("").rstrip(".")
+        attributes = {
+            "binding": "member",
+            "enclosing": enclosing,
+            "line": _line_for_span(self.starts, member_span),
+            "member_resolution": resolution,
+            "owner_symbol": owner,
+            "receiver_derivation": derivation,
+        }
+        key = (
+            f"{len(owner.encode('utf-8'))}:{owner}:"
+            f"{member}:{resolution}:{derivation}"
+        )
+        self.facts.add(
+            "calls",
+            "member-call",
+            member_span,
+            key,
+            member,
+            attributes,
+        )
+        self.facts.add(
+            "name-uses",
+            "local-member-call",
+            member_span,
+            key,
+            member,
+            attributes,
+        )
+        return True
 
     def _receiver_binding(
         self, name: str, before: int
@@ -1367,8 +1484,14 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         imports, receivers = _scope_state(node.body, self.starts)
         self.imports.append(imports)
         self.receivers.append(receivers)
+        self.local_classes.append(
+            {name: self._qualname(name) for name in receivers.classes}
+        )
+        self.method_receivers.append({})
         for statement in node.body:
             self.visit(statement)
+        self.method_receivers.pop()
+        self.local_classes.pop()
         self.receivers.pop()
         self.imports.pop()
         self.tables.pop()
@@ -1414,8 +1537,31 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         imports, receivers = _scope_state(getattr(node, "body"), self.starts)
         self.imports.append(imports)
         self.receivers.append(receivers)
+        self.local_classes.append(
+            {name: self._qualname(name) for name in receivers.classes}
+        )
+        method_receivers: Dict[str, str] = {}
+        if len(self.scope) >= 2 and self.scope[-2][1] == "class":
+            decorators = {
+                (
+                    decorator.id
+                    if isinstance(decorator, ast.Name)
+                    else decorator.attr
+                    if isinstance(decorator, ast.Attribute)
+                    else ""
+                )
+                for decorator in getattr(node, "decorator_list", ())
+            }
+            positional = [*args.posonlyargs, *args.args]
+            if positional and "staticmethod" not in decorators:
+                method_receivers[positional[0].arg] = ".".join(
+                    item[0] for item in self.scope[:-1]
+                )
+        self.method_receivers.append(method_receivers)
         for statement in getattr(node, "body"):
             self.visit(statement)
+        self.method_receivers.pop()
+        self.local_classes.pop()
         self.receivers.pop()
         self.imports.pop()
         self.tables.pop()
@@ -1482,6 +1628,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                     "line": _line_for_span(self.starts, span),
                 },
             )
+            self._record_local_member_call(node, span)
             chain = _attribute_chain(node.func)
             if not self._record_imported_attribute_use(
                 node.func, "imported-attribute-call"
@@ -1569,7 +1716,13 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 self.visit(default)
         self.tables.append(self._child_table("function", "lambda", node.lineno))
         self.imports.append({})
+        self.receivers.append(_ReceiverScope(frozenset(), {}, frozenset()))
+        self.local_classes.append({})
+        self.method_receivers.append({})
         self.visit(node.body)
+        self.method_receivers.pop()
+        self.local_classes.pop()
+        self.receivers.pop()
         self.imports.pop()
         self.tables.pop()
 
@@ -1581,6 +1734,9 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             self.visit(generators[0].iter)
         self.tables.append(self._child_table("function", name, node.lineno))
         self.imports.append({})
+        self.receivers.append(_ReceiverScope(frozenset(), {}, frozenset()))
+        self.local_classes.append({})
+        self.method_receivers.append({})
         for index, generator in enumerate(generators):
             if index:
                 self.visit(generator.iter)
@@ -1589,6 +1745,9 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 self.visit(condition)
         for value in values:
             self.visit(value)
+        self.method_receivers.pop()
+        self.local_classes.pop()
+        self.receivers.pop()
         self.imports.pop()
         self.tables.pop()
 

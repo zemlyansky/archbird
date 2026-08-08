@@ -2341,6 +2341,7 @@ static int valid_symbol_relation_row(const AbValue *row) {
       (binding && !ab_projection_value_is(binding, "builtin") &&
        !ab_projection_value_is(binding, "imported") &&
        !ab_projection_value_is(binding, "local") &&
+       !ab_projection_value_is(binding, "member") &&
        !ab_projection_value_is(binding, "project") &&
        !ab_projection_value_is(binding, "unknown")))
     return 0;

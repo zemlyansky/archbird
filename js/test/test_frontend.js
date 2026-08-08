@@ -1110,10 +1110,12 @@ const mapCachedWarm = Project.fromConfig(
 );
 assert.deepEqual(mapCachedWarm.mapJson(), mapCachedColdJson);
 assert.deepEqual(mapCachedCold.mapCacheStats, {
+  attemptedBytes: mapCachedColdJson.length, errorErrno: 0,
   errors: 0, hits: 0, invalid: 0, misses: 1,
   noSpace: 0, skipped: 0, writes: 1,
 });
 assert.deepEqual(mapCachedWarm.mapCacheStats, {
+  attemptedBytes: 0, errorErrno: 0,
   errors: 0, hits: 1, invalid: 0, misses: 0,
   noSpace: 0, skipped: 0, writes: 0,
 });
@@ -1199,6 +1201,15 @@ if (priorCacheBudget === undefined) {
   process.env.ARCHBIRD_CACHE_MAX_BYTES = priorCacheBudget;
 }
 const boundedCache = new ProviderCache(boundedCacheRoot, { maxBytes: 100 });
+const noOpCache = Object.create(ProviderCache.prototype);
+noOpCache.maxBytes = 100;
+noOpCache.stats = { bytes: 0 };
+noOpCache.entries = {
+  entries() {
+    throw new Error("no-op cache pruning scanned its inventory");
+  },
+};
+noOpCache.prune(0);
 const boundedParameters = {
   namespace: "fixture",
   project: "cache-budget",
@@ -1316,6 +1327,8 @@ try {
 }
 assert.equal(recoveredCache.stats.noSpace, 1);
 assert.equal(recoveredCache.stats.errors, 1);
+assert.equal(recoveredCache.stats.attemptedBytes, 1);
+assert.equal(recoveredCache.stats.errorErrno, 0);
 fs.rmSync(boundedCacheRoot, { force: true, recursive: true });
 const zeroFixture = path.resolve(process.argv[3], "test/fixtures/zero_config");
 const zeroResolutionJson = resolveDiscovery(zeroFixture);

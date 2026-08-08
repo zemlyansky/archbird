@@ -181,6 +181,7 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_python_provider_applicability.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_syntax_recovery.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_cli_progress.py $(CURDIR)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_cli_cancellation.py $(CURDIR)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_mcp_server.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_path.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_path_evaluation.py
@@ -206,6 +207,7 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ast_grep_adapter.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_act_cli.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_plan_edge_localization.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_csrc_bundle.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_freshness.py $(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_fuzz_seeds.py \
 		$(PYTHON_NATIVE) $(CURDIR)/test/fuzz/corpus
@@ -230,6 +232,8 @@ test-js: build-js build-py
 		$(NODE) test/test_coverage_observations.js js/src $(CURDIR) $(NODE_NATIVE)
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) --expose-gc js/test/test_frontend.js $(NODE_NATIVE) $(CURDIR)
+	$(NODE) test/test_node_input_budget.js $(CURDIR) $(NODE_NATIVE) \
+		$(NATIVE_WASM_BUILD)/wasm
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) js/test/test_plan_act_cli.js $(NODE_NATIVE) $(CURDIR)
 	$(NODE) test/test_cli_progress.js js/src/cli.js $(CURDIR) $(NODE_NATIVE)
@@ -429,6 +433,7 @@ release-js: release-source-check app-test
 	command mkdir -p $(RELEASE_TMP)
 	$(PYTHON) tools/sync_schemas.py node
 	$(PYTHON) tools/sync_csrc.py node
+	$(PYTHON) tools/csrc_bundle.py js/csrc js/csrc.snapshot.gz
 	command $(CMAKE) -S . -B $(NATIVE_RELEASE_BUILD) -DBUILD_TESTING=OFF \
 		-DCMAKE_BUILD_TYPE=Release -DARCHBIRD_WARNINGS_AS_ERRORS=ON \
 		-DARCHBIRD_BUILD_PYTHON=OFF \

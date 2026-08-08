@@ -819,6 +819,23 @@ static ArchbirdStatus imported_attribute_call_routes(
   return status;
 }
 
+static ArchbirdStatus local_member_call_routes(
+    AbMapState *state, const AbConfigTest *spec, const AbManifestFile *source,
+    const AbFact *fact, const AbProviderBundle *provider,
+    const char *evidence_scope, AbMapRouteCount **routes, size_t *route_count,
+    AbMapRouteEvidence **evidence, size_t *evidence_count) {
+  AbMapReferenceResolution resolution;
+  ArchbirdStatus status =
+      ab_map_resolve_local_member_reference(state, source, fact, &resolution);
+  if (status != ARCHBIRD_OK || !resolution.target ||
+      !route_file_allowed(spec, resolution.target))
+    return status;
+  return add_evidenced_route(state, routes, route_count, evidence,
+                             evidence_count, &resolution.target->path,
+                             resolution.target_symbol, fact, provider,
+                             resolution.relation, evidence_scope);
+}
+
 static ArchbirdStatus method_name_candidate_routes(
     AbMapState *state, const TestFactIndex *index, const AbConfigTest *spec,
     const AbFact *fact, const AbProviderBundle *provider,
@@ -932,10 +949,14 @@ resolve_routes(AbMapState *state, const TestFactIndex *index,
                                         evidence, evidence_count);
       }
     } else if (fact_domain(fact, "name-uses")) {
-      if (string_literal(&fact->kind, "imported-attribute-call") ||
-          string_literal(&fact->kind, "imported-attribute-reference") ||
-          string_literal(&fact->kind, "inferred-receiver-call") ||
-          string_literal(&fact->kind, "decorator-reference"))
+      if (string_literal(&fact->kind, "local-member-call"))
+        status = local_member_call_routes(state, spec, file, fact, provider,
+                                          evidence_scope, routes, route_count,
+                                          evidence, evidence_count);
+      else if (string_literal(&fact->kind, "imported-attribute-call") ||
+               string_literal(&fact->kind, "imported-attribute-reference") ||
+               string_literal(&fact->kind, "inferred-receiver-call") ||
+               string_literal(&fact->kind, "decorator-reference"))
         status = imported_attribute_call_routes(
             state, index, spec, file, fact, provider, evidence_scope, routes,
             route_count, evidence, evidence_count);

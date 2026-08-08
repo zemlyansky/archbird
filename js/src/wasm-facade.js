@@ -392,8 +392,17 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
         boolFlags(pretty),
       ),
     sha256: (value) => oneInput(value, "_ab_wasm_sha256").toString("ascii"),
-    jsonCanonicalize: (value, pretty = false, trailing = false) =>
-      oneInput(value, "_ab_wasm_json_canonicalize", boolFlags(pretty, trailing)),
+    jsonCanonicalize: (
+      value,
+      pretty = false,
+      trailing = false,
+      savedArtifact = false,
+    ) => oneInput(
+      value,
+      "_ab_wasm_json_canonicalize",
+      boolFlags(pretty, trailing),
+      savedArtifact ? 1 : 0,
+    ),
     unifiedDiff(
       before,
       after,

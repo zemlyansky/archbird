@@ -1006,7 +1006,9 @@ class Project:
     def map_json(self, *, pretty: bool = False) -> bytes:
         if self._cached_map is not None:
             return (
-                _native.json_canonicalize(self._cached_map, pretty=True)
+                _native.json_canonicalize(
+                    self._cached_map, pretty=True, saved_artifact=True
+                )
                 if pretty
                 else self._cached_map
             )
@@ -1016,7 +1018,11 @@ class Project:
             self.map_cache_stats = self._map_cache.map_stats.as_dict()
             self.cache_stats = self._map_cache.stats.as_dict()
             self._cached_map = data
-        return _native.json_canonicalize(data, pretty=True) if pretty else data
+        return (
+            _native.json_canonicalize(data, pretty=True, saved_artifact=True)
+            if pretty
+            else data
+        )
 
     def write_map_json(
         self, sink: Callable[[bytes], object], *, pretty: bool = False
@@ -1025,7 +1031,9 @@ class Project:
 
         if self._cached_map is not None:
             data = (
-                _native.json_canonicalize(self._cached_map, pretty=True)
+                _native.json_canonicalize(
+                    self._cached_map, pretty=True, saved_artifact=True
+                )
                 if pretty
                 else self._cached_map
             )

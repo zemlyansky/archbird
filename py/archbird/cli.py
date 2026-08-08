@@ -693,34 +693,64 @@ def _cache_max_bytes(args: argparse.Namespace) -> int:
     return value
 
 
-def _warn_cache_stats(stats: Mapping[str, int]) -> None:
+def _cache_failure_context(
+    stats: Mapping[str, int], cache_dir: Optional[Path], max_bytes: int
+) -> str:
+    resolved = (cache_dir or default_provider_cache_dir()).resolve()
+    probe = resolved
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        filesystem = os.statvfs(probe)
+        free_bytes = filesystem.f_bavail * filesystem.f_frsize
+        free = str(free_bytes)
+    except OSError:
+        free = "unavailable"
+    return (
+        f"path={resolved}; quota={max_bytes} bytes; "
+        f"attempted={stats.get('attempted_bytes', 0)} bytes; "
+        f"errno={stats.get('error_errno', 0)}; free={free} bytes"
+    )
+
+
+def _warn_cache_stats(
+    stats: Mapping[str, int], cache_dir: Optional[Path], max_bytes: int
+) -> None:
+    if not stats.get("no_space", 0) and not stats.get("skipped", 0):
+        return
+    context = _cache_failure_context(stats, cache_dir, max_bytes)
     if stats.get("no_space", 0):
         print(
             "archbird: warning: provider-cache write failed because storage "
-            "is full; analysis remains valid. Use --cache-dir, increase "
-            "--cache-max-bytes, or use --no-cache.",
+            f"is full ({context}); analysis remains valid. Use --cache-dir, "
+            "increase --cache-max-bytes, or use --no-cache.",
             file=sys.stderr,
         )
     if stats.get("skipped", 0):
         print(
             "archbird: warning: provider-cache entries exceeded the configured "
-            "budget and were not stored; analysis remains valid. Increase "
+            f"budget and were not stored ({context}); analysis remains valid. Increase "
             "--cache-max-bytes or use --no-cache.",
             file=sys.stderr,
         )
 
 
-def _warn_map_cache_stats(stats: Mapping[str, int]) -> None:
+def _warn_map_cache_stats(
+    stats: Mapping[str, int], cache_dir: Optional[Path], max_bytes: int
+) -> None:
+    if not stats.get("no_space", 0) and not stats.get("skipped", 0):
+        return
+    context = _cache_failure_context(stats, cache_dir, max_bytes)
     if stats.get("no_space", 0):
         print(
             "archbird: warning: canonical Map cache write failed because "
-            "storage is full; analysis remains valid.",
+            f"storage is full ({context}); analysis remains valid.",
             file=sys.stderr,
         )
     if stats.get("skipped", 0):
         print(
             "archbird: warning: canonical Map exceeded the configured cache "
-            "budget and was not stored; analysis remains valid.",
+            f"budget and was not stored ({context}); analysis remains valid.",
             file=sys.stderr,
         )
 
@@ -1873,7 +1903,9 @@ def _project_from_args(
         if ledger_path:
             _write(current.merge_conflicts_json(pretty=True), ledger_path)
         raise
-    _warn_cache_stats(current.cache_stats)
+    _warn_cache_stats(
+        current.cache_stats, _cache_dir(args), _cache_max_bytes(args)
+    )
     if ledger_path:
         _write(current.merge_conflicts_json(pretty=True), ledger_path)
     for observation_path in getattr(args, "test_symbol_observations", ()):
@@ -2105,7 +2137,9 @@ def _query_main(
             progress.emit({"phase": "rendering", "artifact": "canonical Map"})
             map_json = current.map_json()
             resolution_json = current.resolution_json or b""
-            _warn_map_cache_stats(current.map_cache_stats)
+            _warn_map_cache_stats(
+                current.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
+            )
         map_document = json.loads(map_json)
         if args.check and _has_error_diagnostics(map_document):
             return 1
@@ -2330,7 +2364,9 @@ def _path_main(argv: Sequence[str]) -> int:
             progress.emit({"phase": "rendering", "artifact": "canonical Map"})
             map_json = current.map_json()
             resolution_json = current.resolution_json or b""
-            _warn_map_cache_stats(current.map_cache_stats)
+            _warn_map_cache_stats(
+                current.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
+            )
         map_document = json.loads(map_json)
         if args.check and _has_error_diagnostics(map_document):
             return 1
@@ -2400,7 +2436,9 @@ def _freshness_main(argv: Sequence[str]) -> int:
         current = _project_from_args(args, progress)
         progress.emit({"phase": "rendering", "artifact": "canonical Map"})
         current_map_json = current.map_json()
-        _warn_map_cache_stats(current.map_cache_stats)
+        _warn_map_cache_stats(
+            current.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
+        )
         progress.emit({"phase": "rendering", "artifact": "freshness audit"})
         encoded = audit_map_freshness(
             snapshot_json, current_map_json, pretty=args.pretty
@@ -2662,7 +2700,9 @@ def _constraint_evaluation_inputs(
         )
         map_json = project.map_json()
         resolution_json = project.resolution_json or b""
-        _warn_map_cache_stats(project.map_cache_stats)
+        _warn_map_cache_stats(
+            project.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
+        )
     return (
         repository,
         config_json,
@@ -2970,8 +3010,12 @@ def _act_project(
         cache_max_bytes=_cache_max_bytes(args),
         progress=progress.emit,
     )
-    _warn_cache_stats(project.cache_stats)
-    _warn_map_cache_stats(project.map_cache_stats)
+    _warn_cache_stats(
+        project.cache_stats, _cache_dir(args), _cache_max_bytes(args)
+    )
+    _warn_map_cache_stats(
+        project.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
+    )
     return project
 
 
@@ -2996,8 +3040,12 @@ def _act_overlay_project(
         cache_max_bytes=_cache_max_bytes(args),
         progress=progress.emit,
     )
-    _warn_cache_stats(project.cache_stats)
-    _warn_map_cache_stats(project.map_cache_stats)
+    _warn_cache_stats(
+        project.cache_stats, _cache_dir(args), _cache_max_bytes(args)
+    )
+    _warn_map_cache_stats(
+        project.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
+    )
     return project
 
 
@@ -3342,7 +3390,7 @@ def _mcp_main(argv: Sequence[str]) -> int:
             repository_host.close()
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def _main(argv: Optional[Sequence[str]] = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] in (["-h"], ["--help"], ["help"]):
         print(_top_level_help(), end="")
@@ -3450,11 +3498,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         progress.emit({"phase": "rendering", "artifact": "canonical Map"})
         if args.format == "json" and not args.check:
             _write_project_map(project, args.output, pretty=args.pretty)
-            _warn_map_cache_stats(project.map_cache_stats)
+            _warn_map_cache_stats(
+                project.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
+            )
             progress.finish()
             return 0
         map_json = project.map_json(pretty=args.pretty and args.format == "json")
-        _warn_map_cache_stats(project.map_cache_stats)
+        _warn_map_cache_stats(
+            project.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
+        )
         document = json.loads(map_json)
         encoded = (
             map_json
@@ -3509,6 +3561,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (ConfigError, OSError, RuntimeError, ValueError) as error:
         print(f"archbird: error: {error}", file=sys.stderr)
         return 2
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        print("archbird: cancelled", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

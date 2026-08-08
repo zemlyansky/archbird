@@ -20,6 +20,7 @@ const wasmBuild = path.resolve(
 const appBuild = path.resolve(
   process.env.ARCHBIRD_APP_BUILD || path.join(repositoryRoot, "app/dist"),
 );
+const cSourceBundle = path.join(packageRoot, "csrc.snapshot.gz");
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -71,6 +72,9 @@ if (Number(process.versions.napi || 0) < 8) {
 }
 const nativeBytes = fs.readFileSync(source);
 validateAddon(nativeBytes);
+if (!fs.existsSync(cSourceBundle) || !fs.statSync(cSourceBundle).isFile()) {
+  throw new Error(`missing compressed C source snapshot: ${cSourceBundle}`);
+}
 const nativeRoot = path.join(packageRoot, "native");
 replaceDirectory(nativeRoot, "archbird-node-native-directory");
 const nativeDestination = path.join(nativeRoot, platformKey());

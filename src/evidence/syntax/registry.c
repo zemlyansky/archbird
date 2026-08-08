@@ -343,6 +343,12 @@ static ArchbirdStatus scan_providers(ArchbirdEngine *engine,
         provider_for_file(&manifest->files[file_index]);
     if (!provider || (selected && provider != selected))
       continue;
+    if (ab_cancel_requested(engine)) {
+      status =
+          archbird_error_set(engine, ARCHBIRD_CANCELLED, ARCHBIRD_NO_OFFSET,
+                             "syntax provider analysis cancelled");
+      goto done;
+    }
     status = scan_file(engine, project, manifest, file_index, provider,
                        manifest_digest, &bundles[bundle_count]);
     if (status != ARCHBIRD_OK)

@@ -13,6 +13,17 @@ typedef struct Output {
 
 static int failures;
 
+typedef struct Cancellation {
+  size_t calls;
+  size_t cancel_at;
+} Cancellation;
+
+static int cancel_after(void *user_data) {
+  Cancellation *cancellation = (Cancellation *)user_data;
+  cancellation->calls++;
+  return cancellation->calls >= cancellation->cancel_at;
+}
+
 static int write_output(void *user_data, const uint8_t *bytes, size_t length) {
   Output *output = (Output *)user_data;
   output->writes++;
@@ -310,6 +321,87 @@ static void test_logical_limit_is_not_resource_evidence(void) {
 done:
   archbird_project_destroy(project);
   archbird_engine_destroy(engine);
+}
+
+static void test_tree_sitter_cooperative_cancellation(void) {
+  static const char line[] = "int value = 1;\n";
+  const size_t repetitions = 500000;
+  ArchbirdEngineOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdProject *project = NULL;
+  char *source = NULL;
+  size_t index;
+  Cancellation cancellation = {0, 3};
+  archbird_engine_options_init(&options);
+  options.cancel = cancel_after;
+  options.cancel_user_data = &cancellation;
+  expect("cancel-engine", archbird_engine_create(&options, &engine),
+         ARCHBIRD_OK);
+  if (!engine)
+    return;
+  source = (char *)malloc((sizeof(line) - 1) * repetitions + 1);
+  if (!source) {
+    fputs("FAIL allocate cancellation source\n", stderr);
+    failures++;
+    goto done;
+  }
+  for (index = 0; index < repetitions; index++)
+    memcpy(source + index * (sizeof(line) - 1), line, sizeof(line) - 1);
+  source[(sizeof(line) - 1) * repetitions] = '\0';
+  project = create_project(engine, source, "src/cancel.c", "c");
+  if (!project) {
+    fputs("FAIL create cancellation project\n", stderr);
+    failures++;
+    goto done;
+  }
+  expect("tree-sitter-cancel",
+         archbird_project_scan_builtin_provider(engine, project,
+                                                "syntax:tree-sitter:c", 20,
+                                                ARCHBIRD_PROVIDER_PRIMARY),
+         ARCHBIRD_CANCELLED);
+  if (cancellation.calls < cancellation.cancel_at ||
+      archbird_project_provider_count(project) != 0) {
+    fputs("FAIL cancelled Tree-sitter provider retained partial evidence\n",
+          stderr);
+    failures++;
+  }
+done:
+  archbird_project_destroy(project);
+  free(source);
+  archbird_engine_destroy(engine);
+}
+#endif
+
+#ifdef ARCHBIRD_TEST_TREE_SITTER_JAVASCRIPT
+static void test_generated_candidate_role(ArchbirdEngine *engine) {
+  static const char source[] = "function generated() { return helper(); }\n";
+  ArchbirdProject *project = create_project_in_layer(
+      engine, source, "public/wasm/generated.js", "javascript",
+      "auto-javascript", "generated-delivery-candidate");
+  Output provider = {{0}, 0, 0};
+  if (!project) {
+    fputs("FAIL create generated-candidate syntax project\n", stderr);
+    failures++;
+    return;
+  }
+  expect("generated-candidate-provider",
+         archbird_project_scan_builtin_provider(engine, project,
+                                                "syntax:tree-sitter:javascript",
+                                                29, ARCHBIRD_PROVIDER_PRIMARY),
+         ARCHBIRD_OK);
+  expect("generated-candidate-render",
+         archbird_project_render_provider_facts(engine, project, 0, 0,
+                                                write_output, &provider),
+         ARCHBIRD_OK);
+  if (!strstr(provider.bytes, "\"coverage\":\"none\"") ||
+      !strstr(provider.bytes,
+              "\"code\":\"tree-sitter-generated-delivery-excluded\"") ||
+      !strstr(provider.bytes, "\"facts\":[]")) {
+    fputs("FAIL generated delivery JavaScript entered syntax parsing\n",
+          stderr);
+    failures++;
+  }
+  archbird_project_destroy(project);
 }
 #endif
 
@@ -669,6 +761,7 @@ int main(void) {
     test_vendor_role_is_bounded(engine);
     test_resource_limit_is_evidence();
     test_logical_limit_is_not_resource_evidence();
+    test_tree_sitter_cooperative_cancellation();
 #endif
 #if defined(ARCHBIRD_TEST_TREE_SITTER_C) &&                                    \
     defined(ARCHBIRD_TEST_TREE_SITTER_CPP)
@@ -693,6 +786,7 @@ int main(void) {
         "\"name\":\"Box.run\"", "\"name\":\"helper\"", "\"name\":\"os\"");
 #endif
 #ifdef ARCHBIRD_TEST_TREE_SITTER_JAVASCRIPT
+    test_generated_candidate_role(engine);
     test_language_pack(
         engine, "javascript-pack", "syntax:tree-sitter:javascript",
         "javascript", "src/sample.js",

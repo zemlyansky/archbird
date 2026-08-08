@@ -748,9 +748,15 @@ ab_wasm_discovery_resolve(const uint8_t *config, size_t config_length,
 
 AB_WASM_EXPORT int ab_wasm_json_canonicalize(const uint8_t *input,
                                              size_t input_length,
-                                             uint32_t flags) {
+                                             uint32_t flags,
+                                             int saved_artifact) {
   ArchbirdEngine *engine = NULL;
-  ArchbirdStatus status = stateless_begin_input(input_length, &engine);
+  ArchbirdStatus status;
+  if (saved_artifact != 0 && saved_artifact != 1)
+    return stateless_end(NULL, ARCHBIRD_INVALID_ARGUMENT);
+  status = saved_artifact
+               ? stateless_begin_saved_artifact(input_length, &engine)
+               : stateless_begin_input(input_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, input, input_length, flags,
                                         output_write, &wasm_output);

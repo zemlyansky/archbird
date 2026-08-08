@@ -76,6 +76,7 @@ struct AbTreeSitterScan {
   size_t first_error_end;
   size_t first_missing_start;
   size_t first_missing_end;
+  int cancel_observed;
   AbTreeSitterRecovery *recoveries;
   size_t recovery_count;
   size_t recovery_capacity;

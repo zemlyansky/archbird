@@ -505,6 +505,32 @@ static ArchbirdStatus mark_recovered_facts(AbTreeSitterScan *scan) {
   return status;
 }
 
+static const char *tree_sitter_read(void *payload, uint32_t byte_index,
+                                    TSPoint position, uint32_t *bytes_read) {
+  AbTreeSitterScan *scan = (AbTreeSitterScan *)payload;
+  size_t remaining;
+  (void)position;
+  if (!scan || byte_index >= scan->source_length) {
+    *bytes_read = 0;
+    return NULL;
+  }
+  remaining = scan->source_length - byte_index;
+  *bytes_read = remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
+  return (const char *)scan->source + byte_index;
+}
+
+static bool tree_sitter_cancelled(TSParseState *state) {
+  AbTreeSitterScan *scan = state ? (AbTreeSitterScan *)state->payload : NULL;
+  if (scan && ab_cancel_requested(scan->engine)) {
+    /* Host callbacks may consume an interrupt while reporting it (CPython's
+       PyErr_CheckSignals does).  Preserve the observation so an aborted parse
+       cannot subsequently be misreported as a parser failure. */
+    scan->cancel_observed = 1;
+    return true;
+  }
+  return false;
+}
+
 static ArchbirdStatus parse_and_extract(void *user_data) {
   AbTreeSitterParse *parse = (AbTreeSitterParse *)user_data;
   AbTreeSitterScan *scan = parse->scan;
@@ -515,6 +541,8 @@ static ArchbirdStatus parse_and_extract(void *user_data) {
   size_t frame_capacity = 0;
   size_t visited = 0;
   ArchbirdStatus status = ARCHBIRD_OK;
+  TSInput input;
+  TSParseOptions parse_options;
   TSNode root;
   parser = ts_parser_new();
   if (!parser ||
@@ -525,9 +553,21 @@ static ArchbirdStatus parse_and_extract(void *user_data) {
                            scan->descriptor->language_name);
     goto done;
   }
-  tree = ts_parser_parse_string(parser, NULL, (const char *)scan->source,
-                                (uint32_t)scan->source_length);
+  memset(&input, 0, sizeof(input));
+  input.payload = scan;
+  input.read = tree_sitter_read;
+  input.encoding = TSInputEncodingUTF8;
+  memset(&parse_options, 0, sizeof(parse_options));
+  parse_options.payload = scan;
+  parse_options.progress_callback = tree_sitter_cancelled;
+  tree = ts_parser_parse_with_options(parser, NULL, input, parse_options);
   if (!tree) {
+    if (scan->cancel_observed || ab_cancel_requested(scan->engine)) {
+      status = archbird_error_set(scan->engine, ARCHBIRD_CANCELLED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "Tree-sitter analysis cancelled");
+      goto done;
+    }
     status =
         archbird_error_set(scan->engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
                            "Tree-sitter %s parse returned no tree",
@@ -545,6 +585,12 @@ static ArchbirdStatus parse_and_extract(void *user_data) {
     uint32_t child_count;
     uint32_t child_index;
     visited++;
+    if ((visited & 255u) == 0 && ab_cancel_requested(scan->engine)) {
+      status = archbird_error_set(scan->engine, ARCHBIRD_CANCELLED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "Tree-sitter extraction cancelled");
+      break;
+    }
     if (visited > scan->engine->options.max_values) {
       status = archbird_error_set(scan->engine, ARCHBIRD_LIMIT_EXCEEDED,
                                   ARCHBIRD_NO_OFFSET,
@@ -699,7 +745,7 @@ static ArchbirdStatus finish_resource_limited_bundle(
 static ArchbirdStatus
 finish_role_excluded_bundle(AbBundleBuilder *builder,
                             const AbTreeSitterDescriptor *descriptor,
-                            AbProviderBundle *out_bundle) {
+                            AbProviderBundle *out_bundle, int candidate) {
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   for (index = 0; status == ARCHBIRD_OK && index < descriptor->capability_count;
@@ -708,14 +754,26 @@ finish_role_excluded_bundle(AbBundleBuilder *builder,
         &descriptor->capabilities[index];
     status = ab_bundle_builder_add_capability(
         builder, capability->domain, "none", "syntax-structure",
-        "portable syntax analysis excludes files asserted as vendor or "
-        "generated evidence");
+        candidate
+            ? "portable syntax analysis excludes files heuristically "
+              "classified as generated delivery evidence"
+            : "portable syntax analysis excludes files asserted as vendor or "
+              "generated evidence");
   }
   if (status == ARCHBIRD_OK)
     status = ab_bundle_builder_add_capability(
         builder, "syntax-summaries", "none", "syntax-structure",
-        "parser recovery evidence is not produced for files asserted as "
-        "vendor or generated evidence");
+        candidate
+            ? "parser recovery evidence is not produced for files "
+              "heuristically classified as generated delivery evidence"
+            : "parser recovery evidence is not produced for files asserted "
+              "as vendor or generated evidence");
+  if (status == ARCHBIRD_OK && candidate)
+    status = ab_bundle_builder_add_diagnostic(
+        builder, "note", "tree-sitter-generated-delivery-excluded",
+        "Tree-sitter syntax analysis skipped a generated-delivery candidate; "
+        "lexical and repository evidence remain available.",
+        0, 0, 0);
   if (status == ARCHBIRD_OK)
     status = ab_bundle_builder_finish(builder, out_bundle);
   return status;
@@ -789,8 +847,11 @@ ArchbirdStatus ab_tree_sitter_scan_file(
         ab_bundle_builder_set_runtime(&builder, descriptor->runtime_identity);
   if (status != ARCHBIRD_OK)
     goto done;
-  if (file_role(file, "vendor") || file_role(file, "generated")) {
-    status = finish_role_excluded_bundle(&builder, descriptor, out_bundle);
+  if (file_role(file, "vendor") || file_role(file, "generated") ||
+      file_role(file, "generated-delivery-candidate")) {
+    status = finish_role_excluded_bundle(
+        &builder, descriptor, out_bundle,
+        file_role(file, "generated-delivery-candidate"));
     goto done;
   }
   scan.engine = engine;

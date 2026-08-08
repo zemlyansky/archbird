@@ -5,10 +5,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+import sys
 import tarfile
 from typing import Iterable, Iterator, Tuple
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.csrc_bundle import decode_bundle
 
 
 EXPECTED_C_SOURCE_LICENSES = {
@@ -70,6 +75,7 @@ def check_archive(
     c_source_manifests = 0
     c_source_manifest: bytes | None = None
     c_source_files: dict[str, bytes] = {}
+    c_source_bundles: list[tuple[str, bytes]] = []
     schema_manifests = 0
     schema_manifest: bytes | None = None
     schema_files: dict[str, bytes] = {}
@@ -77,6 +83,8 @@ def check_archive(
         count += 1
         member_path = PurePosixPath(name)
         parts = member_path.parts
+        if member_path.name == "csrc.snapshot.gz":
+            c_source_bundles.append((name, data))
         if "csrc" in parts:
             csrc_index = parts.index("csrc")
             relative = parts[csrc_index + 1 :]
@@ -126,6 +134,26 @@ def check_archive(
                 raise ValueError(
                     f"{path}: member {name} contains forbidden text: {rendered}"
                 )
+    if c_source_bundles:
+        if len(c_source_bundles) != 1:
+            raise ValueError(f"{path}: multiple compressed C source snapshots")
+        if c_source_files:
+            raise ValueError(f"{path}: contains expanded and compressed C snapshots")
+        try:
+            c_source_files = decode_bundle(c_source_bundles[0][1])
+        except ValueError as error:
+            raise ValueError(f"{path}: invalid compressed C source snapshot") from error
+        c_source_manifest = c_source_files.get(".archbird-manifest.json")
+        c_source_manifests = int(c_source_manifest is not None)
+        c_source_code_members = [PurePosixPath(c_source_bundles[0][0])]
+        for relative_name in c_source_files:
+            relative = PurePosixPath(relative_name).parts
+            if (
+                len(relative) == 3
+                and relative[0] == "vendor"
+                and relative[2] == "LICENSE"
+            ):
+                c_source_licenses.add(relative[1])
     if c_source_code_members:
         if c_source_manifests != 1:
             raise ValueError(

@@ -27,3 +27,4 @@ try {
   // Keep a non-empty developer-owned directory.
 }
 fs.rmSync(path.join(packageRoot, "LICENSE"), { force: true });
+fs.rmSync(path.join(packageRoot, "csrc.snapshot.gz"), { force: true });

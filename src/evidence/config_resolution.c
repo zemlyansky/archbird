@@ -1766,8 +1766,13 @@ static ArchbirdStatus candidate_roles(ResolutionState *state, AbValue *row,
   if (status == ARCHBIRD_OK &&
       (path_segment(path, "generated") || ends_with(path, ".generated.c") ||
        ends_with(path, ".generated.h") || ends_with(path, ".generated.js") ||
-       ends_with(path, ".generated.ts")))
+       ends_with(path, ".generated.ts") ||
+       bytes_contains(path->data, path->length, "public/wasm/")))
     status = add_role(state, row, "generated-candidate");
+  if (status == ARCHBIRD_OK &&
+      (ends_with(path, ".generated.js") || ends_with(path, ".generated.ts") ||
+       bytes_contains(path->data, path->length, "public/wasm/")))
+    status = add_role(state, row, "generated-delivery-candidate");
   return status;
 }
 

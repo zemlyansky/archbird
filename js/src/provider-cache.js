@@ -59,13 +59,15 @@ function defaultProviderCacheMaxBytes() {
 
 function emptyProviderCacheStats() {
   return {
-    bytes: 0, errors: 0, evictions: 0, hits: 0, invalid: 0,
+    attemptedBytes: 0, bytes: 0, errorErrno: 0,
+    errors: 0, evictions: 0, hits: 0, invalid: 0,
     misses: 0, noSpace: 0, skipped: 0, temporariesRemoved: 0, writes: 0,
   };
 }
 
 function emptyMapCacheStats() {
   return {
+    attemptedBytes: 0, errorErrno: 0,
     errors: 0, hits: 0, invalid: 0, misses: 0,
     noSpace: 0, skipped: 0, writes: 0,
   };
@@ -194,6 +196,7 @@ class ProviderCache {
   }
 
   prune(incoming, preserve = null) {
+    if (this.stats.bytes + incoming <= this.maxBytes) return;
     const ordered = [...this.entries.entries()].sort((left, right) =>
       left[1].mtime - right[1].mtime || Buffer.compare(
         Buffer.from(left[0]), Buffer.from(right[0]),
@@ -315,6 +318,7 @@ class ProviderCache {
     data,
     { namespace, project, providerId, path: subjectPath, sourceSha256 },
   ) {
+    this.stats.attemptedBytes = Math.max(this.stats.attemptedBytes, data.length);
     const target = this.target({
       namespace,
       project,
@@ -351,6 +355,7 @@ class ProviderCache {
       this.stats.writes += 1;
     } catch (error) {
       this.stats.errors += 1;
+      this.stats.errorErrno = Math.abs(Number(error.errno) || 0);
       if (["ENOSPC", "EDQUOT"].includes(error.code)) this.stats.noSpace += 1;
     } finally {
       try {
@@ -362,6 +367,10 @@ class ProviderCache {
   }
 
   storeMap(data, parameters) {
+    this.mapStats.attemptedBytes = Math.max(
+      this.mapStats.attemptedBytes,
+      data.length,
+    );
     const target = this.mapTarget(parameters);
     if (data.length > this.maxBytes) {
       this.mapStats.skipped += 1;
@@ -392,6 +401,7 @@ class ProviderCache {
       this.mapStats.writes += 1;
     } catch (error) {
       this.mapStats.errors += 1;
+      this.mapStats.errorErrno = Math.abs(Number(error.errno) || 0);
       if (["ENOSPC", "EDQUOT"].includes(error.code)) this.mapStats.noSpace += 1;
     } finally {
       try {

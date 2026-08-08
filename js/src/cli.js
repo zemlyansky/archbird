@@ -443,34 +443,63 @@ function cacheMaxBytes(options) {
   return value;
 }
 
-function warnCacheStats(stats) {
+function cacheFailureContext(stats, options) {
+  const cachePath = path.resolve(
+    options.cacheDir || archbird.defaultProviderCacheDir(),
+  );
+  let probe = cachePath;
+  while (!fs.existsSync(probe) && path.dirname(probe) !== probe) {
+    probe = path.dirname(probe);
+  }
+  let free = "unavailable";
+  try {
+    const filesystem = fs.statfsSync(probe);
+    free = String(filesystem.bavail * filesystem.bsize);
+  } catch (_) {
+    // A cache warning must survive an unavailable filesystem-stat call.
+  }
+  return [
+    `path=${cachePath}`,
+    `quota=${cacheMaxBytes(options)} bytes`,
+    `attempted=${stats.attemptedBytes || 0} bytes`,
+    `errno=${stats.errorErrno || 0}`,
+    `free=${free} bytes`,
+  ].join("; ");
+}
+
+function warnCacheStats(stats, options) {
+  if (!stats.noSpace && !stats.skipped) return;
+  const context = cacheFailureContext(stats, options);
   if (stats.noSpace) {
     process.stderr.write(
       "archbird: warning: provider-cache write failed because storage is full; " +
-      "analysis remains valid. Use --cache-dir, increase --cache-max-bytes, " +
+      `${context}; analysis remains valid. Use --cache-dir, increase ` +
+      "--cache-max-bytes, " +
       "or use --no-cache.\n",
     );
   }
   if (stats.skipped) {
     process.stderr.write(
       "archbird: warning: provider-cache entries exceeded the configured " +
-      "budget and were not stored; analysis remains valid. Increase " +
+      `budget and were not stored; ${context}; analysis remains valid. Increase ` +
       "--cache-max-bytes or use --no-cache.\n",
     );
   }
 }
 
-function warnMapCacheStats(stats) {
+function warnMapCacheStats(stats, options) {
+  if (!stats.noSpace && !stats.skipped) return;
+  const context = cacheFailureContext(stats, options);
   if (stats.noSpace) {
     process.stderr.write(
       "archbird: warning: canonical Map cache write failed because storage " +
-      "is full; analysis remains valid.\n",
+      `is full; ${context}; analysis remains valid.\n`,
     );
   }
   if (stats.skipped) {
     process.stderr.write(
       "archbird: warning: canonical Map exceeded the configured cache budget " +
-      "and was not stored; analysis remains valid.\n",
+      `and was not stored; ${context}; analysis remains valid.\n`,
     );
   }
 }
@@ -520,7 +549,7 @@ function project(options, progress = null, resolvedInputs = null) {
     }
     throw error;
   }
-  warnCacheStats(current.cacheStats);
+  warnCacheStats(current.cacheStats, options);
   if (options.mergeLedger) {
     write(current.mergeConflictsJson({ pretty: true }), options.mergeLedger);
   }
@@ -648,7 +677,7 @@ function constraintContext(
     current = project(options, progress, inputs);
     mapJson = current.mapJson();
     resolutionJson = current.resolutionJson || Buffer.alloc(0);
-    warnMapCacheStats(current.mapCacheStats);
+    warnMapCacheStats(current.mapCacheStats, options);
   }
   return {
     repository,
@@ -732,7 +761,7 @@ function mapMain(argv) {
   const current = project(options, progress);
   progress.emit({ phase: "rendering", artifact: "canonical Map" });
   const mapJson = current.mapJson({ pretty: options.pretty && options.format === "json" });
-  warnMapCacheStats(current.mapCacheStats);
+  warnMapCacheStats(current.mapCacheStats, options);
   const output = options.format === "json"
     ? mapJson
     : options.view === "source"
@@ -1316,7 +1345,7 @@ function queryMain(argv, command) {
     progress.emit({ phase: "rendering", artifact: "canonical Map" });
     source = current.mapJson();
     resolutionJson = current.resolutionJson || Buffer.alloc(0);
-    warnMapCacheStats(current.mapCacheStats);
+    warnMapCacheStats(current.mapCacheStats, options);
   }
   const sourceDocument = JSON.parse(source);
   if (options.check && options.map) {
@@ -1500,7 +1529,7 @@ function pathMain(argv) {
     progress.emit({ phase: "rendering", artifact: "canonical Map" });
     mapJson = current.mapJson();
     resolutionJson = current.resolutionJson || Buffer.alloc(0);
-    warnMapCacheStats(current.mapCacheStats);
+    warnMapCacheStats(current.mapCacheStats, options);
   }
   const mapDocument = JSON.parse(mapJson);
   if (options.check && hasErrors(mapDocument)) return 1;
@@ -1682,7 +1711,7 @@ function freshnessMain(argv) {
   const currentProject = project(options, progress);
   progress.emit({ phase: "rendering", artifact: "canonical Map" });
   const currentMap = currentProject.mapJson();
-  warnMapCacheStats(currentProject.mapCacheStats);
+  warnMapCacheStats(currentProject.mapCacheStats, options);
   progress.emit({ phase: "rendering", artifact: "freshness audit" });
   const encoded = archbird.auditMapFreshness(
     read(options.snapshot),
@@ -2018,8 +2047,8 @@ function actProject(options, repository, configJson, progress) {
     progress: (event) => progress.emit(event),
     mapCache: true,
   });
-  warnCacheStats(current.cacheStats);
-  warnMapCacheStats(current.mapCacheStats);
+  warnCacheStats(current.cacheStats, options);
+  warnMapCacheStats(current.mapCacheStats, options);
   return current;
 }
 
@@ -2040,8 +2069,8 @@ function actOverlayProject(options, before, configJson, overlay, progress) {
     progress: (event) => progress.emit(event),
     mapCache: true,
   });
-  warnCacheStats(current.cacheStats);
-  warnMapCacheStats(current.mapCacheStats);
+  warnCacheStats(current.cacheStats, options);
+  warnMapCacheStats(current.mapCacheStats, options);
   return current;
 }
 

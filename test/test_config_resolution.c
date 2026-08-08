@@ -180,13 +180,16 @@ int main(void) {
       "\"ignore_files\":[],\"schema_version\":1}";
   static const char candidate_config[] =
       "{\"layers\":[{\"globs\":[\"**/*.py\"],\"language\":\"python\","
-      "\"name\":\"python\"}],\"project\":\"candidate-roles\","
+      "\"name\":\"python\"},{\"globs\":[\"public/wasm/*.js\"],"
+      "\"language\":\"javascript\",\"name\":\"javascript\"}],"
+      "\"project\":\"candidate-roles\","
       "\"tests\":[{\"globs\":[\"tests/**\"],"
       "\"language\":\"python\",\"name\":\"python\",\"route_to\":["
       "\"python\"]}]}";
   static const char candidate_inventory[] =
       "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
       "\"files\":[{\"bytes\":12,\"path\":\"generated/model.py\"},"
+      "{\"bytes\":12,\"path\":\"public/wasm/archbird.js\"},"
       "{\"bytes\":12,\"path\":\"tests/test_api.py\"},"
       "{\"bytes\":12,\"path\":\"vendor/lib.py\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
@@ -389,6 +392,9 @@ int main(void) {
                &candidate) ||
       !contains(&candidate, "\"path\":\"generated/model.py\",\"roles\":["
                             "\"generated-candidate\",\"source\"]") ||
+      !contains(&candidate, "\"path\":\"public/wasm/archbird.js\","
+                            "\"roles\":[\"generated-candidate\","
+                            "\"generated-delivery-candidate\",\"source\"]") ||
       !contains(&candidate,
                 "\"path\":\"tests/test_api.py\",\"roles\":[\"source\","
                 "\"test\"]") ||

@@ -159,6 +159,7 @@ void *ab_malloc(ArchbirdEngine *engine, size_t size);
 void *ab_calloc(ArchbirdEngine *engine, size_t count, size_t size);
 void *ab_realloc(ArchbirdEngine *engine, void *pointer, size_t size);
 void ab_free(ArchbirdEngine *engine, void *pointer);
+int ab_cancel_requested(ArchbirdEngine *engine);
 
 void archbird_error_clear(ArchbirdEngine *engine);
 

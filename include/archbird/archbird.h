@@ -50,13 +50,15 @@ typedef enum ArchbirdStatus {
   ARCHBIRD_WRITE_FAILED = 7,
   ARCHBIRD_INVALID_SCHEMA = 8,
   ARCHBIRD_CONFLICT = 9,
-  ARCHBIRD_POLICY_REJECTED = 10
+  ARCHBIRD_POLICY_REJECTED = 10,
+  ARCHBIRD_CANCELLED = 11
 } ArchbirdStatus;
 
 typedef void *(*ArchbirdAllocateFn)(void *user_data, size_t size);
 typedef void *(*ArchbirdReallocateFn)(void *user_data, void *pointer,
                                       size_t size);
 typedef void (*ArchbirdDeallocateFn)(void *user_data, void *pointer);
+typedef int (*ArchbirdCancelFn)(void *user_data);
 
 typedef struct ArchbirdEngineOptions {
   size_t struct_size;
@@ -79,6 +81,8 @@ typedef struct ArchbirdEngineOptions {
   ArchbirdReallocateFn reallocate;
   ArchbirdDeallocateFn deallocate;
   void *allocator_user_data;
+  ArchbirdCancelFn cancel;
+  void *cancel_user_data;
 } ArchbirdEngineOptions;
 
 /* One-shot frontend engines must opt into the larger saved-artifact budget.

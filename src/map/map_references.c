@@ -573,6 +573,44 @@ ArchbirdStatus ab_map_resolve_imported_reference(
   return status;
 }
 
+ArchbirdStatus ab_map_resolve_local_member_reference(
+    AbMapState *state, const AbManifestFile *source, const AbFact *fact,
+    AbMapReferenceResolution *out) {
+  const AbString *owner_name = string_attribute(fact, "owner_symbol");
+  const AbString *resolution = string_attribute(fact, "member_resolution");
+  const AbFact *owner;
+  const AbFact *target;
+  AbInheritedMemberMatch inherited = {0};
+  ArchbirdStatus status = ARCHBIRD_OK;
+  memset(out, 0, sizeof(*out));
+  if (!owner_name || !resolution || !fact->has_name)
+    return archbird_error_set(
+        state->engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+        "local member reference requires owner_symbol/member_resolution");
+  owner = named_symbol(state, source, owner_name->data, owner_name->length,
+                       "class");
+  if (!owner)
+    return ARCHBIRD_OK;
+  target = qualified_member(state, source, owner, &fact->name, NULL);
+  if (!target) {
+    status = collect_inherited_member(state, source, owner, &fact->name, 0,
+                                      &inherited);
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (inherited.count != 1)
+      return ARCHBIRD_OK;
+    source = inherited.file;
+    target = inherited.fact;
+  }
+  out->target = source;
+  out->target_fact = target;
+  out->target_symbol = &target->name;
+  out->exact = string_literal(resolution, "exact") && !inherited.incomplete;
+  out->relation =
+      out->exact ? "local-member-call" : "local-member-call-candidate";
+  return ARCHBIRD_OK;
+}
+
 ArchbirdStatus ab_map_resolve_imported_name_reference(
     AbMapState *state, const AbManifestFile *source, const AbFact *fact,
     AbMapReferenceResolution *out) {
@@ -748,6 +786,9 @@ ArchbirdStatus ab_map_resolve_call_reference(
     if (string_literal(&fact->kind, "imported-name-call"))
       status = ab_map_resolve_imported_name_reference(state, source, fact,
                                                       &candidate);
+    else if (string_literal(&fact->kind, "local-member-call"))
+      status = ab_map_resolve_local_member_reference(state, source, fact,
+                                                     &candidate);
     else if (string_literal(&fact->kind, "imported-attribute-call") ||
              string_literal(&fact->kind, "inferred-receiver-call"))
       status =
@@ -756,8 +797,26 @@ ArchbirdStatus ab_map_resolve_call_reference(
       continue;
     if (status != ARCHBIRD_OK)
       return status;
-    if (!candidate.exact || !candidate.target || !candidate.target_symbol)
+    if (!candidate.target || !candidate.target_symbol)
       continue;
+    if (!candidate.exact) {
+      if (!found && !*out_evidence) {
+        *out = candidate;
+        *out_evidence = fact;
+        if (out_provider)
+          *out_provider =
+              ab_project_merged_fact_provider_by_path(state->project, index);
+      } else if (!found && (!ab_string_equal(&out->target->path,
+                                             &candidate.target->path) ||
+                            !ab_string_equal(out->target_symbol,
+                                             candidate.target_symbol))) {
+        memset(out, 0, sizeof(*out));
+        *out_evidence = NULL;
+        if (out_provider)
+          *out_provider = NULL;
+      }
+      continue;
+    }
     if (found) {
       if (!ab_string_equal(&out->target->path, &candidate.target->path) ||
           !ab_string_equal(out->target_symbol, candidate.target_symbol)) {
@@ -840,6 +899,12 @@ ArchbirdStatus ab_map_add_reference_edges(AbMapState *state) {
         continue;
       status =
           ab_map_resolve_imported_reference(state, source, fact, &resolution);
+    } else if (fact_domain(fact, "name-uses") &&
+               string_literal(&fact->kind, "local-member-call")) {
+      if (fact_has_matching_call(state->project, fact))
+        continue;
+      status = ab_map_resolve_local_member_reference(state, source, fact,
+                                                     &resolution);
     } else if (fact_domain(fact, "name-uses") &&
                (string_literal(&fact->kind, "imported-name-call") ||
                 string_literal(&fact->kind, "imported-name-use"))) {

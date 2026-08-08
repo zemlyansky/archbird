@@ -10,6 +10,9 @@ ArchbirdStatus archbird_project_scan_builtin(ArchbirdEngine *engine,
   ArchbirdStatus status;
   if (!engine || !project)
     return ARCHBIRD_INVALID_ARGUMENT;
+  if (ab_cancel_requested(engine))
+    return archbird_error_set(engine, ARCHBIRD_CANCELLED, ARCHBIRD_NO_OFFSET,
+                              "provider analysis cancelled");
   status = ab_build_identity_validate(engine);
   if (status == ARCHBIRD_OK)
     status = ab_scan_lexical_providers(
@@ -28,6 +31,9 @@ ArchbirdStatus archbird_project_scan_builtin_provider(
   ArchbirdStatus status;
   if (!engine || !project || !provider_id)
     return ARCHBIRD_INVALID_ARGUMENT;
+  if (ab_cancel_requested(engine))
+    return archbird_error_set(engine, ARCHBIRD_CANCELLED, ARCHBIRD_NO_OFFSET,
+                              "provider analysis cancelled");
   status = ab_build_identity_validate(engine);
   if (status != ARCHBIRD_OK)
     return status;
@@ -52,6 +58,9 @@ ArchbirdStatus archbird_project_scan_builtin_provider_file(
   ArchbirdStatus status;
   if (!engine || !project || !provider_id || !path || !path_length)
     return ARCHBIRD_INVALID_ARGUMENT;
+  if (ab_cancel_requested(engine))
+    return archbird_error_set(engine, ARCHBIRD_CANCELLED, ARCHBIRD_NO_OFFSET,
+                              "provider analysis cancelled");
   status = ab_build_identity_validate(engine);
   if (status != ARCHBIRD_OK)
     return status;

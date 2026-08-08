@@ -700,13 +700,20 @@ def main() -> int:
                 "Override": "imported",
                 "run": "local",
             },
-            "py/test_member.py": {"Receiver": "imported", "object": "builtin"},
+            "py/test_member.py": {
+                "LocalWidget": "project",
+                "Receiver": "imported",
+                "build": "member",
+                "inherited": "member",
+                "object": "builtin",
+                "run": "member",
+            },
             "py/test_other.py": {"other": "imported"},
             "py/test_public_member.py": {
                 "Alias": "imported",
                 "Gadget": "imported",
             },
-            "py/widget.py": {"cls": "local"},
+            "py/widget.py": {"cls": "local", "function": "member"},
         }.get(relative, {})
         if bindings != expected:
             raise AssertionError(f"{relative}: bindings={bindings!r}, wanted={expected!r}")
@@ -1788,6 +1795,53 @@ def main() -> int:
         for row in reassigned_case["route_evidence"]
     ):
         raise AssertionError(reassigned_case)
+    local_cases = {
+        case["selector"]: case
+        for case in tests["py/test_member.py"]["cases"]
+        if case["selector"].startswith("test_local_")
+    }
+    local_static = local_cases["test_local_static_member"]["route_evidence"]
+    if [
+        (row["relation"], row["target_symbol"])
+        for row in local_static
+        if row["target_symbol"] == "LocalWidget.build"
+    ] != [("local-member-call", "LocalWidget.build")]:
+        raise AssertionError(local_cases["test_local_static_member"])
+    local_constructed = local_cases[
+        "test_local_constructed_receiver"
+    ]["route_evidence"]
+    if [
+        (row["relation"], row["target_symbol"])
+        for row in local_constructed
+        if row["target_symbol"] == "LocalWidget.run"
+    ] != [("local-member-call-candidate", "LocalWidget.run")]:
+        raise AssertionError(local_cases["test_local_constructed_receiver"])
+    local_inherited = local_cases["test_local_inherited_member"][
+        "route_evidence"
+    ]
+    if [
+        (row["relation"], row["target_symbol"])
+        for row in local_inherited
+        if row["target_symbol"] == "BaseWidget.inherited"
+    ] != [("local-member-call", "BaseWidget.inherited")]:
+        raise AssertionError(local_cases["test_local_inherited_member"])
+    local_nested = local_cases["test_local_nested_duplicate"]["route_evidence"]
+    if [
+        (row["relation"], row["target_symbol"])
+        for row in local_nested
+        if row["target_symbol"].endswith("LocalWidget.build")
+    ] != [
+        (
+            "local-member-call",
+            "test_local_nested_duplicate.LocalWidget.build",
+        )
+    ]:
+        raise AssertionError(local_cases["test_local_nested_duplicate"])
+    if any(
+        row["target_symbol"].startswith("LocalWidget.")
+        for row in local_cases["test_local_shadowed_class"]["route_evidence"]
+    ):
+        raise AssertionError(local_cases["test_local_shadowed_class"])
     public_member_case = next(
         case
         for case in tests["py/test_public_member.py"]["cases"]
@@ -2410,6 +2464,33 @@ def main() -> int:
         "classification"
     ] != "direct":
         raise AssertionError(member_query["test_matches"])
+
+    local_member_query = json.loads(
+        extension.map_query(
+            canonical(mapped),
+            canonical(
+                {
+                    "symbols": ["py/test_member.py:LocalWidget.build"],
+                    "direction": "both",
+                    "depth": 0,
+                    "test_depth": 1,
+                }
+            ),
+        )
+    )
+    local_member_matches = {
+        (row["path"], row["selector"]): row
+        for row in local_member_query["test_matches"]
+    }
+    if local_member_matches[
+        ("py/test_member.py", "test_local_static_member")
+    ]["classification"] != "direct":
+        raise AssertionError(local_member_query["test_matches"])
+    if (
+        "py/test_member.py",
+        "test_local_shadowed_class",
+    ) in local_member_matches:
+        raise AssertionError(local_member_query["test_matches"])
 
     receiver_query = json.loads(
         extension.map_query(

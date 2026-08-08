@@ -38,6 +38,11 @@ static const char *project_capsule_name = "archbird.native.Project";
 static const char *closed_project_capsule_name =
     "archbird.native.Project.closed";
 
+static int python_cancel(void *user_data) {
+  (void)user_data;
+  return PyErr_CheckSignals() < 0;
+}
+
 static int output_write(void *user_data, const uint8_t *bytes, size_t length) {
   PyOutput *output = (PyOutput *)user_data;
   uint8_t *resized;
@@ -125,6 +130,8 @@ static PyObject *raise_status(ArchbirdEngine *engine, ArchbirdStatus status) {
   PyObject *exception = NULL;
   PyObject *status_value = NULL;
   PyObject *offset_value = NULL;
+  if (status == ARCHBIRD_CANCELLED && PyErr_Occurred())
+    return NULL;
   if (status == ARCHBIRD_OUT_OF_MEMORY)
     return PyErr_NoMemory();
   if (!message || !message[0])
@@ -168,6 +175,8 @@ static PyObject *render_result(ArchbirdEngine *engine, ArchbirdStatus status,
   PyObject *result;
   if (status != ARCHBIRD_OK) {
     free(output->data);
+    if (status == ARCHBIRD_CANCELLED && PyErr_Occurred())
+      return NULL;
     return raise_status(engine, status);
   }
   if (output->length > (size_t)PY_SSIZE_T_MAX) {
@@ -227,6 +236,7 @@ static ArchbirdStatus input_engine_profile(size_t input_length,
       archbird_engine_options_init_for_input(&options, profile, input_length);
   if (status != ARCHBIRD_OK)
     return status;
+  options.cancel = python_cancel;
   return archbird_engine_create(&options, out_engine);
 }
 
@@ -709,26 +719,29 @@ static PyObject *py_project_provider_facts(PyObject *self, PyObject *args,
 
 static PyObject *py_json_canonicalize(PyObject *self, PyObject *args,
                                       PyObject *kwargs) {
-  static char *keywords[] = {"input", "pretty", "trailing_newline", NULL};
+  static char *keywords[] = {"input", "pretty", "trailing_newline",
+                             "saved_artifact", NULL};
   const char *input;
   Py_ssize_t input_length;
   int pretty = 0;
   int trailing = 0;
+  int saved_artifact = 0;
   ArchbirdEngine *engine = NULL;
   ArchbirdStatus status;
   PyOutput output = {0};
   uint32_t flags = 0;
   PyObject *result;
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|pp:json_canonicalize",
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|ppp:json_canonicalize",
                                    keywords, &input, &input_length, &pretty,
-                                   &trailing))
+                                   &trailing, &saved_artifact))
     return NULL;
   if (pretty)
     flags |= ARCHBIRD_JSON_PRETTY;
   if (trailing)
     flags |= ARCHBIRD_JSON_TRAILING_NEWLINE;
-  status = input_engine((size_t)input_length, &engine);
+  status = saved_artifact ? saved_artifact_engine((size_t)input_length, &engine)
+                          : input_engine((size_t)input_length, &engine);
   if (status == ARCHBIRD_OK)
     status = archbird_json_canonicalize(engine, (const uint8_t *)input,
                                         (size_t)input_length, flags,

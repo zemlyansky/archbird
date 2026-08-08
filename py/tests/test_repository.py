@@ -410,6 +410,8 @@ def main() -> int:
     if map_warm.map_json() != map_cold_json:
         raise AssertionError("Python complete Map cache changed canonical bytes")
     if map_cold.map_cache_stats != {
+        "attempted_bytes": len(map_cold_json),
+        "error_errno": 0,
         "errors": 0,
         "hits": 0,
         "invalid": 0,
@@ -418,6 +420,8 @@ def main() -> int:
         "skipped": 0,
         "writes": 1,
     } or map_warm.map_cache_stats != {
+        "attempted_bytes": 0,
+        "error_errno": 0,
         "errors": 0,
         "hits": 1,
         "invalid": 0,
@@ -498,6 +502,16 @@ def main() -> int:
                     f"{invalid_environment!r}"
                 )
     bounded = ProviderCache(bounded_root, max_bytes=100)
+    no_op = object.__new__(ProviderCache)
+    no_op.max_bytes = 100
+    no_op.stats = provider_cache_module.ProviderCacheStats(bytes=0)
+
+    class _UnscannableEntries(dict):
+        def items(self):
+            raise AssertionError("no-op cache pruning scanned its inventory")
+
+    no_op._entries = _UnscannableEntries()
+    no_op._prune(0)
     cache_parameters = {
         "namespace": "fixture",
         "project": "cache-budget",
@@ -699,6 +713,13 @@ writer.commit()
         raise AssertionError("Python cache did not classify ENOSPC")
     if recovered.map_stats.no_space != 1 or recovered.map_stats.errors != 1:
         raise AssertionError("Python Map cache did not classify ENOSPC")
+    if (
+        recovered.stats.attempted_bytes != 1
+        or recovered.stats.error_errno != errno.ENOSPC
+        or recovered.map_stats.attempted_bytes != 2
+        or recovered.map_stats.error_errno != errno.ENOSPC
+    ):
+        raise AssertionError("Python cache did not retain ENOSPC context")
     shutil.rmtree(bounded_root, ignore_errors=True)
     changed = Project(
         "cache-source",

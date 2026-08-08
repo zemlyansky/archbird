@@ -783,7 +783,7 @@ class Project {
   mapJson({ pretty = false } = {}) {
     if (this._cachedMap !== null) {
       return pretty
-        ? native.jsonCanonicalize(this._cachedMap, true, false)
+        ? native.jsonCanonicalize(this._cachedMap, true, false, true)
         : this._cachedMap;
     }
     const data = native.projectMap(this._handle, false);
@@ -793,7 +793,7 @@ class Project {
       this.cacheStats = { ...this._mapCache.stats };
       this._cachedMap = data;
     }
-    return pretty ? native.jsonCanonicalize(data, true, false) : data;
+    return pretty ? native.jsonCanonicalize(data, true, false, true) : data;
   }
 
   map() {

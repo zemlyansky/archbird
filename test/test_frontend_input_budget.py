@@ -6,6 +6,7 @@ from __future__ import annotations
 import ctypes
 
 from archbird import _native
+from archbird.native import Project
 
 
 def test_engine_budget() -> None:
@@ -79,7 +80,26 @@ def test_largest_input_is_forwarded() -> None:
     }
 
 
+def test_cached_large_map_uses_saved_artifact_profile() -> None:
+    # 4,000,002 JSON values: above the ordinary profile and below the saved
+    # artifact profile. Keep the payload compact so the regression remains
+    # bounded while exercising the actual parser limit.
+    cached = b"[" + (b"0," * 4_000_000) + b"0]"
+    try:
+        _native.json_canonicalize(cached, pretty=True)
+    except _native.Error as error:
+        assert "status=5" in str(error)
+    else:
+        raise AssertionError("ordinary canonicalization accepted a saved artifact")
+    project = object.__new__(Project)
+    project._cached_map = cached
+    pretty = project.map_json(pretty=True)
+    assert pretty.startswith(b"[\n")
+    assert _native.json_canonicalize(pretty, saved_artifact=True) == cached
+
+
 if __name__ == "__main__":
     test_engine_budget()
     test_largest_input_is_forwarded()
+    test_cached_large_map_uses_saved_artifact_profile()
     print("frontend input budget tests passed")

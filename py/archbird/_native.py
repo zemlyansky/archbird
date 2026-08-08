@@ -38,6 +38,7 @@ PATTERN_OPTIONS = (
 
 _OK = 0
 _INVALID_ARGUMENT = 1
+_CANCELLED = 11
 _JSON_PRETTY = 1
 _JSON_TRAILING_NEWLINE = 2
 _SIZE_MAX = ctypes.c_size_t(-1).value
@@ -46,6 +47,19 @@ _BYTES_POINTER = ctypes.POINTER(ctypes.c_uint8)
 _WRITE = ctypes.CFUNCTYPE(
     ctypes.c_int, ctypes.c_void_p, _BYTES_POINTER, ctypes.c_size_t
 )
+_CANCEL = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
+
+_pyerr_check_signals = ctypes.pythonapi.PyErr_CheckSignals
+_pyerr_check_signals.argtypes = []
+_pyerr_check_signals.restype = ctypes.c_int
+
+
+@_CANCEL
+def _python_cancel(_user_data) -> int:
+    try:
+        return int(_pyerr_check_signals() != 0)
+    except KeyboardInterrupt:
+        return 1
 
 
 def _library_candidates() -> Iterable[Path | str]:
@@ -215,6 +229,8 @@ class _EngineOptions(ctypes.Structure):
         ("reallocate", _POINTER),
         ("deallocate", _POINTER),
         ("allocator_user_data", _POINTER),
+        ("cancel", _POINTER),
+        ("cancel_user_data", _POINTER),
     ]
 
 
@@ -307,6 +323,8 @@ def _mode(value: str) -> int:
 def _raise(engine: _POINTER, status: int) -> None:
     if status == _OK:
         return
+    if status == _CANCELLED:
+        raise KeyboardInterrupt
     raw = _engine_error(engine) if engine else None
     message = raw.decode("utf-8", "replace") if raw else "native operation failed"
     offset = _engine_error_offset(engine) if engine else _SIZE_MAX
@@ -328,6 +346,7 @@ def _new_engine(input_budget: int = 0, *, saved_artifact: bool = False) -> _POIN
             ctypes.byref(options), int(saved_artifact), input_budget
         ),
     )
+    options.cancel = ctypes.cast(_python_cancel, _POINTER)
     _raise(engine, _engine_create(ctypes.byref(options), ctypes.byref(engine)))
     return engine
 
@@ -764,12 +783,16 @@ def _simple_render(
 
 
 def json_canonicalize(
-    input: bytes, pretty: bool = False, trailing_newline: bool = False
+    input: bytes,
+    pretty: bool = False,
+    trailing_newline: bool = False,
+    saved_artifact: bool = False,
 ) -> bytes:
     return _simple_render(
         "archbird_json_canonicalize",
         [_bytes(input)],
         flags=_json_flags(pretty, trailing_newline),
+        saved_artifact=saved_artifact,
     )
 
 

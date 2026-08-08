@@ -28,6 +28,14 @@ ArchbirdStatus ab_map_resolve_imported_name_reference(
     AbMapState *state, const AbManifestFile *source, const AbFact *fact,
     AbMapReferenceResolution *out);
 
+/* Resolve one provider-established local Python class/member occurrence.
+ * Direct Class.member access can be exact; constructor results and method
+ * receivers retain a unique structural candidate without claiming runtime
+ * dispatch. */
+ArchbirdStatus ab_map_resolve_local_member_reference(
+    AbMapState *state, const AbManifestFile *source, const AbFact *fact,
+    AbMapReferenceResolution *out);
+
 /* Resolve a language-native provider's exact reference target.  The generic
  * reference-targets contract requires a unique resolution plus mapped
  * target_path and target_symbol attributes.  Provider-specific AST/compiler

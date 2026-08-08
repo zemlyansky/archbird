@@ -8,9 +8,14 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import subprocess
+import sys
 import tarfile
 from typing import Iterator
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.csrc_bundle import decode_bundle
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -115,6 +120,20 @@ def _manifest_digest(
         f"{directory} manifest",
     )
     if selected is None:
+        if directory == "csrc":
+            bundle = _one_member(
+                members,
+                lambda name: PurePosixPath(name).name == "csrc.snapshot.gz",
+                "compressed C source snapshot",
+            )
+            if bundle is not None:
+                try:
+                    manifest = decode_bundle(bundle[1])[".archbird-manifest.json"]
+                except (KeyError, ValueError) as error:
+                    raise ValueError(
+                        "archive contains an invalid compressed C source snapshot"
+                    ) from error
+                return hashlib.sha256(manifest).hexdigest()
         if required:
             raise ValueError(f"archive omitted its {directory} content manifest")
         return None

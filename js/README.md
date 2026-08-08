@@ -919,8 +919,9 @@ standard JSON Schema cannot express.
 
 The npm package has no install or postinstall compiler hook. It uses a matching
 Linux x64 glibc Node-API prebuild when available and otherwise the bundled Wasm
-core. `npm run build:native` is an explicit source build. Select or inspect the
-engine with:
+core. Its content-hashed C snapshot stays compressed during normal installation;
+`npm run build:native` verifies and expands it only for an explicit offline
+source build. Select or inspect the engine with:
 
 <!-- archbird-example: tested-pass node-engine covers=map,support -->
 ```bash
