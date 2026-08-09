@@ -11,6 +11,9 @@
           "msvs_settings": {
             "VCCLCompilerTool": {
               "AdditionalOptions": ["/std:c11"],
+              "ForcedIncludeFiles": [
+                "<(module_root_dir)/csrc/src/evidence/syntax/tree_sitter/scanner_abi_compat.h"
+              ],
               "WarningLevel": 4
             }
           }
@@ -19,7 +22,9 @@
             "-std=c11",
             "-fvisibility=hidden",
             "-Wno-cast-function-type",
-            "-Wno-overlength-strings"
+            "-Wno-overlength-strings",
+            "-include",
+            "<(module_root_dir)/csrc/src/evidence/syntax/tree_sitter/scanner_abi_compat.h"
           ]
         }]
       ]

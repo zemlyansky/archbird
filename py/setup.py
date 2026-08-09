@@ -325,6 +325,9 @@ sources = [
     )
 ]
 source_include_dirs = [str(Path("csrc") / "src")]
+tree_sitter_scanner_abi_header = str(
+    Path("csrc/src/evidence/syntax/tree_sitter/scanner_abi_compat.h")
+)
 tree_sitter_include_dirs = sorted(
     {
         str(Path("csrc") / PurePosixPath(path).parent)
@@ -335,7 +338,7 @@ tree_sitter_include_dirs = sorted(
 )
 
 if os.name == "nt":
-    compile_args = ["/std:c11", "/W4"]
+    compile_args = ["/std:c11", "/W4", f"/FI{tree_sitter_scanner_abi_header}"]
     link_args: list[str] = []
 else:
     compile_args = [
@@ -344,6 +347,8 @@ else:
         "-fvisibility=hidden",
         "-Wno-cast-function-type",
         "-Wno-overlength-strings",
+        "-include",
+        tree_sitter_scanner_abi_header,
     ]
     link_args = [] if sys.platform == "darwin" else ["-Wl,--strip-debug"]
 

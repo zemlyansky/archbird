@@ -626,6 +626,10 @@ if(ARCHBIRD_ENABLE_FUZZERS)
   archbird_add_fuzzer(archbird_fuzz_scip test/fuzz/fuzz_scip.c)
   set(ARCHBIRD_FUZZ_SMOKE_OPTIONS
       -runs=256 -seed=1 -verbosity=0 -max_len=65536)
+  set(ARCHBIRD_FUZZ_RUN
+      ${CMAKE_COMMAND} -E env
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+      ASAN_OPTIONS=halt_on_error=1:abort_on_error=1)
   set(ARCHBIRD_FUZZ_SYNTAX_COMMAND)
   set(ARCHBIRD_FUZZ_SYNTAX_DEPENDENCY)
   if(ARCHBIRD_TREE_SITTER_ENABLED)
@@ -637,7 +641,9 @@ if(ARCHBIRD_ENABLE_FUZZERS)
       endif()
     endforeach()
     set(ARCHBIRD_FUZZ_SYNTAX_COMMAND
-      COMMAND archbird_fuzz_syntax ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+      COMMAND ${ARCHBIRD_FUZZ_RUN}
+              $<TARGET_FILE:archbird_fuzz_syntax>
+              ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
               ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/syntax)
     set(ARCHBIRD_FUZZ_SYNTAX_DEPENDENCY archbird_fuzz_syntax)
   endif()
@@ -657,34 +663,57 @@ if(ARCHBIRD_ENABLE_FUZZERS)
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/test/fuzz/corpus
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus
-    COMMAND archbird_fuzz_json ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_json> ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/json
-    COMMAND archbird_fuzz_json_pointer_edit ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_json_pointer_edit>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/json
-    COMMAND archbird_fuzz_schemas ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_schemas>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/schemas
-    COMMAND archbird_fuzz_pattern ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_pattern> ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/pattern
-    COMMAND archbird_fuzz_okf ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_okf> ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/okf
-    COMMAND archbird_fuzz_map ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_map> ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/map
-    COMMAND archbird_fuzz_query_input ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_query_input>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/query
-    COMMAND archbird_fuzz_workspace ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_workspace>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/workspace
-    COMMAND archbird_fuzz_workspace_maps ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_workspace_maps>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/workspace-maps
-    COMMAND archbird_fuzz_scip ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_scip> ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/scip
     ${ARCHBIRD_FUZZ_SYNTAX_COMMAND}
-    COMMAND archbird_fuzz_lex_c ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_lex_c>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/lex-c
-    COMMAND archbird_fuzz_lex_javascript ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_lex_javascript>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/lex-javascript
-    COMMAND archbird_fuzz_lex_python ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_lex_python>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/lex-python
-    COMMAND archbird_fuzz_lex_r ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
+    COMMAND ${ARCHBIRD_FUZZ_RUN}
+            $<TARGET_FILE:archbird_fuzz_lex_r>
+            ${ARCHBIRD_FUZZ_SMOKE_OPTIONS}
             ${CMAKE_CURRENT_BINARY_DIR}/fuzz/corpus/lex-r
     DEPENDS archbird_fuzz_json archbird_fuzz_json_pointer_edit
             archbird_fuzz_schemas archbird_fuzz_pattern

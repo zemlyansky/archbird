@@ -194,6 +194,18 @@ function(archbird_configure_core_object target group shared_library)
     ${ARCHBIRD_PCRE2_GENERATED_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/pcre2/src)
   archbird_apply_core_compile_contract(${target} ${shared_library})
+  if(ARCHBIRD_TREE_SITTER_ENABLED AND
+     "${group}" STREQUAL "${ARCHBIRD_CORE_TREE_SITTER_GROUP}")
+    set(ARCHBIRD_TREE_SITTER_SCANNER_ABI_HEADER
+        "${ARCHBIRD_CORE_GROUP_${group}_PRIVATE_INCLUDE_ROOT}/evidence/syntax/tree_sitter/scanner_abi_compat.h")
+    if(MSVC)
+      target_compile_options(${target} PRIVATE
+        "/FI${ARCHBIRD_TREE_SITTER_SCANNER_ABI_HEADER}")
+    else()
+      target_compile_options(${target} PRIVATE
+        -include "${ARCHBIRD_TREE_SITTER_SCANNER_ABI_HEADER}")
+    endif()
+  endif()
 endfunction()
 
 function(archbird_add_core_objects variant shared_library output_variable)

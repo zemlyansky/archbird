@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -55,6 +56,142 @@ SOAK_TESTS = {
     "archbird_native_allocator",
     "archbird_project_configuration_differential",
 }
+SCANNER_ABI_HEADER = Path("evidence/syntax/tree_sitter/scanner_abi_compat.h")
+
+
+def assert_tree_sitter_scanner_abi_contract(repository: Path) -> None:
+    scanner_sources = sorted(
+        {
+            source
+            for sources in PACK_VENDOR_SOURCES.values()
+            for source in sources
+            if source.endswith("/scanner.c")
+        }
+    )
+    definition = re.compile(
+        r"\bvoid\s*\*\s*"
+        r"(tree_sitter_[A-Za-z0-9_]+_external_scanner_create)"
+        r"\s*\(([^)]*)\)\s*\{"
+    )
+    definitions: dict[str, tuple[str, str]] = {}
+    for source in scanner_sources:
+        matches = definition.findall(
+            (repository / source).read_text(encoding="utf-8")
+        )
+        if len(matches) != 1:
+            raise AssertionError(
+                f"{source} has {len(matches)} scanner-create definitions; "
+                "expected one"
+            )
+        symbol, parameters = matches[0]
+        if parameters.strip() not in {"", "void"}:
+            raise AssertionError(
+                f"{source} has unexpected scanner-create parameters: "
+                f"{parameters!r}"
+            )
+        if symbol in definitions:
+            raise AssertionError(
+                f"duplicate scanner-create definition for {symbol}: "
+                f"{definitions[symbol][0]} and {source}"
+            )
+        definitions[symbol] = (source, parameters.strip())
+
+    header = repository / "src" / SCANNER_ABI_HEADER
+    prototypes = set(
+        re.findall(
+            r"\bvoid\s*\*\s*"
+            r"(tree_sitter_[A-Za-z0-9_]+_external_scanner_create)"
+            r"\s*\(void\)\s*;",
+            header.read_text(encoding="utf-8"),
+        )
+    )
+    symbols = set(definitions)
+    if prototypes != symbols:
+        raise AssertionError(
+            "Tree-sitter scanner ABI prototype inventory drift; "
+            f"missing={sorted(symbols - prototypes)}, "
+            f"unexpected={sorted(prototypes - symbols)}"
+        )
+
+
+def assert_fuzz_sanitizer_contract(repository: Path) -> None:
+    cmake = (repository / "CMakeLists.txt").read_text(encoding="utf-8")
+    if "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1" not in cmake:
+        raise AssertionError("fuzz smoke does not make UBSan findings fatal")
+    if "ASAN_OPTIONS=halt_on_error=1:abort_on_error=1" not in cmake:
+        raise AssertionError("fuzz smoke does not make ASan findings fatal")
+    unguarded = re.findall(r"\bCOMMAND\s+(archbird_fuzz_[A-Za-z0-9_]+)", cmake)
+    if unguarded:
+        raise AssertionError(
+            "fuzz smoke commands bypass the fatal sanitizer environment: "
+            f"{sorted(set(unguarded))}"
+        )
+    guarded = re.findall(
+        r"\bCOMMAND\s+\$\{ARCHBIRD_FUZZ_RUN\}\s+"
+        r"\$<TARGET_FILE:(archbird_fuzz_[A-Za-z0-9_]+)>",
+        cmake,
+    )
+    if len(guarded) != 15 or len(set(guarded)) != 15:
+        raise AssertionError(
+            "fuzz smoke must run each of its 15 targets once through the "
+            f"fatal sanitizer environment; observed={sorted(guarded)}"
+        )
+
+
+def assert_package_scanner_abi_contract(repository: Path) -> None:
+    relative = SCANNER_ABI_HEADER.as_posix()
+    setup = (repository / "py" / "setup.py").read_text(encoding="utf-8")
+    expected_python_path = f"csrc/src/{relative}"
+    required_python_fragments = {
+        f'Path("{expected_python_path}")',
+        'f"/FI{tree_sitter_scanner_abi_header}"',
+        '"-include",\n        tree_sitter_scanner_abi_header,',
+    }
+    missing = sorted(
+        fragment for fragment in required_python_fragments if fragment not in setup
+    )
+    if missing:
+        raise AssertionError(
+            f"Python source build omits scanner ABI contract fragments: {missing}"
+        )
+
+    binding = json.loads(
+        (repository / "js" / "binding.gyp").read_text(encoding="utf-8")
+    )
+    targets = [
+        target
+        for target in binding.get("targets", [])
+        if target.get("target_name") == "_native"
+    ]
+    if len(targets) != 1:
+        raise AssertionError("binding.gyp must define exactly one _native target")
+    platform_conditions = [
+        condition
+        for condition in targets[0]["conditions"]
+        if condition[0].replace(" ", "") == "OS=='win'"
+    ]
+    expected_node_path = f"<(module_root_dir)/csrc/src/{relative}"
+    if len(platform_conditions) != 1 or len(platform_conditions[0]) != 3:
+        raise AssertionError("binding.gyp omits a platform scanner ABI route")
+    _, windows, non_windows = platform_conditions[0]
+    forced = windows["msvs_settings"]["VCCLCompilerTool"].get(
+        "ForcedIncludeFiles"
+    )
+    if forced != [expected_node_path]:
+        raise AssertionError(
+            f"Windows Node build has wrong scanner ABI header: {forced}"
+        )
+    flags = non_windows.get("cflags_c", [])
+    try:
+        include_index = flags.index("-include")
+    except ValueError as error:
+        raise AssertionError(
+            "non-Windows Node build omits forced scanner ABI include"
+        ) from error
+    if flags[include_index + 1 : include_index + 2] != [expected_node_path]:
+        raise AssertionError(
+            "non-Windows Node build has wrong scanner ABI header after -include"
+        )
 
 
 def logical_lines(text: str) -> list[str]:
@@ -260,6 +397,25 @@ def assert_core_target_commands(
                     f"{path} does not have exactly one {group} private header "
                     f"view in {build.name}: {private_views}"
                 )
+            if path in vendor_sources:
+                expected_header = (
+                    private_views[0] / SCANNER_ABI_HEADER
+                ).resolve()
+                forced_headers: list[Path] = []
+                index = 0
+                while index < len(arguments):
+                    argument = arguments[index]
+                    if argument == "-include" and index + 1 < len(arguments):
+                        index += 1
+                        forced_headers.append(Path(arguments[index]).resolve())
+                    elif argument.startswith("/FI") and len(argument) > 3:
+                        forced_headers.append(Path(argument[3:]).resolve())
+                    index += 1
+                if forced_headers != [expected_header]:
+                    raise AssertionError(
+                        f"{path} does not receive exactly the reviewed scanner "
+                        f"ABI header in {build.name}: {forced_headers}"
+                    )
         if observed_variants != variants:
             raise AssertionError(
                 f"{path} compiled for variants {sorted(observed_variants)} in "
@@ -353,6 +509,9 @@ def main() -> int:
     core_sources = {entry.path for entry in validate_manifest(repository)}
     target_inventory = validate_target_manifest(repository)
     source_groups = dict(target_inventory.source_groups)
+    assert_tree_sitter_scanner_abi_contract(repository)
+    assert_fuzz_sanitizer_contract(repository)
+    assert_package_scanner_abi_contract(repository)
     makefile = repository / "Makefile"
     required = prerequisites(makefile, "test-js")
     if "native-wasm-smoke" not in required:
