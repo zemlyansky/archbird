@@ -1454,6 +1454,30 @@ endif()
   endif()
 endif()
 
+if(BUILD_TESTING)
+  # Every registered test belongs to exactly one runtime class. The complete
+  # native-test gate still runs both classes; the labels provide explicit
+  # rapid-feedback and exhaustive-allocation/differential routes.
+  set(ARCHBIRD_CTEST_SOAK_TESTS
+    archbird_native_allocator
+    archbird_project_configuration_differential)
+  get_property(ARCHBIRD_CTEST_REGISTERED_TESTS DIRECTORY PROPERTY TESTS)
+  if(NOT ARCHBIRD_CTEST_REGISTERED_TESTS)
+    message(FATAL_ERROR "BUILD_TESTING registered no Archbird tests")
+  endif()
+  foreach(ARCHBIRD_CTEST_TEST IN LISTS ARCHBIRD_CTEST_REGISTERED_TESTS)
+    list(FIND ARCHBIRD_CTEST_SOAK_TESTS "${ARCHBIRD_CTEST_TEST}"
+         ARCHBIRD_CTEST_SOAK_INDEX)
+    if(ARCHBIRD_CTEST_SOAK_INDEX EQUAL -1)
+      set(ARCHBIRD_CTEST_CLASS fast)
+    else()
+      set(ARCHBIRD_CTEST_CLASS soak)
+    endif()
+    set_property(TEST "${ARCHBIRD_CTEST_TEST}" PROPERTY LABELS
+                 "${ARCHBIRD_CTEST_CLASS}")
+  endforeach()
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
   function(archbird_add_wasm_host target output_name synchronous)
     add_executable(${target} bindings/wasm.c)

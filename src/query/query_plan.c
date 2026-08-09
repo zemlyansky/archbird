@@ -563,7 +563,7 @@ prepare_projection_plans(ArchbirdEngine *engine,
     const AbValue *reference = references->kind == AB_VALUE_ARRAY
                                    ? &references->as.array.items[index]
                                    : references;
-    const AbValue *definition = NULL;
+    const AbValue *projection_definition = NULL;
     const AbString *declared_id = NULL;
     const AbObjectField *named = NULL;
     if (reference->kind == AB_VALUE_STRING) {
@@ -573,11 +573,11 @@ prepare_projection_plans(ArchbirdEngine *engine,
             invalid(engine, "named query references an unknown projection");
         break;
       }
-      definition = &named->value;
+      projection_definition = &named->value;
       declared_id = &named->name;
     } else if (reference->kind == AB_VALUE_OBJECT) {
       const AbValue *id = ab_value_member(reference, "id");
-      definition = reference;
+      projection_definition = reference;
       if (id && id->kind == AB_VALUE_STRING)
         declared_id = &id->as.text;
     } else {
@@ -585,8 +585,8 @@ prepare_projection_plans(ArchbirdEngine *engine,
       break;
     }
     if (status == ARCHBIRD_OK)
-      status = projection_plan_add(engine, definition, declared_id, query_id,
-                                   nodes, capacity, &node_count);
+      status = projection_plan_add(engine, projection_definition, declared_id,
+                                   query_id, nodes, capacity, &node_count);
   }
   if (status == ARCHBIRD_OK && paths && paths->as.array.count)
     status =

@@ -252,8 +252,8 @@ collect_call_sites(AbActContext *context,
         return reject(context, "source call has no exact evidence spans");
       for (evidence_index = 0; evidence_index < evidence->as.array.count;
            evidence_index++) {
-        const AbValue *row = &evidence->as.array.items[evidence_index];
-        const AbValue *span = field(row, "span");
+        const AbValue *evidence_row = &evidence->as.array.items[evidence_index];
+        const AbValue *span = field(evidence_row, "span");
         uint64_t start;
         uint64_t end;
         if (!span || span->kind != AB_VALUE_OBJECT ||

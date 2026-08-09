@@ -56,7 +56,7 @@ NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Ivendor/yyjson/src \
 	-I$(NATIVE_BUILD)/vendor/pcre2 -Ivendor/pcre2/src \
 	-Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter/lib/src \
 	-Ivendor/tree-sitter-c/src
-.PHONY: test verify version-check evaluation-test schema-snapshots build-c build-py editable-install test-py js-dependencies build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
+.PHONY: test verify version-check evaluation-test schema-snapshots build-c build-py editable-install test-py js-dependencies build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-test-fast native-test-soak native-sanitize \
 	native-warnings native-wasm-smoke native-fuzz-smoke native-json-corpus native-sha256-vectors native-analyze \
 	native-boundaries release-source-check release-self-check release-py release-js release clean \
 	release-check
@@ -265,6 +265,14 @@ native-build: native-configure
 
 native-test: native-build
 	TMPDIR=$(BUILD_TMP) ctest --test-dir $(NATIVE_BUILD) --output-on-failure
+
+native-test-fast: native-build
+	TMPDIR=$(BUILD_TMP) ctest --test-dir $(NATIVE_BUILD) \
+		--label-regex '^fast$$' --output-on-failure
+
+native-test-soak: native-build
+	TMPDIR=$(BUILD_TMP) ctest --test-dir $(NATIVE_BUILD) \
+		--label-regex '^soak$$' --output-on-failure
 
 native-json-corpus: native-build
 	@test -n "$(JSON_TEST_SUITE_ROOT)" || { \

@@ -51,6 +51,10 @@ PACK_VENDOR_SOURCES = {
         "vendor/tree-sitter-r/src/scanner.c",
     },
 }
+SOAK_TESTS = {
+    "archbird_native_allocator",
+    "archbird_project_configuration_differential",
+}
 
 
 def logical_lines(text: str) -> list[str]:
@@ -78,6 +82,54 @@ def prerequisites(makefile: Path, target: str) -> set[str]:
     if not found:
         raise AssertionError(f"Makefile has no {target!r} target")
     return result
+
+
+def recipe(makefile: Path, target: str) -> str:
+    found = False
+    active = False
+    result: list[str] = []
+    for row in logical_lines(makefile.read_text(encoding="utf-8")):
+        if row.startswith(f"{target}:"):
+            found = True
+            active = True
+            continue
+        if not active:
+            continue
+        if row.startswith("\t"):
+            result.append(row.strip())
+        elif row.strip() and not row.lstrip().startswith("#"):
+            active = False
+    if not found:
+        raise AssertionError(f"Makefile has no {target!r} target")
+    if not result:
+        raise AssertionError(f"Makefile target {target!r} has no recipe")
+    return " ".join(result)
+
+
+def assert_test_classes(
+    inventory: dict[str, object], expected_soak: set[str]
+) -> None:
+    tests = inventory["tests"]
+    if not isinstance(tests, list) or not tests:
+        raise AssertionError("CMake registered no tests to classify")
+    names = {test["name"] for test in tests}
+    if not expected_soak <= names:
+        raise AssertionError(
+            f"CMake omitted soak tests: {sorted(expected_soak - names)}"
+        )
+    for test in tests:
+        labels: set[str] = set()
+        for property_ in test.get("properties", []):
+            if property_["name"] != "LABELS":
+                continue
+            value = property_["value"]
+            labels.update(value if isinstance(value, list) else [value])
+        expected = {"soak"} if test["name"] in expected_soak else {"fast"}
+        if labels != expected:
+            raise AssertionError(
+                f"CTest runtime class drift for {test['name']}: "
+                f"observed={sorted(labels)}, expected={sorted(expected)}"
+            )
 
 
 def run(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -177,6 +229,10 @@ def assert_core_target_commands(
             arguments = entry.get("arguments")
             if arguments is None:
                 arguments = shlex.split(entry["command"])
+            if "-Wshadow" not in arguments and "/W4" not in arguments:
+                raise AssertionError(
+                    f"{path} has no shadow-warning ratchet in {build.name}"
+                )
             include_paths: list[Path] = []
             index = 0
             while index < len(arguments):
@@ -297,12 +353,23 @@ def main() -> int:
     core_sources = {entry.path for entry in validate_manifest(repository)}
     target_inventory = validate_target_manifest(repository)
     source_groups = dict(target_inventory.source_groups)
-    required = prerequisites(repository / "Makefile", "test-js")
+    makefile = repository / "Makefile"
+    required = prerequisites(makefile, "test-js")
     if "native-wasm-smoke" not in required:
         raise AssertionError(
             "test-js consumes the native Wasm tree without declaring "
             "native-wasm-smoke"
         )
+    for runtime_class in ("fast", "soak"):
+        target = f"native-test-{runtime_class}"
+        if "native-build" not in prerequisites(makefile, target):
+            raise AssertionError(f"{target} does not depend on native-build")
+        command = recipe(makefile, target)
+        expected_filter = f"--label-regex '^{runtime_class}$$'"
+        if expected_filter not in command or "--output-on-failure" not in command:
+            raise AssertionError(
+                f"{target} does not select only the {runtime_class} CTest class"
+            )
 
     build_root = repository / "build"
     build_root.mkdir(exist_ok=True)
@@ -344,6 +411,7 @@ def main() -> int:
                 cwd=repository,
             ).stdout
         )
+        assert_test_classes(inventory, SOAK_TESTS)
         matches = [
             test
             for test in inventory["tests"]
@@ -395,6 +463,10 @@ def main() -> int:
                 "--show-only=json-v1",
                 cwd=repository,
             ).stdout
+        )
+        assert_test_classes(
+            static_inventory,
+            SOAK_TESTS - {"archbird_project_configuration_differential"},
         )
         if any(
             test["name"] == "archbird_project_configuration_differential"

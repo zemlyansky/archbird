@@ -745,10 +745,10 @@ static ArchbirdStatus collect_operation(AbActContext *context,
   size_t work_index = 0;
   ArchbirdStatus status;
   if (!executable->as.boolean) {
-    const AbValue *path = ab_act_submission_path(operation);
+    const AbValue *submission_path = ab_act_submission_path(operation);
     AbActSubmission *submission =
         ab_act_submission_take(submissions, &item_id->as.text);
-    if (submission && path)
+    if (submission && submission_path)
       return add_asserted_file_submission(context, operation, &item_id->as.text,
                                           submission);
     return act_error(context->engine, ARCHBIRD_POLICY_REJECTED,

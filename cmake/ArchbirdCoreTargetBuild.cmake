@@ -165,7 +165,8 @@ function(archbird_apply_core_compile_contract target shared_library)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4)
   else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(${target} PRIVATE
+      -Wall -Wextra -Wpedantic -Wshadow)
   endif()
   if(ARCHBIRD_ENABLE_SANITIZERS)
     target_compile_options(${target} PRIVATE

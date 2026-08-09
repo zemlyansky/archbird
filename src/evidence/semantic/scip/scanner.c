@@ -2010,10 +2010,11 @@ add_occurrence_fact(ScipAnalysis *analysis, size_t document_index,
   status = ab_fact_set_resolution(analysis->engine, fact, state, targets,
                                   target_count, NULL);
   if (status == ARCHBIRD_OK && strcmp(state, "unique") == 0) {
-    size_t definition =
+    size_t definition_index =
         first_anchored_definition(analysis, definition_start, definition_end);
-    size_t target_document = analysis->definitions[definition].document_index;
-    const ScipDocument *target = &analysis->documents[target_document];
+    size_t anchored_document_index =
+        analysis->definitions[definition_index].document_index;
+    const ScipDocument *target = &analysis->documents[anchored_document_index];
     status = ab_fact_add_string_attribute(analysis->engine, fact, "target_path",
                                           (const uint8_t *)target->path.data,
                                           target->path.length);
@@ -2025,13 +2026,13 @@ add_occurrence_fact(ScipAnalysis *analysis, size_t document_index,
           analysis->engine, fact, "target_semantic_symbol",
           occurrence->symbol.data, occurrence->symbol.length);
     if (status == ARCHBIRD_OK)
-      status =
-          ab_fact_add_u64_attribute(analysis->engine, fact, "target_span_start",
-                                    analysis->definitions[definition].start);
+      status = ab_fact_add_u64_attribute(
+          analysis->engine, fact, "target_span_start",
+          analysis->definitions[definition_index].start);
     if (status == ARCHBIRD_OK)
-      status =
-          ab_fact_add_u64_attribute(analysis->engine, fact, "target_span_end",
-                                    analysis->definitions[definition].end);
+      status = ab_fact_add_u64_attribute(
+          analysis->engine, fact, "target_span_end",
+          analysis->definitions[definition_index].end);
   }
 done:
   resolution_targets_free(analysis, targets, target_count);
@@ -2117,10 +2118,10 @@ add_relationship_fact(ScipAnalysis *analysis, size_t document_index,
         analysis->engine, fact, "target_semantic_symbol", target_symbol.data,
         target_symbol.length);
   if (status == ARCHBIRD_OK) {
-    const char *state = display_name_state(&target_metadata);
+    const char *display_state = display_name_state(&target_metadata);
     status = ab_fact_add_string_attribute(
         analysis->engine, fact, "target_display_name_state",
-        (const uint8_t *)state, strlen(state));
+        (const uint8_t *)display_state, strlen(display_state));
   }
   if (status == ARCHBIRD_OK)
     status = resolution_targets(analysis, definition_start, definition_end,
@@ -2151,8 +2152,9 @@ add_relationship_fact(ScipAnalysis *analysis, size_t document_index,
   if (status == ARCHBIRD_OK && strcmp(state, "unique") == 0) {
     size_t definition =
         first_anchored_definition(analysis, definition_start, definition_end);
-    size_t target_document = analysis->definitions[definition].document_index;
-    const ScipDocument *target = &analysis->documents[target_document];
+    size_t anchored_document_index =
+        analysis->definitions[definition].document_index;
+    const ScipDocument *target = &analysis->documents[anchored_document_index];
     status = ab_fact_add_string_attribute(analysis->engine, fact, "target_path",
                                           (const uint8_t *)target->path.data,
                                           target->path.length);

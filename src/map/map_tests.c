@@ -1716,36 +1716,39 @@ static ArchbirdStatus token_cases(AbMapState *state, const AbConfigTest *spec,
                        tokens.items[index].end - tokens.items[index].start,
                        "test_") &&
           ab_token_equals(&tokens, index + 1, "(")) {
-        const char *selector =
+        const char *candidate_selector =
             (const char *)tokens.source + tokens.items[index].start;
         size_t selector_length =
             tokens.items[index].end - tokens.items[index].start;
-        size_t close = matching_token(&tokens, index + 1, "(", ")");
-        size_t brace;
-        size_t end;
-        if (close == SIZE_MAX)
+        size_t candidate_close = matching_token(&tokens, index + 1, "(", ")");
+        size_t candidate_brace;
+        size_t candidate_end;
+        if (candidate_close == SIZE_MAX)
           continue;
         if ((main_opening != SIZE_MAX &&
              !c_main_calls_function(&tokens, main_opening, main_closing,
                                     &tokens.items[index])) ||
             (main_opening == SIZE_MAX &&
-             !c_parameter_list_is_test_like(&tokens, index + 1, close)))
+             !c_parameter_list_is_test_like(&tokens, index + 1,
+                                            candidate_close)))
           continue;
-        for (brace = close + 1; brace < tokens.count; brace++) {
-          if (ab_token_equals(&tokens, brace, "{"))
+        for (candidate_brace = candidate_close + 1;
+             candidate_brace < tokens.count; candidate_brace++) {
+          if (ab_token_equals(&tokens, candidate_brace, "{"))
             break;
-          if (ab_token_equals(&tokens, brace, ";"))
+          if (ab_token_equals(&tokens, candidate_brace, ";"))
             break;
         }
-        if (brace == tokens.count || ab_token_equals(&tokens, brace, ";"))
+        if (candidate_brace == tokens.count ||
+            ab_token_equals(&tokens, candidate_brace, ";"))
           continue;
-        end = matching_token(&tokens, brace, "{", "}");
-        if (end == SIZE_MAX)
+        candidate_end = matching_token(&tokens, candidate_brace, "{", "}");
+        if (candidate_end == SIZE_MAX)
           continue;
-        status =
-            append_case(state, cases, case_count, selector, selector_length,
-                        tokens.items[index].line, tokens.items[index].start,
-                        tokens.items[end].end, "test_function_candidate");
+        status = append_case(
+            state, cases, case_count, candidate_selector, selector_length,
+            tokens.items[index].line, tokens.items[index].start,
+            tokens.items[candidate_end].end, "test_function_candidate");
         if (status == ARCHBIRD_OK)
           (*registered)++;
         continue;
