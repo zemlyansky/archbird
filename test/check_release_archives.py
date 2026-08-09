@@ -6,9 +6,10 @@ import argparse
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+import stat
 import sys
 import tarfile
-from typing import Iterable, Iterator, Tuple
+from typing import Iterable, Iterator
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -30,20 +31,76 @@ EXPECTED_C_SOURCE_LICENSES = {
 }
 
 
-def _members(path: str) -> Iterator[Tuple[str, bytes]]:
+class _ArchiveMember:
+    __slots__ = ("name", "kind", "data")
+
+    def __init__(self, name: str, kind: str, data: bytes | None = None) -> None:
+        self.name = name
+        self.kind = kind
+        self.data = data
+
+
+def _zip_kind(info: zipfile.ZipInfo) -> str:
+    mode = (info.external_attr >> 16) & 0xFFFF
+    file_type = stat.S_IFMT(mode) if info.create_system == 3 else 0
+    if info.is_dir():
+        return "directory" if file_type in {0, stat.S_IFDIR} else "invalid-directory"
+    if file_type in {0, stat.S_IFREG}:
+        return "regular"
+    if file_type == stat.S_IFLNK:
+        return "symbolic-link"
+    if file_type == stat.S_IFDIR:
+        return "invalid-directory"
+    if stat.S_ISCHR(mode):
+        return "character-device"
+    if stat.S_ISBLK(mode):
+        return "block-device"
+    if stat.S_ISFIFO(mode):
+        return "fifo"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    return "non-regular"
+
+
+def _tar_kind(info: tarfile.TarInfo) -> str:
+    if info.isfile():
+        return "regular"
+    if info.isdir():
+        return "directory"
+    if info.issym():
+        return "symbolic-link"
+    if info.islnk():
+        return "hard-link"
+    if info.ischr():
+        return "character-device"
+    if info.isblk():
+        return "block-device"
+    if info.isfifo():
+        return "fifo"
+    return "non-regular"
+
+
+def _members(path: str) -> Iterator[_ArchiveMember]:
     if path.endswith(".whl") or path.endswith(".zip"):
         with zipfile.ZipFile(path) as archive:
             for info in archive.infolist():
-                if not info.is_dir():
-                    yield info.filename, archive.read(info)
+                kind = _zip_kind(info)
+                yield _ArchiveMember(
+                    info.filename,
+                    kind,
+                    archive.read(info) if kind == "regular" else None,
+                )
         return
     with tarfile.open(path, "r:*") as archive:
         for info in archive.getmembers():
-            if info.isfile():
+            kind = _tar_kind(info)
+            data = None
+            if kind == "regular":
                 member = archive.extractfile(info)
                 if member is None:
                     raise ValueError(f"cannot read archive member: {info.name}")
-                yield info.name, member.read()
+                data = member.read()
+            yield _ArchiveMember(info.name, kind, data)
 
 
 def _development_path(name: str) -> bool:
@@ -63,6 +120,11 @@ def _development_path(name: str) -> bool:
     return basename.endswith(".MD") and basename != "README.MD"
 
 
+def _check_member_name_policy(archive: str, name: str) -> None:
+    if _development_path(name):
+        raise ValueError(f"{archive}: development or unsafe member: {name}")
+
+
 def _check_member_policy(
     archive: str,
     name: str,
@@ -70,8 +132,7 @@ def _check_member_policy(
     forbidden_prefixes: Iterable[bytes],
     forbidden_text: Iterable[bytes],
 ) -> None:
-    if _development_path(name):
-        raise ValueError(f"{archive}: development or unsafe member: {name}")
+    _check_member_name_policy(archive, name)
     for marker in (*forbidden_prefixes, *forbidden_text):
         if marker and marker in data:
             rendered = marker.decode("utf-8", errors="backslashreplace")
@@ -96,7 +157,18 @@ def check_archive(
     schema_manifests = 0
     schema_manifest: bytes | None = None
     schema_files: dict[str, bytes] = {}
-    for name, data in _members(path):
+    for member in _members(path):
+        name = member.name
+        _check_member_name_policy(path, name)
+        if member.kind == "directory":
+            continue
+        if member.kind != "regular":
+            raise ValueError(
+                f"{path}: unsupported archive member type {member.kind}: {name}"
+            )
+        data = member.data
+        if data is None:
+            raise ValueError(f"{path}: cannot read archive member: {name}")
         count += 1
         member_path = PurePosixPath(name)
         parts = member_path.parts

@@ -970,6 +970,279 @@ def import_positive():
             raise AssertionError(call)
 
 
+def check_python_binding_form_barriers(extension, provider) -> None:
+    source_text = '''\
+def positive_case():
+    class PositiveBound:
+        def run(self): pass
+    def inner():
+        return PositiveBound.run()
+    return inner
+
+def comprehension_scope_case(items):
+    class ComprehensionBound:
+        def run(self): pass
+    [ComprehensionBound for ComprehensionBound in items]
+    def inner():
+        return ComprehensionBound.run()
+    return inner
+
+def lambda_scope_case():
+    class LambdaBound:
+        def run(self): pass
+    (lambda LambdaBound: LambdaBound)(None)
+    def inner():
+        return LambdaBound.run()
+    return inner
+
+def nested_scope_case():
+    class NestedScopeBound:
+        def run(self): pass
+    def shadow(items):
+        for NestedScopeBound in items:
+            pass
+    def inner():
+        return NestedScopeBound.run()
+    return inner
+
+def for_case(items):
+    class ForBound:
+        def run(self): pass
+    for ForBound in items:
+        pass
+    def inner():
+        return ForBound.run()
+    return inner
+
+async def async_for_case(items):
+    class AsyncForBound:
+        def run(self): pass
+    async for AsyncForBound in items:
+        pass
+    def inner():
+        return AsyncForBound.run()
+    return inner
+
+def with_case(manager):
+    class WithBound:
+        def run(self): pass
+    with manager as WithBound:
+        pass
+    def inner():
+        return WithBound.run()
+    return inner
+
+async def async_with_case(manager):
+    class AsyncWithBound:
+        def run(self): pass
+    async with manager as AsyncWithBound:
+        pass
+    def inner():
+        return AsyncWithBound.run()
+    return inner
+
+def except_case():
+    class ExceptBound:
+        def run(self): pass
+    try:
+        pass
+    except Exception as ExceptBound:
+        pass
+    def inner():
+        return ExceptBound.run()
+    return inner
+
+def delete_case():
+    class DeleteBound:
+        def run(self): pass
+    del DeleteBound
+    def inner():
+        return DeleteBound.run()
+    return inner
+
+def destructuring_case(items):
+    class DestructuringBound:
+        def run(self): pass
+    for DestructuringBound, _ in items:
+        pass
+    def inner():
+        return DestructuringBound.run()
+    return inner
+
+def parameter_case(ParameterBound):
+    ParameterBound.run()
+    class ParameterBound:
+        def run(self): pass
+'''
+    negative = {
+        "async_for_case.inner": "async_for_case.AsyncForBound.run",
+        "async_with_case.inner": "async_with_case.AsyncWithBound.run",
+        "delete_case.inner": "delete_case.DeleteBound.run",
+        "destructuring_case.inner": "destructuring_case.DestructuringBound.run",
+        "except_case.inner": "except_case.ExceptBound.run",
+        "for_case.inner": "for_case.ForBound.run",
+        "parameter_case": "parameter_case.ParameterBound.run",
+        "with_case.inner": "with_case.WithBound.run",
+    }
+    if sys.version_info >= (3, 10):
+        source_text += '''\
+
+def match_as_case(value):
+    class MatchAsBound:
+        def run(self): pass
+    match value:
+        case MatchAsBound:
+            pass
+    def inner():
+        return MatchAsBound.run()
+    return inner
+
+def match_star_case(value):
+    class MatchStarBound:
+        def run(self): pass
+    match value:
+        case [*MatchStarBound]:
+            pass
+    def inner():
+        return MatchStarBound.run()
+    return inner
+
+def match_mapping_case(value):
+    class MatchMappingBound:
+        def run(self): pass
+    match value:
+        case {"value": MatchMappingBound, **rest}:
+            pass
+    def inner():
+        return MatchMappingBound.run()
+    return inner
+
+def match_class_case(value):
+    class MatchClassBound:
+        def run(self): pass
+    match value:
+        case object(value=MatchClassBound):
+            pass
+    def inner():
+        return MatchClassBound.run()
+    return inner
+
+def match_or_case(value):
+    class MatchOrBound:
+        def run(self): pass
+    match value:
+        case [MatchOrBound] | (MatchOrBound,):
+            pass
+    def inner():
+        return MatchOrBound.run()
+    return inner
+'''
+        negative.update(
+            {
+                "match_as_case.inner": "match_as_case.MatchAsBound.run",
+                "match_class_case.inner": "match_class_case.MatchClassBound.run",
+                "match_mapping_case.inner": "match_mapping_case.MatchMappingBound.run",
+                "match_or_case.inner": "match_or_case.MatchOrBound.run",
+                "match_star_case.inner": "match_star_case.MatchStarBound.run",
+            }
+        )
+    if sys.version_info >= (3, 12):
+        source_text += '''\
+
+def type_alias_case():
+    class TypeAliasBound:
+        def run(self): pass
+    type TypeAliasBound = int
+    def inner():
+        return TypeAliasBound.run()
+    return inner
+'''
+        negative["type_alias_case.inner"] = "type_alias_case.TypeAliasBound.run"
+
+    source = source_text.encode()
+    path = "binding_forms.py"
+    project_name = "python-binding-form-barriers"
+    document = json.loads(
+        provider.python_ast_provider_facts(
+            project=project_name,
+            path=path,
+            source_bytes=source,
+        )
+    )
+    exact_facts = {
+        fact["attributes"]["enclosing"]: fact["attributes"]["owner_symbol"]
+        for fact in document["facts"]
+        if fact["domain"] == "name-uses"
+        and fact["kind"] == "local-member-call"
+        and fact["name"] == "run"
+    }
+    expected_exact = {
+        "comprehension_scope_case.inner": "comprehension_scope_case.ComprehensionBound",
+        "lambda_scope_case.inner": "lambda_scope_case.LambdaBound",
+        "nested_scope_case.inner": "nested_scope_case.NestedScopeBound",
+        "positive_case.inner": "positive_case.PositiveBound",
+    }
+    if exact_facts != expected_exact:
+        raise AssertionError(exact_facts)
+
+    manifest = {
+        "artifact": "archbird-source-manifest",
+        "files": [
+            {
+                "bytes": len(source),
+                "language": "python",
+                "layer": "python",
+                "path": path,
+                "roles": ["source"],
+                "sha256": hashlib.sha256(source).hexdigest(),
+            }
+        ],
+        "producer": {
+            "implementation_sha256": "f" * 64,
+            "name": project_name,
+            "version": "1",
+        },
+        "project": project_name,
+        "schema_version": 1,
+    }
+    config = {
+        "layers": [
+            {"globs": ["*.py"], "language": "python", "name": "python"}
+        ],
+        "project": project_name,
+    }
+    project = extension.project_create(canonical(manifest))
+    try:
+        extension.project_add_source(project, path, source)
+        extension.project_finalize_sources(project)
+        extension.project_set_config(project, canonical(config))
+        extension.project_add_provider(project, "primary", canonical(document))
+        extension.project_finalize_providers(project)
+        mapped = json.loads(extension.project_map(project))
+    finally:
+        extension.project_close(project)
+
+    calls = {
+        row["source"].get("symbol"): row
+        for row in mapped["symbol_calls"]
+        if row["name"] == "run"
+    }
+    for enclosing, owner in expected_exact.items():
+        positive = calls[enclosing]
+        if positive["resolution"] != "unique" or [
+            row["symbol"] for row in positive["candidates"]
+        ] != [f"{owner}.run"]:
+            raise AssertionError(positive)
+    for enclosing, stale_target in negative.items():
+        call = calls.get(enclosing)
+        if call is None:
+            continue
+        if call["resolution"] == "unique" and [
+            row["symbol"] for row in call["candidates"]
+        ] == [stale_target]:
+            raise AssertionError(call)
+
+
 def main() -> int:
     if len(sys.argv) != 4:
         raise SystemExit(
@@ -3153,6 +3426,7 @@ def main() -> int:
     check_conflicting_call_targets(extension, provider)
     check_nonexact_call_candidate_cardinality(extension, provider)
     check_python_lexical_binding_owners(extension, provider)
+    check_python_binding_form_barriers(extension, provider)
     print(
         "typed calls, preprocessing-token selectors, named dispatch, and "
         "generated test provenance passed"

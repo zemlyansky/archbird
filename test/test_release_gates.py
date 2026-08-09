@@ -8,6 +8,7 @@ import io
 import json
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -253,6 +254,65 @@ def test_compressed_archive_policy(root: Path) -> None:
             raise AssertionError(
                 f"{label} compressed snapshot escaped release-content policy"
             )
+
+
+def test_archive_member_type_policy(root: Path) -> None:
+    def rejected(path: Path, expected: str) -> None:
+        try:
+            ARCHIVE_CHECK.check_archive(str(path), (), ())
+        except ValueError as error:
+            if expected not in str(error):
+                raise AssertionError((path, str(error), expected)) from error
+        else:
+            raise AssertionError(f"unsafe archive member escaped policy: {path}")
+
+    tar_cases = (
+        ("symbolic-link", tarfile.SYMTYPE, "/private/release-source"),
+        ("hard-link", tarfile.LNKTYPE, "../../outside"),
+        ("character-device", tarfile.CHRTYPE, ""),
+        ("block-device", tarfile.BLKTYPE, ""),
+        ("fifo", tarfile.FIFOTYPE, ""),
+    )
+    for name, member_type, target in tar_cases:
+        archive = root / f"{name}.tgz"
+        with tarfile.open(archive, "w:gz") as output:
+            info = tarfile.TarInfo("package/native-entry")
+            info.type = member_type
+            info.linkname = target
+            if member_type in {tarfile.CHRTYPE, tarfile.BLKTYPE}:
+                info.devmajor = 1
+                info.devminor = 3
+            output.addfile(info)
+        rejected(archive, f"unsupported archive member type {name}")
+
+    development_link = root / "development-link.tgz"
+    with tarfile.open(development_link, "w:gz") as output:
+        info = tarfile.TarInfo("package/test/hidden")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "package/README.md"
+        output.addfile(info)
+    rejected(development_link, "development or unsafe member")
+
+    zip_link = root / "symbolic-link.zip"
+    info = zipfile.ZipInfo("package/native-entry")
+    info.create_system = 3
+    info.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(zip_link, "w") as output:
+        output.writestr(info, "../../outside")
+    rejected(zip_link, "unsupported archive member type symbolic-link")
+
+    valid = root / "regular-members.zip"
+    directory = zipfile.ZipInfo("package/data/")
+    directory.create_system = 3
+    directory.external_attr = (stat.S_IFDIR | 0o755) << 16
+    regular = zipfile.ZipInfo("package/data/value.bin")
+    regular.create_system = 3
+    regular.external_attr = (stat.S_IFREG | 0o644) << 16
+    with zipfile.ZipFile(valid, "w") as output:
+        output.writestr(directory, b"")
+        output.writestr(regular, b"value")
+    if ARCHIVE_CHECK.check_archive(str(valid), (), ()) != 1:
+        raise AssertionError("regular ZIP members were not counted exactly once")
 
 
 def _initialize_repository(root: Path) -> tuple[str, str, bytes, bytes, bytes]:
@@ -827,6 +887,7 @@ def main() -> None:
         root = Path(raw)
         test_documentation_contract_mutation(root)
         test_compressed_archive_policy(root)
+        test_archive_member_type_policy(root)
         test_release_provenance_and_attestation(root)
     print("release gate mutation tests passed")
 

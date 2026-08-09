@@ -590,12 +590,13 @@ def _receiver_expression_origin(node: ast.expr) -> Optional[Tuple[str, Tuple[str
     return root, attributes, "imported-call"
 
 
-class _ReceiverScopeCollector(_ScopeImportCollector):
-    """Find names with exactly one syntactically traceable assignment.
+class _ScopeBindingCollector(_ScopeImportCollector):
+    """Collect bindings and bounded receiver origins for one lexical scope.
 
-    Multiple writes, deletion, destructuring, loop targets, imports, and
-    rebinding deliberately remove the candidate.  Nested lexical scopes are
-    collected separately by the main provider visitor.
+    Exact class identity and inferred receiver origins are retained only when
+    the name has one binding event in this scope.  Every Python binding form
+    must therefore pass through ``_write``.  Expressions evaluated while a
+    nested scope is created are visited here, but the nested body is not.
     """
 
     def __init__(self, starts: Sequence[int]) -> None:
@@ -613,11 +614,73 @@ class _ReceiverScopeCollector(_ScopeImportCollector):
         if isinstance(target, ast.Name):
             self._write(target.id, origin)
             return
-        for child in ast.walk(target):
-            if isinstance(child, ast.Name) and isinstance(
-                child.ctx, (ast.Store, ast.Del)
-            ):
-                self._write(child.id)
+        if isinstance(target, ast.Starred):
+            self._write_target(target.value)
+            return
+        if isinstance(target, (ast.List, ast.Tuple)):
+            for element in target.elts:
+                self._write_target(element)
+
+    def _bind_target(
+        self, target: ast.expr, origin: Optional[_ReceiverOrigin] = None
+    ) -> None:
+        self._write_target(target, origin)
+        # Attribute/subscript targets may contain assignment expressions in
+        # their evaluated receiver/index even though they bind no name
+        # themselves. Plain Name/List/Tuple traversal is inert here.
+        self.visit(target)
+
+    def _visit_function_outer_expressions(self, node: ast.AST) -> None:
+        for decorator in getattr(node, "decorator_list", ()):
+            self.visit(decorator)
+        args = getattr(node, "args")
+        for default in (*args.defaults, *args.kw_defaults):
+            if default is not None:
+                self.visit(default)
+        for argument in (
+            *getattr(args, "posonlyargs", ()),
+            *args.args,
+            *args.kwonlyargs,
+        ):
+            if argument.annotation is not None:
+                self.visit(argument.annotation)
+        for argument in (args.vararg, args.kwarg):
+            if argument is not None and argument.annotation is not None:
+                self.visit(argument.annotation)
+        returns = getattr(node, "returns", None)
+        if returns is not None:
+            self.visit(returns)
+
+    def _write_pattern(self, pattern: ast.AST) -> None:
+        if isinstance(pattern, ast.MatchAs):
+            if pattern.pattern is not None:
+                self._write_pattern(pattern.pattern)
+            if pattern.name is not None:
+                self._write(pattern.name)
+            return
+        if isinstance(pattern, ast.MatchStar):
+            if pattern.name is not None:
+                self._write(pattern.name)
+            return
+        if isinstance(pattern, ast.MatchMapping):
+            for nested in pattern.patterns:
+                self._write_pattern(nested)
+            if pattern.rest is not None:
+                self._write(pattern.rest)
+            return
+        if isinstance(pattern, ast.MatchSequence):
+            for nested in pattern.patterns:
+                self._write_pattern(nested)
+            return
+        if isinstance(pattern, ast.MatchClass):
+            for nested in (*pattern.patterns, *pattern.kwd_patterns):
+                self._write_pattern(nested)
+            return
+        if isinstance(pattern, ast.MatchOr):
+            # CPython requires every branch to bind the same names. Record one
+            # branch so the pattern contributes one binding event per name.
+            if pattern.patterns:
+                self._write_pattern(pattern.patterns[0])
 
     def _origin(self, node: ast.expr) -> Optional[_ReceiverOrigin]:
         resolved = _receiver_expression_origin(node)
@@ -630,23 +693,68 @@ class _ReceiverScopeCollector(_ScopeImportCollector):
     def visit_Assign(self, node: ast.Assign) -> None:
         origin = self._origin(node.value) if len(node.targets) == 1 else None
         for target in node.targets:
-            self._write_target(target, origin)
+            self._bind_target(target, origin)
         self.visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         origin = self._origin(node.value) if node.value is not None else None
-        self._write_target(node.target, origin)
+        self._bind_target(node.target, origin)
         self.visit(node.annotation)
         if node.value is not None:
             self.visit(node.value)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
-        self._write_target(node.target)
+        self._bind_target(node.target)
         self.visit(node.value)
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
-        self._write_target(node.target, self._origin(node.value))
+        self._bind_target(node.target, self._origin(node.value))
         self.visit(node.value)
+
+    def visit_Delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            self._bind_target(target)
+
+    def visit_For(self, node: ast.For) -> None:
+        self.visit(node.iter)
+        self._bind_target(node.target)
+        for statement in (*node.body, *node.orelse):
+            self.visit(statement)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self.visit_For(node)
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self._bind_target(item.optional_vars)
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self.visit_With(node)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.type is not None:
+            self.visit(node.type)
+        if node.name is not None:
+            self._write(node.name)
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_Match(self, node: ast.Match) -> None:
+        self.visit(node.subject)
+        for case in node.cases:
+            self._write_pattern(case.pattern)
+            self.visit(case.pattern)
+            if case.guard is not None:
+                self.visit(case.guard)
+            for statement in case.body:
+                self.visit(statement)
+
+    def visit_TypeAlias(self, node: ast.AST) -> None:
+        self._bind_target(getattr(node, "name"))
 
     def visit_Import(self, node: ast.Import) -> None:
         super().visit_Import(node)
@@ -661,16 +769,51 @@ class _ReceiverScopeCollector(_ScopeImportCollector):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._write(node.name)
+        self._visit_function_outer_expressions(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._write(node.name)
+        self._visit_function_outer_expressions(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.class_writes.add(node.name)
         self._write(node.name)
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for base in node.bases:
+            self.visit(base)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
-        del node
+        for default in (*node.args.defaults, *node.args.kw_defaults):
+            if default is not None:
+                self.visit(default)
+
+    def _visit_comprehension(
+        self, generators: Sequence[ast.comprehension], values: Sequence[ast.AST]
+    ) -> None:
+        # Comprehension targets belong to their implicit nested scope. Named
+        # expressions elsewhere in a comprehension bind in the containing
+        # non-comprehension scope and are therefore visited normally.
+        for generator in generators:
+            self.visit(generator.iter)
+            for condition in generator.ifs:
+                self.visit(condition)
+        for value in values:
+            self.visit(value)
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self._visit_comprehension(node.generators, (node.elt,))
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self._visit_comprehension(node.generators, (node.key, node.value))
 
     def result(self) -> _ReceiverScope:
         origins = {
@@ -702,9 +845,23 @@ class _ReceiverScopeCollector(_ScopeImportCollector):
 
 
 def _scope_state(
-    statements: Sequence[ast.stmt], starts: Sequence[int]
+    statements: Sequence[ast.stmt],
+    starts: Sequence[int],
+    args: ast.arguments | None = None,
 ) -> Tuple[Dict[str, Tuple[str, str, str]], _ReceiverScope]:
-    collector = _ReceiverScopeCollector(starts)
+    collector = _ScopeBindingCollector(starts)
+    if args is not None:
+        parameters = [
+            *getattr(args, "posonlyargs", ()),
+            *args.args,
+            *args.kwonlyargs,
+        ]
+        if args.vararg is not None:
+            parameters.append(args.vararg)
+        if args.kwarg is not None:
+            parameters.append(args.kwarg)
+        for argument in parameters:
+            collector._write(argument.arg)
     for statement in statements:
         collector.visit(statement)
     imports = {
@@ -1513,7 +1670,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         self.scope.pop()
         self.scope.append((name, "function"))
         self.tables.append(self._child_table("function", name, node.lineno))
-        imports, receivers = _scope_state(getattr(node, "body"), self.starts)
+        imports, receivers = _scope_state(getattr(node, "body"), self.starts, args)
         self.imports.append(imports)
         self.receivers.append(receivers)
         self.local_classes.append(
