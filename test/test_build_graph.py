@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tools.core_target_manifest import CoreTargetInventory
 
 
 PACK_DIRECTORIES = {
@@ -96,6 +101,9 @@ def compiled_native_sources(repository: Path, build: Path) -> set[str]:
     commands = json.loads((build / "compile_commands.json").read_text())
     result: set[str] = set()
     for command in commands:
+        output = command.get("output", command.get("command", ""))
+        if "archbird_core_" not in output:
+            continue
         path = Path(command["file"]).resolve()
         try:
             relative = path.relative_to(repository).as_posix()
@@ -104,6 +112,143 @@ def compiled_native_sources(repository: Path, build: Path) -> set[str]:
         if relative.startswith("src/") or relative.startswith("vendor/tree-sitter"):
             result.add(relative)
     return result
+
+
+def assert_core_target_commands(
+    repository: Path,
+    build: Path,
+    source_groups: dict[str, str],
+    tree_sitter_group: str,
+    enabled: set[str],
+    *,
+    shared: bool,
+) -> None:
+    commands = json.loads((build / "compile_commands.json").read_text())
+    selected = selected_core_sources(set(source_groups), enabled)
+    by_source: dict[str, list[dict[str, str]]] = {path: [] for path in selected}
+    vendor_sources: set[str] = set()
+    if enabled:
+        vendor_sources.add("vendor/tree-sitter/lib/src/lib.c")
+        for pack in enabled:
+            vendor_sources.update(PACK_VENDOR_SOURCES[pack])
+    by_vendor: dict[str, list[dict[str, str]]] = {
+        path: [] for path in vendor_sources
+    }
+    for command in commands:
+        output = command.get("output", command.get("command", ""))
+        if "archbird_core_" not in output:
+            continue
+        path = Path(command["file"]).resolve()
+        try:
+            relative = path.relative_to(repository).as_posix()
+        except ValueError:
+            continue
+        if relative in by_source:
+            by_source[relative].append(command)
+        elif relative in by_vendor:
+            by_vendor[relative].append(command)
+
+    variants = {"static", "shared"} if shared else {"static"}
+    expected_count = len(variants)
+    private_root = (build / "archbird-private-include").resolve()
+    source_root = (repository / "src").resolve()
+    for path, entries in (*by_source.items(), *by_vendor.items()):
+        if len(entries) != expected_count:
+            raise AssertionError(
+                f"{path} compiled {len(entries)} times in {build.name}; "
+                f"expected {expected_count}"
+            )
+        group = source_groups.get(path, tree_sitter_group)
+        observed_variants: set[str] = set()
+        for entry in entries:
+            output = entry.get("output", entry.get("command", ""))
+            matches = {
+                variant
+                for variant in variants
+                if f"archbird_core_{variant}_{group}.dir" in output
+            }
+            if len(matches) != 1:
+                raise AssertionError(
+                    f"{path} escaped its coarse target {group} in {build.name}: "
+                    f"{output}"
+                )
+            observed_variants.update(matches)
+
+            arguments = entry.get("arguments")
+            if arguments is None:
+                arguments = shlex.split(entry["command"])
+            include_paths: list[Path] = []
+            index = 0
+            while index < len(arguments):
+                argument = arguments[index]
+                if argument == "-I" and index + 1 < len(arguments):
+                    index += 1
+                    include_paths.append(Path(arguments[index]).resolve())
+                elif argument.startswith("-I") and len(argument) > 2:
+                    include_paths.append(Path(argument[2:]).resolve())
+                elif argument.startswith("/I") and len(argument) > 2:
+                    include_paths.append(Path(argument[2:]).resolve())
+                index += 1
+            if source_root in include_paths:
+                raise AssertionError(
+                    f"{path} retains unrestricted private src visibility in "
+                    f"{build.name}"
+                )
+            private_views = [
+                include
+                for include in include_paths
+                if private_root in include.parents and include.name == group
+            ]
+            if len(private_views) != 1:
+                raise AssertionError(
+                    f"{path} does not have exactly one {group} private header "
+                    f"view in {build.name}: {private_views}"
+                )
+        if observed_variants != variants:
+            raise AssertionError(
+                f"{path} compiled for variants {sorted(observed_variants)} in "
+                f"{build.name}; expected {sorted(variants)}"
+            )
+
+
+def assert_private_header_views(
+    build: Path, target_inventory: CoreTargetInventory
+) -> None:
+    dependencies = {
+        group.name: set(group.dependencies) for group in target_inventory.groups
+    }
+    header_groups = dict(target_inventory.header_groups)
+    visible: dict[str, set[str]] = {}
+    for group in target_inventory.groups:
+        group_visible = {group.name}
+        for dependency in dependencies[group.name]:
+            group_visible.update(visible[dependency])
+        visible[group.name] = group_visible
+
+    private_root = build / "archbird-private-include"
+    for group in target_inventory.groups:
+        roots = list(private_root.glob(f"*/{group.name}"))
+        if len(roots) != 1:
+            raise AssertionError(
+                f"{build.name} has {len(roots)} private header views for "
+                f"{group.name}; expected one"
+            )
+        actual = {
+            path.relative_to(roots[0]).as_posix()
+            for path in roots[0].rglob("*.h")
+            if path.is_file()
+        }
+        expected = {
+            path.removeprefix("src/")
+            for path, owner in header_groups.items()
+            if owner in visible[group.name]
+        }
+        if actual != expected:
+            raise AssertionError(
+                f"private header view drift for {group.name} in {build.name}; "
+                f"missing={sorted(expected - actual)}, "
+                f"unexpected={sorted(actual - expected)}"
+            )
 
 
 def selected_core_sources(paths: set[str], enabled: set[str]) -> set[str]:
@@ -147,8 +292,11 @@ def main() -> int:
     repository = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     sys.path.insert(0, str(repository))
     from tools.core_source_manifest import validate_manifest
+    from tools.core_target_manifest import validate_target_manifest
 
     core_sources = {entry.path for entry in validate_manifest(repository)}
+    target_inventory = validate_target_manifest(repository)
+    source_groups = dict(target_inventory.source_groups)
     required = prerequisites(repository / "Makefile", "test-js")
     if "native-wasm-smoke" not in required:
         raise AssertionError(
@@ -178,6 +326,15 @@ def main() -> int:
         assert_source_matrix(
             repository, candidate, core_sources, set(PACK_DIRECTORIES)
         )
+        assert_core_target_commands(
+            repository,
+            candidate,
+            source_groups,
+            target_inventory.tree_sitter_group,
+            set(PACK_DIRECTORIES),
+            shared=True,
+        )
+        assert_private_header_views(candidate, target_inventory)
         inventory = json.loads(
             run(
                 "ctest",
@@ -219,7 +376,16 @@ def main() -> int:
             "-DARCHBIRD_BUILD_PYTHON=OFF",
             "-DARCHBIRD_BUILD_NODE=OFF",
             "-DARCHBIRD_BUILD_SHARED=OFF",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             cwd=repository,
+        )
+        assert_core_target_commands(
+            repository,
+            static_only,
+            source_groups,
+            target_inventory.tree_sitter_group,
+            set(PACK_DIRECTORIES),
+            shared=False,
         )
         static_inventory = json.loads(
             run(
@@ -276,6 +442,14 @@ def main() -> int:
             )
             assert_source_matrix(
                 repository, selection_build, core_sources, enabled
+            )
+            assert_core_target_commands(
+                repository,
+                selection_build,
+                source_groups,
+                target_inventory.tree_sitter_group,
+                enabled,
+                shared=False,
             )
     print("clean test dependency graph contract passed")
     return 0

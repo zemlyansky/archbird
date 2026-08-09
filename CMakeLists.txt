@@ -253,6 +253,19 @@ if(NOT ARCHBIRD_CORE_SOURCES)
 endif()
 list(SORT ARCHBIRD_CORE_SOURCE_PATHS)
 list(SORT ARCHBIRD_CORE_SOURCES)
+
+set(ARCHBIRD_CORE_TARGET_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ArchbirdCoreTargets.cmake")
+if(NOT EXISTS "${ARCHBIRD_CORE_TARGET_MANIFEST}")
+  message(FATAL_ERROR
+          "Native core target manifest is missing: "
+          "${ARCHBIRD_CORE_TARGET_MANIFEST}")
+endif()
+include("${ARCHBIRD_CORE_TARGET_MANIFEST}")
+if(NOT ARCHBIRD_DECLARED_CORE_GROUPS)
+  message(FATAL_ERROR "Native core target manifest contains no groups")
+endif()
+
 set(ARCHBIRD_TREE_SITTER_ENABLED OFF)
 set(ARCHBIRD_TREE_SITTER_VENDOR_SOURCES "")
 set(ARCHBIRD_TREE_SITTER_VENDOR_INCLUDE_DIRS "")
@@ -327,11 +340,7 @@ if(ARCHBIRD_TREE_SITTER_ENABLED)
   )
 endif()
 
-add_library(archbird_native STATIC
-  ${ARCHBIRD_CORE_SOURCES}
-  "${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson/src/yyjson.c"
-  $<TARGET_OBJECTS:archbird_pcre2>
-)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ArchbirdCoreTargetBuild.cmake")
 
 file(STRINGS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/evidence/lexical/provider_identity.sources"
@@ -533,67 +542,6 @@ if(ARCHBIRD_TREE_SITTER_ENABLED)
   endif()
 endif()
 
-function(archbird_configure_core_target target shared_library)
-  set_target_properties(${target} PROPERTIES
-    C_EXTENSIONS OFF
-    C_VISIBILITY_PRESET hidden
-    OUTPUT_NAME archbird
-    POSITION_INDEPENDENT_CODE ON)
-  target_compile_features(${target} PUBLIC c_std_11)
-  target_include_directories(${target}
-    PUBLIC
-      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-    PRIVATE
-      ${ARCHBIRD_INTERNAL_INCLUDE_DIRS}
-      ${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson/src
-      ${ARCHBIRD_PCRE2_GENERATED_DIR}
-      ${CMAKE_CURRENT_SOURCE_DIR}/vendor/pcre2/src)
-  target_compile_definitions(${target} PRIVATE
-    ARCHBIRD_LEXICAL_C_IMPLEMENTATION_SHA256="${ARCHBIRD_LEXICAL_C_IMPLEMENTATION_SHA256}"
-    ARCHBIRD_LEXICAL_JAVASCRIPT_IMPLEMENTATION_SHA256="${ARCHBIRD_LEXICAL_JAVASCRIPT_IMPLEMENTATION_SHA256}"
-    ARCHBIRD_LEXICAL_PYTHON_IMPLEMENTATION_SHA256="${ARCHBIRD_LEXICAL_PYTHON_IMPLEMENTATION_SHA256}"
-    ARCHBIRD_LEXICAL_R_IMPLEMENTATION_SHA256="${ARCHBIRD_LEXICAL_R_IMPLEMENTATION_SHA256}"
-    ARCHBIRD_SCIP_IMPLEMENTATION_SHA256="${ARCHBIRD_SCIP_IMPLEMENTATION_SHA256}"
-    ARCHBIRD_IMPLEMENTATION_SHA256="${ARCHBIRD_IMPLEMENTATION_SHA256}"
-    ARCHBIRD_VERSION="${PROJECT_VERSION}"
-    TREE_SITTER_HIDE_SYMBOLS=1
-    TREE_SITTER_HIDDEN_SYMBOLS=1
-    yyjson_api=)
-  if(shared_library)
-    target_compile_definitions(${target} PRIVATE ARCHBIRD_SHARED_BUILD=1)
-    target_compile_definitions(${target} INTERFACE ARCHBIRD_SHARED_USE=1)
-  endif()
-  if(ARCHBIRD_TREE_SITTER_ENABLED)
-    target_compile_definitions(${target} PRIVATE
-      TREE_SITTER_REUSE_ALLOCATOR=1)
-    foreach(ARCHBIRD_TREE_SITTER_PACK IN ITEMS C CPP PYTHON JAVASCRIPT TYPESCRIPT TSX R)
-      if(ARCHBIRD_ENABLE_TREE_SITTER_${ARCHBIRD_TREE_SITTER_PACK})
-        target_compile_definitions(${target} PRIVATE
-          ARCHBIRD_HAVE_TREE_SITTER_${ARCHBIRD_TREE_SITTER_PACK}=1
-          ARCHBIRD_TREE_SITTER_${ARCHBIRD_TREE_SITTER_PACK}_IMPLEMENTATION_SHA256="${ARCHBIRD_TREE_SITTER_${ARCHBIRD_TREE_SITTER_PACK}_IMPLEMENTATION_SHA256}")
-      endif()
-    endforeach()
-    if(UNIX AND NOT APPLE)
-      target_compile_definitions(${target} PRIVATE _DEFAULT_SOURCE=1)
-    endif()
-  endif()
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /W4)
-  else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-  endif()
-  if(ARCHBIRD_ENABLE_SANITIZERS)
-    target_compile_options(${target} PRIVATE
-      -fno-omit-frame-pointer -fsanitize=address,undefined)
-    target_link_options(${target} PRIVATE -fsanitize=address,undefined)
-  endif()
-  if(ARCHBIRD_ENABLE_FUZZERS)
-    target_compile_options(${target} PRIVATE
-      -fno-omit-frame-pointer -fsanitize=fuzzer-no-link,address,undefined)
-  endif()
-endfunction()
-
 if(ARCHBIRD_ENABLE_SANITIZERS)
   if(MSVC)
     message(FATAL_ERROR "ARCHBIRD_ENABLE_SANITIZERS is not configured for MSVC")
@@ -606,7 +554,13 @@ if(ARCHBIRD_ENABLE_FUZZERS)
     -fno-omit-frame-pointer -fsanitize=fuzzer-no-link,address,undefined)
 endif()
 
-archbird_configure_core_target(archbird_native FALSE)
+archbird_add_core_objects(static FALSE ARCHBIRD_STATIC_CORE_OBJECTS)
+add_library(archbird_native STATIC
+  ${ARCHBIRD_STATIC_CORE_OBJECTS}
+  "${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson/src/yyjson.c"
+  $<TARGET_OBJECTS:archbird_pcre2>
+)
+archbird_configure_core_library(archbird_native FALSE)
 
 # The static archive remains the self-contained link input for CPython,
 # Node-API, Wasm, tests, and release packages.  The shared target exposes the
@@ -614,12 +568,13 @@ archbird_configure_core_target(archbird_native FALSE)
 # build/libarchbird.so (or the platform equivalent) without changing frontend
 # artifact ownership.
 if(ARCHBIRD_BUILD_SHARED)
+  archbird_add_core_objects(shared TRUE ARCHBIRD_SHARED_CORE_OBJECTS)
   add_library(archbird_shared SHARED
-    ${ARCHBIRD_CORE_SOURCES}
+    ${ARCHBIRD_SHARED_CORE_OBJECTS}
     "${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson/src/yyjson.c"
     $<TARGET_OBJECTS:archbird_pcre2>
   )
-  archbird_configure_core_target(archbird_shared TRUE)
+  archbird_configure_core_library(archbird_shared TRUE)
   set_target_properties(archbird_shared PROPERTIES
     VERSION "${PROJECT_VERSION}"
     SOVERSION "${ARCHBIRD_SOVERSION}"
@@ -950,44 +905,6 @@ if(BUILD_TESTING)
   target_compile_features(archbird_native_okf_publish PRIVATE c_std_11)
   set_target_properties(archbird_native_okf_publish PROPERTIES C_EXTENSIONS OFF)
 
-  if(ARCHBIRD_ENABLE_SANITIZERS)
-    foreach(target archbird_native_json_test archbird_native_json
-                   archbird_native_json_pointer_edit_test
-                   archbird_native_plan_model_test
-                   archbird_native_plan_compile_test
-                   archbird_native_act_model_test
-                   archbird_native_act_materialize_test
-                   archbird_native_sha256_test archbird_native_hash
-                   archbird_native_project_test archbird_native_lex_test
-                   archbird_native_scip_test
-                   archbird_native_pattern_test
-                   archbird_native_gitignore_test
-                   archbird_native_config_resolution_test
-                   archbird_native_project_configuration_test
-                   archbird_native_allocator_test
-                   archbird_native_path_match_test
-                   archbird_native_build_identity_test
-                   archbird_native_builds_test
-                   archbird_native_pattern
-                   archbird_native_lex
-                   archbird_native_scanner
-                   archbird_native_unified_diff_test
-                   archbird_native_graph
-                   archbird_native_okf
-                   archbird_native_okf_publish)
-      target_compile_options(${target} PRIVATE
-        -fno-omit-frame-pointer -fsanitize=address,undefined
-      )
-      target_link_options(${target} PRIVATE -fsanitize=address,undefined)
-    endforeach()
-    if(ARCHBIRD_TREE_SITTER_ENABLED)
-      target_compile_options(archbird_native_tree_sitter_test PRIVATE
-        -fno-omit-frame-pointer -fsanitize=address,undefined)
-      target_link_options(archbird_native_tree_sitter_test PRIVATE
-        -fsanitize=address,undefined)
-    endif()
-  endif()
-
   add_test(NAME archbird_native_json COMMAND archbird_native_json_test)
   add_test(NAME archbird_native_json_pointer_edit
            COMMAND archbird_native_json_pointer_edit_test)
@@ -1043,6 +960,12 @@ if(BUILD_TESTING)
       NAME archbird_private_include_boundaries
       COMMAND ${Python3_EXECUTABLE}
               ${CMAKE_CURRENT_SOURCE_DIR}/test/test_private_include_boundaries.py
+              ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(
+      NAME archbird_core_target_manifest
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_core_target_manifest.py
               ${CMAKE_CURRENT_SOURCE_DIR}
     )
     add_test(

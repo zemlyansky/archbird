@@ -71,6 +71,7 @@ test: version-check evaluation-test schema-snapshots native-test test-py test-js
 version-check:
 	$(PYTHON) tools/check_versions.py
 	$(PYTHON) tools/core_source_manifest.py $(CURDIR)
+	$(PYTHON) tools/core_target_manifest.py $(CURDIR)
 	$(PYTHON) tools/private_include_boundaries.py $(CURDIR)
 
 schema-snapshots:
@@ -343,6 +344,7 @@ native-analyze: native-configure
 	command $(CLANG_FORMAT) --dry-run --Werror $(NATIVE_C_FILES)
 	$(PYTHON) test/test_allocator_boundary.py
 	$(PYTHON) test/test_planning_boundaries.py
+	$(PYTHON) tools/core_target_manifest.py $(CURDIR)
 	$(PYTHON) tools/private_include_boundaries.py $(CURDIR)
 	command $(CPPCHECK) -j $(CPPCHECK_JOBS) --std=c11 \
 		--enable=warning,performance,portability --error-exitcode=1 \
@@ -355,6 +357,7 @@ native-analyze: native-configure
 native-boundaries:
 	$(PYTHON) test/test_json_boundary.py
 	$(PYTHON) test/test_planning_boundaries.py
+	$(PYTHON) tools/core_target_manifest.py $(CURDIR)
 	$(PYTHON) tools/private_include_boundaries.py $(CURDIR)
 
 release-source-check: version-check
