@@ -549,6 +549,9 @@ class ProviderCache:
         manifest_sha256: str,
         config_sha256: str,
     ) -> None:
+        self.map_stats.attempted_bytes = max(
+            self.map_stats.attempted_bytes, len(data)
+        )
         if len(data) > self.max_bytes:
             self.map_stats.skipped += 1
             return

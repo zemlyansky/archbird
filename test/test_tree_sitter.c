@@ -393,12 +393,12 @@ static void test_generated_candidate_role(ArchbirdEngine *engine) {
          archbird_project_render_provider_facts(engine, project, 0, 0,
                                                 write_output, &provider),
          ARCHBIRD_OK);
-  if (!strstr(provider.bytes, "\"coverage\":\"none\"") ||
-      !strstr(provider.bytes,
-              "\"code\":\"tree-sitter-generated-delivery-excluded\"") ||
-      !strstr(provider.bytes, "\"facts\":[]")) {
-    fputs("FAIL generated delivery JavaScript entered syntax parsing\n",
-          stderr);
+  if (strstr(provider.bytes, "\"coverage\":\"none\"") ||
+      strstr(provider.bytes,
+             "\"code\":\"tree-sitter-generated-delivery-excluded\"") ||
+      strstr(provider.bytes, "\"facts\":[]") ||
+      !strstr(provider.bytes, "\"name\":\"generated\"")) {
+    fputs("FAIL generated-delivery candidate skipped syntax parsing\n", stderr);
     failures++;
   }
   archbird_project_destroy(project);

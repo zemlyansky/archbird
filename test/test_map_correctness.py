@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import itertools
 import json
 from pathlib import Path
 import sys
@@ -584,6 +585,389 @@ def check_conflicting_call_targets(extension, provider) -> None:
         or projected["completeness"]["counts"]["unknown"] < 1
     ):
         raise AssertionError(projected)
+
+
+def check_nonexact_call_candidate_cardinality(extension, provider) -> None:
+    source = b"""\
+class A:
+    def run(self):
+        pass
+
+class B:
+    def run(self):
+        pass
+
+class C:
+    def run(self):
+        pass
+
+def caller():
+    return A().run()
+"""
+    path = "probe.py"
+    project_name = "call-candidate-cardinality"
+    manifest = {
+        "artifact": "archbird-source-manifest",
+        "files": [
+            {
+                "bytes": len(source),
+                "language": "python",
+                "layer": "python",
+                "path": path,
+                "roles": ["source"],
+                "sha256": hashlib.sha256(source).hexdigest(),
+            }
+        ],
+        "producer": {
+            "implementation_sha256": "d" * 64,
+            "name": project_name,
+            "version": "1",
+        },
+        "project": project_name,
+        "schema_version": 1,
+    }
+    config = {
+        "layers": [
+            {"globs": ["*.py"], "language": "python", "name": "python"}
+        ],
+        "project": project_name,
+    }
+
+    def map_for(
+        owners: tuple[str, ...], exact_indexes: frozenset[int] = frozenset()
+    ) -> dict:
+        project = extension.project_create(canonical(manifest))
+        extension.project_add_source(project, path, source)
+        extension.project_finalize_sources(project)
+        extension.project_set_config(project, canonical(config))
+        document = json.loads(
+            provider.python_ast_provider_facts(
+                project=project_name,
+                path=path,
+                text=source.decode(),
+                source_manifest_sha256=extension.project_manifest_sha256(project),
+            )
+        )
+        template = next(
+            fact
+            for fact in document["facts"]
+            if fact["domain"] == "name-uses"
+            and fact["kind"] == "local-member-call"
+            and fact["name"] == "run"
+        )
+        document["facts"] = [
+            fact
+            for fact in document["facts"]
+            if not (
+                fact["domain"] == "name-uses"
+                and fact["kind"] == "local-member-call"
+                and fact["name"] == "run"
+            )
+        ]
+        for index, owner in enumerate(owners):
+            fact = copy.deepcopy(template)
+            fact.pop("correlation", None)
+            fact["attributes"]["owner_symbol"] = owner
+            fact["attributes"]["member_resolution"] = (
+                "exact" if index in exact_indexes else "candidate"
+            )
+            fact["id"] = f"candidate-{index:02d}-{owner}"
+            fact["key"] = f"candidate-{index:02d}-{owner}"
+            document["facts"].append(fact)
+        document["facts"].sort(key=lambda fact: fact["id"])
+        extension.project_add_provider(project, "primary", canonical(document))
+        extension.project_finalize_providers(project)
+        return json.loads(extension.project_map(project))
+
+    def call_for(mapped: dict) -> dict:
+        return next(
+            row
+            for row in mapped["symbol_calls"]
+            if row["source"] == {"path": path, "symbol": "caller"}
+            and row["name"] == "run"
+        )
+
+    def assert_resolution(
+        owners: tuple[str, ...],
+        expected_resolution: str,
+        expected_symbols: list[str],
+        exact_indexes: frozenset[int] = frozenset(),
+    ) -> dict:
+        mapped = map_for(owners, exact_indexes)
+        call = call_for(mapped)
+        actual_symbols = [row["symbol"] for row in call["candidates"]]
+        if (
+            call["resolution"] != expected_resolution
+            or actual_symbols != expected_symbols
+        ):
+            raise AssertionError(
+                {
+                    "call": call,
+                    "exact_indexes": sorted(exact_indexes),
+                    "owners": owners,
+                }
+            )
+        return mapped
+
+    singleton = assert_resolution(("A",), "candidate", ["A.run"])
+    for owners in itertools.permutations(("A", "B")):
+        assert_resolution(owners, "unresolved", [])
+    ambiguous = None
+    for owners in itertools.permutations(("A", "B", "C")):
+        mapped = assert_resolution(owners, "unresolved", [])
+        if owners == ("A", "B", "C"):
+            ambiguous = mapped
+    assert_resolution(("A", "A"), "candidate", ["A.run"])
+    assert_resolution(("A", "B", "A"), "unresolved", [])
+    assert_resolution(("A", "B", "B"), "unresolved", [])
+    for exact_index, owner in enumerate(("A", "B", "C")):
+        assert_resolution(
+            ("A", "B", "C"),
+            "unique",
+            [f"{owner}.run"],
+            frozenset({exact_index}),
+        )
+    assert_resolution(("A", "A"), "unique", ["A.run"], frozenset({0, 1}))
+    for owners in itertools.permutations(("A", "B")):
+        assert_resolution(owners, "unresolved", [], frozenset({0, 1}))
+
+    if ambiguous is None:
+        raise AssertionError("three-target candidate fixture was not evaluated")
+    query = json.loads(
+        extension.map_query(
+            canonical(ambiguous),
+            canonical(
+                {
+                    "depth": 1,
+                    "direction": "downstream",
+                    "symbols": [f"{path}:caller"],
+                    "test_depth": 0,
+                }
+            ),
+        )
+    )
+    selected_symbols = [
+        symbol["name"]
+        for file in query["files"]
+        for symbol in file.get("symbols", [])
+    ]
+    if any(symbol.endswith(".run") for symbol in selected_symbols):
+        raise AssertionError(query)
+
+    for mapped, expected_resolution, expected_target in (
+        (singleton, "candidate", 'symbol:["probe.py","A.run"]'),
+        (ambiguous, "unresolved", 'unresolved:"run"'),
+    ):
+        projected = json.loads(
+            extension.projection_evaluate(
+                canonical(mapped),
+                canonical(
+                    {
+                        "id": "calls",
+                        "kinds": ["calls"],
+                        "select": "symbol_relations",
+                    }
+                ),
+            )
+        )
+        item = next(
+            row
+            for row in projected["fact"]["items"]
+            if row["attributes"]["names"] == ["run"]
+        )
+        if (
+            item["attributes"]["resolution"] != expected_resolution
+            or item["attributes"]["target"] != expected_target
+            or item["state"] != "unknown"
+        ):
+            raise AssertionError(item)
+
+
+def check_python_lexical_binding_owners(extension, provider) -> None:
+    source = b"""\
+class ModuleClass:
+    @staticmethod
+    def run():
+        pass
+
+def shadow_outer():
+    ModuleClass = object
+    def inner():
+        return ModuleClass.run()
+    return inner
+
+def class_outer():
+    class ClosureClass:
+        @staticmethod
+        def run():
+            pass
+    def inner():
+        return ClosureClass.run()
+    return inner
+
+def nonlocal_outer():
+    class NonlocalClass:
+        @staticmethod
+        def run():
+            pass
+    def inner():
+        nonlocal NonlocalClass
+        return NonlocalClass.run()
+    return inner
+
+class GlobalClass:
+    @staticmethod
+    def run():
+        pass
+
+def global_call():
+    global GlobalClass
+    return GlobalClass.run()
+
+class ReceiverClass:
+    def run(self):
+        pass
+    def method(self):
+        def inner():
+            return self.run()
+        return inner
+
+class ReceiverShadow:
+    def run(self):
+        pass
+    def method(self):
+        def outer():
+            self = object()
+            def inner():
+                return self.run()
+            return inner
+        return outer
+
+import package as Imported
+
+def import_outer():
+    Imported = object
+    def inner():
+        return Imported.run()
+    return inner
+
+def import_positive():
+    import package as Captured
+    def inner():
+        return Captured.run()
+    return inner
+"""
+    path = "lexical.py"
+    project_name = "python-lexical-binding-owners"
+    document = json.loads(
+        provider.python_ast_provider_facts(
+            project=project_name,
+            path=path,
+            source_bytes=source,
+        )
+    )
+
+    def name_uses(enclosing: str) -> list[dict]:
+        return [
+            fact
+            for fact in document["facts"]
+            if fact["domain"] == "name-uses"
+            and fact.get("name") == "run"
+            and fact.get("attributes", {}).get("enclosing") == enclosing
+        ]
+
+    for enclosing in (
+        "shadow_outer.inner",
+        "ReceiverShadow.method.outer.inner",
+        "import_outer.inner",
+    ):
+        if name_uses(enclosing):
+            raise AssertionError({enclosing: name_uses(enclosing)})
+
+    expected_local = {
+        "class_outer.inner": ("class_outer.ClosureClass", "exact"),
+        "nonlocal_outer.inner": ("nonlocal_outer.NonlocalClass", "exact"),
+        "global_call": ("GlobalClass", "exact"),
+        "ReceiverClass.method.inner": ("ReceiverClass", "candidate"),
+    }
+    for enclosing, (owner, resolution) in expected_local.items():
+        rows = name_uses(enclosing)
+        if len(rows) != 1 or {
+            key: rows[0]["attributes"][key]
+            for key in ("member_resolution", "owner_symbol")
+        } != {"member_resolution": resolution, "owner_symbol": owner}:
+            raise AssertionError({enclosing: rows})
+
+    imported = name_uses("import_positive.inner")
+    if len(imported) != 1 or {
+        key: imported[0]["attributes"][key]
+        for key in ("imported", "local", "module")
+    } != {"imported": "run", "local": "Captured", "module": "package"}:
+        raise AssertionError(imported)
+
+    manifest = {
+        "artifact": "archbird-source-manifest",
+        "files": [
+            {
+                "bytes": len(source),
+                "language": "python",
+                "layer": "python",
+                "path": path,
+                "roles": ["source"],
+                "sha256": hashlib.sha256(source).hexdigest(),
+            }
+        ],
+        "producer": {
+            "implementation_sha256": "e" * 64,
+            "name": project_name,
+            "version": "1",
+        },
+        "project": project_name,
+        "schema_version": 1,
+    }
+    project = extension.project_create(canonical(manifest))
+    extension.project_add_source(project, path, source)
+    extension.project_finalize_sources(project)
+    extension.project_set_config(
+        project,
+        canonical(
+            {
+                "layers": [
+                    {
+                        "globs": ["*.py"],
+                        "language": "python",
+                        "name": "python",
+                    }
+                ],
+                "project": project_name,
+            }
+        ),
+    )
+    extension.project_add_provider(project, "primary", canonical(document))
+    extension.project_finalize_providers(project)
+    mapped = json.loads(extension.project_map(project))
+    calls = {
+        row["source"].get("symbol"): row
+        for row in mapped["symbol_calls"]
+        if row["name"] == "run"
+    }
+    for enclosing in (
+        "shadow_outer.inner",
+        "ReceiverShadow.method.outer.inner",
+        "import_outer.inner",
+    ):
+        call = calls.get(enclosing)
+        if call is not None and (
+            call["resolution"] != "unresolved" or call["candidates"]
+        ):
+            raise AssertionError(call)
+    for enclosing, (owner, resolution) in expected_local.items():
+        call = calls[enclosing]
+        expected = "unique" if resolution == "exact" else "candidate"
+        if call["resolution"] != expected or [
+            row["symbol"] for row in call["candidates"]
+        ] != [f"{owner}.run"]:
+            raise AssertionError(call)
 
 
 def main() -> int:
@@ -2767,6 +3151,8 @@ def main() -> int:
     check_stable_duplicate_reference_witness(extension)
     check_external_call_namespace(extension)
     check_conflicting_call_targets(extension, provider)
+    check_nonexact_call_candidate_cardinality(extension, provider)
+    check_python_lexical_binding_owners(extension, provider)
     print(
         "typed calls, preprocessing-token selectors, named dispatch, and "
         "generated test provenance passed"

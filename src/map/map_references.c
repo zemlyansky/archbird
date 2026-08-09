@@ -736,6 +736,11 @@ ab_map_resolve_provider_reference(AbMapState *state, const AbFact *fact,
 ArchbirdStatus ab_map_resolve_call_reference(
     AbMapState *state, const AbFact *call, const AbFact **out_evidence,
     const AbProviderBundle **out_provider, AbMapReferenceResolution *out) {
+  enum CandidateCardinality {
+    CANDIDATE_NONE,
+    CANDIDATE_SINGLETON,
+    CANDIDATE_AMBIGUOUS
+  } candidate_cardinality = CANDIDATE_NONE;
   const AbFact *semantic;
   size_t start;
   size_t end;
@@ -800,20 +805,24 @@ ArchbirdStatus ab_map_resolve_call_reference(
     if (!candidate.target || !candidate.target_symbol)
       continue;
     if (!candidate.exact) {
-      if (!found && !*out_evidence) {
+      if (found || candidate_cardinality == CANDIDATE_AMBIGUOUS)
+        continue;
+      if (candidate_cardinality == CANDIDATE_NONE) {
         *out = candidate;
         *out_evidence = fact;
         if (out_provider)
           *out_provider =
               ab_project_merged_fact_provider_by_path(state->project, index);
-      } else if (!found && (!ab_string_equal(&out->target->path,
-                                             &candidate.target->path) ||
-                            !ab_string_equal(out->target_symbol,
-                                             candidate.target_symbol))) {
+        candidate_cardinality = CANDIDATE_SINGLETON;
+      } else if (!ab_string_equal(&out->target->path,
+                                  &candidate.target->path) ||
+                 !ab_string_equal(out->target_symbol,
+                                  candidate.target_symbol)) {
         memset(out, 0, sizeof(*out));
         *out_evidence = NULL;
         if (out_provider)
           *out_provider = NULL;
+        candidate_cardinality = CANDIDATE_AMBIGUOUS;
       }
       continue;
     }

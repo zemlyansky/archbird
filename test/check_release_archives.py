@@ -63,6 +63,23 @@ def _development_path(name: str) -> bool:
     return basename.endswith(".MD") and basename != "README.MD"
 
 
+def _check_member_policy(
+    archive: str,
+    name: str,
+    data: bytes,
+    forbidden_prefixes: Iterable[bytes],
+    forbidden_text: Iterable[bytes],
+) -> None:
+    if _development_path(name):
+        raise ValueError(f"{archive}: development or unsafe member: {name}")
+    for marker in (*forbidden_prefixes, *forbidden_text):
+        if marker and marker in data:
+            rendered = marker.decode("utf-8", errors="backslashreplace")
+            raise ValueError(
+                f"{archive}: member {name} contains forbidden text: {rendered}"
+            )
+
+
 def check_archive(
     path: str, forbidden_prefixes: Iterable[bytes], forbidden_text: Iterable[bytes]
 ) -> int:
@@ -126,14 +143,7 @@ def check_archive(
                 if relative == (".archbird-manifest.json",):
                     schema_manifests += 1
                     schema_manifest = data
-        if _development_path(name):
-            raise ValueError(f"{path}: development or unsafe member: {name}")
-        for marker in (*forbidden_prefixes, *forbidden_text):
-            if marker and marker in data:
-                rendered = marker.decode("utf-8", errors="backslashreplace")
-                raise ValueError(
-                    f"{path}: member {name} contains forbidden text: {rendered}"
-                )
+        _check_member_policy(path, name, data, forbidden_prefixes, forbidden_text)
     if c_source_bundles:
         if len(c_source_bundles) != 1:
             raise ValueError(f"{path}: multiple compressed C source snapshots")
@@ -146,7 +156,14 @@ def check_archive(
         c_source_manifest = c_source_files.get(".archbird-manifest.json")
         c_source_manifests = int(c_source_manifest is not None)
         c_source_code_members = [PurePosixPath(c_source_bundles[0][0])]
-        for relative_name in c_source_files:
+        for relative_name, data in c_source_files.items():
+            _check_member_policy(
+                path,
+                f"{c_source_bundles[0][0]}!/{relative_name}",
+                data,
+                forbidden_prefixes,
+                forbidden_text,
+            )
             relative = PurePosixPath(relative_name).parts
             if (
                 len(relative) == 3

@@ -803,8 +803,35 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             return "builtin" if hasattr(builtins, name) else "unknown"
         return "unknown"
 
-    def _import_binding(self, name: str) -> Optional[Tuple[str, str, str]]:
+    def _lexical_binding_owner(self, name: str) -> Optional[int]:
+        """Return the nearest real lexical binding scope for ``name``."""
+
         table = self.tables[-1]
+        if table is None:
+            return None
+        try:
+            symbol = table.lookup(name)
+        except KeyError:
+            return None
+        if table.get_type() == "module":
+            return 0 if self._bound_in_table(table, name) else None
+        if symbol.is_global():
+            return 0 if self._bound_in_table(self.module_table, name) else None
+        if symbol.is_local() or symbol.is_parameter() or symbol.is_imported():
+            return len(self.tables) - 1
+        if not (symbol.is_free() or symbol.is_nonlocal()):
+            return None
+        for index in range(len(self.tables) - 2, -1, -1):
+            outer_table = self.tables[index]
+            if outer_table is not None and self._bound_in_table(outer_table, name):
+                return index
+        return None
+
+    def _import_binding(self, name: str) -> Optional[Tuple[str, str, str]]:
+        owner = self._lexical_binding_owner(name)
+        if owner is None:
+            return None
+        table = self.tables[owner]
         if table is None:
             return None
         try:
@@ -812,66 +839,18 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         except KeyError:
             return None
         if symbol.is_imported() and not symbol.is_assigned():
-            return self.imports[-1].get(name)
-        if symbol.is_global():
-            try:
-                module_symbol = self.module_table.lookup(name)
-            except KeyError:
-                return None
-            if module_symbol.is_imported() and not module_symbol.is_assigned():
-                return self.imports[0].get(name)
-            return None
-        if symbol.is_free() or symbol.is_nonlocal():
-            for outer_table, imports in zip(
-                reversed(self.tables[:-1]), reversed(self.imports[:-1])
-            ):
-                if outer_table is None:
-                    continue
-                try:
-                    outer_symbol = outer_table.lookup(name)
-                except KeyError:
-                    continue
-                if outer_symbol.is_imported() and not outer_symbol.is_assigned():
-                    return imports.get(name)
+            return self.imports[owner].get(name)
         return None
 
     def _local_class_binding(self, name: str) -> Optional[str]:
         """Resolve one unambiguous class declaration through lexical scope."""
 
-        table = self.tables[-1]
-        if table is None:
-            return None
-        try:
-            symbol = table.lookup(name)
-        except KeyError:
-            return None
-        if table.get_type() == "module" or symbol.is_global():
-            return self.local_classes[0].get(name)
-        if symbol.is_local() or symbol.is_parameter() or symbol.is_imported():
-            return self.local_classes[-1].get(name)
-        if symbol.is_free() or symbol.is_nonlocal():
-            for classes in reversed(self.local_classes[:-1]):
-                qualified = classes.get(name)
-                if qualified is not None:
-                    return qualified
-        return None
+        owner = self._lexical_binding_owner(name)
+        return self.local_classes[owner].get(name) if owner is not None else None
 
     def _method_receiver_binding(self, name: str) -> Optional[str]:
-        table = self.tables[-1]
-        if table is None:
-            return None
-        try:
-            symbol = table.lookup(name)
-        except KeyError:
-            return None
-        if symbol.is_local() or symbol.is_parameter() or symbol.is_imported():
-            return self.method_receivers[-1].get(name)
-        if symbol.is_free() or symbol.is_nonlocal():
-            for receivers in reversed(self.method_receivers[:-1]):
-                qualified = receivers.get(name)
-                if qualified is not None:
-                    return qualified
-        return None
+        owner = self._lexical_binding_owner(name)
+        return self.method_receivers[owner].get(name) if owner is not None else None
 
     def _local_member_owner(
         self, receiver: ast.expr

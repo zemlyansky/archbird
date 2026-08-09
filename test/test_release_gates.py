@@ -47,6 +47,10 @@ README_CONTRACT = _load(
     "archbird_readme_contract",
     REPOSITORY / "test/test_readme_examples.py",
 )
+ARCHIVE_CHECK = _load(
+    "archbird_check_release_archives",
+    REPOSITORY / "test/check_release_archives.py",
+)
 
 
 def _run(
@@ -207,6 +211,48 @@ def test_documentation_contract_mutation(root: Path) -> None:
             "candidate/illustrative checked Path mutation escaped the "
             "documentation gate"
         )
+
+
+def test_compressed_archive_policy(root: Path) -> None:
+    marker = b"/private/archbird-release-root"
+    cases = (
+        (
+            "decoded-content",
+            {
+                ".archbird-manifest.json": b"{}\n",
+                "src/example.c": b"/* " + marker + b" */\n",
+            },
+            "contains forbidden text",
+        ),
+        (
+            "decoded-manifest",
+            {".archbird-manifest.json": b'{"root":"' + marker + b'"}\n'},
+            "contains forbidden text",
+        ),
+        (
+            "decoded-development-path",
+            {
+                ".archbird-manifest.json": b"{}\n",
+                "test/hidden.c": b"int hidden(void);\n",
+            },
+            "development or unsafe member",
+        ),
+    )
+    for label, files, expected in cases:
+        archive = root / f"{label}.tgz"
+        _tar(
+            archive,
+            {"package/csrc.snapshot.gz": encode_bundle(files)},
+        )
+        try:
+            ARCHIVE_CHECK.check_archive(str(archive), (marker,), ())
+        except ValueError as error:
+            if expected not in str(error):
+                raise
+        else:
+            raise AssertionError(
+                f"{label} compressed snapshot escaped release-content policy"
+            )
 
 
 def _initialize_repository(root: Path) -> tuple[str, str, bytes, bytes, bytes]:
@@ -780,6 +826,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(dir=temporary_root) as raw:
         root = Path(raw)
         test_documentation_contract_mutation(root)
+        test_compressed_archive_policy(root)
         test_release_provenance_and_attestation(root)
     print("release gate mutation tests passed")
 

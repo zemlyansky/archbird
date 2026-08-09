@@ -745,7 +745,7 @@ static ArchbirdStatus finish_resource_limited_bundle(
 static ArchbirdStatus
 finish_role_excluded_bundle(AbBundleBuilder *builder,
                             const AbTreeSitterDescriptor *descriptor,
-                            AbProviderBundle *out_bundle, int candidate) {
+                            AbProviderBundle *out_bundle) {
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   for (index = 0; status == ARCHBIRD_OK && index < descriptor->capability_count;
@@ -754,26 +754,14 @@ finish_role_excluded_bundle(AbBundleBuilder *builder,
         &descriptor->capabilities[index];
     status = ab_bundle_builder_add_capability(
         builder, capability->domain, "none", "syntax-structure",
-        candidate
-            ? "portable syntax analysis excludes files heuristically "
-              "classified as generated delivery evidence"
-            : "portable syntax analysis excludes files asserted as vendor or "
-              "generated evidence");
+        "portable syntax analysis excludes files asserted as vendor or "
+        "generated evidence");
   }
   if (status == ARCHBIRD_OK)
     status = ab_bundle_builder_add_capability(
         builder, "syntax-summaries", "none", "syntax-structure",
-        candidate
-            ? "parser recovery evidence is not produced for files "
-              "heuristically classified as generated delivery evidence"
-            : "parser recovery evidence is not produced for files asserted "
-              "as vendor or generated evidence");
-  if (status == ARCHBIRD_OK && candidate)
-    status = ab_bundle_builder_add_diagnostic(
-        builder, "note", "tree-sitter-generated-delivery-excluded",
-        "Tree-sitter syntax analysis skipped a generated-delivery candidate; "
-        "lexical and repository evidence remain available.",
-        0, 0, 0);
+        "parser recovery evidence is not produced for files asserted as "
+        "vendor or generated evidence");
   if (status == ARCHBIRD_OK)
     status = ab_bundle_builder_finish(builder, out_bundle);
   return status;
@@ -847,11 +835,8 @@ ArchbirdStatus ab_tree_sitter_scan_file(
         ab_bundle_builder_set_runtime(&builder, descriptor->runtime_identity);
   if (status != ARCHBIRD_OK)
     goto done;
-  if (file_role(file, "vendor") || file_role(file, "generated") ||
-      file_role(file, "generated-delivery-candidate")) {
-    status = finish_role_excluded_bundle(
-        &builder, descriptor, out_bundle,
-        file_role(file, "generated-delivery-candidate"));
+  if (file_role(file, "vendor") || file_role(file, "generated")) {
+    status = finish_role_excluded_bundle(&builder, descriptor, out_bundle);
     goto done;
   }
   scan.engine = engine;

@@ -1671,6 +1671,28 @@ static int path_segment(const AbString *path, const char *wanted) {
   return 0;
 }
 
+static int path_segment_pair(const AbString *path, const char *first,
+                             const char *second) {
+  size_t first_length = strlen(first);
+  size_t second_length = strlen(second);
+  size_t start = 0;
+  int previous_is_first = 0;
+  while (start < path->length) {
+    size_t end = start;
+    int current_is_first;
+    while (end < path->length && path->data[end] != '/')
+      end++;
+    if (previous_is_first && end - start == second_length &&
+        !memcmp(path->data + start, second, second_length))
+      return 1;
+    current_is_first = end - start == first_length &&
+                       !memcmp(path->data + start, first, first_length);
+    previous_is_first = current_is_first;
+    start = end + 1;
+  }
+  return 0;
+}
+
 static int ends_with(const AbString *value, const char *suffix) {
   size_t length = strlen(suffix);
   return value->length >= length &&
@@ -1738,6 +1760,7 @@ static ArchbirdStatus candidate_roles(ResolutionState *state, AbValue *row,
   const char *leaf = path->data;
   size_t leaf_length = path->length;
   size_t index;
+  int generated_delivery = path_segment_pair(path, "public", "wasm");
   ArchbirdStatus status = ARCHBIRD_OK;
   for (index = path->length; index; index--) {
     if (path->data[index - 1] == '/') {
@@ -1766,12 +1789,11 @@ static ArchbirdStatus candidate_roles(ResolutionState *state, AbValue *row,
   if (status == ARCHBIRD_OK &&
       (path_segment(path, "generated") || ends_with(path, ".generated.c") ||
        ends_with(path, ".generated.h") || ends_with(path, ".generated.js") ||
-       ends_with(path, ".generated.ts") ||
-       bytes_contains(path->data, path->length, "public/wasm/")))
+       ends_with(path, ".generated.ts") || generated_delivery))
     status = add_role(state, row, "generated-candidate");
   if (status == ARCHBIRD_OK &&
       (ends_with(path, ".generated.js") || ends_with(path, ".generated.ts") ||
-       bytes_contains(path->data, path->length, "public/wasm/")))
+       generated_delivery))
     status = add_role(state, row, "generated-delivery-candidate");
   return status;
 }

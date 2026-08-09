@@ -502,6 +502,32 @@ def main() -> int:
                     f"{invalid_environment!r}"
                 )
     bounded = ProviderCache(bounded_root, max_bytes=100)
+    oversized_map_root = repository / "build/test-map-cache-oversized-python"
+    shutil.rmtree(oversized_map_root, ignore_errors=True)
+    oversized_map = ProviderCache(oversized_map_root, max_bytes=1)
+    oversized_map.store_map(
+        b"{}",
+        namespace="fixture",
+        project="cache-budget",
+        manifest_sha256="3" * 64,
+        config_sha256="4" * 64,
+    )
+    if oversized_map.map_stats.as_dict() != {
+        "attempted_bytes": 2,
+        "error_errno": 0,
+        "errors": 0,
+        "hits": 0,
+        "invalid": 0,
+        "misses": 0,
+        "no_space": 0,
+        "skipped": 1,
+        "writes": 0,
+    }:
+        raise AssertionError(
+            "oversized Python Map cache accounting differs from Node: "
+            f"{oversized_map.map_stats!r}"
+        )
+    shutil.rmtree(oversized_map_root, ignore_errors=True)
     no_op = object.__new__(ProviderCache)
     no_op.max_bytes = 100
     no_op.stats = provider_cache_module.ProviderCacheStats(bytes=0)

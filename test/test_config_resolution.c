@@ -180,7 +180,7 @@ int main(void) {
       "\"ignore_files\":[],\"schema_version\":1}";
   static const char candidate_config[] =
       "{\"layers\":[{\"globs\":[\"**/*.py\"],\"language\":\"python\","
-      "\"name\":\"python\"},{\"globs\":[\"public/wasm/*.js\"],"
+      "\"name\":\"python\"},{\"globs\":[\"**/*.js\"],"
       "\"language\":\"javascript\",\"name\":\"javascript\"}],"
       "\"project\":\"candidate-roles\","
       "\"tests\":[{\"globs\":[\"tests/**\"],"
@@ -189,6 +189,7 @@ int main(void) {
   static const char candidate_inventory[] =
       "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
       "\"files\":[{\"bytes\":12,\"path\":\"generated/model.py\"},"
+      "{\"bytes\":12,\"path\":\"notpublic/wasm/source.js\"},"
       "{\"bytes\":12,\"path\":\"public/wasm/archbird.js\"},"
       "{\"bytes\":12,\"path\":\"tests/test_api.py\"},"
       "{\"bytes\":12,\"path\":\"vendor/lib.py\"}],"
@@ -395,6 +396,8 @@ int main(void) {
       !contains(&candidate, "\"path\":\"public/wasm/archbird.js\","
                             "\"roles\":[\"generated-candidate\","
                             "\"generated-delivery-candidate\",\"source\"]") ||
+      !contains(&candidate, "\"path\":\"notpublic/wasm/source.js\","
+                            "\"roles\":[\"source\"]") ||
       !contains(&candidate,
                 "\"path\":\"tests/test_api.py\",\"roles\":[\"source\","
                 "\"test\"]") ||
