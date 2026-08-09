@@ -12,6 +12,11 @@ import re
 import shutil
 import tempfile
 
+try:
+    from .core_source_manifest import validate_manifest
+except ImportError:
+    from core_source_manifest import validate_manifest
+
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 FIXED_MTIME = 946684800
@@ -144,16 +149,21 @@ def _canonical_paths(paths: tuple[str, ...] | set[str]) -> tuple[str, ...]:
 
 
 def _repository_files(binding: str) -> tuple[str, ...]:
+    core_sources = validate_manifest(REPOSITORY)
     patterns = (
         "include/**/*.h",
-        "src/**/*.c",
         "src/**/*.h",
         "vendor/tree-sitter/lib/include/**/*.h",
         "vendor/tree-sitter/lib/src/**/*.c",
         "vendor/tree-sitter/lib/src/**/*.h",
         "vendor/tree-sitter/LICENSE",
     )
-    paths = {binding, LEXICAL_COMMON_IDENTITY, *VENDOR_FILE_MAP}
+    paths = {
+        binding,
+        LEXICAL_COMMON_IDENTITY,
+        *(entry.path for entry in core_sources),
+        *VENDOR_FILE_MAP,
+    }
     for pattern in patterns:
         paths.update(
             path.relative_to(REPOSITORY).as_posix()

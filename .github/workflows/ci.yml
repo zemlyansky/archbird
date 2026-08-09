@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-full:
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            app/package-lock.json
+            js/package-lock.json
+
+      - name: Install native analysis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-format cppcheck
+
+      - name: Install pinned Emscripten SDK
+        run: |
+          git clone --branch 5.0.2 --depth 1 \
+            https://github.com/emscripten-core/emsdk.git build/emsdk
+          build/emsdk/emsdk install 5.0.2
+          build/emsdk/emsdk activate 5.0.2
+
+      - name: Install Chromium
+        run: |
+          cd app
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run complete repository gates
+        run: |
+          source build/emsdk/emsdk_env.sh
+          make test verify BUILD_JOBS=2 CPPCHECK_JOBS=2

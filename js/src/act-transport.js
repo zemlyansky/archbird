@@ -122,6 +122,29 @@ function readRegular(root, relative) {
   }
 }
 
+function transitionBeforeState(root, transition) {
+  const kind = transition.kind;
+  const filePath = relativePath(transition.path);
+  if (kind === "create") {
+    requireAbsent(root, filePath);
+    return { data: Buffer.alloc(0), mode: 0 };
+  }
+  const sourcePath = kind === "move"
+    ? relativePath(transition.source_path)
+    : filePath;
+  const state = readRegular(root, sourcePath);
+  const before = transition.before;
+  if (
+    crypto.createHash("sha256").update(state.data).digest("hex") !==
+      before.sha256 ||
+    Boolean(state.mode & 0o111) !== before.executable
+  ) {
+    throw new Error(`Act source differs from before state: ${sourcePath}`);
+  }
+  if (kind === "move") requireAbsent(root, filePath);
+  return state;
+}
+
 function requireAbsent(root, relative) {
   checkParents(root, relative);
   try {
@@ -413,21 +436,7 @@ function applyMaterializedAct(workspace, actJson) {
       ? relativePath(transition.source_path)
       : filePath;
     const source = candidate(workspace, sourcePath);
-    if (kind === "create") {
-      if (fs.existsSync(destination)) {
-        throw new Error(`gate workspace destination exists: ${filePath}`);
-      }
-    } else {
-      const state = readRegular(workspace, sourcePath);
-      const before = transition.before;
-      if (
-        crypto.createHash("sha256").update(state.data).digest("hex") !==
-          before.sha256 ||
-        Boolean(state.mode & 0o111) !== before.executable
-      ) {
-        throw new Error(`gate workspace source differs from Act: ${sourcePath}`);
-      }
-    }
+    transitionBeforeState(workspace, transition);
     if (kind === "delete") {
       fs.unlinkSync(source);
       continue;
@@ -668,9 +677,7 @@ function renderAct(rootValue, actJson, { format, pretty = false }) {
     const sourcePath = kind === "move"
       ? relativePath(transition.source_path)
       : filePath;
-    const before = kind === "create"
-      ? Buffer.alloc(0)
-      : readRegular(root, sourcePath).data;
+    const before = transitionBeforeState(root, transition).data;
     const after = kind === "delete"
       ? Buffer.alloc(0)
       : Buffer.from(transition.after.content_base64, "base64");

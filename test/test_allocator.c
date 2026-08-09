@@ -402,6 +402,50 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
   return status;
 }
 
+static ArchbirdStatus exercise_map_diff(TestAllocator *allocator) {
+  static const char map[] =
+      "{\"artifact\":\"map\",\"artifacts\":[],\"builds\":[],"
+      "\"call_resolutions\":[],\"components\":[],\"diagnostics\":[],"
+      "\"edges\":[],\"evidence\":{\"config_sha256\":\"0000000000000000"
+      "000000000000000000000000000000000000000000000000\","
+      "\"input_sha256\":\"000000000000000000000000000000000000000000000000"
+      "0000000000000000\"},\"facts\":[],\"files\":[],\"inputs\":[],"
+      "\"layers\":[],\"packages\":[],\"parity\":[],"
+      "\"project\":\"allocator-diff\",\"schema_version\":9,"
+      "\"surfaces\":[],\"symbol_calls\":[{\"candidates\":[{\"line\":1,"
+      "\"path\":\"src/target.c\",\"symbol\":\"target\"}],\"evidence\":[{"
+      "\"claim\":\"syntax-structure\",\"fact_id\":\"call-1\",\"line\":4,"
+      "\"provider\":\"fixture\",\"span\":{\"end\":20,\"start\":14}}],"
+      "\"name\":\"target\",\"resolution\":\"candidate\",\"source\":{"
+      "\"path\":\"src/source.c\",\"symbol\":\"source\"}}],"
+      "\"symbol_references\":[],\"tests\":[{\"cases\":[{"
+      "\"route_evidence\":[{\"claim\":\"syntax-reference\","
+      "\"fact_id\":\"route-1\",\"line\":4,\"name\":\"target\","
+      "\"provenance\":\"derived\",\"provider\":\"fixture\","
+      "\"relation\":\"call\",\"scope\":\"case\",\"span\":{\"end\":24,"
+      "\"start\":18},\"target\":\"src/target.c\","
+      "\"target_symbol\":\"target\"}],\"selector\":\"case\"}],"
+      "\"group\":\"c\",\"path\":\"test/a.c\",\"routes\":{}}],"
+      "\"tool\":{\"implementation_sha256\":\"000000000000000000000000000000"
+      "0000000000000000000000000000000000\",\"name\":\"archbird\","
+      "\"version\":\"test\"}}";
+  ArchbirdStatus status;
+  ArchbirdEngine *engine = create_engine(allocator, &status);
+  CountingOutput output = {0};
+  if (!engine)
+    return status;
+  status = archbird_map_diff(engine, (const uint8_t *)map, sizeof(map) - 1,
+                             (const uint8_t *)map, sizeof(map) - 1, 0,
+                             count_write, &output);
+  if (status == ARCHBIRD_OK && !output.length)
+    status = ARCHBIRD_CONFLICT;
+  if (status != ARCHBIRD_OK)
+    (void)snprintf(allocator->error, sizeof(allocator->error), "%s",
+                   archbird_engine_error(engine));
+  archbird_engine_destroy(engine);
+  return status;
+}
+
 static ArchbirdStatus exercise_scip(TestAllocator *allocator) {
   static const uint8_t source[] = "int add(void) { return 1; }\n";
   static const char config[] =
@@ -950,6 +994,7 @@ int main(void) {
   run_failure_sweep("pattern-every-n", exercise_pattern);
   run_failure_sweep("config-resolution-every-n", exercise_config_resolution);
   run_failure_sweep("map-every-n", exercise_map);
+  run_failure_sweep("map-diff-every-n", exercise_map_diff);
   run_failure_sweep("scip-every-n", exercise_scip);
   run_failure_sweep("map-report-every-n", exercise_map_report);
   run_failure_sweep("map-report-budget-every-n", exercise_budgeted_map_report);
@@ -985,7 +1030,7 @@ int main(void) {
   if (failures)
     return 1;
   puts("native allocator tests passed: JSON/edit, PCRE2, config resolution, "
-       "SCIP, Map/Query/Path reports, Verify/authoring, and Act every-N "
-       "sweeps");
+       "Map diff, SCIP, Map/Query/Path reports, Verify/authoring, and Act "
+       "every-N sweeps");
   return 0;
 }

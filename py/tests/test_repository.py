@@ -1287,7 +1287,15 @@ writer.commit()
     else:
         raise AssertionError("source view accepted bytes that differ from the Map")
 
-    zero_fixture = repository / "test/fixtures/zero_config"
+    zero_fixture_temporary = tempfile.TemporaryDirectory(
+        dir=repository / "build"
+    )
+    zero_fixture = Path(zero_fixture_temporary.name) / "zero_config"
+    shutil.copytree(
+        repository / "test/fixtures/zero_config",
+        zero_fixture,
+        ignore=shutil.ignore_patterns("__pycache__", "*.py[co]"),
+    )
     zero_resolution_json = resolve_discovery(zero_fixture)
     if zero_resolution_json != resolve_discovery(zero_fixture):
         raise AssertionError("config-free resolution is not repeatable")
@@ -1677,7 +1685,7 @@ writer.commit()
         raise AssertionError("native diff changed identical file-scoped relations")
     file_scoped_changed = json.loads(file_scoped_json)
     file_scoped_changed["symbol_calls"][-1]["evidence"][0]["line"] = 9
-    file_scoped_delta = json.loads(
+    file_scoped_position_delta = json.loads(
         diff_maps_json(
             file_scoped_json,
             json.dumps(
@@ -1688,8 +1696,25 @@ writer.commit()
             ).encode("utf-8"),
         )
     )
-    if len(file_scoped_delta["sections"]["symbol_calls"]["changed"]) != 1:
-        raise AssertionError("native diff lost a file-scoped relation change")
+    if any(file_scoped_position_delta["sections"]["symbol_calls"].values()):
+        raise AssertionError("native diff retained a file-scoped position change")
+    file_scoped_changed["symbol_calls"][-1]["resolution"] = "unique"
+    file_scoped_semantic_delta = json.loads(
+        diff_maps_json(
+            file_scoped_json,
+            json.dumps(
+                file_scoped_changed,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+    )
+    if (
+        len(file_scoped_semantic_delta["sections"]["symbol_calls"]["changed"])
+        != 1
+    ):
+        raise AssertionError("native diff lost a file-scoped semantic change")
     graphml = export_graph(first, format="graphml", view="files")
     mermaid = export_graph(first, format="mermaid", view="components")
     graph_json = project.graph_view_json(view="components")

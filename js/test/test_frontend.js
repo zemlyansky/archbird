@@ -1330,7 +1330,22 @@ assert.equal(recoveredCache.stats.errors, 1);
 assert.equal(recoveredCache.stats.attemptedBytes, 1);
 assert.equal(recoveredCache.stats.errorErrno, 0);
 fs.rmSync(boundedCacheRoot, { force: true, recursive: true });
-const zeroFixture = path.resolve(process.argv[3], "test/fixtures/zero_config");
+const zeroFixtureTemporary = fs.mkdtempSync(path.join(
+  repositoryRoot,
+  "build/test-zero-config-node-",
+));
+const zeroFixture = path.join(zeroFixtureTemporary, "zero_config");
+fs.cpSync(
+  path.join(repositoryRoot, "test/fixtures/zero_config"),
+  zeroFixture,
+  {
+    recursive: true,
+    filter: (source) => {
+      const basename = path.basename(source);
+      return basename !== "__pycache__" && !/\.py[co]$/.test(basename);
+    },
+  },
+);
 const zeroResolutionJson = resolveDiscovery(zeroFixture);
 assert.deepEqual(zeroResolutionJson, resolveDiscovery(zeroFixture));
 const zeroResolution = JSON.parse(zeroResolutionJson);
@@ -1791,6 +1806,7 @@ zeroProject.dispose();
 zeroProject = null;
 workspace.dispose();
 workspace = null;
+fs.rmSync(zeroFixtureTemporary, { force: true, recursive: true });
 if (global.gc) {
   global.gc();
   global.gc();

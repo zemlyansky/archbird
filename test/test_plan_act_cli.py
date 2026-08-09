@@ -189,7 +189,20 @@ class PlanActCliTest(unittest.TestCase):
             [{"id": "NO-LEGACY", "status": "pass"}],
         )
         original = legacy.read_bytes()
+        self.assertIn(
+            b"--- a/legacy.py",
+            act_transport.render_act(
+                str(self.root), act_path.read_bytes(), format="patch"
+            ),
+        )
         legacy.write_text("drifted = True\n")
+        with self.assertRaisesRegex(
+            OSError, "Act source differs from before state: legacy.py"
+        ):
+            act_transport.render_act(
+                str(self.root), act_path.read_bytes(), format="patch"
+            )
+        self.assertEqual(legacy.read_text(), "drifted = True\n")
         drift = run(
             "apply",
             str(act_path),

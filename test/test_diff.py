@@ -252,15 +252,37 @@ def main() -> int:
     for section in ("symbol_calls", "symbol_references"):
         if any(reordered["sections"][section].values()):
             raise AssertionError({section: reordered["sections"][section]})
+    position_only = copy.deepcopy(schema7_before)
+    for section in ("symbol_calls", "symbol_references"):
+        evidence = position_only[section][0]["evidence"][0]
+        evidence["fact_id"] += "-shifted"
+        evidence["line"] += 1
+        evidence["span"]["start"] += 10
+        evidence["span"]["end"] += 10
+        position_only[section][0]["candidates"][0]["line"] = 9
+    route = position_only["tests"][route_location[0]]["cases"][route_location[1]][
+        "route_evidence"
+    ][0]
+    route["fact_id"] += "-shifted"
+    route["line"] += 1
+    route["span"]["start"] += 10
+    route["span"]["end"] += 10
+    position_delta = json.loads(
+        extension.map_diff(canonical(schema7_before), canonical(position_only))
+    )
+    for section in ("symbol_calls", "symbol_references", "test_route_evidence"):
+        if any(position_delta["sections"][section].values()):
+            raise AssertionError({section: position_delta["sections"][section]})
+
     schema7_after = copy.deepcopy(schema7_before)
-    schema7_after["symbol_calls"][0]["evidence"][0]["line"] = 5
+    schema7_after["symbol_calls"][0]["resolution"] = "unique"
     schema7_after["symbol_references"][0]["resolution"] = "unique"
     schema7_after["packages"][0]["entrypoint_surfaces"][0]["exports"].append(
         "extra"
     )
     schema7_after["tests"][route_location[0]]["cases"][route_location[1]][
         "route_evidence"
-    ][0]["line"] += 1
+    ][0]["target_symbol"] = "replacement"
     schema7 = json.loads(
         extension.map_diff(canonical(schema7_before), canonical(schema7_after))
     )
@@ -270,11 +292,15 @@ def main() -> int:
         "package_entrypoint_surfaces",
         "symbol_calls",
         "symbol_references",
-        "test_route_evidence",
     ):
         change = schema7["sections"][section]
         if len(change["changed"]) != 1 or change["added"] or change["removed"]:
             raise AssertionError({section: change})
+    route_change = schema7["sections"]["test_route_evidence"]
+    if route_change["changed"] or len(route_change["added"]) != 1 or len(
+        route_change["removed"]
+    ) != 1:
+        raise AssertionError({"test_route_evidence": route_change})
     print(
         "native saved-map diff parity passed: legacy sections and schema-7 relations"
     )

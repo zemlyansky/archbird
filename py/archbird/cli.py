@@ -2514,11 +2514,13 @@ def _diff_has_risk(document: object, raw_categories: str) -> bool:
     sections = document["sections"]
     if "all" in categories:
         return any(matches(section, "any") for section in sections.values())
-    return any(
-        matches(sections[name], policy)
-        for category in categories
-        for name, policy in _DIFF_RISK_POLICIES[category]
-    )
+    for category in categories:
+        for name, policy in _DIFF_RISK_POLICIES[category]:
+            if name not in sections:
+                raise ValueError(f"native diff result has no {name} section")
+            if matches(sections[name], policy):
+                return True
+    return False
 
 
 def _diff_main(argv: Sequence[str]) -> int:

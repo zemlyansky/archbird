@@ -236,12 +236,104 @@ static ArchbirdStatus render_sorted_values(DiffContext *context,
   return status;
 }
 
-/* Relation candidates and evidence are set-valued in the Map schema. Their
- * serialized order may change when provider merge order changes, but that is
- * not an architectural change. Other arrays remain order-sensitive. */
+static int field_is_one_of(const AbString *name, const char *const *excluded,
+                           size_t excluded_count) {
+  size_t index;
+  for (index = 0; index < excluded_count; index++)
+    if (string_is(name, excluded[index]))
+      return 1;
+  return 0;
+}
+
+static ArchbirdStatus render_filtered_object(DiffContext *context,
+                                             AbBuffer *buffer,
+                                             const AbValue *object,
+                                             const char *const *excluded,
+                                             size_t excluded_count) {
+  size_t field;
+  int first = 1;
+  ArchbirdStatus status;
+  if (!object || object->kind != AB_VALUE_OBJECT)
+    return diff_error(context, "diff expected an object");
+  status = ab_buffer_literal(buffer, "{");
+  for (field = 0; status == ARCHBIRD_OK && field < object->as.object.count;
+       field++) {
+    const AbObjectField *member = &object->as.object.fields[field];
+    if (field_is_one_of(&member->name, excluded, excluded_count))
+      continue;
+    if (!first)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_buffer_json_string(buffer, member->name.data, member->name.length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, &member->value);
+    first = 0;
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  return status;
+}
+
+static ArchbirdStatus render_sorted_filtered_objects(
+    DiffContext *context, AbBuffer *buffer, const AbValue *array,
+    const char *const *excluded, size_t excluded_count) {
+  AbString *items = NULL;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!array || array->kind != AB_VALUE_ARRAY)
+    return diff_error(context, "diff expected an array of objects");
+  if (array->as.array.count) {
+    items = (AbString *)ab_calloc(context->engine, array->as.array.count,
+                                  sizeof(*items));
+    if (!items)
+      return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory normalizing diff rows");
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < array->as.array.count;
+       index++) {
+    AbBuffer rendered;
+    ab_buffer_init(&rendered, context->engine);
+    status = render_filtered_object(context, &rendered,
+                                    &array->as.array.items[index], excluded,
+                                    excluded_count);
+    if (status == ARCHBIRD_OK)
+      status = ab_string_copy(context->engine, &items[index],
+                              (const char *)rendered.data, rendered.length);
+    ab_buffer_free(&rendered);
+  }
+  if (status == ARCHBIRD_OK && array->as.array.count > 1)
+    qsort(items, array->as.array.count, sizeof(*items), owned_string_compare);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "[");
+  for (index = 0; status == ARCHBIRD_OK && index < array->as.array.count;
+       index++) {
+    if (index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(buffer, items[index].data, items[index].length);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "]");
+  for (index = 0; index < array->as.array.count; index++)
+    ab_string_free(context->engine, &items[index]);
+  ab_free(context->engine, items);
+  return status;
+}
+
+/* Relation candidates and evidence are order-insensitive in the Map schema.
+ * Their serialized order may change when provider merge order changes, but
+ * duplicate cardinality and semantic fields remain significant. Other arrays
+ * remain order-sensitive. */
 static ArchbirdStatus render_relation_row(DiffContext *context,
                                           AbBuffer *buffer,
                                           const AbValue *row) {
+  static const char *const candidate_position_fields[] = {"line"};
+  static const char *const evidence_position_fields[] = {"fact_id", "line",
+                                                         "span"};
   size_t field;
   ArchbirdStatus status;
   if (!row || row->kind != AB_VALUE_OBJECT)
@@ -259,9 +351,16 @@ static ArchbirdStatus render_relation_row(DiffContext *context,
       status = ab_buffer_literal(buffer, ":");
     if (status != ARCHBIRD_OK)
       break;
-    if (string_is(&member->name, "candidates") ||
-        string_is(&member->name, "evidence"))
-      status = render_sorted_values(context, buffer, &member->value);
+    if (string_is(&member->name, "candidates"))
+      status = render_sorted_filtered_objects(
+          context, buffer, &member->value, candidate_position_fields,
+          sizeof(candidate_position_fields) /
+              sizeof(candidate_position_fields[0]));
+    else if (string_is(&member->name, "evidence"))
+      status = render_sorted_filtered_objects(
+          context, buffer, &member->value, evidence_position_fields,
+          sizeof(evidence_position_fields) /
+              sizeof(evidence_position_fields[0]));
     else
       status = ab_value_render(buffer, &member->value);
   }
@@ -862,6 +961,8 @@ test_route_evidence_rows(DiffContext *context, DiffIndex *out,
                          const AbString *selector, const AbValue *rows) {
   static char empty_data[] = "";
   static const AbString empty = {empty_data, 0};
+  static const char *const position_fields[] = {"fact_id", "line", "span"};
+  DiffIndex grouped = {0};
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   if (!rows)
@@ -893,8 +994,6 @@ test_route_evidence_rows(DiffContext *context, DiffIndex *out,
       return ARCHBIRD_INVALID_SCHEMA;
     if (observation && observation->as.text.length)
       correlation = &observation->as.text;
-    else if (fact_id)
-      correlation = &fact_id->as.text;
     parts[0] = group;
     parts[1] = path;
     parts[2] = selector;
@@ -908,12 +1007,53 @@ test_route_evidence_rows(DiffContext *context, DiffIndex *out,
     ab_buffer_init(&value, context->engine);
     status = key_parts(&key, parts, sizeof(parts) / sizeof(parts[0]));
     if (status == ARCHBIRD_OK)
-      status = ab_value_render(&value, row);
+      status = render_filtered_object(context, &value, row, position_fields,
+                                      sizeof(position_fields) /
+                                          sizeof(position_fields[0]));
     if (status == ARCHBIRD_OK)
-      status = add_buffers(context, out, &key, &value);
+      status = add_buffers(context, &grouped, &key, &value);
     ab_buffer_free(&value);
     ab_buffer_free(&key);
   }
+  if (status == ARCHBIRD_OK && grouped.count > 1)
+    qsort(grouped.items, grouped.count, sizeof(*grouped.items),
+          pair_full_compare);
+  if (status == ARCHBIRD_OK) {
+    size_t start = 0;
+    while (start < grouped.count) {
+      size_t end = start + 1;
+      size_t item;
+      AbBuffer value;
+      while (end < grouped.count && ab_string_equal(&grouped.items[start].key,
+                                                    &grouped.items[end].key))
+        end++;
+      ab_buffer_init(&value, context->engine);
+      if (end == start + 1) {
+        status = ab_buffer_append(&value, grouped.items[start].value.data,
+                                  grouped.items[start].value.length);
+      } else {
+        status = ab_buffer_literal(&value, "[");
+        for (item = start; status == ARCHBIRD_OK && item < end; item++) {
+          if (item != start)
+            status = ab_buffer_literal(&value, ",");
+          if (status == ARCHBIRD_OK)
+            status = ab_buffer_append(&value, grouped.items[item].value.data,
+                                      grouped.items[item].value.length);
+        }
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(&value, "]");
+      }
+      if (status == ARCHBIRD_OK)
+        status = index_add(context, out, grouped.items[start].key.data,
+                           grouped.items[start].key.length,
+                           (const char *)value.data, value.length);
+      ab_buffer_free(&value);
+      if (status != ARCHBIRD_OK)
+        break;
+      start = end;
+    }
+  }
+  diff_index_free(context->engine, &grouped);
   return status;
 }
 

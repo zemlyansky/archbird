@@ -204,9 +204,54 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(archbird_pcre2 PRIVATE -Wno-overlength-strings)
 endif()
 
-file(GLOB_RECURSE ARCHBIRD_CORE_SOURCES CONFIGURE_DEPENDS
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
-)
+set(ARCHBIRD_CORE_SOURCE_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ArchbirdCoreSources.cmake")
+if(NOT EXISTS "${ARCHBIRD_CORE_SOURCE_MANIFEST}")
+  message(FATAL_ERROR
+          "Native core source manifest is missing: "
+          "${ARCHBIRD_CORE_SOURCE_MANIFEST}")
+endif()
+include("${ARCHBIRD_CORE_SOURCE_MANIFEST}")
+if(NOT ARCHBIRD_DECLARED_CORE_SOURCE_PATHS)
+  message(FATAL_ERROR "Native core source manifest contains no sources")
+endif()
+set(ARCHBIRD_SORTED_CORE_SOURCE_PATHS
+    ${ARCHBIRD_DECLARED_CORE_SOURCE_PATHS})
+list(SORT ARCHBIRD_SORTED_CORE_SOURCE_PATHS)
+if(NOT "${ARCHBIRD_DECLARED_CORE_SOURCE_PATHS}" STREQUAL
+       "${ARCHBIRD_SORTED_CORE_SOURCE_PATHS}")
+  message(FATAL_ERROR
+          "Native core source manifest must be sorted by source path")
+endif()
+set(ARCHBIRD_CORE_SOURCE_PATHS "")
+set(ARCHBIRD_CORE_SOURCES "")
+foreach(ARCHBIRD_CORE_SOURCE_PATH IN LISTS
+        ARCHBIRD_DECLARED_CORE_SOURCE_PATHS)
+  if(NOT ARCHBIRD_CORE_SOURCE_PATH MATCHES
+     "^src/[A-Za-z0-9_./+-]+\\.c$" OR
+     ARCHBIRD_CORE_SOURCE_PATH MATCHES "(^|/)\\.\\.(/|$)")
+    message(FATAL_ERROR
+            "Invalid native core source path: ${ARCHBIRD_CORE_SOURCE_PATH}")
+  endif()
+  list(FIND ARCHBIRD_CORE_SOURCE_PATHS "${ARCHBIRD_CORE_SOURCE_PATH}"
+       ARCHBIRD_CORE_SOURCE_DUPLICATE_INDEX)
+  if(NOT ARCHBIRD_CORE_SOURCE_DUPLICATE_INDEX EQUAL -1)
+    message(FATAL_ERROR
+            "Duplicate native core source path: ${ARCHBIRD_CORE_SOURCE_PATH}")
+  endif()
+  if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${ARCHBIRD_CORE_SOURCE_PATH}")
+    message(FATAL_ERROR
+            "Listed native core source does not exist: "
+            "${ARCHBIRD_CORE_SOURCE_PATH}")
+  endif()
+  list(APPEND ARCHBIRD_CORE_SOURCE_PATHS "${ARCHBIRD_CORE_SOURCE_PATH}")
+  list(APPEND ARCHBIRD_CORE_SOURCES
+       "${CMAKE_CURRENT_SOURCE_DIR}/${ARCHBIRD_CORE_SOURCE_PATH}")
+endforeach()
+if(NOT ARCHBIRD_CORE_SOURCES)
+  message(FATAL_ERROR "Native core source manifest contains no sources")
+endif()
+list(SORT ARCHBIRD_CORE_SOURCE_PATHS)
 list(SORT ARCHBIRD_CORE_SOURCES)
 set(ARCHBIRD_TREE_SITTER_ENABLED OFF)
 set(ARCHBIRD_TREE_SITTER_VENDOR_SOURCES "")
@@ -442,7 +487,6 @@ endif()
 file(GLOB_RECURSE ARCHBIRD_IMPLEMENTATION_FILES RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
   CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson/src/*.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson/src/*.h"
@@ -450,7 +494,9 @@ file(GLOB_RECURSE ARCHBIRD_IMPLEMENTATION_FILES RELATIVE "${CMAKE_CURRENT_SOURCE
   "${CMAKE_CURRENT_SOURCE_DIR}/vendor/tree-sitter/lib/src/*.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/vendor/tree-sitter/lib/include/*.h"
 )
-list(APPEND ARCHBIRD_IMPLEMENTATION_FILES ${ARCHBIRD_PCRE2_IDENTITY_FILES})
+list(APPEND ARCHBIRD_IMPLEMENTATION_FILES
+     ${ARCHBIRD_CORE_SOURCE_PATHS}
+     ${ARCHBIRD_PCRE2_IDENTITY_FILES})
 foreach(ARCHBIRD_TREE_SITTER_VENDOR_IDENTITY_DIR IN LISTS
         ARCHBIRD_TREE_SITTER_VENDOR_IDENTITY_DIRS)
   file(GLOB_RECURSE ARCHBIRD_TREE_SITTER_IMPLEMENTATION_FILES
@@ -992,13 +1038,22 @@ if(BUILD_TESTING)
   add_test(NAME archbird_native_unified_diff
            COMMAND archbird_native_unified_diff_test)
   find_package(Python3 COMPONENTS Interpreter)
-  if(Python3_Interpreter_FOUND)
+  if(Python3_Interpreter_FOUND AND TARGET archbird_shared)
     add_test(
       NAME archbird_project_configuration_differential
       COMMAND ${CMAKE_COMMAND} -E env
               "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/py"
+              "ARCHBIRD_LIB=$<TARGET_FILE:archbird_shared>"
               ${Python3_EXECUTABLE}
               ${CMAKE_CURRENT_SOURCE_DIR}/test/test_project_configuration.py
+    )
+  endif()
+  if(Python3_Interpreter_FOUND)
+    add_test(
+      NAME archbird_core_source_manifest
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_core_source_manifest.py
+              ${CMAKE_CURRENT_SOURCE_DIR}
     )
     add_test(
       NAME archbird_native_evidence

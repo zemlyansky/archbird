@@ -1634,25 +1634,56 @@ function configMain(argv) {
 }
 
 const DIFF_POLICIES = {
-  "public-api": [["public_symbols", "removed"], ["package_exports", "removed"], ["package_entrypoint_surfaces", "removed"], ["entrypoints", "removed"]],
+  "public-api": [["public_symbols", "removed_changed"], ["package_exports", "removed_changed"], ["package_export_origins", "removed_changed"], ["package_entrypoint_surfaces", "removed_changed"], ["entrypoints", "removed_changed"]],
   bridges: [["bridges", "any"], ["bridge_surfaces", "any"]],
   calls: [["call_resolutions", "any"], ["symbol_calls", "any"], ["symbol_references", "any"]],
-  parity: [["parity_gaps", "added"]],
-  tests: [["test_route_evidence", "any"], ["test_routes", "removed"]],
+  parity: [["parity_gaps", "added_changed"]],
+  tests: [["test_route_evidence", "any"], ["test_routes", "removed_changed"]],
   architecture: [["artifacts", "any"], ["build_routes", "any"], ["component_routes", "any"], ["package_dependencies", "any"]],
 };
 
+function diffSectionMatches(section, policy) {
+  if (!section || Array.isArray(section) || typeof section !== "object") {
+    throw new Error("native diff section is invalid");
+  }
+  const added = Boolean(section.added?.length);
+  const changed = Boolean(section.changed?.length);
+  const removed = Boolean(section.removed?.length);
+  if (policy === "any") return added || changed || removed;
+  if (policy === "removed_changed") return removed || changed;
+  if (policy === "added_changed") return added || changed;
+  throw new Error(`unknown diff risk policy: ${policy}`);
+}
+
 function diffRisk(document, raw) {
-  const categories = raw.split(",").filter(Boolean);
-  const selected = categories.includes("all") ? Object.keys(DIFF_POLICIES) : categories;
-  for (const category of selected) {
-    if (!DIFF_POLICIES[category]) throw new Error(`unknown diff risk category: ${category}`);
+  if (
+    !document ||
+    Array.isArray(document) ||
+    typeof document !== "object" ||
+    !document.sections ||
+    Array.isArray(document.sections) ||
+    typeof document.sections !== "object"
+  ) {
+    throw new Error("native diff result has no sections");
+  }
+  const categories = [...new Set(raw.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean))].sort();
+  const unknown = categories.filter(
+    (category) => category !== "all" && !DIFF_POLICIES[category],
+  );
+  if (unknown.length) {
+    throw new Error(`diff.check: unknown categories: ${unknown.join(", ")}`);
+  }
+  if (categories.includes("all")) {
+    return Object.values(document.sections)
+      .some((section) => diffSectionMatches(section, "any"));
+  }
+  for (const category of categories) {
     for (const [name, policy] of DIFF_POLICIES[category]) {
       const section = document.sections[name];
-      if (!section) continue;
-      if (policy === "any" && (section.added?.length || section.changed?.length || section.removed?.length)) return true;
-      if (policy === "added" && (section.added?.length || section.changed?.length)) return true;
-      if (policy === "removed" && (section.removed?.length || section.changed?.length)) return true;
+      if (!section) throw new Error(`native diff result has no ${name} section`);
+      if (diffSectionMatches(section, policy)) return true;
     }
   }
   return false;

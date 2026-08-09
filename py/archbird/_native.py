@@ -84,7 +84,12 @@ def _load_library() -> ctypes.CDLL:
             failures.append(f"{path}: missing")
             continue
         try:
-            return ctypes.CDLL(path)
+            # Match the compiled CPython binding: keep the GIL while native
+            # work polls PyErr_CheckSignals through the cancellation callback.
+            # CDLL releases it, allowing SIGINT to raise while ctypes is only
+            # entering the callback; ctypes then reports and swallows the
+            # exception instead of returning ARCHBIRD_CANCELLED.
+            return ctypes.PyDLL(path)
         except OSError as error:
             failures.append(f"{path}: {error}")
     detail = "\n".join(failures)

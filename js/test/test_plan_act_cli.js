@@ -277,6 +277,22 @@ try {
   ]);
   assert.equal(fs.existsSync(legacy), true, "Act creation mutated the repository");
 
+  fs.writeFileSync(legacy, "module.exports = 'drifted';\n");
+  assert.throws(
+    () => actTransport.renderAct(
+      root,
+      fs.readFileSync(act),
+      { format: "patch" },
+    ),
+    /Act source differs from before state: legacy\.js/,
+  );
+  assert.equal(
+    fs.readFileSync(legacy, "utf8"),
+    "module.exports = 'drifted';\n",
+    "Act preview mutated the drifted repository",
+  );
+  fs.writeFileSync(legacy, "module.exports = 1;\n");
+
   assert.equal(
     run(["apply", act, "--root", root]).stdout.toString("utf8"),
     "Result: applied-transitions=1; state=applied\n",

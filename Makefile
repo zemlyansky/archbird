@@ -47,7 +47,9 @@ RELEASE_SELF_BEFORE = $(CURDIR)/build/release-self-before
 NATIVE_C_FILES = $(shell find include src bindings test -type f \
 	\( -name '*.c' -o -name '*.h' \) ! -path 'test/fixtures/*' -print | \
 	LC_ALL=C sort)
-NATIVE_CORE_C_FILES = $(shell find src -type f -name '*.c' -print | LC_ALL=C sort)
+NATIVE_CORE_SOURCE_MANIFEST := cmake/ArchbirdCoreSources.cmake
+NATIVE_CORE_C_FILES := $(shell LC_ALL=C awk \
+	'$$1 ~ /^src\// { print $$1 }' $(NATIVE_CORE_SOURCE_MANIFEST))
 NATIVE_TEST_C_FILES = $(shell find bindings test -type f -name '*.c' \
 	! -path 'test/fixtures/*' -print | LC_ALL=C sort)
 NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Isrc/api -Isrc/base -Isrc/evidence -Isrc/map \
@@ -72,6 +74,7 @@ test: version-check evaluation-test schema-snapshots native-test test-py test-js
 
 version-check:
 	$(PYTHON) tools/check_versions.py
+	$(PYTHON) tools/core_source_manifest.py $(CURDIR)
 
 schema-snapshots:
 	$(PYTHON) tools/sync_schemas.py --check python node
@@ -188,6 +191,7 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_evidence_routes.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_adjacency_scaling.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_readme_examples.py
+	$(PYTHON) test/test_build_graph.py $(CURDIR)
 	$(PYTHON) test/test_release_gates.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) py/tests/test_repository.py \
 		$(PYTHON_NATIVE) $(CURDIR)
@@ -227,7 +231,7 @@ build-js: js-dependencies
 
 test-js: export TMPDIR := $(BUILD_TMP)
 test-js: export XDG_CACHE_HOME := $(TEST_CACHE)
-test-js: build-js build-py
+test-js: build-js build-py native-wasm-smoke
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) test/test_coverage_observations.js js/src $(CURDIR) $(NODE_NATIVE)
 	ARCHBIRD_ENGINE=native ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
@@ -240,6 +244,8 @@ test-js: build-js build-py
 	$(NODE) test/test_readme_examples.js $(CURDIR) js/src/cli.js \
 		$(NODE_NATIVE) $(CURDIR)/js
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_git_diff_cli.py \
+		$(CURDIR) $(NODE) $(NODE_NATIVE)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_diff_cli.py \
 		$(CURDIR) $(NODE) $(NODE_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_verification_overlay.py \
 		$(CURDIR) $(NODE) $(NODE_NATIVE)

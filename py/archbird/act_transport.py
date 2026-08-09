@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Union
 
 from . import _native
 
@@ -23,6 +23,7 @@ from . import _native
 _MAX_FILE_BYTES = 64 * 1024 * 1024
 _GATE_DEFAULT_OUTPUT_BYTES = 1024 * 1024
 _GATE_TAIL_BYTES = 64 * 1024
+RepositoryRoot = Union[Path, os.PathLike[str], str]
 
 
 def _relative_path(value: object) -> str:
@@ -46,8 +47,8 @@ def _candidate(root: Path, relative: str) -> Path:
     return root.joinpath(*PurePosixPath(relative).parts)
 
 
-def _repository_root(root: Path) -> Path:
-    resolved = root.resolve(strict=True)
+def _repository_root(root: RepositoryRoot) -> Path:
+    resolved = Path(root).resolve(strict=True)
     if not resolved.is_dir():
         raise OSError("repository root must resolve to a directory")
     return resolved
@@ -120,8 +121,35 @@ def _require_absent(root: Path, relative: str) -> None:
     raise OSError(f"Act destination already exists: {relative}")
 
 
+def _transition_before_state(
+    root: Path, transition: dict[str, object]
+) -> tuple[bytes, int]:
+    kind = transition["kind"]
+    path = _relative_path(transition["path"])
+    if kind == "create":
+        _require_absent(root, path)
+        return b"", 0
+    source_path = (
+        _relative_path(transition["source_path"])
+        if kind == "move"
+        else path
+    )
+    data, mode = _read_regular(root, source_path)
+    before = transition["before"]
+    if not isinstance(before, dict):
+        raise ValueError("Act transition before state is invalid")
+    if (
+        hashlib.sha256(data).hexdigest() != before["sha256"]
+        or bool(mode & 0o111) != before["executable"]
+    ):
+        raise OSError(f"Act source differs from before state: {source_path}")
+    if kind == "move":
+        _require_absent(root, path)
+    return data, mode
+
+
 def observe_source_requirements(
-    root: Path, requirements_json: bytes
+    root: RepositoryRoot, requirements_json: bytes
 ) -> bytes:
     root = _repository_root(root)
     document = json.loads(requirements_json)
@@ -185,7 +213,7 @@ def observe_source_requirements(
 
 
 def observe_plan_sources(
-    root: Path,
+    root: RepositoryRoot,
     plan_json: bytes,
     executor_submissions_json: bytes = b"",
 ) -> bytes:
@@ -195,7 +223,7 @@ def observe_plan_sources(
     return observe_source_requirements(root, requirements)
 
 
-def observe_act_sources(root: Path, act_json: bytes) -> bytes:
+def observe_act_sources(root: RepositoryRoot, act_json: bytes) -> bytes:
     requirements = _native.act_source_requirements(act_json)
     root = _repository_root(root)
     document = json.loads(requirements)
@@ -399,19 +427,7 @@ def _apply_materialized_act(workspace: Path, act_json: bytes) -> None:
             else relative
         )
         source = _candidate(workspace, source_relative)
-        before = transition["before"]
-        if kind == "create":
-            if destination.exists() or destination.is_symlink():
-                raise OSError(f"gate workspace destination exists: {relative}")
-        else:
-            data, mode = _read_regular(workspace, source_relative)
-            if (
-                hashlib.sha256(data).hexdigest() != before["sha256"]
-                or bool(mode & 0o111) != before["executable"]
-            ):
-                raise OSError(
-                    f"gate workspace source differs from Act: {source_relative}"
-                )
+        _transition_before_state(workspace, transition)
         if kind == "delete":
             source.unlink()
             continue
@@ -617,7 +633,7 @@ def _gate_order(gates: Mapping[str, Mapping[str, object]]) -> list[str]:
     return emitted
 
 
-def run_act_gates(root: Path, act_json: bytes) -> bytes:
+def run_act_gates(root: RepositoryRoot, act_json: bytes) -> bytes:
     root = _repository_root(root)
     _native.act_validate(act_json)
     document = json.loads(act_json)
@@ -723,7 +739,11 @@ def gate_failure_details(gate_results_json: bytes) -> str:
 
 
 def render_act(
-    root: Path, act_json: bytes, *, format: str, pretty: bool = False
+    root: RepositoryRoot,
+    act_json: bytes,
+    *,
+    format: str,
+    pretty: bool = False,
 ) -> bytes:
     root = _repository_root(root)
     _native.act_validate(act_json)
@@ -739,7 +759,7 @@ def render_act(
             if kind == "move"
             else path
         )
-        before = b"" if kind == "create" else _read_regular(root, source_path)[0]
+        before = _transition_before_state(root, transition)[0]
         after = (
             b""
             if kind == "delete"
@@ -923,7 +943,7 @@ def _commit_act(root: Path, act_json: bytes) -> None:
             raise OSError(f"rollback was incomplete: {detail}")
 
 
-def apply_accepted_act(root: Path, act_json: bytes) -> int:
+def apply_accepted_act(root: RepositoryRoot, act_json: bytes) -> int:
     root = _repository_root(root)
     metadata = observe_act_sources(root, act_json)
     if _native.act_preflight_apply(act_json, metadata) == 1:
