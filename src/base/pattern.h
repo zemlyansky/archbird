@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_PATTERN_H
 #define ARCHBIRD_PATTERN_H
 
-#include "model.h"
+#include "base/model.h"
 
 typedef struct AbPattern AbPattern;
 

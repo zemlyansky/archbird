@@ -1,11 +1,11 @@
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
-#include "lexical/c/scanner.h"
-#include "lexical/javascript/scanner.h"
-#include "lexical/python/scanner.h"
-#include "lexical/r/scanner.h"
-#include "lexical/registry.h"
-#include "project_internal.h"
+#include "evidence/lexical/c/scanner.h"
+#include "evidence/lexical/javascript/scanner.h"
+#include "evidence/lexical/python/scanner.h"
+#include "evidence/lexical/r/scanner.h"
+#include "evidence/lexical/registry.h"
+#include "evidence/project_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

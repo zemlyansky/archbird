@@ -1,12 +1,12 @@
-#include "map_internal.h"
+#include "map/map_internal.h"
 
-#include "archbird_internal.h"
-#include "json_value.h"
-#include "makefile.h"
-#include "manifests/autoconf_manifest.h"
-#include "package_json.h"
-#include "sha256.h"
-#include "utf8.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
+#include "base/makefile.h"
+#include "base/sha256.h"
+#include "base/utf8.h"
+#include "evidence/manifests/autoconf_manifest.h"
+#include "map/package_json.h"
 
 #include <ctype.h>
 #include <stdio.h>

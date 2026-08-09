@@ -1,14 +1,14 @@
 #include <archbird/archbird.h>
 
-#include "archbird_internal.h"
-#include "json_value.h"
-#include "path_match.h"
-#include "projection_internal.h"
-#include "query_context.h"
-#include "query_internal.h"
-#include "render_internal.h"
-#include "retrieval.h"
-#include "sha256.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
+#include "base/path_match.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "projection/projection_internal.h"
+#include "query/query_context.h"
+#include "query/query_internal.h"
+#include "query/retrieval.h"
 
 #include <stdlib.h>
 #include <string.h>

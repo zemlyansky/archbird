@@ -1,7 +1,7 @@
-#include "map_internal.h"
-#include "map_references.h"
+#include "map/map_internal.h"
+#include "map/map_references.h"
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

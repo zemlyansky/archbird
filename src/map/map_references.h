@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_MAP_REFERENCES_H
 #define ARCHBIRD_MAP_REFERENCES_H
 
-#include "map_internal.h"
+#include "map/map_internal.h"
 
 typedef struct AbMapReferenceResolution {
   const AbManifestFile *target;

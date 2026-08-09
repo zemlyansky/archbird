@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_SCIP_PROTOBUF_H
 #define ARCHBIRD_SCIP_PROTOBUF_H
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 typedef struct AbPbCursor {
   const uint8_t *bytes;

@@ -1,6 +1,6 @@
-#include "manifests/pyproject_manifest.h"
+#include "evidence/manifests/pyproject_manifest.h"
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 #include <string.h>
 

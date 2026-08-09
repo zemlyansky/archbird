@@ -1,8 +1,8 @@
 #include "archbird/archbird.h"
 
-#include "plan_internal.h"
-#include "plan_report.h"
-#include "render_internal.h"
+#include "base/render_internal.h"
+#include "plan/plan_internal.h"
+#include "plan/plan_report.h"
 
 ArchbirdStatus archbird_plan_validate(ArchbirdEngine *engine,
                                       const uint8_t *plan_json,

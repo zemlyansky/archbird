@@ -1,6 +1,6 @@
 #include "fuzz_common.h"
 
-#include "sha256.h"
+#include "base/sha256.h"
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   ArchbirdEngine *engine = fuzz_engine();

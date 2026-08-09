@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_LEXICAL_PYTHON_SCANNER_H
 #define ARCHBIRD_LEXICAL_PYTHON_SCANNER_H
 
-#include "fact_builder.h"
+#include "evidence/fact_builder.h"
 
 ArchbirdStatus ab_scan_python_file(ArchbirdEngine *engine,
                                    const AbSourceManifest *manifest,

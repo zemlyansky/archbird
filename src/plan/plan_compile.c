@@ -1,15 +1,15 @@
 #include <archbird/archbird.h>
 
-#include "archbird_internal.h"
-#include "artifact_validation.h"
-#include "gate.h"
-#include "json_value.h"
-#include "plan_compile_internal.h"
-#include "plan_internal.h"
-#include "projection_internal.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "verification_artifact.h"
+#include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
+#include "base/gate.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "plan/plan_compile_internal.h"
+#include "plan/plan_internal.h"
+#include "projection/projection_internal.h"
+#include "verify/verification_artifact.h"
 
 #include <stdint.h>
 #include <stdio.h>

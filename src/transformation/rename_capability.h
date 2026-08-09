@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_TRANSFORMATION_RENAME_CAPABILITY_H
 #define ARCHBIRD_TRANSFORMATION_RENAME_CAPABILITY_H
 
-#include "json_value.h"
-#include "projection_model.h"
+#include "base/json_value.h"
+#include "projection/projection_model.h"
 
 typedef struct AbRenameEvidence {
   const AbValue *file;

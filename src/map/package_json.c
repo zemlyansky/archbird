@@ -1,7 +1,7 @@
-#include "package_json.h"
+#include "map/package_json.h"
 
-#include "archbird_internal.h"
-#include "json_internal.h"
+#include "base/archbird_internal.h"
+#include "base/json_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

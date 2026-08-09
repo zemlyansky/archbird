@@ -1,6 +1,6 @@
-#include "registry.h"
+#include "evidence/semantic/registry.h"
 
-#include "scip/scanner.h"
+#include "evidence/semantic/scip/scanner.h"
 
 #include <string.h>
 

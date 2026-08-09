@@ -1,10 +1,10 @@
 #ifndef ARCHBIRD_OKF_PUBLISH_INTERNAL_H
 #define ARCHBIRD_OKF_PUBLISH_INTERNAL_H
 
-#include "json_value.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "verification_artifact.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "verify/verification_artifact.h"
 
 typedef struct AbOkfPubSource {
   const char *artifact;

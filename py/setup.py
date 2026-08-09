@@ -324,13 +324,7 @@ sources = [
         and path != "vendor/tree-sitter/lib/src/lib.c"
     )
 ]
-source_include_dirs = sorted(
-    {
-        str(Path("csrc") / PurePosixPath(path).parent)
-        for path in paths
-        if path.startswith("src/") and path.endswith((".c", ".h"))
-    }
-)
+source_include_dirs = [str(Path("csrc") / "src")]
 tree_sitter_include_dirs = sorted(
     {
         str(Path("csrc") / PurePosixPath(path).parent)
@@ -367,7 +361,6 @@ setup(
                 "csrc/vendor/pcre2",
                 "csrc/vendor/tree-sitter/lib/include",
                 "csrc/vendor/tree-sitter/lib/src",
-                "csrc/src/evidence/syntax/tree_sitter",
                 *tree_sitter_include_dirs,
             ],
             define_macros=[

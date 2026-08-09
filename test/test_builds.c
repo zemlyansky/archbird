@@ -1,6 +1,6 @@
-#include "manifests/autoconf_manifest.h"
-#include "map_internal.h"
-#include "sha256.h"
+#include "base/sha256.h"
+#include "evidence/manifests/autoconf_manifest.h"
+#include "map/map_internal.h"
 #include <archbird/archbird.h>
 
 #include <stdio.h>

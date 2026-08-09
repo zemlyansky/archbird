@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_JSON_VALUE_H
 #define ARCHBIRD_JSON_VALUE_H
 
-#include "model.h"
-#include "render_internal.h"
+#include "base/model.h"
+#include "base/render_internal.h"
 
 ArchbirdStatus ab_json_value_decode(ArchbirdEngine *engine, const uint8_t *json,
                                     size_t json_length, AbValue *out);

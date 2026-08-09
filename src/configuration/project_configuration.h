@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_PROJECT_CONFIGURATION_H
 #define ARCHBIRD_PROJECT_CONFIGURATION_H
 
-#include "model.h"
-#include "render_internal.h"
+#include "base/model.h"
+#include "base/render_internal.h"
 
 typedef struct AbProjectConfiguration {
   AbValue normalized;

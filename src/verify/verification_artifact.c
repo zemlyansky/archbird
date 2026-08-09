@@ -1,10 +1,10 @@
-#include "verification_artifact.h"
+#include "verify/verification_artifact.h"
 
 /* This module validates saved Verification identity, not constraint policy. */
-#include "artifact_validation.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "verify_checks.h"
+#include "base/artifact_validation.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "verify/verify_checks.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,6 +1,6 @@
 #include "fuzz_common.h"
 
-#include "pattern.h"
+#include "base/pattern.h"
 
 #include <string.h>
 

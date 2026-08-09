@@ -1,4 +1,4 @@
-#include "okf_internal.h"
+#include "interchange/okf/okf_internal.h"
 
 ArchbirdStatus
 archbird_okf_analyze(ArchbirdEngine *engine, const uint8_t *source_bundle_json,

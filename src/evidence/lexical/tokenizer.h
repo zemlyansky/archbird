@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_LEX_H
 #define ARCHBIRD_LEX_H
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 typedef enum AbTokenKind {
   AB_TOKEN_IDENTIFIER = 0,

@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_SOURCE_REPORT_H
 #define ARCHBIRD_SOURCE_REPORT_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 typedef ArchbirdStatus (*AbSourceReportLookupFn)(void *user_data,
                                                  const AbString *path,

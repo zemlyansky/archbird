@@ -1,6 +1,6 @@
-#include "projection_model.h"
+#include "projection/projection_model.h"
 
-#include "sha256.h"
+#include "base/sha256.h"
 
 #include <stdlib.h>
 #include <string.h>

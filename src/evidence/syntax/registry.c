@@ -1,27 +1,27 @@
-#include "syntax/registry.h"
+#include "evidence/syntax/registry.h"
 
-#include "archbird_internal.h"
-#include "json_value.h"
-#include "project_internal.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
+#include "evidence/project_internal.h"
 
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_C
-#include "syntax/tree_sitter/c/scanner.h"
+#include "evidence/syntax/tree_sitter/c/scanner.h"
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_CPP
-#include "syntax/tree_sitter/cpp/scanner.h"
+#include "evidence/syntax/tree_sitter/cpp/scanner.h"
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_JAVASCRIPT
-#include "syntax/tree_sitter/javascript/scanner.h"
+#include "evidence/syntax/tree_sitter/javascript/scanner.h"
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_PYTHON
-#include "syntax/tree_sitter/python/scanner.h"
+#include "evidence/syntax/tree_sitter/python/scanner.h"
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_R
-#include "syntax/tree_sitter/r/scanner.h"
+#include "evidence/syntax/tree_sitter/r/scanner.h"
 #endif
 #if defined(ARCHBIRD_HAVE_TREE_SITTER_TYPESCRIPT) ||                           \
     defined(ARCHBIRD_HAVE_TREE_SITTER_TSX)
-#include "syntax/tree_sitter/typescript/scanner.h"
+#include "evidence/syntax/tree_sitter/typescript/scanner.h"
 #endif
 
 #include <stdlib.h>

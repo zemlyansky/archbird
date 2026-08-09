@@ -1,6 +1,6 @@
-#include "map_internal.h"
+#include "map/map_internal.h"
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

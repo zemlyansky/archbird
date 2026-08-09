@@ -1,6 +1,6 @@
-#include "lexical/c/constants.h"
+#include "evidence/lexical/c/constants.h"
 
-#include "render_internal.h"
+#include "base/render_internal.h"
 
 #include <errno.h>
 #include <inttypes.h>

@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_PROJECTION_MODEL_H
 #define ARCHBIRD_PROJECTION_MODEL_H
 
-#include "json_value.h"
-#include "render_internal.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
 
 int ab_projection_value_is(const AbValue *value, const char *literal);
 int ab_projection_nonblank(const AbValue *value);

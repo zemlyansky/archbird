@@ -1,10 +1,10 @@
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
-#include "file_facts.h"
-#include "model.h"
-#include "project_internal.h"
-#include "render_internal.h"
-#include "sha256.h"
+#include "base/model.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "evidence/file_facts.h"
+#include "evidence/project_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

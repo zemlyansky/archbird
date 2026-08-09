@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_PROJECTION_COMPONENT_MEMBERSHIP_H
 #define ARCHBIRD_PROJECTION_COMPONENT_MEMBERSHIP_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 typedef struct AbProjectionMembershipAssignment {
   const AbString *path;

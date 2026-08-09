@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_CONFIG_H
 #define ARCHBIRD_CONFIG_H
 
-#include "model.h"
+#include "base/model.h"
 
 typedef struct AbExternalNamespace {
   AbString prefix;

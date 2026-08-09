@@ -1,16 +1,16 @@
-#include "config_resolution.h"
+#include "evidence/config_resolution.h"
 
-#include "archbird_internal.h"
-#include "config.h"
-#include "gitignore.h"
-#include "json_value.h"
-#include "manifests/autoconf_manifest.h"
-#include "manifests/pyproject_manifest.h"
-#include "path_match.h"
-#include "project_configuration.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "utf8.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
+#include "base/path_match.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "base/utf8.h"
+#include "configuration/project_configuration.h"
+#include "evidence/config.h"
+#include "evidence/gitignore.h"
+#include "evidence/manifests/autoconf_manifest.h"
+#include "evidence/manifests/pyproject_manifest.h"
 
 #include <stdio.h>
 #include <stdlib.h>

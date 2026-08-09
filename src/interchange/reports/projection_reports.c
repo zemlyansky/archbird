@@ -1,7 +1,7 @@
-#include "projection_reports.h"
+#include "interchange/reports/projection_reports.h"
 
-#include "archbird_internal.h"
-#include "report_utils.h"
+#include "base/archbird_internal.h"
+#include "interchange/reports/report_utils.h"
 
 #include <inttypes.h>
 #include <stdint.h>

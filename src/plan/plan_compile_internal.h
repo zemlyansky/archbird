@@ -1,9 +1,9 @@
 #ifndef ARCHBIRD_PLAN_COMPILE_INTERNAL_H
 #define ARCHBIRD_PLAN_COMPILE_INTERNAL_H
 
-#include "json_value.h"
-#include "projection_internal.h"
-#include "verification_artifact.h"
+#include "base/json_value.h"
+#include "projection/projection_internal.h"
+#include "verify/verification_artifact.h"
 
 #define AB_PLAN_COMPILE_MAX_ROWS 4096u
 

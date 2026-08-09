@@ -1,10 +1,10 @@
 #include "archbird/archbird.h"
 
-#include "archbird_internal.h"
-#include "json_internal.h"
-#include "json_value.h"
-#include "project_configuration.h"
-#include "query_internal.h"
+#include "base/archbird_internal.h"
+#include "base/json_internal.h"
+#include "base/json_value.h"
+#include "configuration/project_configuration.h"
+#include "query/query_internal.h"
 
 #include <string.h>
 

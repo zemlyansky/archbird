@@ -1,7 +1,7 @@
-#include "verify_checks.h"
+#include "verify/verify_checks.h"
 
-#include "path_match.h"
-#include "sha256.h"
+#include "base/path_match.h"
+#include "base/sha256.h"
 
 #include <stdio.h>
 #include <stdlib.h>

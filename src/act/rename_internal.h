@@ -1,9 +1,9 @@
 #ifndef ARCHBIRD_ACT_RENAME_INTERNAL_H
 #define ARCHBIRD_ACT_RENAME_INTERNAL_H
 
-#include "json_value.h"
-#include "projection_model.h"
-#include "rename_capability.h"
+#include "base/json_value.h"
+#include "projection/projection_model.h"
+#include "transformation/rename_capability.h"
 
 #include <stddef.h>
 #include <stdint.h>

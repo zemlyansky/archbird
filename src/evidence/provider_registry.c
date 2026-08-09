@@ -1,8 +1,8 @@
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
-#include "lexical/registry.h"
-#include "semantic/registry.h"
-#include "syntax/registry.h"
+#include "evidence/lexical/registry.h"
+#include "evidence/semantic/registry.h"
+#include "evidence/syntax/registry.h"
 
 ArchbirdStatus archbird_project_scan_builtin(ArchbirdEngine *engine,
                                              ArchbirdProject *project,

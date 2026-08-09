@@ -317,26 +317,10 @@ else()
 endif()
 
 set(ARCHBIRD_INTERNAL_INCLUDE_DIRS
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/api"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/base"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/configuration"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/evidence"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/map"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/path"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/projection"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/query"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/constraints"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/plan"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/act"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/transformation"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/verify"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/graph"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/okf"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/interchange/reports"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 if(ARCHBIRD_TREE_SITTER_ENABLED)
   list(APPEND ARCHBIRD_INTERNAL_INCLUDE_DIRS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/evidence/syntax/tree_sitter"
     "${CMAKE_CURRENT_SOURCE_DIR}/vendor/tree-sitter/lib/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/vendor/tree-sitter/lib/src"
     ${ARCHBIRD_TREE_SITTER_VENDOR_INCLUDE_DIRS}
@@ -1053,6 +1037,12 @@ if(BUILD_TESTING)
       NAME archbird_core_source_manifest
       COMMAND ${Python3_EXECUTABLE}
               ${CMAKE_CURRENT_SOURCE_DIR}/test/test_core_source_manifest.py
+              ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(
+      NAME archbird_private_include_boundaries
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/test/test_private_include_boundaries.py
               ${CMAKE_CURRENT_SOURCE_DIR}
     )
     add_test(

@@ -1,7 +1,7 @@
-#include "gate.h"
+#include "base/gate.h"
 
-#include "artifact_validation.h"
-#include "render_internal.h"
+#include "base/artifact_validation.h"
+#include "base/render_internal.h"
 
 #include <string.h>
 

@@ -1,13 +1,13 @@
 #include <archbird/archbird.h>
 
-#include "act_gate_acceptance.h"
-#include "act_internal.h"
-#include "act_projection_acceptance.h"
-#include "artifact_validation.h"
-#include "projection_internal.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "verification_artifact.h"
+#include "act/act_gate_acceptance.h"
+#include "act/act_internal.h"
+#include "act/act_projection_acceptance.h"
+#include "base/artifact_validation.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "projection/projection_internal.h"
+#include "verify/verification_artifact.h"
 
 #include <string.h>
 

@@ -110,7 +110,9 @@ def load_manifest(repository: Path) -> tuple[str, ...]:
     return tuple(paths)
 
 
-def _reviewed_components(repository: Path) -> dict[str, tuple[str, ...]]:
+def load_reviewed_components(repository: Path) -> dict[str, tuple[str, ...]]:
+    """Load and validate the reviewed component path declarations."""
+
     configuration_path = repository / PROJECT_CONFIGURATION_PATH
     try:
         configuration = json.loads(configuration_path.read_text(encoding="utf-8"))
@@ -148,6 +150,35 @@ def _reviewed_components(repository: Path) -> dict[str, tuple[str, ...]]:
     return components
 
 
+def reviewed_component_owners(
+    path: str, components: dict[str, tuple[str, ...]]
+) -> tuple[str, ...]:
+    """Return every reviewed component whose path patterns own ``path``."""
+
+    return tuple(
+        sorted(
+            name
+            for name, patterns in components.items()
+            if any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+        )
+    )
+
+
+def require_reviewed_component_owner(
+    path: str, components: dict[str, tuple[str, ...]]
+) -> str:
+    """Return the one reviewed owner for ``path`` or reject configuration drift."""
+
+    owners = reviewed_component_owners(path, components)
+    if len(owners) != 1:
+        rendered = ", ".join(owners) if owners else "none"
+        raise ManifestError(
+            f"{path}: expected exactly one reviewed archbird.json "
+            f"component, found {rendered}"
+        )
+    return owners[0]
+
+
 def validate_manifest(repository: Path) -> tuple[SourceEntry, ...]:
     """Prove source completeness and agreement with reviewed components."""
 
@@ -166,21 +197,12 @@ def validate_manifest(repository: Path) -> tuple[SourceEntry, ...]:
     if stale:
         raise ManifestError("stale native source declaration(s): " + ", ".join(stale))
 
-    components = _reviewed_components(repository)
+    components = load_reviewed_components(repository)
     entries: list[SourceEntry] = []
     for path in paths:
-        owners = sorted(
-            name
-            for name, patterns in components.items()
-            if any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+        entries.append(
+            SourceEntry(require_reviewed_component_owner(path, components), path)
         )
-        if len(owners) != 1:
-            rendered = ", ".join(owners) if owners else "none"
-            raise ManifestError(
-                f"{path}: expected exactly one reviewed archbird.json "
-                f"component, found {rendered}"
-            )
-        entries.append(SourceEntry(owners[0], path))
     return tuple(entries)
 
 

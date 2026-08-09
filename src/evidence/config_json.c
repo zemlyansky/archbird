@@ -1,10 +1,10 @@
-#include "config.h"
+#include "evidence/config.h"
 
-#include "project_configuration.h"
+#include "configuration/project_configuration.h"
 
-#include "json_internal.h"
-#include "pattern.h"
-#include "sha256.h"
+#include "base/json_internal.h"
+#include "base/pattern.h"
+#include "base/sha256.h"
 
 #include <stdlib.h>
 #include <string.h>

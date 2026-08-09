@@ -1,7 +1,7 @@
-#include "plan_compile_internal.h"
+#include "plan/plan_compile_internal.h"
 
-#include "artifact_validation.h"
-#include "utf8.h"
+#include "base/artifact_validation.h"
+#include "base/utf8.h"
 
 #include <stdio.h>
 #include <string.h>

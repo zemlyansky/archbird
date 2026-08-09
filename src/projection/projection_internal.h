@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_PROJECTION_INTERNAL_H
 #define ARCHBIRD_PROJECTION_INTERNAL_H
 
-#include "json_value.h"
-#include "projection_model.h"
+#include "base/json_value.h"
+#include "projection/projection_model.h"
 
 typedef struct AbProjectionPlan {
   AbString id;

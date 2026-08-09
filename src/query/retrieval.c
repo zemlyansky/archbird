@@ -1,6 +1,6 @@
-#include "retrieval.h"
+#include "query/retrieval.h"
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 #include <limits.h>
 #include <stdlib.h>

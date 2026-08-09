@@ -1,11 +1,11 @@
-#include "source_report.h"
+#include "interchange/reports/source_report.h"
 
-#include "archbird_internal.h"
-#include "path_match.h"
-#include "projection_internal.h"
-#include "report_utils.h"
-#include "sha256.h"
-#include "utf8.h"
+#include "base/archbird_internal.h"
+#include "base/path_match.h"
+#include "base/sha256.h"
+#include "base/utf8.h"
+#include "interchange/reports/report_utils.h"
+#include "projection/projection_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

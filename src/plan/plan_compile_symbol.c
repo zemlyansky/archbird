@@ -1,8 +1,8 @@
-#include "plan_compile_internal.h"
+#include "plan/plan_compile_internal.h"
 
-#include "artifact_validation.h"
-#include "rename_capability.h"
-#include "utf8.h"
+#include "base/artifact_validation.h"
+#include "base/utf8.h"
+#include "transformation/rename_capability.h"
 
 #include <stdarg.h>
 #include <stdio.h>

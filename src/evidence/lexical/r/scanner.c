@@ -1,7 +1,7 @@
-#include "lexical/r/scanner.h"
+#include "evidence/lexical/r/scanner.h"
 
-#include "lexical/tokenizer.h"
-#include "sha256.h"
+#include "base/sha256.h"
+#include "evidence/lexical/tokenizer.h"
 
 #include <string.h>
 

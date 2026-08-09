@@ -1,7 +1,7 @@
-#include "map_references.h"
+#include "map/map_references.h"
 
-#include "archbird_internal.h"
-#include "json_value.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
 
 #include <stdio.h>
 #include <string.h>

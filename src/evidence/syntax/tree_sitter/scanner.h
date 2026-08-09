@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_TREE_SITTER_SCANNER_H
 #define ARCHBIRD_TREE_SITTER_SCANNER_H
 
-#include "fact_builder.h"
+#include "evidence/fact_builder.h"
 #include "tree_sitter/api.h"
 
 typedef struct AbTreeSitterScan AbTreeSitterScan;

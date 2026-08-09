@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_PATH_ARTIFACT_H
 #define ARCHBIRD_PATH_ARTIFACT_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 typedef struct AbPathArtifact {
   ArchbirdEngine *engine;

@@ -1,7 +1,7 @@
-#include "python/definitions.h"
+#include "evidence/python/definitions.h"
 
-#include "python/tokens.h"
-#include "render_internal.h"
+#include "base/render_internal.h"
+#include "evidence/python/tokens.h"
 
 #include <stdlib.h>
 #include <string.h>

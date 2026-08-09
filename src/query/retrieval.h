@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_RETRIEVAL_H
 #define ARCHBIRD_RETRIEVAL_H
 
-#include "json_value.h"
-#include "projection_model.h"
+#include "base/json_value.h"
+#include "projection/projection_model.h"
 
 #define AB_RETRIEVAL_MAX_TERMS 16
 

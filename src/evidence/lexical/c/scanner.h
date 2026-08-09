@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_LEXICAL_C_SCANNER_H
 #define ARCHBIRD_LEXICAL_C_SCANNER_H
 
-#include "fact_builder.h"
+#include "evidence/fact_builder.h"
 
 typedef struct AbNameRef {
   const uint8_t *data;

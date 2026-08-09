@@ -1,9 +1,9 @@
-#include "plan_internal.h"
+#include "plan/plan_internal.h"
 
-#include "archbird_internal.h"
-#include "artifact_validation.h"
-#include "gate.h"
-#include "sha256.h"
+#include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
+#include "base/gate.h"
+#include "base/sha256.h"
 
 #include <ctype.h>
 #include <stdint.h>

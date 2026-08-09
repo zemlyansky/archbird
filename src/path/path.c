@@ -1,11 +1,11 @@
 #include <archbird/archbird.h>
 
-#include "json_value.h"
-#include "path_internal.h"
-#include "path_match.h"
-#include "projection_internal.h"
-#include "projection_model.h"
-#include "sha256.h"
+#include "base/json_value.h"
+#include "base/path_match.h"
+#include "base/sha256.h"
+#include "path/path_internal.h"
+#include "projection/projection_internal.h"
+#include "projection/projection_model.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,6 +1,6 @@
-#include "verify_checks.h"
+#include "verify/verify_checks.h"
 
-#include "sha256.h"
+#include "base/sha256.h"
 
 #include <stdlib.h>
 #include <string.h>

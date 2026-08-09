@@ -1,6 +1,6 @@
-#include "verify_runtime.h"
+#include "verify/verify_runtime.h"
 
-#include "verify_checks.h"
+#include "verify/verify_checks.h"
 
 #include <string.h>
 

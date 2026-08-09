@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_PYPROJECT_MANIFEST_H
 #define ARCHBIRD_PYPROJECT_MANIFEST_H
 
-#include "model.h"
+#include "base/model.h"
 
 typedef struct AbPyprojectMetadata {
   AbString name;

@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_ACT_GATE_ACCEPTANCE_H
 #define ARCHBIRD_ACT_GATE_ACCEPTANCE_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 typedef struct AbActGateAcceptance {
   AbValue document;

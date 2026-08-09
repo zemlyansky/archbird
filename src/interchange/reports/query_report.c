@@ -1,7 +1,7 @@
-#include "map_reports.h"
+#include "interchange/reports/map_reports.h"
 
-#include "archbird_internal.h"
-#include "report_utils.h"
+#include "base/archbird_internal.h"
+#include "interchange/reports/report_utils.h"
 
 #include <stdlib.h>
 #include <string.h>

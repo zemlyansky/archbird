@@ -1,6 +1,6 @@
-#include "c/napi_export.h"
+#include "act/c/napi_export.h"
 
-#include "artifact_validation.h"
+#include "base/artifact_validation.h"
 #include "tree_sitter/api.h"
 
 #include <stdint.h>

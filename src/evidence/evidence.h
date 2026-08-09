@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_EVIDENCE_H
 #define ARCHBIRD_EVIDENCE_H
 
-#include "model.h"
+#include "base/model.h"
 
 ArchbirdStatus ab_decode_source_manifest(ArchbirdEngine *engine,
                                          const uint8_t *json,

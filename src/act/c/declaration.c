@@ -1,6 +1,6 @@
-#include "c/declaration.h"
+#include "act/c/declaration.h"
 
-#include "artifact_validation.h"
+#include "base/artifact_validation.h"
 
 #include <ctype.h>
 #include <string.h>

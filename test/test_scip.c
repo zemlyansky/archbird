@@ -1,5 +1,5 @@
+#include "base/sha256.h"
 #include "scip_fixture.h"
-#include "sha256.h"
 #include <archbird/archbird.h>
 
 #include <stdio.h>

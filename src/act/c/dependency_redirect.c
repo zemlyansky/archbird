@@ -1,6 +1,6 @@
-#include "c/dependency_redirect.h"
+#include "act/c/dependency_redirect.h"
 
-#include "artifact_validation.h"
+#include "base/artifact_validation.h"
 
 #include <string.h>
 

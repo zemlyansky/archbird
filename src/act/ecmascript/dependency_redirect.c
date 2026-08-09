@@ -1,7 +1,7 @@
-#include "dependency_redirect_internal.h"
+#include "act/dependency_redirect_internal.h"
 
-#include "act_source.h"
-#include "artifact_validation.h"
+#include "act/act_source.h"
+#include "base/artifact_validation.h"
 #include "tree_sitter/api.h"
 
 #include <stdint.h>

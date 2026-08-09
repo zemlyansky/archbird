@@ -1,6 +1,6 @@
 #include "fuzz_common.h"
 
-#include "sha256.h"
+#include "base/sha256.h"
 
 #include <stdio.h>
 #include <string.h>

@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_MAP_REPORTS_H
 #define ARCHBIRD_MAP_REPORTS_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 ArchbirdStatus ab_map_report_markdown(ArchbirdEngine *engine,
                                       const AbValue *map, int full,

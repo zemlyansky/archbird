@@ -1,8 +1,8 @@
-#include "map_internal.h"
+#include "map/map_internal.h"
 
-#include "archbird_internal.h"
-#include "pattern.h"
-#include "utf8.h"
+#include "base/archbird_internal.h"
+#include "base/pattern.h"
+#include "base/utf8.h"
 
 #include <stdio.h>
 #include <stdlib.h>

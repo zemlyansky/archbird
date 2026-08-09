@@ -1,8 +1,8 @@
-#include "archbird_internal.h"
-#include "makefile.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "utf8.h"
+#include "base/archbird_internal.h"
+#include "base/makefile.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "base/utf8.h"
 
 #include <ctype.h>
 #include <string.h>

@@ -1,10 +1,10 @@
 #include <archbird/archbird.h>
 
-#include "archbird_internal.h"
-#include "json_value.h"
-#include "render_internal.h"
-#include "verify_checks.h"
-#include "verify_runtime.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "verify/verify_checks.h"
+#include "verify/verify_runtime.h"
 
 #include <stdlib.h>
 #include <string.h>

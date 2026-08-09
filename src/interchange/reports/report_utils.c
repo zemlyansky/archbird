@@ -1,6 +1,6 @@
-#include "report_utils.h"
+#include "interchange/reports/report_utils.h"
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 #include <stdarg.h>
 #include <stdio.h>

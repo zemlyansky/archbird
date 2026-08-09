@@ -1,7 +1,7 @@
-#include "json_value.h"
+#include "base/json_value.h"
 
-#include "json_internal.h"
-#include "json_number.h"
+#include "base/json_internal.h"
+#include "base/json_number.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,11 +1,11 @@
 #include <archbird/archbird.h>
 
-#include "archbird_internal.h"
-#include "json_value.h"
-#include "map_reports.h"
-#include "query_internal.h"
-#include "render_internal.h"
-#include "verification_artifact.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "interchange/reports/map_reports.h"
+#include "query/query_internal.h"
+#include "verify/verification_artifact.h"
 
 #include <string.h>
 

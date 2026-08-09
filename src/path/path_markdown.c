@@ -1,9 +1,9 @@
 #include <archbird/archbird.h>
 
-#include "json_value.h"
-#include "path_artifact.h"
-#include "path_internal.h"
-#include "render_internal.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "path/path_artifact.h"
+#include "path/path_internal.h"
 
 #include <string.h>
 

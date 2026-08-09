@@ -1,6 +1,6 @@
-#include "component_membership.h"
+#include "projection/component_membership.h"
 
-#include "projection_model.h"
+#include "projection/projection_model.h"
 
 #include <stdlib.h>
 #include <string.h>

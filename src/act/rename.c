@@ -1,9 +1,9 @@
-#include "rename.h"
+#include "act/rename.h"
 
-#include "act_source.h"
-#include "artifact_validation.h"
-#include "projection_internal.h"
-#include "rename_internal.h"
+#include "act/act_source.h"
+#include "act/rename_internal.h"
+#include "base/artifact_validation.h"
+#include "projection/projection_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

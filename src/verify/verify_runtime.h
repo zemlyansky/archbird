@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_VERIFY_RUNTIME_H
 #define ARCHBIRD_VERIFY_RUNTIME_H
 
-#include "../projection/projection_model.h"
+#include "projection/projection_model.h"
 
 typedef struct AbVerifyDiagnostic {
   AbString severity;

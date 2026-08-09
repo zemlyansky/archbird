@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_ARTIFACT_VALIDATION_H
 #define ARCHBIRD_ARTIFACT_VALIDATION_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 #include <stdint.h>
 

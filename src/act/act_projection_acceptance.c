@@ -1,7 +1,7 @@
-#include "act_projection_acceptance.h"
+#include "act/act_projection_acceptance.h"
 
-#include "artifact_validation.h"
-#include "projection_internal.h"
+#include "base/artifact_validation.h"
+#include "projection/projection_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>

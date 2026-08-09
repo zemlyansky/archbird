@@ -1,7 +1,7 @@
-#include "evidence_render.h"
+#include "evidence/evidence_render.h"
 
-#include "json_number.h"
-#include "sha256.h"
+#include "base/json_number.h"
+#include "base/sha256.h"
 
 #include <string.h>
 

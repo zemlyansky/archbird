@@ -1,12 +1,12 @@
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
-#include "config.h"
-#include "file_facts.h"
-#include "map_internal.h"
-#include "map_references.h"
-#include "project_internal.h"
-#include "render_internal.h"
-#include "sha256.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "evidence/config.h"
+#include "evidence/file_facts.h"
+#include "evidence/project_internal.h"
+#include "map/map_internal.h"
+#include "map/map_references.h"
 
 #include <stdlib.h>
 #include <string.h>

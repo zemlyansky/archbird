@@ -1,10 +1,10 @@
 #ifndef ARCHBIRD_MAP_INTERNAL_H
 #define ARCHBIRD_MAP_INTERNAL_H
 
-#include "config.h"
-#include "path_match.h"
-#include "project_internal.h"
-#include "render_internal.h"
+#include "base/path_match.h"
+#include "base/render_internal.h"
+#include "evidence/config.h"
+#include "evidence/project_internal.h"
 
 typedef struct AbMapSymbolReference {
   const AbManifestFile *file;

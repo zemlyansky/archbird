@@ -1,7 +1,7 @@
-#include "map_internal.h"
+#include "map/map_internal.h"
 
-#include "json_value.h"
-#include "sha256.h"
+#include "base/json_value.h"
+#include "base/sha256.h"
 
 #include <string.h>
 

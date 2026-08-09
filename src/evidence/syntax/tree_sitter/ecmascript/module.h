@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_TREE_SITTER_ECMASCRIPT_MODULE_H
 #define ARCHBIRD_TREE_SITTER_ECMASCRIPT_MODULE_H
 
-#include "syntax/tree_sitter/scanner.h"
+#include "evidence/syntax/tree_sitter/scanner.h"
 
 /* Extract the statically determined module surface of one ECMAScript program.
  * ESM records come directly from export/import declarations. CommonJS uses a

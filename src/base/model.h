@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_MODEL_H
 #define ARCHBIRD_MODEL_H
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 typedef struct AbString {
   char *data;

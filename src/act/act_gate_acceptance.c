@@ -1,8 +1,8 @@
-#include "act_gate_acceptance.h"
+#include "act/act_gate_acceptance.h"
 
-#include "artifact_validation.h"
-#include "base64.h"
-#include "gate.h"
+#include "base/artifact_validation.h"
+#include "base/base64.h"
+#include "base/gate.h"
 
 #include <string.h>
 

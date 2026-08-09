@@ -1,7 +1,7 @@
 #include "archbird/archbird.h"
 
-#include "constraints_internal.h"
-#include "project_configuration.h"
+#include "configuration/project_configuration.h"
+#include "constraints/constraints_internal.h"
 
 static AbConstraintPolicyInput
 policy_input(const AbProjectConfiguration *configuration) {

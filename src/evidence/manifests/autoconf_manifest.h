@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_AUTOCONF_MANIFEST_H
 #define ARCHBIRD_AUTOCONF_MANIFEST_H
 
-#include "model.h"
+#include "base/model.h"
 
 typedef struct AbAutoconfMetadata {
   AbString package;

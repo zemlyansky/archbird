@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_JSON_NUMBER_H
 #define ARCHBIRD_JSON_NUMBER_H
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 #define AB_JSON_REAL_BUFFER_SIZE 64
 

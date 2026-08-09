@@ -1,7 +1,7 @@
-#include "map_internal.h"
+#include "map/map_internal.h"
 
-#include "archbird_internal.h"
-#include "pattern.h"
+#include "base/archbird_internal.h"
+#include "base/pattern.h"
 
 #include <ctype.h>
 #include <stdlib.h>

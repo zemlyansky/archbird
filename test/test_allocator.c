@@ -1,7 +1,7 @@
-#include "archbird_internal.h"
-#include "pattern.h"
+#include "base/archbird_internal.h"
+#include "base/pattern.h"
+#include "base/sha256.h"
 #include "scip_fixture.h"
-#include "sha256.h"
 
 #include <stdint.h>
 #include <stdio.h>

@@ -1,4 +1,4 @@
-#include "rename_capability.h"
+#include "transformation/rename_capability.h"
 
 #include <string.h>
 

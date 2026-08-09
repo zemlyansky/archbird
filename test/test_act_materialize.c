@@ -1,8 +1,8 @@
 #include <archbird/archbird.h>
 
-#include "json_value.h"
-#include "render_internal.h"
-#include "sha256.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
 
 #include <stdio.h>
 #include <string.h>

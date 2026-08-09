@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_TREE_SITTER_ALLOCATOR_H
 #define ARCHBIRD_TREE_SITTER_ALLOCATOR_H
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 #include <stddef.h>
 

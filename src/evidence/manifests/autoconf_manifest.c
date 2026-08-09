@@ -1,7 +1,7 @@
-#include "manifests/autoconf_manifest.h"
+#include "evidence/manifests/autoconf_manifest.h"
 
-#include "archbird_internal.h"
-#include "utf8.h"
+#include "base/archbird_internal.h"
+#include "base/utf8.h"
 
 #include <ctype.h>
 #include <stdlib.h>

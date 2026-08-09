@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_ACT_C_DECLARATION_H
 #define ARCHBIRD_ACT_C_DECLARATION_H
 
-#include "c/provider_capability.h"
+#include "act/c/provider_capability.h"
 
 ArchbirdStatus ab_act_c_declare_symbol(AbActContext *context,
                                        const AbValue *operation,

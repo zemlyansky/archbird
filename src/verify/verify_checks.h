@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_VERIFY_CHECKS_H
 #define ARCHBIRD_VERIFY_CHECKS_H
 
-#include "verify_runtime.h"
+#include "verify/verify_runtime.h"
 
 typedef struct AbVerifyFinding {
   AbString fingerprint;

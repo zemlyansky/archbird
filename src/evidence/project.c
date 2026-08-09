@@ -1,14 +1,14 @@
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
-#include "config.h"
-#include "evidence.h"
-#include "evidence_render.h"
-#include "json_value.h"
-#include "model.h"
-#include "project_internal.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "test_observations.h"
+#include "base/json_value.h"
+#include "base/model.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "evidence/config.h"
+#include "evidence/evidence.h"
+#include "evidence/evidence_render.h"
+#include "evidence/project_internal.h"
+#include "evidence/test_observations.h"
 
 #include <inttypes.h>
 #include <stdint.h>

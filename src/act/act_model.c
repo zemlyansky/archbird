@@ -1,14 +1,14 @@
-#include "act_internal.h"
+#include "act/act_internal.h"
 
-#include "act_gate_acceptance.h"
-#include "act_source.h"
-#include "artifact_validation.h"
-#include "base64.h"
-#include "gate.h"
-#include "model.h"
-#include "projection_internal.h"
-#include "render_internal.h"
-#include "sha256.h"
+#include "act/act_gate_acceptance.h"
+#include "act/act_source.h"
+#include "base/artifact_validation.h"
+#include "base/base64.h"
+#include "base/gate.h"
+#include "base/model.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "projection/projection_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

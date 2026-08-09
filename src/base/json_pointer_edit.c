@@ -1,7 +1,7 @@
-#include "json_internal.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "utf8.h"
+#include "base/json_internal.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "base/utf8.h"
 
 #include <string.h>
 

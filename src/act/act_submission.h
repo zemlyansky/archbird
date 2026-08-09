@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_ACT_SUBMISSION_H
 #define ARCHBIRD_ACT_SUBMISSION_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 typedef struct AbActSubmission {
   const AbString *item_id;

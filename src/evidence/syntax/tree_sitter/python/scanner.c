@@ -1,9 +1,9 @@
-#include "syntax/tree_sitter/python/scanner.h"
+#include "evidence/syntax/tree_sitter/python/scanner.h"
 
-#include "python/definitions.h"
-#include "python/tokens.h"
-#include "render_internal.h"
-#include "syntax/tree_sitter/scanner.h"
+#include "base/render_internal.h"
+#include "evidence/python/definitions.h"
+#include "evidence/python/tokens.h"
+#include "evidence/syntax/tree_sitter/scanner.h"
 
 #include <string.h>
 

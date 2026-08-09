@@ -1,6 +1,6 @@
 #include <archbird/archbird.h>
 
-#include "act_internal.h"
+#include "act/act_internal.h"
 
 ArchbirdStatus archbird_act_validate(ArchbirdEngine *engine,
                                      const uint8_t *act_json,

@@ -1,8 +1,8 @@
 #include <archbird/archbird.h>
 
-#include "act_internal.h"
-#include "act_source.h"
-#include "artifact_validation.h"
+#include "act/act_internal.h"
+#include "act/act_source.h"
+#include "base/artifact_validation.h"
 
 #include <string.h>
 

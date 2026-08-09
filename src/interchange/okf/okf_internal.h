@@ -1,9 +1,9 @@
 #ifndef ARCHBIRD_INTERCHANGE_OKF_INTERNAL_H
 #define ARCHBIRD_INTERCHANGE_OKF_INTERNAL_H
 
-#include "json_value.h"
-#include "path_match.h"
-#include "sha256.h"
+#include "base/json_value.h"
+#include "base/path_match.h"
+#include "base/sha256.h"
 
 typedef struct AbOkfDiagnostic {
   AbString severity;

@@ -1,7 +1,7 @@
 #include <archbird/archbird.h>
 
-#include "../../base/archbird_internal.h"
-#include "../../base/utf8.h"
+#include "base/archbird_internal.h"
+#include "base/utf8.h"
 
 #include <stddef.h>
 #include <stdint.h>

@@ -1,6 +1,6 @@
-#include "plan_compile_internal.h"
+#include "plan/plan_compile_internal.h"
 
-#include "artifact_validation.h"
+#include "base/artifact_validation.h"
 
 #include <stdlib.h>
 #include <string.h>

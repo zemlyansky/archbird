@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_PYTHON_DEFINITIONS_H
 #define ARCHBIRD_PYTHON_DEFINITIONS_H
 
-#include "fact_builder.h"
-#include "lexical/tokenizer.h"
+#include "evidence/fact_builder.h"
+#include "evidence/lexical/tokenizer.h"
 
 typedef struct AbPythonDefinition {
   size_t start_token;

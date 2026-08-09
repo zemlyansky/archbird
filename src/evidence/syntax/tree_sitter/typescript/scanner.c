@@ -1,7 +1,7 @@
-#include "syntax/tree_sitter/typescript/scanner.h"
+#include "evidence/syntax/tree_sitter/typescript/scanner.h"
 
-#include "archbird_internal.h"
-#include "syntax/tree_sitter/ecmascript/scanner.h"
+#include "base/archbird_internal.h"
+#include "evidence/syntax/tree_sitter/ecmascript/scanner.h"
 
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TYPESCRIPT
 const TSLanguage *tree_sitter_typescript(void);

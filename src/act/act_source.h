@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_ACT_SOURCE_H
 #define ARCHBIRD_ACT_SOURCE_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 #define AB_ACT_MAX_TRANSITIONS 4096u
 #define AB_ACT_MAX_SOURCE_PATHS (AB_ACT_MAX_TRANSITIONS * 2u)

@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_PLAN_INTERNAL_H
 #define ARCHBIRD_PLAN_INTERNAL_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 typedef struct AbPlan {
   AbValue document;

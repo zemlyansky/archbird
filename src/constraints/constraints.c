@@ -1,15 +1,15 @@
 #include <archbird/archbird.h>
 
-#include "../projection/projection_internal.h"
-#include "archbird_internal.h"
-#include "constraints_internal.h"
-#include "date.h"
-#include "json_value.h"
-#include "render_internal.h"
-#include "sha256.h"
-#include "verify_checks.h"
-#include "verify_reports.h"
-#include "verify_runtime.h"
+#include "base/archbird_internal.h"
+#include "base/date.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "constraints/constraints_internal.h"
+#include "interchange/reports/verify_reports.h"
+#include "projection/projection_internal.h"
+#include "verify/verify_checks.h"
+#include "verify/verify_runtime.h"
 
 #include <limits.h>
 #include <stdio.h>

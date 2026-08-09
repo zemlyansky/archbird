@@ -1,9 +1,9 @@
-#include "c/provider_capability.h"
+#include "act/c/provider_capability.h"
 
-#include "artifact_validation.h"
-#include "c/declaration.h"
-#include "c/napi_export.h"
-#include "project_internal.h"
+#include "act/c/declaration.h"
+#include "act/c/napi_export.h"
+#include "base/artifact_validation.h"
+#include "evidence/project_internal.h"
 
 #include <string.h>
 

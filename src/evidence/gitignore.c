@@ -1,7 +1,7 @@
-#include "gitignore.h"
+#include "evidence/gitignore.h"
 
-#include "archbird_internal.h"
-#include "sha256.h"
+#include "base/archbird_internal.h"
+#include "base/sha256.h"
 
 #include <stdlib.h>
 #include <string.h>

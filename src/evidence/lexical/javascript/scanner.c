@@ -1,8 +1,8 @@
-#include "lexical/javascript/scanner.h"
+#include "evidence/lexical/javascript/scanner.h"
 
-#include "lexical/tokenizer.h"
-#include "render_internal.h"
-#include "sha256.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "evidence/lexical/tokenizer.h"
 
 #include <stdlib.h>
 #include <string.h>

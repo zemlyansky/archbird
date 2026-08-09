@@ -1,7 +1,7 @@
-#include "path_artifact.h"
+#include "path/path_artifact.h"
 
-#include "artifact_validation.h"
-#include "projection_model.h"
+#include "base/artifact_validation.h"
+#include "projection/projection_model.h"
 
 #include <string.h>
 

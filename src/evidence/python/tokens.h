@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_PYTHON_TOKENS_H
 #define ARCHBIRD_PYTHON_TOKENS_H
 
-#include "lexical/tokenizer.h"
+#include "evidence/lexical/tokenizer.h"
 
 typedef struct AbPythonNameRef {
   const uint8_t *data;

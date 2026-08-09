@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_INTERCHANGE_VERIFY_REPORTS_H
 #define ARCHBIRD_INTERCHANGE_VERIFY_REPORTS_H
 
-#include "verify_runtime.h"
+#include "verify/verify_runtime.h"
 
 ArchbirdStatus ab_constraints_render_markdown(AbVerificationContext *context,
                                               AbBuffer *buffer,

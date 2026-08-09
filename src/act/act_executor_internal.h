@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_ACT_EXECUTOR_INTERNAL_H
 #define ARCHBIRD_ACT_EXECUTOR_INTERNAL_H
 
-#include "json_value.h"
+#include "base/json_value.h"
 
 typedef struct AbActContext AbActContext;
 

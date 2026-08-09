@@ -1,6 +1,6 @@
-#include "lexical/tokenizer.h"
+#include "evidence/lexical/tokenizer.h"
 
-#include "utf8.h"
+#include "base/utf8.h"
 
 #include <stdlib.h>
 #include <string.h>

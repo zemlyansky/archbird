@@ -1,10 +1,10 @@
-#include "map_internal.h"
+#include "map/map_internal.h"
 
-#include "archbird_internal.h"
-#include "manifests/pyproject_manifest.h"
-#include "package_json.h"
-#include "pattern.h"
-#include "utf8.h"
+#include "base/archbird_internal.h"
+#include "base/pattern.h"
+#include "base/utf8.h"
+#include "evidence/manifests/pyproject_manifest.h"
+#include "map/package_json.h"
 
 #include <ctype.h>
 #include <stdio.h>

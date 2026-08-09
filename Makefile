@@ -52,12 +52,8 @@ NATIVE_CORE_C_FILES := $(shell LC_ALL=C awk \
 	'$$1 ~ /^src\// { print $$1 }' $(NATIVE_CORE_SOURCE_MANIFEST))
 NATIVE_TEST_C_FILES = $(shell find bindings test -type f -name '*.c' \
 	! -path 'test/fixtures/*' -print | LC_ALL=C sort)
-NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Isrc/api -Isrc/base -Isrc/evidence -Isrc/map \
-	-Isrc/configuration -Isrc/projection -Isrc/query -Isrc/constraints \
-	-Isrc/verify -Isrc/interchange/graph \
-	-Isrc/interchange/okf -Isrc/interchange/reports -Ivendor/yyjson/src \
+NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Ivendor/yyjson/src \
 	-I$(NATIVE_BUILD)/vendor/pcre2 -Ivendor/pcre2/src \
-	-Isrc/evidence/syntax/tree_sitter \
 	-Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter/lib/src \
 	-Ivendor/tree-sitter-c/src
 .PHONY: test verify version-check evaluation-test schema-snapshots build-c build-py editable-install test-py js-dependencies build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-sanitize \
@@ -75,6 +71,7 @@ test: version-check evaluation-test schema-snapshots native-test test-py test-js
 version-check:
 	$(PYTHON) tools/check_versions.py
 	$(PYTHON) tools/core_source_manifest.py $(CURDIR)
+	$(PYTHON) tools/private_include_boundaries.py $(CURDIR)
 
 schema-snapshots:
 	$(PYTHON) tools/sync_schemas.py --check python node
@@ -346,6 +343,7 @@ native-analyze: native-configure
 	command $(CLANG_FORMAT) --dry-run --Werror $(NATIVE_C_FILES)
 	$(PYTHON) test/test_allocator_boundary.py
 	$(PYTHON) test/test_planning_boundaries.py
+	$(PYTHON) tools/private_include_boundaries.py $(CURDIR)
 	command $(CPPCHECK) -j $(CPPCHECK_JOBS) --std=c11 \
 		--enable=warning,performance,portability --error-exitcode=1 \
 		--suppress=missingIncludeSystem --suppress='*:*vendor/yyjson/*' \
@@ -357,6 +355,7 @@ native-analyze: native-configure
 native-boundaries:
 	$(PYTHON) test/test_json_boundary.py
 	$(PYTHON) test/test_planning_boundaries.py
+	$(PYTHON) tools/private_include_boundaries.py $(CURDIR)
 
 release-source-check: version-check
 	$(PYTHON) tools/stage_release_provenance.py check

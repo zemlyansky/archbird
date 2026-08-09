@@ -1,7 +1,7 @@
-#include "fact_builder.h"
+#include "evidence/fact_builder.h"
 
-#include "archbird_internal.h"
-#include "sha256.h"
+#include "base/archbird_internal.h"
+#include "base/sha256.h"
 
 #include <inttypes.h>
 #include <stdio.h>

@@ -1,10 +1,10 @@
 #include <archbird/archbird.h>
 
-#include "../projection/projection_internal.h"
-#include "json_value.h"
-#include "query_internal.h"
-#include "render_internal.h"
-#include "sha256.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "projection/projection_internal.h"
+#include "query/query_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

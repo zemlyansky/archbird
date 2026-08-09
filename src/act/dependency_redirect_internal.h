@@ -1,9 +1,9 @@
 #ifndef ARCHBIRD_ACT_DEPENDENCY_REDIRECT_INTERNAL_H
 #define ARCHBIRD_ACT_DEPENDENCY_REDIRECT_INTERNAL_H
 
-#include "act_executor_internal.h"
-#include "component_membership.h"
-#include "projection_internal.h"
+#include "act/act_executor_internal.h"
+#include "projection/component_membership.h"
+#include "projection/projection_internal.h"
 
 typedef struct AbActDependencyRedirect {
   const AbValue *map;

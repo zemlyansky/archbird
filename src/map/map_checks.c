@@ -1,6 +1,6 @@
-#include "map_internal.h"
+#include "map/map_internal.h"
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 static ArchbirdStatus add_message(AbMapState *state, const char *code,
                                   const AbString *path, size_t part_count,

@@ -1,4 +1,4 @@
-#include "tree_sitter_allocator.h"
+#include "evidence/syntax/tree_sitter/tree_sitter_allocator.h"
 
 #include "tree_sitter/api.h"
 

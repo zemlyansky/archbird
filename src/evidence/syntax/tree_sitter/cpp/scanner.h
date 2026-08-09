@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_TREE_SITTER_CPP_SCANNER_H
 #define ARCHBIRD_TREE_SITTER_CPP_SCANNER_H
 
-#include "fact_builder.h"
+#include "evidence/fact_builder.h"
 
 ArchbirdStatus ab_scan_tree_sitter_cpp_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,

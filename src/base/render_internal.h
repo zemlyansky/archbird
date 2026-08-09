@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_RENDER_INTERNAL_H
 #define ARCHBIRD_RENDER_INTERNAL_H
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 typedef struct AbBuffer {
   ArchbirdEngine *engine;

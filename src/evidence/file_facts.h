@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_FILE_FACTS_H
 #define ARCHBIRD_FILE_FACTS_H
 
-#include "project_internal.h"
-#include "render_internal.h"
+#include "base/render_internal.h"
+#include "evidence/project_internal.h"
 
 ArchbirdStatus ab_render_file_facts_row(AbBuffer *buffer,
                                         ArchbirdEngine *engine,

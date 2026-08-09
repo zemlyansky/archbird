@@ -1,6 +1,6 @@
-#include "act_source.h"
+#include "act/act_source.h"
 
-#include "artifact_validation.h"
+#include "base/artifact_validation.h"
 
 #include <string.h>
 

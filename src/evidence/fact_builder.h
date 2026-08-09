@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_FACT_BUILDER_H
 #define ARCHBIRD_FACT_BUILDER_H
 
-#include "model.h"
+#include "base/model.h"
 
 typedef struct AbBundleBuilder {
   ArchbirdEngine *engine;

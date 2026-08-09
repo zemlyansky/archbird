@@ -1,11 +1,11 @@
-#include "map_internal.h"
-#include "map_references.h"
+#include "map/map_internal.h"
+#include "map/map_references.h"
 
-#include "archbird_internal.h"
-#include "json_value.h"
-#include "lexical/tokenizer.h"
-#include "sha256.h"
-#include "utf8.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
+#include "base/sha256.h"
+#include "base/utf8.h"
+#include "evidence/lexical/tokenizer.h"
 
 #include <ctype.h>
 #include <stdlib.h>

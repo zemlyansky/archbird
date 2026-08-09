@@ -1,11 +1,11 @@
-#include "scanner.h"
+#include "evidence/semantic/scip/scanner.h"
 
-#include "archbird_internal.h"
-#include "fact_builder.h"
-#include "project_internal.h"
-#include "protobuf.h"
-#include "render_internal.h"
-#include "sha256.h"
+#include "base/archbird_internal.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
+#include "evidence/fact_builder.h"
+#include "evidence/project_internal.h"
+#include "evidence/semantic/scip/protobuf.h"
 
 #include <limits.h>
 #include <stdio.h>

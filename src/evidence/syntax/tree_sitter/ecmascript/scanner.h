@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_TREE_SITTER_ECMASCRIPT_SCANNER_H
 #define ARCHBIRD_TREE_SITTER_ECMASCRIPT_SCANNER_H
 
-#include "syntax/tree_sitter/scanner.h"
+#include "evidence/syntax/tree_sitter/scanner.h"
 
 /* Strip expression wrappers that preserve the identity of their operand.
  * JavaScript uses parentheses; TypeScript additionally uses assertion and

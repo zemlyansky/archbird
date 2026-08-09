@@ -1,4 +1,4 @@
-#include "protobuf.h"
+#include "evidence/semantic/scip/protobuf.h"
 
 #include <limits.h>
 #include <string.h>

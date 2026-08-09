@@ -1,9 +1,9 @@
-#include "act_submission.h"
+#include "act/act_submission.h"
 
-#include "act_source.h"
-#include "artifact_validation.h"
-#include "base64.h"
-#include "utf8.h"
+#include "act/act_source.h"
+#include "base/artifact_validation.h"
+#include "base/base64.h"
+#include "base/utf8.h"
 
 #include <string.h>
 

@@ -1,9 +1,9 @@
-#include "make/provider_capability.h"
+#include "act/make/provider_capability.h"
 
-#include "artifact_validation.h"
-#include "config.h"
-#include "project_internal.h"
-#include "sha256.h"
+#include "base/artifact_validation.h"
+#include "base/sha256.h"
+#include "evidence/config.h"
+#include "evidence/project_internal.h"
 
 #include <string.h>
 

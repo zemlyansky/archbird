@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_ACT_C_PROVIDER_CAPABILITY_H
 #define ARCHBIRD_ACT_C_PROVIDER_CAPABILITY_H
 
-#include "act_executor_internal.h"
-#include "config.h"
+#include "act/act_executor_internal.h"
+#include "evidence/config.h"
 
 typedef struct AbActCProviderCapability {
   const AbString *definition_sha256;

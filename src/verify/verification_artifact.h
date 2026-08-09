@@ -2,8 +2,8 @@
 #define ARCHBIRD_VERIFICATION_ARTIFACT_H
 
 /* Strict canonical Verification decoding shared by artifact consumers. */
-#include "json_value.h"
-#include "projection_model.h"
+#include "base/json_value.h"
+#include "projection/projection_model.h"
 
 typedef struct AbVerificationArtifact {
   ArchbirdEngine *engine;

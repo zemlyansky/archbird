@@ -1,10 +1,10 @@
 #ifndef ARCHBIRD_QUERY_INTERNAL_H
 #define ARCHBIRD_QUERY_INTERNAL_H
 
-#include "archbird_internal.h"
-#include "json_value.h"
-#include "projection_internal.h"
-#include "render_internal.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "projection/projection_internal.h"
 
 typedef struct AbQueryProjection {
   AbProjectionPlan plan;

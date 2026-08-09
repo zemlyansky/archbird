@@ -346,17 +346,12 @@ def _node_gypi(paths: tuple[str, ...], version: str) -> bytes:
     ]
     include_dirs = sorted(
         {
-            PurePosixPath(path).parent.as_posix()
-            for path in paths
-            if path.startswith("src/") and path.endswith((".c", ".h"))
-        }
-        | {
             "include",
+            "src",
             "vendor/yyjson",
             "vendor/pcre2",
             "vendor/tree-sitter/lib/include",
             "vendor/tree-sitter/lib/src",
-            "src/evidence/syntax/tree_sitter",
         }
         | {
             PurePosixPath(path).parent.as_posix()

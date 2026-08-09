@@ -1,11 +1,11 @@
-#include "project_configuration.h"
+#include "configuration/project_configuration.h"
 
-#include "../projection/projection_internal.h"
-#include "../query/query_context.h"
-#include "date.h"
-#include "gate.h"
-#include "json_value.h"
-#include "sha256.h"
+#include "base/date.h"
+#include "base/gate.h"
+#include "base/json_value.h"
+#include "base/sha256.h"
+#include "projection/projection_internal.h"
+#include "query/query_context.h"
 
 #include <stdlib.h>
 #include <string.h>

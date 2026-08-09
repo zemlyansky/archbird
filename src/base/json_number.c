@@ -1,6 +1,6 @@
-#include "json_number.h"
+#include "base/json_number.h"
 
-#include "json_internal.h"
+#include "base/json_internal.h"
 
 #include "yyjson.h"
 

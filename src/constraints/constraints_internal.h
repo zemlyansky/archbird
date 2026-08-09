@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_CONSTRAINTS_INTERNAL_H
 #define ARCHBIRD_CONSTRAINTS_INTERNAL_H
 
-#include "archbird_internal.h"
-#include "json_value.h"
+#include "base/archbird_internal.h"
+#include "base/json_value.h"
 
 typedef struct AbConstraintPolicyInput {
   const AbValue *project;

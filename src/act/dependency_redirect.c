@@ -1,8 +1,8 @@
-#include "dependency_redirect.h"
+#include "act/dependency_redirect.h"
 
-#include "act_source.h"
-#include "artifact_validation.h"
-#include "dependency_redirect_internal.h"
+#include "act/act_source.h"
+#include "act/dependency_redirect_internal.h"
+#include "base/artifact_validation.h"
 
 #include <stdlib.h>
 #include <string.h>

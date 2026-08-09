@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_JSON_INTERNAL_H
 #define ARCHBIRD_JSON_INTERNAL_H
 
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
 #include "yyjson.h"
 

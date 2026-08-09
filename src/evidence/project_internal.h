@@ -1,8 +1,8 @@
 #ifndef ARCHBIRD_PROJECT_INTERNAL_H
 #define ARCHBIRD_PROJECT_INTERNAL_H
 
-#include "config.h"
-#include "model.h"
+#include "base/model.h"
+#include "evidence/config.h"
 
 const AbSourceManifest *ab_project_manifest(const ArchbirdProject *project);
 

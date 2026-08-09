@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_BASE64_H
 #define ARCHBIRD_BASE64_H
 
-#include "render_internal.h"
+#include "base/render_internal.h"
 
 ArchbirdStatus ab_base64_encode(AbBuffer *buffer, const uint8_t *bytes,
                                 size_t length);

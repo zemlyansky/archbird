@@ -1,6 +1,6 @@
-#include "package_entrypoint.h"
+#include "act/json/package_entrypoint.h"
 
-#include "artifact_validation.h"
+#include "base/artifact_validation.h"
 
 #include <string.h>
 

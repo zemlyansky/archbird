@@ -1,9 +1,9 @@
-#include "projection_internal.h"
+#include "projection/projection_internal.h"
 
-#include "artifact_validation.h"
-#include "component_membership.h"
-#include "path_match.h"
-#include "sha256.h"
+#include "base/artifact_validation.h"
+#include "base/path_match.h"
+#include "base/sha256.h"
+#include "projection/component_membership.h"
 
 #include <inttypes.h>
 #include <stdio.h>

@@ -1,7 +1,7 @@
-#include "syntax/tree_sitter/scanner.h"
+#include "evidence/syntax/tree_sitter/scanner.h"
 
-#include "sha256.h"
-#include "syntax/tree_sitter/tree_sitter_allocator.h"
+#include "base/sha256.h"
+#include "evidence/syntax/tree_sitter/tree_sitter_allocator.h"
 
 #include <stdint.h>
 #include <stdio.h>

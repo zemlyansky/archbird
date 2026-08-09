@@ -1,6 +1,6 @@
-#include "syntax/tree_sitter/cpp/scanner.h"
+#include "evidence/syntax/tree_sitter/cpp/scanner.h"
 
-#include "syntax/tree_sitter/scanner.h"
+#include "evidence/syntax/tree_sitter/scanner.h"
 
 #include <string.h>
 

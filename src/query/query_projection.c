@@ -1,6 +1,6 @@
-#include "query_internal.h"
+#include "query/query_internal.h"
 
-#include "projection_internal.h"
+#include "projection/projection_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

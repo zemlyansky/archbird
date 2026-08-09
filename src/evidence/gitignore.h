@@ -1,7 +1,7 @@
 #ifndef ARCHBIRD_GITIGNORE_H
 #define ARCHBIRD_GITIGNORE_H
 
-#include "model.h"
+#include "base/model.h"
 
 typedef struct AbIgnoreToken AbIgnoreToken;
 

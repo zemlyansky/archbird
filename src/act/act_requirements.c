@@ -1,11 +1,11 @@
 #include <archbird/archbird.h>
 
-#include "act_internal.h"
-#include "act_source.h"
-#include "act_submission.h"
-#include "artifact_validation.h"
-#include "plan_internal.h"
-#include "render_internal.h"
+#include "act/act_internal.h"
+#include "act/act_source.h"
+#include "act/act_submission.h"
+#include "base/artifact_validation.h"
+#include "base/render_internal.h"
+#include "plan/plan_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

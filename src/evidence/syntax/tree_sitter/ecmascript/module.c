@@ -1,8 +1,8 @@
-#include "syntax/tree_sitter/ecmascript/module.h"
+#include "evidence/syntax/tree_sitter/ecmascript/module.h"
 
-#include "syntax/tree_sitter/ecmascript/scanner.h"
+#include "evidence/syntax/tree_sitter/ecmascript/scanner.h"
 
-#include "render_internal.h"
+#include "base/render_internal.h"
 
 #include <stdint.h>
 #include <string.h>

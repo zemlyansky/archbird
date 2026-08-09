@@ -1,9 +1,9 @@
-#include "archbird_internal.h"
+#include "base/archbird_internal.h"
 
-#include "config.h"
-#include "gitignore.h"
-#include "path_match.h"
-#include "render_internal.h"
+#include "base/path_match.h"
+#include "base/render_internal.h"
+#include "evidence/config.h"
+#include "evidence/gitignore.h"
 
 #include <stdlib.h>
 #include <string.h>

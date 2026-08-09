@@ -1,6 +1,6 @@
-#include "syntax/tree_sitter/javascript/scanner.h"
+#include "evidence/syntax/tree_sitter/javascript/scanner.h"
 
-#include "syntax/tree_sitter/ecmascript/scanner.h"
+#include "evidence/syntax/tree_sitter/ecmascript/scanner.h"
 
 const TSLanguage *tree_sitter_javascript(void);
 
