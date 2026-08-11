@@ -194,6 +194,33 @@ int main(void) {
       "{\"bytes\":12,\"path\":\"tests/test_api.py\"},"
       "{\"bytes\":12,\"path\":\"vendor/lib.py\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
+  static const char monorepo_candidate_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"7b22776f726b737061636573223a5b227061636b61676573"
+      "2f2a225d7d\",\"path\":\"package.json\"}],\"files\":["
+      "{\"bytes\":29,\"path\":\"package.json\"},"
+      "{\"bytes\":20,\"path\":\"packages/core/index.js\"},"
+      "{\"bytes\":39,\"path\":\"packages/core/package.json\"},"
+      "{\"bytes\":10,\"path\":\"py/demo/__init__.py\"},"
+      "{\"bytes\":95,\"path\":\"py/pyproject.toml\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
+  static const char monorepo_final_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"7b22776f726b737061636573223a5b227061636b61676573"
+      "2f2a225d7d\",\"path\":\"package.json\"},"
+      "{\"content_hex\":\"7b226e616d65223a224064656d6f2f636f7265222c227665"
+      "7273696f6e223a22312e302e30227d\",\"path\":\"packages/core/"
+      "package.json\"},"
+      "{\"content_hex\":\"5b70726f6a6563745d0a6e616d65203d202264656d6f220a"
+      "76657273696f6e203d2022322e302e30220a0a5b746f6f6c2e7365747570746f6f6c"
+      "732e7061636b616765732e66696e645d0a696e636c756465203d205b2264656d6f2a22"
+      "5d0a\",\"path\":\"py/pyproject.toml\"}],\"files\":["
+      "{\"bytes\":29,\"path\":\"package.json\"},"
+      "{\"bytes\":20,\"path\":\"packages/core/index.js\"},"
+      "{\"bytes\":39,\"path\":\"packages/core/package.json\"},"
+      "{\"bytes\":10,\"path\":\"py/demo/__init__.py\"},"
+      "{\"bytes\":95,\"path\":\"py/pyproject.toml\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
   ArchbirdEngine *engine = NULL;
   Output first = {{0}, 0};
   Output second = {{0}, 0};
@@ -210,6 +237,8 @@ int main(void) {
   Output index = {{0}, 0};
   Output vendor = {{0}, 0};
   Output candidate = {{0}, 0};
+  Output monorepo_candidate = {{0}, 0};
+  Output monorepo_final = {{0}, 0};
   ArchbirdDiscovery *discovery = NULL;
   int descend_temp = 1;
   int descend_src = 0;
@@ -407,6 +436,33 @@ int main(void) {
                "\"path\":\"tests/test_api.py\",\"roles\":[\"source\","
                "\"test\",\"test-candidate\"]")) {
     fprintf(stderr, "configured discovery lost or weakened derived roles\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, monorepo_candidate_inventory,
+               &monorepo_candidate) ||
+      !contains(&monorepo_candidate, "\"fulfilled\":false,\"kind\":\"npm\"") ||
+      !contains(&monorepo_candidate,
+                "\"path\":\"packages/core/package.json\",\"source\":"
+                "\"npm-workspace\"") ||
+      !contains(&monorepo_candidate,
+                "\"fulfilled\":false,\"kind\":\"python\"") ||
+      !contains(&monorepo_candidate,
+                "\"path\":\"py/pyproject.toml\",\"source\":"
+                "\"python-top-level\"") ||
+      !contains(&monorepo_candidate, "discovery-manifest-input-missing")) {
+    fprintf(stderr, "bounded manifest request handshake is incorrect\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, monorepo_final_inventory,
+               &monorepo_final) ||
+      !contains(&monorepo_final, "\"project\":\"demo\"") ||
+      !contains(&monorepo_final, "\"identity\":\"@demo/core\"") ||
+      !contains(&monorepo_final, "\"identity\":\"demo\"") ||
+      !contains(&monorepo_final, "\"import_roots\":[\"py\"]") ||
+      !contains(&monorepo_final, "\"fulfilled\":true,\"kind\":\"npm\"") ||
+      !contains(&monorepo_final, "\"fulfilled\":true,\"kind\":\"python\"") ||
+      contains(&monorepo_final, "discovery-manifest-input-missing")) {
+    fprintf(stderr, "manifest-backed package/import discovery is incorrect\n");
     failed = 1;
   }
   archbird_engine_destroy(engine);

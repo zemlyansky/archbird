@@ -1212,6 +1212,15 @@ archbird config init . --output archbird.json
 
 `config init` is a review candidate, not architecture truth.
 
+For monorepos, discovery follows explicit npm/Yarn `workspaces` and uv
+`[tool.uv.workspace]` member patterns (including uv exclusions). It also probes
+a direct-child Python `pyproject.toml` only when inventoried Python source exists
+below that directory. The native resolver requests exact regular manifest files;
+each request is limited to 256 KiB, with at most 128 npm and 32 Python
+candidates. `config show` exposes the request ledger, limits, provenance, and
+overlap/truncation/conflict diagnostics. Authored `project`, `layers`, and
+`packages` fields still take precedence over every inferred candidate.
+
 <!-- archbird-minimal-project-config:start -->
 ```json
 {

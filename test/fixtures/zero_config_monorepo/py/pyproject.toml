@@ -1,0 +1,6 @@
+[project]
+name = "fixture-py"
+version = "2.0.0"
+
+[tool.setuptools.packages.find]
+include = ["fixture_py*"]

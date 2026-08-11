@@ -10,9 +10,37 @@ if (process.argv.length !== 5 && process.argv.length !== 6) {
 process.env.ARCHBIRD_NATIVE_ADDON = path.resolve(process.argv[2]);
 const { resolveDiscovery } = require(path.join(path.resolve(process.argv[3]), "js/src/index.js"));
 const fixture = path.resolve(process.argv[4]);
-const outputs = process.argv[5] === "default"
-  ? [resolveDiscovery(fixture)]
-  : [
+const mode = process.argv[5] || "matrix";
+let outputs;
+if (mode === "default") {
+  outputs = [resolveDiscovery(fixture)];
+} else if (mode === "authored") {
+  outputs = [resolveDiscovery(fixture, {
+    config: Buffer.from(JSON.stringify({
+      layers: [{
+        globs: ["**/*.js"],
+        language: "javascript",
+        name: "authored",
+      }],
+      packages: [{
+        kind: "npm",
+        layer: "authored",
+        name: "authored",
+        path: "package.json",
+      }],
+      project: "authored",
+    })),
+  })];
+} else if (mode === "ignore-overlay") {
+  outputs = [resolveDiscovery(fixture, {
+    _sourceOverlay: {
+      ".archbirdignore": Buffer.from(
+        "# virtual after-state\npackages/ignored/\n",
+      ),
+    },
+  })];
+} else {
+  outputs = [
       resolveDiscovery(fixture),
       resolveDiscovery(fixture, {
         project: "cli",
@@ -24,5 +52,6 @@ const outputs = process.argv[5] === "default"
         ignore: false,
         ignoreFiles: [".customignore"],
       }),
-    ];
+  ];
+}
 process.stdout.write(`${outputs.map((value) => value.toString("hex")).join("\n")}\n`);

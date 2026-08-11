@@ -41,6 +41,12 @@ const NATIVE_SYNTAX_PROVIDERS = Object.freeze([
 ]);
 const NATIVE_SEMANTIC_PROVIDERS = Object.freeze(["semantic:scip"]);
 const HOST_PROVIDERS = Object.freeze(["compiler:typescript"]);
+const DISCOVERY_MANIFEST_MAX_BYTES = 256 * 1024;
+const DISCOVERY_MANIFEST_LIMITS = Object.freeze({ npm: 128, python: 32 });
+const DISCOVERY_MANIFEST_SOURCES = Object.freeze({
+  npm: new Set(["npm-workspace"]),
+  python: new Set(["python-top-level", "python-workspace"]),
+});
 
 const NATIVE_CACHE_PROVIDERS = [
   ["lexical:c",
@@ -113,6 +119,40 @@ function nativeCacheNamespace() {
       "ascii",
     ),
   );
+}
+
+function nativeProviderCacheNamespace(classifications) {
+  const context = crypto.createHash("sha256");
+  const frame = (hash, value) => {
+    const length = Buffer.alloc(8);
+    length.writeBigUInt64BE(BigInt(value.length));
+    hash.update(length);
+    hash.update(value);
+  };
+  frame(context, Buffer.from("archbird-native-provider-classification-v1"));
+  const count = Buffer.alloc(8);
+  count.writeBigUInt64BE(BigInt(classifications.length));
+  context.update(count);
+  for (const classification of classifications) {
+    for (const field of ["path", "language", "layer"]) {
+      frame(context, Buffer.from(classification[field], "utf8"));
+    }
+    const roleCount = Buffer.alloc(8);
+    roleCount.writeBigUInt64BE(BigInt(classification.roles.length));
+    context.update(roleCount);
+    for (const role of classification.roles) {
+      frame(context, Buffer.from(role, "utf8"));
+    }
+  }
+  const identity = crypto.createHash("sha256");
+  for (const value of [
+    Buffer.from("archbird-native-provider-cache-context-v1"),
+    Buffer.from(nativeCacheNamespace(), "ascii"),
+    Buffer.from(context.digest("hex"), "ascii"),
+  ]) {
+    frame(identity, value);
+  }
+  return identity.digest("hex");
 }
 
 function typescriptProviderIdentity() {
@@ -200,6 +240,9 @@ class Project {
       path: source.path,
       roles: source.roles,
     }));
+    this._nativeProviderCacheNamespace = nativeProviderCacheNamespace(
+      classifications,
+    );
     const files = this.sources.map((source) => {
       const row = {
         bytes: source.data.length,
@@ -643,7 +686,7 @@ class Project {
         report({ phase: "providers", provider: providerId, state: "complete" });
       }
     } else {
-      const namespace = nativeCacheNamespace();
+      const namespace = this._nativeProviderCacheNamespace;
       for (const [providerId, matches, providerMode] of
         NATIVE_CACHE_PROVIDERS) {
         const selectedMode = providerMode === "support" || (
@@ -1195,7 +1238,79 @@ function overlayRows(rows, overlay) {
     utf8Compare(left.path, right.path));
 }
 
-function encodedInput(root, relative, overlay = null) {
+function readDiscoveryInput(root, relative, maxBytes) {
+  const parts = relative.split("/");
+  let cursor = root;
+  for (const part of parts.slice(0, -1)) {
+    cursor = path.join(cursor, part);
+    const metadata = fs.lstatSync(cursor);
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+      throw new Error(`unsafe discovery input parent: ${relative}`);
+    }
+  }
+  const candidate = path.join(root, ...parts);
+  const before = fs.lstatSync(candidate);
+  if (before.isSymbolicLink() || !before.isFile()) {
+    throw new Error(`discovery input is not a regular file: ${relative}`);
+  }
+  if (maxBytes !== null && before.size > maxBytes) {
+    throw new Error(
+      `discovery input exceeds advertised limit: ${relative}: ${before.size} > ${maxBytes}`,
+    );
+  }
+  const descriptor = fs.openSync(
+    candidate,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
+  );
+  try {
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    if (
+      !opened.isFile()
+      || opened.dev !== BigInt(before.dev)
+      || opened.ino !== BigInt(before.ino)
+    ) {
+      throw new Error(`discovery input changed while opening: ${relative}`);
+    }
+    const length = Number(opened.size);
+    if (
+      !Number.isSafeInteger(length)
+      || (maxBytes !== null && length > maxBytes)
+    ) {
+      throw new Error(
+        `discovery input exceeds advertised limit: ${relative}: ${opened.size} > ${maxBytes}`,
+      );
+    }
+    const data = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const count = fs.readSync(
+        descriptor,
+        data,
+        offset,
+        length - offset,
+        offset,
+      );
+      if (count === 0) {
+        throw new Error(`discovery input changed while reading: ${relative}`);
+      }
+      offset += count;
+    }
+    const after = fs.fstatSync(descriptor, { bigint: true });
+    if (
+      after.dev !== opened.dev
+      || after.ino !== opened.ino
+      || after.size !== opened.size
+      || after.mtimeNs !== opened.mtimeNs
+    ) {
+      throw new Error(`discovery input changed while reading: ${relative}`);
+    }
+    return data;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function encodedInput(root, relative, overlay = null, maxBytes = null) {
   let data;
   if (overlay && Object.hasOwn(overlay, relative)) {
     data = overlay[relative];
@@ -1203,12 +1318,12 @@ function encodedInput(root, relative, overlay = null) {
       throw new Error(`discovery input was removed by source overlay: ${relative}`);
     }
   } else {
-    const candidate = path.join(root, ...relative.split("/"));
-    const metadata = fs.lstatSync(candidate);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) {
-      throw new Error(`discovery input is not a regular file: ${relative}`);
-    }
-    data = fs.readFileSync(candidate);
+    data = readDiscoveryInput(root, relative, maxBytes);
+  }
+  if (maxBytes !== null && data.length > maxBytes) {
+    throw new Error(
+      `discovery input exceeds advertised limit: ${relative}: ${data.length} > ${maxBytes}`,
+    );
   }
   return { content_hex: data.toString("hex"), path: relative };
 }
@@ -1221,6 +1336,7 @@ function repositoryInventory(
     ignoreFiles = [],
     prunedDirectories = [],
     overlay = null,
+    manifestRequests = [],
   } = {},
 ) {
   const paths = new Set(rows.map((row) => row.path));
@@ -1242,6 +1358,31 @@ function repositoryInventory(
   const documents = ["package.json", "pyproject.toml", "DESCRIPTION", "configure.ac"]
     .filter((relative) => paths.has(relative))
     .map((relative) => encodedInput(root, relative, overlay));
+  const documentPaths = new Set(documents.map((row) => row.path));
+  const manifestCounts = { npm: 0, python: 0 };
+  for (const request of manifestRequests) {
+    const relative = request?.path;
+    const maxBytes = request?.max_bytes;
+    const kind = request?.kind;
+    if (
+      typeof relative !== "string"
+      || documentPaths.has(relative)
+      || !paths.has(relative)
+      || !Number.isSafeInteger(maxBytes)
+      || maxBytes !== DISCOVERY_MANIFEST_MAX_BYTES
+      || request?.fulfilled !== false
+      || !Object.hasOwn(DISCOVERY_MANIFEST_LIMITS, kind)
+      || !DISCOVERY_MANIFEST_SOURCES[kind].has(request?.source)
+    ) {
+      throw new Error("native manifest request is invalid");
+    }
+    manifestCounts[kind] += 1;
+    if (manifestCounts[kind] > DISCOVERY_MANIFEST_LIMITS[kind]) {
+      throw new Error("native manifest request limit was exceeded");
+    }
+    documents.push(encodedInput(root, relative, overlay, maxBytes));
+    documentPaths.add(relative);
+  }
   return Buffer.from(JSON.stringify(canonicalForDigest({
     artifact: "archbird-repository-inventory",
     documents,
@@ -1365,11 +1506,24 @@ function resolveDiscovery(
     }
   }
   const rows = overlayRows(inventoryState.rows, finalOverlay);
+  const candidateInventory = repositoryInventory(repository, rows, {
+    includeStandardIgnores: ignore,
+    ignoreFiles: normalizedIgnoreFiles,
+    prunedDirectories: inventoryState.pruned,
+    overlay,
+  });
+  const candidateResolution = JSON.parse(
+    native.discoveryResolve(configJson, request, candidateInventory, false).toString("utf8"),
+  );
+  if (!Array.isArray(candidateResolution.manifest_requests)) {
+    throw new Error("native resolution has no manifest request ledger");
+  }
   const inventory = repositoryInventory(repository, rows, {
     includeStandardIgnores: ignore,
     ignoreFiles: normalizedIgnoreFiles,
     prunedDirectories: inventoryState.pruned,
     overlay,
+    manifestRequests: candidateResolution.manifest_requests,
   });
   return native.discoveryResolve(configJson, request, inventory, pretty);
 }

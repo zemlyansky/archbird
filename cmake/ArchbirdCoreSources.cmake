@@ -48,6 +48,7 @@ set(ARCHBIRD_DECLARED_CORE_SOURCE_PATHS
   src/configuration/project_configuration.c
   src/constraints/constraints.c
   src/evidence/config_json.c
+  src/evidence/config_manifest_discovery.c
   src/evidence/config_resolution.c
   src/evidence/discovery.c
   src/evidence/evidence.c
@@ -63,6 +64,7 @@ set(ARCHBIRD_DECLARED_CORE_SOURCE_PATHS
   src/evidence/lexical/registry.c
   src/evidence/lexical/tokenizer.c
   src/evidence/manifests/autoconf_manifest.c
+  src/evidence/manifests/npm_workspace_manifest.c
   src/evidence/manifests/pyproject_manifest.c
   src/evidence/project.c
   src/evidence/project/observation_store.c

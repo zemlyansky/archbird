@@ -349,14 +349,18 @@ def main() -> int:
     c_cache_root = repository / "build/test-c-input-cache-python"
     shutil.rmtree(c_cache_root, ignore_errors=True)
 
-    def c_cache_sources(header: bytes, note: bytes) -> tuple[Source, ...]:
+    def c_cache_sources(
+        header: bytes, note: bytes, *, public_header: bool = True
+    ) -> tuple[Source, ...]:
         return (
             Source(
                 "include/api.h",
                 header,
                 language="c",
                 layer="core",
-                roles=("public-header", "source"),
+                roles=("public-header", "source")
+                if public_header
+                else ("source",),
             ),
             Source("notes/state.txt", note, language="text", layer="docs"),
             Source(
@@ -378,6 +382,57 @@ def main() -> int:
             "unrelated source invalidated C provider input closure: "
             f"{c_cold.cache_stats!r} -> {c_unrelated.cache_stats!r}"
         )
+    c_context_root = repository / "build/test-provider-context-cache-python"
+    shutil.rmtree(c_context_root, ignore_errors=True)
+    c_without_public = Project(
+        "c-context-cache",
+        c_cache_sources(
+            b"int api(void);\n", b"same\n", public_header=False
+        ),
+    )
+    c_without_public.scan(cache_dir=c_context_root, map_cache=False)
+    c_with_public = Project(
+        "c-context-cache",
+        c_cache_sources(b"int api(void);\n", b"same\n"),
+    )
+    c_with_public.scan(cache_dir=c_context_root, map_cache=False)
+
+    def c_api_scopes(project: Project) -> set[str]:
+        return {
+            str(fact["attributes"]["scope"])
+            for index in range(project.counts["providers"])
+            for bundle in (project.provider_facts(index),)
+            if bundle["producer"]["name"] == "archbird-native-c-lexical"
+            for fact in bundle["facts"]
+            if fact["domain"] == "symbols" and fact["name"] == "api"
+        }
+
+    if c_api_scopes(c_without_public) != {"global"}:
+        raise AssertionError("unconfigured C cache fixture was not global")
+    if (
+        c_api_scopes(c_with_public) != {"public"}
+        or c_with_public.cache_stats["hits"]
+        or c_with_public.cache_stats["misses"] != 4
+    ):
+        raise AssertionError(
+            "source classification reused stale native provider facts: "
+            f"{c_without_public.cache_stats!r} -> {c_with_public.cache_stats!r}"
+        )
+    c_with_public_warm = Project(
+        "c-context-cache",
+        c_cache_sources(b"int api(void);\n", b"same\n"),
+    )
+    c_with_public_warm.scan(cache_dir=c_context_root, map_cache=False)
+    if (
+        c_api_scopes(c_with_public_warm) != {"public"}
+        or c_with_public_warm.cache_stats["hits"] != 4
+        or c_with_public_warm.cache_stats["misses"]
+    ):
+        raise AssertionError(
+            "classification-bound native provider cache was not reusable: "
+            f"{c_with_public_warm.cache_stats!r}"
+        )
+    shutil.rmtree(c_context_root, ignore_errors=True)
     c_header_changed = Project(
         "c-input-cache",
         c_cache_sources(b"int api(void);\nint added(void);\n", b"after\n"),

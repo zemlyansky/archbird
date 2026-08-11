@@ -37,6 +37,12 @@ PATTERN_ENGINE = _native.PATTERN_ENGINE
 PATTERN_UNICODE = _native.PATTERN_UNICODE
 PATTERN_OPTIONS = _native.PATTERN_OPTIONS
 DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS = 300.0
+_DISCOVERY_MANIFEST_MAX_BYTES = 256 * 1024
+_DISCOVERY_MANIFEST_LIMITS = {"npm": 128, "python": 32}
+_DISCOVERY_MANIFEST_SOURCES = {
+    "npm": {"npm-workspace"},
+    "python": {"python-top-level", "python-workspace"},
+}
 
 
 def validate_test_symbol_observations(observations_json: bytes) -> None:
@@ -203,6 +209,38 @@ def _native_cache_namespace() -> str:
     ).hexdigest()
 
 
+def _native_provider_cache_namespace(
+    classifications: Sequence[Mapping[str, object]],
+) -> str:
+    """Bind reusable native facts to the source-classification context."""
+
+    context = hashlib.sha256()
+
+    def framed(value: bytes) -> None:
+        context.update(len(value).to_bytes(8, "big"))
+        context.update(value)
+
+    framed(b"archbird-native-provider-classification-v1")
+    context.update(len(classifications).to_bytes(8, "big"))
+    for classification in classifications:
+        for field in ("path", "language", "layer"):
+            framed(str(classification[field]).encode("utf-8"))
+        roles = tuple(str(role) for role in classification["roles"])
+        context.update(len(roles).to_bytes(8, "big"))
+        for role in roles:
+            framed(role.encode("utf-8"))
+
+    identity = hashlib.sha256()
+    for value in (
+        b"archbird-native-provider-cache-context-v1",
+        _native_cache_namespace().encode("ascii"),
+        context.hexdigest().encode("ascii"),
+    ):
+        identity.update(len(value).to_bytes(8, "big"))
+        identity.update(value)
+    return identity.hexdigest()
+
+
 def _python_ast_cache_namespace() -> str:
     identity = (
         f"archbird-python-ast-cache-v1\0"
@@ -274,6 +312,9 @@ class Project:
             }
             for source in ordered
         ]
+        self._native_provider_cache_namespace = (
+            _native_provider_cache_namespace(classifications)
+        )
         manifest_files = []
         for source, classification in zip(ordered, classifications):
             row = {
@@ -802,7 +843,7 @@ class Project:
                 phase="providers", provider="lexical:python", state="complete"
             )
         else:
-            namespace = _native_cache_namespace()
+            namespace = self._native_provider_cache_namespace
             for provider_id, matches, provider_mode in (
                 _NATIVE_CACHE_PROVIDERS
             ):
@@ -2811,24 +2852,87 @@ def _overlay_rows(
     return [indexed[path] for path in sorted(indexed, key=lambda value: value.encode())]
 
 
+def _read_discovery_input(
+    root: Path, path: str, max_bytes: Optional[int]
+) -> bytes:
+    parts = PurePosixPath(path).parts
+    cursor = root
+    for part in parts[:-1]:
+        cursor /= part
+        metadata = cursor.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise OSError(f"unsafe discovery input parent: {path}")
+    candidate = root.joinpath(*parts)
+    before = candidate.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise OSError(f"discovery input is not a regular file: {path}")
+    if max_bytes is not None and before.st_size > max_bytes:
+        raise OSError(
+            f"discovery input exceeds advertised limit: {path}: "
+            f"{before.st_size} > {max_bytes}"
+        )
+    descriptor = os.open(
+        candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_dev != before.st_dev
+            or opened.st_ino != before.st_ino
+        ):
+            raise OSError(f"discovery input changed while opening: {path}")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise OSError(
+                    f"discovery input exceeds advertised limit: {path}: "
+                    f"{total} > {max_bytes}"
+                )
+        after = os.fstat(descriptor)
+        if (
+            after.st_dev != opened.st_dev
+            or after.st_ino != opened.st_ino
+            or after.st_size != opened.st_size
+            or after.st_mtime_ns != opened.st_mtime_ns
+            or total != opened.st_size
+        ):
+            raise OSError(f"discovery input changed while reading: {path}")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
 def _encoded_input(
     root: Path,
     path: str,
     overlay: Optional[Mapping[str, Optional[bytes]]] = None,
+    *,
+    max_bytes: Optional[int] = None,
 ) -> dict[str, str]:
     if overlay is not None and path in overlay:
         data = overlay[path]
         if data is None:
             raise ConfigError(f"discovery input was removed by source overlay: {path}")
     else:
-        candidate = root.joinpath(*PurePosixPath(path).parts)
         try:
-            data = candidate.read_bytes()
+            data = _read_discovery_input(root, path, max_bytes)
         except OSError as error:
             raise ConfigError(
                 f"cannot read discovery input: {path}: {error}"
             ) from error
     assert data is not None
+    if max_bytes is not None and len(data) > max_bytes:
+        raise ConfigError(
+            f"discovery input exceeds advertised limit: {path}: "
+            f"{len(data)} > {max_bytes}"
+        )
     return {"content_hex": data.hex(), "path": path}
 
 
@@ -2840,6 +2944,7 @@ def _repository_inventory(
     ignore_files: Sequence[Union[str, Path]],
     pruned_directories: Sequence[str] = (),
     overlay: Optional[Mapping[str, Optional[bytes]]] = None,
+    manifest_requests: Sequence[Mapping[str, object]] = (),
 ) -> bytes:
     paths = {str(row["path"]) for row in rows}
     standard = sorted(
@@ -2872,6 +2977,37 @@ def _repository_inventory(
         documents.append(_encoded_input(root, "DESCRIPTION", overlay))
     if "configure.ac" in paths:
         documents.append(_encoded_input(root, "configure.ac", overlay))
+    document_paths = {str(row["path"]) for row in documents}
+    manifest_counts = {"npm": 0, "python": 0}
+    for request in manifest_requests:
+        if not isinstance(request, Mapping):
+            raise ConfigError("native manifest request is invalid")
+        path = request.get("path")
+        max_bytes = request.get("max_bytes")
+        kind = request.get("kind")
+        source = request.get("source")
+        if (
+            not isinstance(path, str)
+            or path in document_paths
+            or path not in paths
+            or not isinstance(max_bytes, int)
+            or isinstance(max_bytes, bool)
+            or max_bytes != _DISCOVERY_MANIFEST_MAX_BYTES
+            or request.get("fulfilled") is not False
+            or not isinstance(kind, str)
+            or kind not in _DISCOVERY_MANIFEST_LIMITS
+            or not isinstance(source, str)
+            or source not in _DISCOVERY_MANIFEST_SOURCES.get(kind, set())
+        ):
+            raise ConfigError("native manifest request is invalid")
+        assert isinstance(kind, str)
+        manifest_counts[kind] += 1
+        if manifest_counts[kind] > _DISCOVERY_MANIFEST_LIMITS[kind]:
+            raise ConfigError("native manifest request limit was exceeded")
+        documents.append(
+            _encoded_input(root, path, overlay, max_bytes=max_bytes)
+        )
+        document_paths.add(path)
     return _canonical(
         {
             "artifact": "archbird-repository-inventory",
@@ -3004,6 +3140,22 @@ def resolve_discovery(
         if path not in normalized_transient_exclude
     }
     rows = _overlay_rows(rows, final_overlay)
+    candidate_inventory = _repository_inventory(
+        repository,
+        rows,
+        include_standard_ignores=ignore,
+        ignore_files=normalized_ignore_files,
+        pruned_directories=pruned_directories,
+        overlay=overlay,
+    )
+    candidate_resolution = json.loads(
+        _native.discovery_resolve(
+            config_json, request, candidate_inventory
+        )
+    )
+    manifest_requests = candidate_resolution.get("manifest_requests")
+    if not isinstance(manifest_requests, list):
+        raise ConfigError("native resolution has no manifest request ledger")
     inventory = _repository_inventory(
         repository,
         rows,
@@ -3011,6 +3163,7 @@ def resolve_discovery(
         ignore_files=normalized_ignore_files,
         pruned_directories=pruned_directories,
         overlay=overlay,
+        manifest_requests=manifest_requests,
     )
     return _native.discovery_resolve(
         config_json, request, inventory, pretty=pretty

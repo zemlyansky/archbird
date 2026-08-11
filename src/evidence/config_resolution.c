@@ -8,8 +8,10 @@
 #include "base/utf8.h"
 #include "configuration/project_configuration.h"
 #include "evidence/config.h"
+#include "evidence/config_manifest_discovery.h"
 #include "evidence/gitignore.h"
 #include "evidence/manifests/autoconf_manifest.h"
+#include "evidence/manifests/npm_workspace_manifest.h"
 #include "evidence/manifests/pyproject_manifest.h"
 
 #include <stdio.h>
@@ -30,10 +32,7 @@ typedef struct ResolutionRequest {
   int use_ignore_files;
 } ResolutionRequest;
 
-typedef struct InventoryFile {
-  const AbString *path;
-  size_t bytes;
-} InventoryFile;
+typedef AbManifestInventoryFile InventoryFile;
 
 typedef struct InventoryIgnore {
   const AbValue *row;
@@ -47,10 +46,16 @@ typedef struct InventoryIgnore {
 typedef struct ResolutionDiagnostic {
   const char *code;
   const char *severity;
+  const char *metric;
   AbString path;
-  size_t bytes;
+  size_t observed;
   size_t limit;
 } ResolutionDiagnostic;
+
+typedef struct InferredImportRoot {
+  AbString root;
+  AbString manifest;
+} InferredImportRoot;
 
 typedef struct ResolutionState {
   ArchbirdEngine *engine;
@@ -65,6 +70,11 @@ typedef struct ResolutionState {
   AbValue plan;
   ResolutionDiagnostic *diagnostics;
   size_t diagnostic_count;
+  size_t diagnostic_capacity;
+  AbManifestDiscovery manifests;
+  InferredImportRoot *python_import_roots;
+  size_t python_import_root_count;
+  size_t python_import_root_capacity;
   size_t ignored_count;
   size_t oversized_count;
   size_t unsupported_count;
@@ -78,9 +88,30 @@ typedef struct ResolutionState {
   int has_c_translation_unit;
   int has_cpp_translation_unit;
   int has_scip_index;
-  /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION, 4 = configure.ac. */
+  /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION, 4 = configure.ac,
+   * 5 = agreeing nested workspace manifests. */
   int package_identity;
 } ResolutionState;
+
+static InventoryFile *inventory_find(ResolutionState *state,
+                                     const AbString *path);
+static ArchbirdStatus
+append_metric_diagnostic(ResolutionState *state, const char *code,
+                         const char *severity, const AbString *path,
+                         const char *metric, size_t observed, size_t limit);
+static ArchbirdStatus append_plain_diagnostic(ResolutionState *state,
+                                              const char *code,
+                                              const char *severity,
+                                              const AbString *path);
+static ArchbirdStatus append_diagnostic(ResolutionState *state,
+                                        const char *code, const char *severity,
+                                        const AbString *path, size_t bytes,
+                                        size_t limit);
+static ArchbirdStatus manifest_diagnostic(void *user_data, const char *code,
+                                          const char *severity,
+                                          const AbString *path,
+                                          const char *metric, size_t observed,
+                                          size_t limit);
 
 static int configured_map_field(const ResolutionState *state,
                                 const char *name) {
@@ -640,29 +671,20 @@ static ArchbirdStatus inventory_error(ArchbirdEngine *engine,
 
 static ArchbirdStatus parse_package_document(ResolutionState *state,
                                              const uint8_t *bytes,
-                                             size_t length, AbString *name,
-                                             AbString *version) {
-  AbValue document = {0};
-  const AbValue *value;
+                                             size_t length,
+                                             AbNpmDiscoveryMetadata *out) {
   ArchbirdStatus status =
-      ab_json_value_decode(state->engine, bytes, length, &document);
-  if (status != ARCHBIRD_OK)
+      ab_npm_discovery_metadata(state->engine, bytes, length, out);
+  if (status == ARCHBIRD_INVALID_JSON || status == ARCHBIRD_DUPLICATE_KEY) {
+    archbird_error_clear(state->engine);
     return inventory_error(state->engine,
                            "root package.json is not strict JSON");
-  if (document.kind != AB_VALUE_OBJECT) {
-    ab_value_free(state->engine, &document);
+  }
+  if (status == ARCHBIRD_INVALID_SCHEMA) {
+    archbird_error_clear(state->engine);
     return inventory_error(state->engine,
                            "root package.json must contain an object");
   }
-  value = ab_value_member(&document, "name");
-  if (value && nonblank_string(value))
-    status = ab_string_copy(state->engine, name, value->as.text.data,
-                            value->as.text.length);
-  value = ab_value_member(&document, "version");
-  if (status == ARCHBIRD_OK && value && value->kind == AB_VALUE_STRING)
-    status = ab_string_copy(state->engine, version, value->as.text.data,
-                            value->as.text.length);
-  ab_value_free(state->engine, &document);
   return status;
 }
 
@@ -782,6 +804,7 @@ static ArchbirdStatus add_default_python(ResolutionState *state,
   AbValue package = {0};
   AbValue aliases = {0};
   AbObjectField *field = mutable_member(&state->effective, "packages");
+  int had_packages = field != NULL;
   ArchbirdStatus status = ARCHBIRD_OK;
   if (field) {
     packages = field->value;
@@ -789,33 +812,36 @@ static ArchbirdStatus add_default_python(ResolutionState *state,
   } else {
     packages.kind = AB_VALUE_ARRAY;
   }
-  package.kind = AB_VALUE_OBJECT;
-  aliases.kind = AB_VALUE_ARRAY;
-  status = object_set_string(state->engine, &package, "kind", "python", 6);
-  if (status == ARCHBIRD_OK)
+  if (metadata->name.length) {
+    package.kind = AB_VALUE_OBJECT;
+    aliases.kind = AB_VALUE_ARRAY;
+    status = object_set_string(state->engine, &package, "kind", "python", 6);
+  }
+  if (status == ARCHBIRD_OK && metadata->name.length)
     status =
         object_set_string(state->engine, &package, "layer", "auto-python", 11);
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && metadata->name.length)
     status =
         object_set_string(state->engine, &package, "name", "python-root", 11);
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && metadata->name.length)
     status = object_set_string(state->engine, &package, "path",
                                "pyproject.toml", 14);
   if (status == ARCHBIRD_OK && metadata->name.length)
     status = object_set_string(state->engine, &package, "identity",
                                metadata->name.data, metadata->name.length);
-  if (status == ARCHBIRD_OK && metadata->version.length)
+  if (status == ARCHBIRD_OK && metadata->name.length &&
+      metadata->version.length)
     status =
         object_set_string(state->engine, &package, "version",
                           metadata->version.data, metadata->version.length);
-  if (status == ARCHBIRD_OK && metadata->module.length)
+  if (status == ARCHBIRD_OK && metadata->name.length && metadata->module.length)
     status = array_append_string(state->engine, &aliases, metadata->module.data,
                                  metadata->module.length);
   if (status == ARCHBIRD_OK && aliases.as.array.count)
     status = object_set(state->engine, &package, "aliases", &aliases);
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && metadata->name.length)
     status = array_append(state->engine, &packages, &package);
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && (had_packages || metadata->name.length))
     status =
         object_set(state->engine, &state->effective, "packages", &packages);
   ab_value_free(state->engine, &aliases);
@@ -1019,12 +1045,13 @@ static ArchbirdStatus add_default_autoconf(ResolutionState *state,
   return status;
 }
 
-static ArchbirdStatus
-decode_inventory(ResolutionState *state, const uint8_t *json,
-                 size_t json_length, AbString *package,
-                 AbString *package_version, AbPyprojectMetadata *pyproject,
-                 AbString *r_package, AbString *r_version,
-                 AbAutoconfMetadata *autoconf, int *has_make) {
+static ArchbirdStatus decode_inventory(ResolutionState *state,
+                                       const uint8_t *json, size_t json_length,
+                                       AbNpmDiscoveryMetadata *npm,
+                                       AbPyprojectMetadata *pyproject,
+                                       AbString *r_package, AbString *r_version,
+                                       AbAutoconfMetadata *autoconf,
+                                       int *has_make) {
   static const char *const fields[] = {
       "artifact",     "documents",          "files",
       "ignore_files", "pruned_directories", "schema_version"};
@@ -1168,23 +1195,45 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
                                  input->path->length, bytes, length);
     ab_free(state->engine, bytes);
   }
+  if (status == ARCHBIRD_OK)
+    status = ab_ignore_set_finalize(&state->ignores);
+  for (index = 0; status == ARCHBIRD_OK && index < documents->as.array.count;
+       index++) {
+    const AbValue *row = &documents->as.array.items[index];
+    const AbValue *path = ab_value_member(row, "path");
+    size_t previous;
+    if (!allowed_fields(row, input_fields, 2) || !nonblank_string(path) ||
+        !repository_path_valid(&path->as.text)) {
+      status = inventory_error(state->engine, "invalid document row");
+      break;
+    }
+    for (previous = 0; previous < index; previous++) {
+      const AbValue *other =
+          ab_value_member(&documents->as.array.items[previous], "path");
+      if (other && other->kind == AB_VALUE_STRING &&
+          ab_string_equal(&other->as.text, &path->as.text)) {
+        status = inventory_error(state->engine, "duplicate document path");
+        break;
+      }
+    }
+  }
   for (index = 0; status == ARCHBIRD_OK && index < documents->as.array.count;
        index++) {
     const AbValue *row = &documents->as.array.items[index];
     const AbValue *path = ab_value_member(row, "path");
     uint8_t *bytes = NULL;
     size_t length = 0;
-    if (!allowed_fields(row, input_fields, 2) || !nonblank_string(path) ||
-        !repository_path_valid(&path->as.text)) {
-      status = inventory_error(state->engine, "invalid root document row");
-      break;
-    }
+    int root_document = ab_value_string_is(path, "package.json") ||
+                        ab_value_string_is(path, "pyproject.toml") ||
+                        ab_value_string_is(path, "DESCRIPTION") ||
+                        ab_value_string_is(path, "configure.ac");
+    if (!root_document)
+      continue;
     status = decode_hex(state->engine, ab_value_member(row, "content_hex"),
                         &bytes, &length);
     if (status == ARCHBIRD_OK && ab_value_string_is(path, "package.json")) {
       state->has_package_json = 1;
-      status = parse_package_document(state, bytes, length, package,
-                                      package_version);
+      status = parse_package_document(state, bytes, length, npm);
     } else if (status == ARCHBIRD_OK &&
                ab_value_string_is(path, "pyproject.toml")) {
       state->has_pyproject = 1;
@@ -1202,7 +1251,44 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
     ab_free(state->engine, bytes);
   }
   if (status == ARCHBIRD_OK)
-    status = ab_ignore_set_finalize(&state->ignores);
+    status = ab_manifest_discovery_select(
+        &state->manifests, state->files, state->file_count, &state->ignores,
+        state->request.use_ignore_files ||
+            (state->request.ignore_files &&
+             state->request.ignore_files->as.array.count),
+        npm, pyproject, manifest_diagnostic, state);
+  for (index = 0; status == ARCHBIRD_OK && index < documents->as.array.count;
+       index++) {
+    const AbValue *row = &documents->as.array.items[index];
+    const AbValue *path = ab_value_member(row, "path");
+    AbManifestCandidate *candidate;
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    if (ab_value_string_is(path, "package.json") ||
+        ab_value_string_is(path, "pyproject.toml") ||
+        ab_value_string_is(path, "DESCRIPTION") ||
+        ab_value_string_is(path, "configure.ac"))
+      continue;
+    candidate = ab_manifest_discovery_find(&state->manifests, &path->as.text);
+    if (!candidate) {
+      status = inventory_error(state->engine, "unrequested manifest document");
+      break;
+    }
+    status = decode_hex(state->engine, ab_value_member(row, "content_hex"),
+                        &bytes, &length);
+    if (status == ARCHBIRD_OK && (length != candidate->bytes ||
+                                  length > AB_MANIFEST_DISCOVERY_MAX_BYTES))
+      status = inventory_error(
+          state->engine,
+          "manifest document bytes disagree with bounded inventory row");
+    if (status == ARCHBIRD_OK)
+      status = ab_manifest_discovery_supply(&state->manifests, candidate, bytes,
+                                            length, manifest_diagnostic, state);
+    ab_free(state->engine, bytes);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_manifest_discovery_report_missing(&state->manifests,
+                                                  manifest_diagnostic, state);
 done:
   ab_free(state->engine, ignore_inputs);
   return status;
@@ -1499,10 +1585,548 @@ static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
   return ARCHBIRD_OK;
 }
 
+static int normalized_python_module(const AbPyprojectMetadata *metadata,
+                                    char *buffer, size_t capacity,
+                                    size_t *out_length) {
+  if ((metadata->module_hints_present && !metadata->module_hints_supported) ||
+      (metadata->module_hints_present && !metadata->module.length))
+    return 0;
+  const AbString *source =
+      metadata->module.length ? &metadata->module : &metadata->name;
+  size_t index;
+  if (!source->length || source->length + 1 > capacity)
+    return 0;
+  for (index = 0; index < source->length; index++) {
+    unsigned char value = (unsigned char)source->data[index];
+    if (value == '-' || value == '.')
+      buffer[index] = '_';
+    else if ((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+             (value >= '0' && value <= '9') || value == '_')
+      buffer[index] = (char)value;
+    else
+      return 0;
+  }
+  if (buffer[0] >= '0' && buffer[0] <= '9')
+    return 0;
+  buffer[source->length] = '\0';
+  *out_length = source->length;
+  return 1;
+}
+
+static int discovery_path_ignored(ResolutionState *state,
+                                  const AbString *path) {
+  return (state->request.use_ignore_files ||
+          (state->request.ignore_files &&
+           state->request.ignore_files->as.array.count)) &&
+         ab_ignore_set_matches(&state->ignores, path, 0);
+}
+
+static int inventory_path_before_children(const AbString *path,
+                                          const char *prefix,
+                                          size_t prefix_length) {
+  size_t shared = path->length < prefix_length ? path->length : prefix_length;
+  int compared = shared ? memcmp(path->data, prefix, shared) : 0;
+  if (compared)
+    return compared < 0;
+  if (path->length <= prefix_length)
+    return 1;
+  return (unsigned char)path->data[prefix_length] < (unsigned char)'/';
+}
+
+static size_t inventory_first_child(const ResolutionState *state,
+                                    const char *prefix, size_t prefix_length) {
+  size_t low = 0;
+  size_t high = state->file_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (inventory_path_before_children(state->files[middle].path, prefix,
+                                       prefix_length))
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  return low;
+}
+
+static int inventory_python_source_below(ResolutionState *state,
+                                         const char *prefix,
+                                         size_t prefix_length) {
+  size_t index = inventory_first_child(state, prefix, prefix_length);
+  for (; index < state->file_count; index++) {
+    const AbString *path = state->files[index].path;
+    if (path->length <= prefix_length || path->data[prefix_length] != '/' ||
+        memcmp(path->data, prefix, prefix_length))
+      break;
+    if (!discovery_path_ignored(state, path) &&
+        (string_has_suffix(path, ".py") || string_has_suffix(path, ".pyi") ||
+         string_has_suffix(path, ".pyw")))
+      return 1;
+  }
+  return 0;
+}
+
+static int inventory_python_module_exists(ResolutionState *state,
+                                          const char *prefix,
+                                          size_t prefix_length) {
+  static const char *const suffixes[] = {
+      ".py", ".pyi", ".pyw", "/__init__.py", "/__init__.pyi", "/__init__.pyw"};
+  size_t suffix_index;
+  for (suffix_index = 0; suffix_index < sizeof(suffixes) / sizeof(suffixes[0]);
+       suffix_index++) {
+    AbBuffer candidate;
+    AbString path;
+    int found;
+    ab_buffer_init(&candidate, state->engine);
+    if (ab_buffer_append(&candidate, prefix, prefix_length) != ARCHBIRD_OK ||
+        ab_buffer_literal(&candidate, suffixes[suffix_index]) != ARCHBIRD_OK) {
+      ab_buffer_free(&candidate);
+      return -1;
+    }
+    path.data = (char *)candidate.data;
+    path.length = candidate.length;
+    found = inventory_find(state, &path) != NULL &&
+            !discovery_path_ignored(state, &path);
+    ab_buffer_free(&candidate);
+    if (found)
+      return 1;
+  }
+  return inventory_python_source_below(state, prefix, prefix_length);
+}
+
+typedef enum PythonImportRootOutcome {
+  PYTHON_IMPORT_ROOT_UNRESOLVED,
+  PYTHON_IMPORT_ROOT_RESOLVED,
+  PYTHON_IMPORT_ROOT_CONFLICT,
+  PYTHON_IMPORT_ROOT_UNSUPPORTED
+} PythonImportRootOutcome;
+
+static ArchbirdStatus
+python_import_root_candidate(ResolutionState *state, const AbString *manifest,
+                             const AbPyprojectMetadata *metadata, AbString *out,
+                             PythonImportRootOutcome *out_outcome) {
+  static const char *const conventional_roots[] = {"src", ""};
+  char module[256];
+  size_t module_length;
+  size_t directory_length = manifest->length;
+  size_t root_index;
+  size_t matches = 0;
+  AbString matched = {0};
+  *out_outcome = PYTHON_IMPORT_ROOT_UNRESOLVED;
+  if ((metadata->module_hints_present && !metadata->module_hints_supported) ||
+      (metadata->source_root_present && !metadata->source_root_supported)) {
+    *out_outcome = PYTHON_IMPORT_ROOT_UNSUPPORTED;
+    return append_plain_diagnostic(state, "discovery-python-layout-unsupported",
+                                   "warning", manifest);
+  }
+  if (!normalized_python_module(metadata, module, sizeof(module),
+                                &module_length))
+    return ARCHBIRD_OK;
+  while (directory_length && manifest->data[directory_length - 1] != '/')
+    directory_length--;
+  if (directory_length)
+    directory_length--;
+  for (root_index = 0; root_index < (metadata->source_root.length ? 1 : 2);
+       root_index++) {
+    const char *root_data = metadata->source_root.length
+                                ? metadata->source_root.data
+                                : conventional_roots[root_index];
+    size_t root_length = metadata->source_root.length
+                             ? metadata->source_root.length
+                             : strlen(conventional_roots[root_index]);
+    AbBuffer prefix;
+    AbBuffer root;
+    int exists;
+    if (root_length == 1 && root_data[0] == '.')
+      root_length = 0;
+    ab_buffer_init(&prefix, state->engine);
+    ab_buffer_init(&root, state->engine);
+    if (directory_length && ab_buffer_append(&root, manifest->data,
+                                             directory_length) != ARCHBIRD_OK)
+      exists = -1;
+    else if (directory_length && root_length &&
+             ab_buffer_literal(&root, "/") != ARCHBIRD_OK)
+      exists = -1;
+    else if (root_length &&
+             ab_buffer_append(&root, root_data, root_length) != ARCHBIRD_OK)
+      exists = -1;
+    else if (root.length &&
+             ab_buffer_append(&prefix, root.data, root.length) != ARCHBIRD_OK)
+      exists = -1;
+    else if (root.length && ab_buffer_literal(&prefix, "/") != ARCHBIRD_OK)
+      exists = -1;
+    else if (ab_buffer_append(&prefix, module, module_length) != ARCHBIRD_OK)
+      exists = -1;
+    else
+      exists = inventory_python_module_exists(state, (const char *)prefix.data,
+                                              prefix.length);
+    if (exists < 0) {
+      ab_buffer_free(&prefix);
+      ab_buffer_free(&root);
+      return ARCHBIRD_OUT_OF_MEMORY;
+    }
+    if (exists) {
+      AbString candidate;
+      candidate.data = root.length ? (char *)root.data : (char *)".";
+      candidate.length = root.length ? root.length : 1;
+      matches++;
+      ab_string_free(state->engine, &matched);
+      if (ab_string_copy(state->engine, &matched, candidate.data,
+                         candidate.length) != ARCHBIRD_OK) {
+        ab_buffer_free(&prefix);
+        ab_buffer_free(&root);
+        return ARCHBIRD_OUT_OF_MEMORY;
+      }
+    }
+    ab_buffer_free(&prefix);
+    ab_buffer_free(&root);
+  }
+  if (matches == 1) {
+    *out = matched;
+    *out_outcome = PYTHON_IMPORT_ROOT_RESOLVED;
+  } else {
+    ab_string_free(state->engine, &matched);
+    if (matches > 1) {
+      *out_outcome = PYTHON_IMPORT_ROOT_CONFLICT;
+      return append_metric_diagnostic(
+          state, "discovery-python-import-root-conflict", "warning", manifest,
+          "matches", matches, 1);
+    }
+  }
+  return ARCHBIRD_OK;
+}
+
+static int package_files_use_typescript(ResolutionState *state,
+                                        const AbString *manifest) {
+  size_t directory_length = manifest->length;
+  size_t index;
+  int javascript = 0;
+  int typescript = 0;
+  while (directory_length && manifest->data[directory_length - 1] != '/')
+    directory_length--;
+  if (directory_length)
+    directory_length--;
+  if (!directory_length)
+    return 0;
+  index = inventory_first_child(state, manifest->data, directory_length);
+  for (; index < state->file_count; index++) {
+    const AbString *path = state->files[index].path;
+    if (path->length <= directory_length ||
+        path->data[directory_length] != '/' ||
+        memcmp(path->data, manifest->data, directory_length))
+      break;
+    if (discovery_path_ignored(state, path))
+      continue;
+    javascript |=
+        string_has_suffix(path, ".js") || string_has_suffix(path, ".mjs") ||
+        string_has_suffix(path, ".cjs") || string_has_suffix(path, ".jsx");
+    typescript |=
+        string_has_suffix(path, ".ts") || string_has_suffix(path, ".mts") ||
+        string_has_suffix(path, ".cts") || string_has_suffix(path, ".tsx");
+  }
+  return typescript && !javascript;
+}
+
+static int package_identity_exists(const AbValue *packages, const char *kind,
+                                   const AbString *identity) {
+  size_t index;
+  if (!packages || packages->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < packages->as.array.count; index++) {
+    const AbValue *package = &packages->as.array.items[index];
+    const AbValue *package_kind = ab_value_member(package, "kind");
+    const AbValue *package_identity = ab_value_member(package, "identity");
+    if (ab_value_string_is(package_kind, kind) && package_identity &&
+        package_identity->kind == AB_VALUE_STRING &&
+        ab_string_equal(&package_identity->as.text, identity))
+      return 1;
+  }
+  return 0;
+}
+
+static ArchbirdStatus
+append_discovered_package(ResolutionState *state, const char *kind,
+                          const char *layer, const AbString *manifest,
+                          const AbString *identity, const AbString *version,
+                          const AbString *alias) {
+  AbObjectField *field = mutable_member(&state->effective, "packages");
+  AbValue packages = {0};
+  AbValue package = {0};
+  AbValue aliases = {0};
+  AbBuffer name;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (field) {
+    packages = field->value;
+    memset(&field->value, 0, sizeof(field->value));
+  } else {
+    packages.kind = AB_VALUE_ARRAY;
+  }
+  ab_buffer_init(&name, state->engine);
+  if (package_identity_exists(&packages, kind, identity)) {
+    status = append_plain_diagnostic(
+        state, "discovery-package-identity-conflict", "warning", manifest);
+    goto done;
+  }
+  package.kind = AB_VALUE_OBJECT;
+  aliases.kind = AB_VALUE_ARRAY;
+  status = ab_buffer_literal(&name, kind);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&name, ":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&name, identity->data, identity->length);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &package, "identity",
+                               identity->data, identity->length);
+  if (status == ARCHBIRD_OK)
+    status =
+        object_set_string(state->engine, &package, "kind", kind, strlen(kind));
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &package, "layer", layer,
+                               strlen(layer));
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &package, "name",
+                               (const char *)name.data, name.length);
+  if (status == ARCHBIRD_OK)
+    status = object_set_string(state->engine, &package, "path", manifest->data,
+                               manifest->length);
+  if (status == ARCHBIRD_OK && version->length)
+    status = object_set_string(state->engine, &package, "version",
+                               version->data, version->length);
+  if (status == ARCHBIRD_OK && alias && alias->length)
+    status = array_append_string(state->engine, &aliases, alias->data,
+                                 alias->length);
+  if (status == ARCHBIRD_OK && aliases.as.array.count)
+    status = object_set(state->engine, &package, "aliases", &aliases);
+  if (status == ARCHBIRD_OK)
+    status = array_append(state->engine, &packages, &package);
+done:
+  if (status == ARCHBIRD_OK)
+    status =
+        object_set(state->engine, &state->effective, "packages", &packages);
+  ab_buffer_free(&name);
+  ab_value_free(state->engine, &aliases);
+  ab_value_free(state->engine, &package);
+  ab_value_free(state->engine, &packages);
+  return status;
+}
+
+static ArchbirdStatus record_python_import_root(ResolutionState *state,
+                                                const AbString *root,
+                                                const AbString *manifest) {
+  AbObjectField *layer_field = mutable_member(&state->effective, "layers");
+  size_t layer_index;
+  if (!root->length || !layer_field ||
+      layer_field->value.kind != AB_VALUE_ARRAY)
+    return ARCHBIRD_OK;
+  for (layer_index = 0; layer_index < layer_field->value.as.array.count;
+       layer_index++) {
+    AbValue *layer = &layer_field->value.as.array.items[layer_index];
+    AbObjectField *roots_field;
+    AbValue roots = {0};
+    size_t root_index;
+    InferredImportRoot *resized;
+    ArchbirdStatus status;
+    if (!ab_value_string_is(ab_value_member(layer, "name"), "auto-python"))
+      continue;
+    roots_field = mutable_member(layer, "import_roots");
+    if (roots_field) {
+      roots = roots_field->value;
+      memset(&roots_field->value, 0, sizeof(roots_field->value));
+    } else {
+      roots.kind = AB_VALUE_ARRAY;
+    }
+    for (root_index = 0; root_index < roots.as.array.count; root_index++)
+      if (roots.as.array.items[root_index].kind == AB_VALUE_STRING &&
+          ab_string_equal(&roots.as.array.items[root_index].as.text, root)) {
+        status = object_set(state->engine, layer, "import_roots", &roots);
+        ab_value_free(state->engine, &roots);
+        return status;
+      }
+    status =
+        array_append_string(state->engine, &roots, root->data, root->length);
+    if (status == ARCHBIRD_OK)
+      status = object_set(state->engine, layer, "import_roots", &roots);
+    ab_value_free(state->engine, &roots);
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (state->python_import_root_count == state->python_import_root_capacity) {
+      size_t next = state->python_import_root_capacity
+                        ? state->python_import_root_capacity * 2
+                        : 8;
+      if (next < state->python_import_root_capacity ||
+          next > SIZE_MAX / sizeof(*state->python_import_roots))
+        return ARCHBIRD_LIMIT_EXCEEDED;
+      resized = (InferredImportRoot *)ab_realloc(
+          state->engine, state->python_import_roots,
+          next * sizeof(*state->python_import_roots));
+      if (!resized)
+        return ARCHBIRD_OUT_OF_MEMORY;
+      state->python_import_roots = resized;
+      state->python_import_root_capacity = next;
+    }
+    memset(&state->python_import_roots[state->python_import_root_count], 0,
+           sizeof(*state->python_import_roots));
+    status = ab_string_copy(
+        state->engine,
+        &state->python_import_roots[state->python_import_root_count].root,
+        root->data, root->length);
+    if (status == ARCHBIRD_OK) {
+      status = ab_string_copy(
+          state->engine,
+          &state->python_import_roots[state->python_import_root_count].manifest,
+          manifest->data, manifest->length);
+      if (status == ARCHBIRD_OK)
+        state->python_import_root_count++;
+      else
+        ab_string_free(
+            state->engine,
+            &state->python_import_roots[state->python_import_root_count].root);
+    }
+    return status;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus
+add_discovered_packages(ResolutionState *state,
+                        const AbPyprojectMetadata *root_python) {
+  size_t index;
+  AbString root_manifest = {(char *)"pyproject.toml", 14};
+  AbString root_import = {0};
+  PythonImportRootOutcome root_outcome;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (state->has_pyproject)
+    status = python_import_root_candidate(state, &root_manifest, root_python,
+                                          &root_import, &root_outcome);
+  if (status == ARCHBIRD_OK && root_import.length)
+    status = record_python_import_root(state, &root_import, &root_manifest);
+  ab_string_free(state->engine, &root_import);
+  for (index = 0;
+       status == ARCHBIRD_OK && index < state->manifests.npm_package_count;
+       index++) {
+    AbDiscoveredNpmPackage *package = &state->manifests.npm_packages[index];
+    if (!package->metadata.name.length) {
+      status =
+          append_plain_diagnostic(state, "discovery-package-identity-missing",
+                                  "warning", package->candidate->path);
+      continue;
+    }
+    status = append_discovered_package(
+        state, "npm",
+        package_files_use_typescript(state, package->candidate->path)
+            ? "auto-typescript"
+            : "auto-javascript",
+        package->candidate->path, &package->metadata.name,
+        &package->metadata.version, NULL);
+  }
+  for (index = 0;
+       status == ARCHBIRD_OK && index < state->manifests.python_package_count;
+       index++) {
+    AbDiscoveredPythonPackage *package =
+        &state->manifests.python_packages[index];
+    PythonImportRootOutcome import_outcome;
+    const AbString *alias = package->metadata.module.length
+                                ? &package->metadata.module
+                                : &package->metadata.name;
+    if (!package->metadata.name.length) {
+      if (!strcmp(package->candidate->source, "python-workspace"))
+        status =
+            append_plain_diagnostic(state, "discovery-package-identity-missing",
+                                    "warning", package->candidate->path);
+      continue;
+    }
+    status = python_import_root_candidate(
+        state, package->candidate->path, &package->metadata,
+        &package->import_root, &import_outcome);
+    if (status == ARCHBIRD_OK &&
+        import_outcome != PYTHON_IMPORT_ROOT_RESOLVED) {
+      if (import_outcome == PYTHON_IMPORT_ROOT_UNRESOLVED)
+        status = append_plain_diagnostic(
+            state, "discovery-python-import-root-unresolved", "warning",
+            package->candidate->path);
+      continue;
+    }
+    if (status == ARCHBIRD_OK)
+      status = record_python_import_root(state, &package->import_root,
+                                         package->candidate->path);
+    if (status == ARCHBIRD_OK)
+      status = append_discovered_package(
+          state, "python", "auto-python", package->candidate->path,
+          &package->metadata.name, &package->metadata.version, alias);
+  }
+  return status;
+}
+
+static int scoped_npm_project(const AbString *identity, AbString *out) {
+  size_t slash = 0;
+  if (identity->length < 4 || identity->data[0] != '@')
+    return 0;
+  while (slash < identity->length && identity->data[slash] != '/')
+    slash++;
+  if (slash <= 1 || slash + 1 >= identity->length)
+    return 0;
+  out->data = identity->data + 1;
+  out->length = slash - 1;
+  return 1;
+}
+
+static int discovered_project_identity(const ResolutionState *state,
+                                       AbString *out) {
+  const AbValue *packages = ab_value_member(&state->effective, "packages");
+  const AbString *python = NULL;
+  AbString npm = {0};
+  size_t named_npm = 0;
+  size_t index;
+  if (!packages || packages->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (index = 0; index < packages->as.array.count; index++) {
+    const AbValue *package = &packages->as.array.items[index];
+    const AbValue *kind = ab_value_member(package, "kind");
+    const AbValue *identity = ab_value_member(package, "identity");
+    if (!ab_value_string_is(kind, "npm") || !identity ||
+        identity->kind != AB_VALUE_STRING)
+      continue;
+    named_npm++;
+  }
+  for (index = 0; index < packages->as.array.count; index++) {
+    const AbValue *package = &packages->as.array.items[index];
+    const AbValue *kind = ab_value_member(package, "kind");
+    const AbValue *identity = ab_value_member(package, "identity");
+    AbString scope;
+    if (!identity || identity->kind != AB_VALUE_STRING)
+      continue;
+    if (ab_value_string_is(kind, "python")) {
+      if (python && !ab_string_equal(python, &identity->as.text))
+        return 0;
+      python = &identity->as.text;
+      continue;
+    }
+    if (!ab_value_string_is(kind, "npm"))
+      continue;
+    if (!scoped_npm_project(&identity->as.text, &scope)) {
+      if (named_npm != 1 || python)
+        return 0;
+      npm = identity->as.text;
+      continue;
+    }
+    if (npm.length && !ab_string_equal(&npm, &scope))
+      return 0;
+    npm = scope;
+  }
+  if (python && npm.length && !ab_string_equal(python, &npm))
+    return 0;
+  if (python)
+    *out = *python;
+  else if (npm.length && named_npm)
+    *out = npm;
+  else
+    return 0;
+  return 1;
+}
+
 static ArchbirdStatus
 prepare_effective(ResolutionState *state, const uint8_t *config_json,
-                  size_t config_length, const AbString *package,
-                  const AbString *version, const AbPyprojectMetadata *pyproject,
+                  size_t config_length, const AbNpmDiscoveryMetadata *npm,
+                  const AbPyprojectMetadata *pyproject,
                   const AbString *r_package, const AbString *r_version,
                   const AbAutoconfMetadata *autoconf, int has_make) {
   ArchbirdStatus status;
@@ -1510,6 +2134,8 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
   const uint8_t *default_json =
       ab_default_project_configuration(&default_length);
   AbProjectConfiguration configuration = {0};
+  AbString discovered_identity = {0};
+  const AbString *root_identity = NULL;
   size_t overlay_index;
   if (config_length) {
     status = ab_project_configuration_decode(state->engine, config_json,
@@ -1525,31 +2151,50 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
   if (status == ARCHBIRD_OK && state->has_cpp_translation_unit &&
       !state->has_c_translation_unit)
     status = prefer_cpp_headers(state);
+  if (npm->name.length)
+    root_identity = &npm->name;
+  else if (pyproject->name.length)
+    root_identity = &pyproject->name;
+  else if (r_package->length)
+    root_identity = r_package;
+  else if (autoconf->package.length)
+    root_identity = &autoconf->package;
   if (status == ARCHBIRD_OK && !configured_map_field(state, "project") &&
-      !state->request.project &&
-      (package->length || pyproject->name.length || r_package->length ||
-       autoconf->package.length)) {
-    const AbString *identity = package->length          ? package
-                               : pyproject->name.length ? &pyproject->name
-                               : r_package->length      ? r_package
-                                                        : &autoconf->package;
+      !state->request.project && root_identity) {
     const char *project_data;
     size_t project_length;
-    if (portable_project_name(identity->data, identity->length, &project_data,
+    if (portable_project_name(root_identity->data, root_identity->length,
+                              &project_data, &project_length)) {
+      status = object_set_string(state->engine, &state->effective, "project",
+                                 project_data, project_length);
+      if (status == ARCHBIRD_OK)
+        state->package_identity = npm->name.length           ? 1
+                                  : pyproject->name.length   ? 2
+                                  : r_package->length        ? 3
+                                  : autoconf->package.length ? 4
+                                                             : 5;
+    }
+  }
+  if (status == ARCHBIRD_OK && state->has_package_json)
+    status = add_default_npm(state, &npm->name, &npm->version);
+  if (status == ARCHBIRD_OK && state->has_pyproject)
+    status = add_default_python(state, pyproject);
+  if (status == ARCHBIRD_OK)
+    status = add_discovered_packages(state, pyproject);
+  if (status == ARCHBIRD_OK && !configured_map_field(state, "project") &&
+      !state->request.project && !state->package_identity &&
+      discovered_project_identity(state, &discovered_identity)) {
+    const char *project_data;
+    size_t project_length;
+    if (portable_project_name(discovered_identity.data,
+                              discovered_identity.length, &project_data,
                               &project_length)) {
       status = object_set_string(state->engine, &state->effective, "project",
                                  project_data, project_length);
       if (status == ARCHBIRD_OK)
-        state->package_identity = package->length          ? 1
-                                  : pyproject->name.length ? 2
-                                  : r_package->length      ? 3
-                                                           : 4;
+        state->package_identity = 5;
     }
   }
-  if (status == ARCHBIRD_OK && state->has_package_json)
-    status = add_default_npm(state, package, version);
-  if (status == ARCHBIRD_OK && state->has_pyproject)
-    status = add_default_python(state, pyproject);
   if (status == ARCHBIRD_OK && state->has_description && r_package->length)
     status = add_default_r(state, r_package, r_version);
   if (status == ARCHBIRD_OK && state->has_autoconf)
@@ -1823,22 +2468,30 @@ static int extension_supported(const AbString *path) {
   return 0;
 }
 
-static ArchbirdStatus append_diagnostic(ResolutionState *state,
-                                        const char *code, const char *severity,
-                                        const AbString *path, size_t bytes,
-                                        size_t limit) {
+static ArchbirdStatus
+append_metric_diagnostic(ResolutionState *state, const char *code,
+                         const char *severity, const AbString *path,
+                         const char *metric, size_t observed, size_t limit) {
   ResolutionDiagnostic *resized;
-  resized = (ResolutionDiagnostic *)ab_realloc(
-      state->engine, state->diagnostics,
-      (state->diagnostic_count + 1) * sizeof(*state->diagnostics));
-  if (!resized)
-    return ARCHBIRD_OUT_OF_MEMORY;
-  state->diagnostics = resized;
+  if (state->diagnostic_count == state->diagnostic_capacity) {
+    size_t next =
+        state->diagnostic_capacity ? state->diagnostic_capacity * 2 : 16;
+    if (next < state->diagnostic_capacity ||
+        next > SIZE_MAX / sizeof(*state->diagnostics))
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    resized = (ResolutionDiagnostic *)ab_realloc(
+        state->engine, state->diagnostics, next * sizeof(*state->diagnostics));
+    if (!resized)
+      return ARCHBIRD_OUT_OF_MEMORY;
+    state->diagnostics = resized;
+    state->diagnostic_capacity = next;
+  }
   memset(&state->diagnostics[state->diagnostic_count], 0,
          sizeof(*state->diagnostics));
   state->diagnostics[state->diagnostic_count].code = code;
   state->diagnostics[state->diagnostic_count].severity = severity;
-  state->diagnostics[state->diagnostic_count].bytes = bytes;
+  state->diagnostics[state->diagnostic_count].metric = metric;
+  state->diagnostics[state->diagnostic_count].observed = observed;
   state->diagnostics[state->diagnostic_count].limit = limit;
   if (ab_string_copy(state->engine,
                      &state->diagnostics[state->diagnostic_count].path,
@@ -1846,6 +2499,30 @@ static ArchbirdStatus append_diagnostic(ResolutionState *state,
     return ARCHBIRD_OUT_OF_MEMORY;
   state->diagnostic_count++;
   return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus append_diagnostic(ResolutionState *state,
+                                        const char *code, const char *severity,
+                                        const AbString *path, size_t bytes,
+                                        size_t limit) {
+  return append_metric_diagnostic(state, code, severity, path, "bytes", bytes,
+                                  limit);
+}
+
+static ArchbirdStatus append_plain_diagnostic(ResolutionState *state,
+                                              const char *code,
+                                              const char *severity,
+                                              const AbString *path) {
+  return append_metric_diagnostic(state, code, severity, path, NULL, 0, 0);
+}
+
+static ArchbirdStatus manifest_diagnostic(void *user_data, const char *code,
+                                          const char *severity,
+                                          const AbString *path,
+                                          const char *metric, size_t observed,
+                                          size_t limit) {
+  return append_metric_diagnostic((ResolutionState *)user_data, code, severity,
+                                  path, metric, observed, limit);
 }
 
 static ArchbirdStatus filter_plan(ResolutionState *state, size_t max_file_bytes,
@@ -1984,17 +2661,23 @@ static ArchbirdStatus render_diagnostics(AbBuffer *buffer,
     if (index)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer, "{\"bytes\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_u64(buffer, row->bytes);
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer, ",\"code\":");
+      status = ab_buffer_literal(buffer, "{\"code\":");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_json_string(buffer, row->code, strlen(row->code));
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_literal(buffer, ",\"limit\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_u64(buffer, row->limit);
+    if (status == ARCHBIRD_OK && row->metric) {
+      status = ab_buffer_literal(buffer, ",");
+      if (status == ARCHBIRD_OK)
+        status =
+            ab_buffer_json_string(buffer, row->metric, strlen(row->metric));
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, ":");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_u64(buffer, row->observed);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(buffer, ",\"limit\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_u64(buffer, row->limit);
+    }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"path\":");
     if (status == ARCHBIRD_OK)
@@ -2009,6 +2692,111 @@ static ArchbirdStatus render_diagnostics(AbBuffer *buffer,
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "]");
+  return status;
+}
+
+static ArchbirdStatus render_manifest_requests(AbBuffer *buffer,
+                                               const ResolutionState *state) {
+  size_t index;
+  ArchbirdStatus status = ab_buffer_literal(buffer, "[");
+  for (index = 0;
+       status == ARCHBIRD_OK && index < state->manifests.candidate_count;
+       index++) {
+    const AbManifestCandidate *candidate = &state->manifests.candidates[index];
+    if (index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "{\"evidence\":[");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(
+          buffer,
+          candidate->kind == AB_MANIFEST_CANDIDATE_NPM ? "package.json"
+                                                       : "pyproject.toml",
+          candidate->kind == AB_MANIFEST_CANDIDATE_NPM ? 12 : 14);
+    if (status == ARCHBIRD_OK && candidate->pattern) {
+      status = ab_buffer_literal(buffer, ",");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_json_string(buffer, candidate->pattern->data,
+                                       candidate->pattern->length);
+    }
+    if (status == ARCHBIRD_OK && candidate->witness) {
+      status = ab_buffer_literal(buffer, ",");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_json_string(buffer, candidate->witness->data,
+                                       candidate->witness->length);
+    }
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "],\"fulfilled\":");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_buffer_literal(buffer, candidate->supplied ? "true" : "false");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"kind\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(
+          buffer,
+          candidate->kind == AB_MANIFEST_CANDIDATE_NPM ? "npm" : "python",
+          candidate->kind == AB_MANIFEST_CANDIDATE_NPM ? 3 : 6);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"max_bytes\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, AB_MANIFEST_DISCOVERY_MAX_BYTES);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"path\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, candidate->path->data,
+                                     candidate->path->length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"source\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, candidate->source,
+                                     strlen(candidate->source));
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "]");
+  return status;
+}
+
+static ArchbirdStatus
+render_manifest_request_summary(AbBuffer *buffer,
+                                const ResolutionState *state) {
+  static const char *const names[] = {"npm", "python"};
+  static const size_t limits[] = {AB_MANIFEST_DISCOVERY_NPM_LIMIT,
+                                  AB_MANIFEST_DISCOVERY_PYTHON_LIMIT};
+  size_t kind;
+  ArchbirdStatus status = ab_buffer_literal(buffer, "{");
+  for (kind = 0; status == ARCHBIRD_OK && kind < 2; kind++) {
+    if (kind)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, names[kind], strlen(names[kind]));
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ":{\"limit\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, limits[kind]);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"matched\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, state->manifests.matches[kind]);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"max_bytes\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, AB_MANIFEST_DISCOVERY_MAX_BYTES);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"oversized\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, state->manifests.oversized[kind]);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"requested\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, state->manifests.requested[kind]);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, "}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
   return status;
 }
 
@@ -2099,6 +2887,7 @@ static ArchbirdStatus render_indexed_origin(AbBuffer *buffer, int *first,
 static ArchbirdStatus render_origins(AbBuffer *buffer,
                                      const ResolutionState *state) {
   const AbValue *layers = ab_value_member(&state->effective, "layers");
+  const AbValue *packages = ab_value_member(&state->effective, "packages");
   const AbValue *excludes = ab_value_member(&state->effective, "exclude");
   const AbValue *request_default =
       ab_value_member(&state->request_document, "default_excludes");
@@ -2163,6 +2952,46 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
         : configured_map_field(state, "layers") ? "config"
                                                 : "discovery",
         name && name->kind == AB_VALUE_STRING ? &name->as.text : NULL);
+    if (status == ARCHBIRD_OK && !configured_map_field(state, "layers") &&
+        ab_value_string_is(name, "auto-python")) {
+      const AbValue *roots = ab_value_member(layer, "import_roots");
+      size_t root_index;
+      for (root_index = 0;
+           status == ARCHBIRD_OK && roots && roots->kind == AB_VALUE_ARRAY &&
+           root_index < roots->as.array.count;
+           root_index++) {
+        const AbValue *root = &roots->as.array.items[root_index];
+        size_t inferred;
+        for (inferred = 0; inferred < state->python_import_root_count;
+             inferred++)
+          if (root->kind == AB_VALUE_STRING &&
+              ab_string_equal(&root->as.text,
+                              &state->python_import_roots[inferred].root)) {
+            char pointer[128];
+            int pointer_length =
+                snprintf(pointer, sizeof(pointer),
+                         "/layers/%zu/import_roots/%zu", index, root_index);
+            if (pointer_length < 0 || (size_t)pointer_length >= sizeof(pointer))
+              status = ARCHBIRD_LIMIT_EXCEEDED;
+            else
+              status = render_origin(
+                  buffer, &first, pointer, "manifest-candidate",
+                  state->python_import_roots[inferred].manifest.data,
+                  state->python_import_roots[inferred].manifest.length);
+            break;
+          }
+      }
+    }
+  }
+  for (index = 0;
+       status == ARCHBIRD_OK && packages && index < packages->as.array.count;
+       index++) {
+    const AbValue *package = &packages->as.array.items[index];
+    const AbValue *path = ab_value_member(package, "path");
+    status = render_indexed_origin(
+        buffer, &first, "packages", index,
+        configured_map_field(state, "packages") ? "config" : "manifest",
+        path && path->kind == AB_VALUE_STRING ? &path->as.text : NULL);
   }
   if (status == ARCHBIRD_OK)
     status = render_origin(
@@ -2192,6 +3021,7 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
         : state->package_identity == 2           ? "pyproject.toml"
         : state->package_identity == 3           ? "DESCRIPTION"
         : state->package_identity == 4           ? "configure.ac"
+        : state->package_identity == 5           ? "workspace-manifests"
                                                  : "stable-literal:repository";
     status = render_origin(buffer, &first, "/project", source, evidence,
                            evidence ? strlen(evidence) : 0);
@@ -2289,6 +3119,14 @@ render_resolution(ResolutionState *state, size_t max_file_bytes,
   if (status == ARCHBIRD_OK)
     status = render_ignore_sources(&body, state);
   if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&body, ",\"manifest_request_summary\":");
+  if (status == ARCHBIRD_OK)
+    status = render_manifest_request_summary(&body, state);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&body, ",\"manifest_requests\":");
+  if (status == ARCHBIRD_OK)
+    status = render_manifest_requests(&body, state);
+  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&body, ",\"inventory\":[");
   for (index = 0; status == ARCHBIRD_OK && index < state->file_count; index++) {
     if (index)
@@ -2382,6 +3220,12 @@ static void resolution_free(ResolutionState *state) {
   for (index = 0; index < state->diagnostic_count; index++)
     ab_string_free(state->engine, &state->diagnostics[index].path);
   ab_free(state->engine, state->diagnostics);
+  ab_manifest_discovery_free(&state->manifests);
+  for (index = 0; index < state->python_import_root_count; index++)
+    ab_string_free(state->engine, &state->python_import_roots[index].root);
+  for (index = 0; index < state->python_import_root_count; index++)
+    ab_string_free(state->engine, &state->python_import_roots[index].manifest);
+  ab_free(state->engine, state->python_import_roots);
   memset(state, 0, sizeof(*state));
 }
 
@@ -2392,8 +3236,7 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
                      size_t inventory_length, uint32_t json_flags,
                      ArchbirdWriteFn write_fn, void *user_data) {
   ResolutionState state = {0};
-  AbString package = {0};
-  AbString package_version = {0};
+  AbNpmDiscoveryMetadata npm = {0};
   AbString r_package = {0};
   AbString r_version = {0};
   AbPyprojectMetadata pyproject = {0};
@@ -2408,17 +3251,18 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
       !inventory_json || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   state.engine = engine;
+  ab_manifest_discovery_init(&state.manifests, engine);
   ab_ignore_set_init(&state.ignores, engine);
   ab_buffer_init(&effective_json, engine);
   status = decode_request(&state, request_json, request_length);
   if (status == ARCHBIRD_OK)
-    status = decode_inventory(&state, inventory_json, inventory_length,
-                              &package, &package_version, &pyproject,
-                              &r_package, &r_version, &autoconf, &has_make);
+    status = decode_inventory(&state, inventory_json, inventory_length, &npm,
+                              &pyproject, &r_package, &r_version, &autoconf,
+                              &has_make);
   if (status == ARCHBIRD_OK)
-    status = prepare_effective(&state, config_json, config_length, &package,
-                               &package_version, &pyproject, &r_package,
-                               &r_version, &autoconf, has_make);
+    status =
+        prepare_effective(&state, config_json, config_length, &npm, &pyproject,
+                          &r_package, &r_version, &autoconf, has_make);
   if (status == ARCHBIRD_OK)
     status = render_value(engine, &state.effective, &effective_json);
   if (status == ARCHBIRD_OK)
@@ -2436,8 +3280,7 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   }
   ab_map_config_free(engine, &validated);
   ab_buffer_free(&effective_json);
-  ab_string_free(engine, &package);
-  ab_string_free(engine, &package_version);
+  ab_npm_discovery_metadata_free(engine, &npm);
   ab_string_free(engine, &r_package);
   ab_string_free(engine, &r_version);
   ab_pyproject_metadata_free(engine, &pyproject);

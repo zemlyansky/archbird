@@ -298,10 +298,23 @@ static ArchbirdStatus exercise_config_resolution(TestAllocator *allocator) {
       "{\"artifact\":\"archbird-map-request\",\"schema_version\":1,"
       "\"sources\":[]}";
   static const char inventory[] =
-      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":[],"
-      "\"files\":[{\"bytes\":5000001,\"path\":\"huge.py\"},"
-      "{\"bytes\":12,\"path\":\"src/main.py\"}],\"ignore_files\":[],"
-      "\"schema_version\":1}";
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"7b22776f726b737061636573223a5b227061636b61676573"
+      "2f2a225d7d\",\"path\":\"package.json\"},"
+      "{\"content_hex\":\"7b226e616d65223a224064656d6f2f636f7265222c227665"
+      "7273696f6e223a22312e302e30227d\",\"path\":\"packages/core/"
+      "package.json\"},"
+      "{\"content_hex\":\"5b70726f6a6563745d0a6e616d65203d202264656d6f220a"
+      "76657273696f6e203d2022322e302e30220a0a5b746f6f6c2e7365747570746f6f6c"
+      "732e7061636b616765732e66696e645d0a696e636c756465203d205b2264656d6f2a22"
+      "5d0a\",\"path\":\"py/pyproject.toml\"}],\"files\":["
+      "{\"bytes\":5000001,\"path\":\"huge.py\"},"
+      "{\"bytes\":29,\"path\":\"package.json\"},"
+      "{\"bytes\":20,\"path\":\"packages/core/index.js\"},"
+      "{\"bytes\":39,\"path\":\"packages/core/package.json\"},"
+      "{\"bytes\":10,\"path\":\"py/demo/__init__.py\"},"
+      "{\"bytes\":95,\"path\":\"py/pyproject.toml\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
   ArchbirdStatus status;
   ArchbirdEngine *engine = create_engine(allocator, &status);
   CountingOutput output = {0};

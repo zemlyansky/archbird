@@ -1,0 +1,9 @@
+[project]
+name = "fixture-worker"
+version = "3.0.0"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = [
+  "fixture_worker*",
+]

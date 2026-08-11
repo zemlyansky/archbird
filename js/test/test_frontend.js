@@ -1106,9 +1106,10 @@ const cInputCacheRoot = path.resolve(
   process.argv[3], "build/test-c-input-cache-node",
 );
 fs.rmSync(cInputCacheRoot, { force: true, recursive: true });
-const cInputSources = (header, note) => [
+const cInputSources = (header, note, { publicHeader = true } = {}) => [
   new Source("include/api.h", Buffer.from(header), {
-    language: "c", layer: "core", roles: ["public-header", "source"],
+    language: "c", layer: "core",
+    roles: publicHeader ? ["public-header", "source"] : ["source"],
   }),
   new Source("notes/state.txt", Buffer.from(note), {
     language: "text", layer: "docs",
@@ -1131,6 +1132,46 @@ cInputUnrelated.scan("primary", {
 });
 assert.equal(cInputUnrelated.cacheStats.hits, 4);
 assert.equal(cInputUnrelated.cacheStats.misses, 0);
+const cContextCacheRoot = path.resolve(
+  process.argv[3], "build/test-provider-context-cache-node",
+);
+fs.rmSync(cContextCacheRoot, { force: true, recursive: true });
+const cWithoutPublic = new Project(
+  "c-context-cache",
+  cInputSources("int api(void);\n", "same\n", { publicHeader: false }),
+);
+cWithoutPublic.scan("primary", {
+  typescript: false, cacheDir: cContextCacheRoot, mapCache: false,
+});
+const cWithPublic = new Project(
+  "c-context-cache", cInputSources("int api(void);\n", "same\n"),
+);
+cWithPublic.scan("primary", {
+  typescript: false, cacheDir: cContextCacheRoot, mapCache: false,
+});
+const cApiScopes = (project) => new Set(
+  Array.from({ length: Number(project.counts.providers) }, (_, index) =>
+    JSON.parse(project.providerFactsJson(index)))
+    .filter((bundle) =>
+      bundle.producer.name === "archbird-native-c-lexical")
+    .flatMap((bundle) => bundle.facts)
+    .filter((fact) => fact.domain === "symbols" && fact.name === "api")
+    .map((fact) => fact.attributes.scope),
+);
+assert.deepEqual(cApiScopes(cWithoutPublic), new Set(["global"]));
+assert.deepEqual(cApiScopes(cWithPublic), new Set(["public"]));
+assert.equal(cWithPublic.cacheStats.hits, 0);
+assert.equal(cWithPublic.cacheStats.misses, 4);
+const cWithPublicWarm = new Project(
+  "c-context-cache", cInputSources("int api(void);\n", "same\n"),
+);
+cWithPublicWarm.scan("primary", {
+  typescript: false, cacheDir: cContextCacheRoot, mapCache: false,
+});
+assert.deepEqual(cApiScopes(cWithPublicWarm), new Set(["public"]));
+assert.equal(cWithPublicWarm.cacheStats.hits, 4);
+assert.equal(cWithPublicWarm.cacheStats.misses, 0);
+fs.rmSync(cContextCacheRoot, { force: true, recursive: true });
 const cInputHeaderChanged = new Project(
   "c-input-cache",
   cInputSources("int api(void);\nint added(void);\n", "after\n"),
