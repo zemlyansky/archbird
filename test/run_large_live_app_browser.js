@@ -34,33 +34,25 @@ async function expand(page, name) {
 }
 
 async function changeGrouping(page, grouping) {
-  await page.getByRole("button", { name: grouping, exact: true }).click();
-  await page.locator(".operation-progress").waitFor({
-    state: "visible",
-    timeout: 5_000,
-  });
+  await clickAndWaitForGraphLayout(
+    page,
+    page.getByRole("button", { name: grouping, exact: true }),
+    60_000,
+  );
   await page.locator(
     `.graph-canvas[data-group-by="${grouping}"][data-layout-ready="true"]`,
   ).waitFor({ timeout: 60_000 });
-  await page.locator(".operation-progress").waitFor({
-    state: "hidden",
-    timeout: 5_000,
-  });
 }
 
 async function changeMapView(page, view) {
-  await page.getByRole("button", { name: view, exact: true }).click();
-  await page.locator(".operation-progress").waitFor({
-    state: "visible",
-    timeout: 5_000,
-  });
+  await clickAndWaitForGraphLayout(
+    page,
+    page.getByRole("button", { name: view, exact: true }),
+    60_000,
+  );
   await page.locator(
     `.graph-canvas[data-map-view="${view}"][data-layout-ready="true"]`,
   ).waitFor({ timeout: 60_000 });
-  await page.locator(".operation-progress").waitFor({
-    state: "hidden",
-    timeout: 5_000,
-  });
 }
 
 async function nodeCount(page) {
