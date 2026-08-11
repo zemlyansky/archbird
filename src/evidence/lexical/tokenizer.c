@@ -299,8 +299,7 @@ ArchbirdStatus ab_tokenize(ArchbirdEngine *engine, const uint8_t *source,
   size_t line = 1;
   int line_prefix = 1;
   if (!engine || (!source && source_length) || !out ||
-      (flags &
-       ~(AB_LEX_C_PREPROCESSOR | AB_LEX_JAVASCRIPT | AB_LEX_R | AB_LEX_PYTHON)))
+      (flags & ~AB_LEX_FLAGS_SUPPORTED))
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(out, 0, sizeof(*out));
   out->engine = engine;

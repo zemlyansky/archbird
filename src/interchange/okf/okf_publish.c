@@ -226,8 +226,7 @@ ArchbirdStatus archbird_okf_publish(
   AbOkfPublication pub = {0};
   AbBuffer output;
   ArchbirdStatus status;
-  if (!engine || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+  if (!engine || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   pub.engine = engine;
   ab_buffer_init(&output, engine);

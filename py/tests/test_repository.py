@@ -291,6 +291,61 @@ def main() -> int:
             "Python provider cache cold/warm accounting is incomplete: "
             f"{cached_cold.cache_stats!r} -> {cached_warm.cache_stats!r}"
         )
+    provider_cache_files = tuple((cache_root / "providers-v1").rglob("*.json"))
+    if not provider_cache_files:
+        raise AssertionError("Python provider cache produced no persistent entries")
+    provider_cache_files[0].write_bytes(b"{broken")
+    cached_recovered = Project.from_config(
+        fixture / "archbird.json",
+        root=fixture,
+        cache_dir=cache_root,
+        map_cache=False,
+    )
+    if (
+        cached_recovered.map_json() != first
+        or cached_recovered.cache_stats["invalid"] != 1
+        or cached_recovered.cache_stats["misses"] != 1
+        or cached_recovered.cache_stats["writes"] != 1
+    ):
+        raise AssertionError(
+            "Python provider cache did not reject and rebuild corruption: "
+            f"{cached_recovered.cache_stats!r}"
+        )
+    cached_rewarmed = Project.from_config(
+        fixture / "archbird.json",
+        root=fixture,
+        cache_dir=cache_root,
+        map_cache=False,
+    )
+    if (
+        cached_rewarmed.map_json() != first
+        or cached_rewarmed.cache_stats["invalid"]
+        or cached_rewarmed.cache_stats["misses"]
+        or cached_rewarmed.cache_stats["hits"]
+        != cached_cold.cache_stats["writes"]
+    ):
+        raise AssertionError(
+            "Python rebuilt provider cache was not completely warm: "
+            f"{cached_rewarmed.cache_stats!r}"
+        )
+    transition_root = repository / "build/test-provider-cache-transition-python"
+    shutil.rmtree(transition_root, ignore_errors=True)
+    transition_cache = ProviderCache(transition_root)
+    transition_parameters = {
+        "namespace": "provider-implementation-v1",
+        "project": "cache-transition",
+        "provider_id": "fixture",
+        "path": "a.py",
+        "source_sha256": "1" * 64,
+    }
+    transition_cache.store(b"{}", **transition_parameters)
+    if transition_cache.load(
+        **dict(transition_parameters, namespace="provider-implementation-v2")
+    ) is not None:
+        raise AssertionError("Python provider cache crossed implementation namespaces")
+    if transition_cache.load(**transition_parameters) != b"{}":
+        raise AssertionError("Python provider cache lost the prior namespace entry")
+    shutil.rmtree(transition_root, ignore_errors=True)
     c_cache_root = repository / "build/test-c-input-cache-python"
     shutil.rmtree(c_cache_root, ignore_errors=True)
 
@@ -2472,9 +2527,130 @@ writer.commit()
         row["status"] != "pass" for row in verification_document["constraints"]
     ):
         raise AssertionError("reviewed self constraints did not pass")
-    from archbird.cli import main as cli_main
+    from archbird.cli import (
+        _MapDiagnosticTracker,
+        _write_project_map,
+        main as cli_main,
+    )
+
+    warning_map = (
+        b'{"artifact":"map","description":"literal ,\\\"diagnostics\\\":[]",'
+        b'"diagnostics":[{"message":"escaped ] } \\\\ \\\" text",'
+        b'"severity":"warning"}],"facts":[{"severity":"error"}]}'
+    )
+    error_map = warning_map.replace(b'"severity":"warning"', b'"severity":"error"')
+    for expected, encoded in ((False, warning_map), (True, error_map)):
+        tracker = _MapDiagnosticTracker()
+        for byte in encoded:
+            tracker.observe(bytes((byte,)))
+        tracker.finish()
+        if tracker.has_errors is not expected:
+            raise AssertionError("streamed Map diagnostic classification diverged")
+
+    import tracemalloc
+
+    bounded_stream = error_map + b"x" * (8 * 1024 * 1024)
+    tracemalloc.start()
+    bounded_tracker = _MapDiagnosticTracker()
+    bounded_tracker.observe(bounded_stream)
+    bounded_tracker.finish()
+    _, tracker_peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    if tracker_peak >= 1024 * 1024:
+        raise AssertionError(
+            "streamed Map diagnostic tracking copied the trailing artifact: "
+            f"peak={tracker_peak}"
+        )
 
     with tempfile.TemporaryDirectory(dir=repository / "build") as directory:
+        class ChunkedMapProject:
+            def __init__(self, encoded: bytes) -> None:
+                self.encoded = encoded
+
+            def write_map_json(self, sink, *, pretty: bool = False) -> None:
+                if pretty:
+                    raise AssertionError("compact stream fixture requested pretty JSON")
+                for start in range(0, len(self.encoded), 7):
+                    chunk = self.encoded[start : start + 7]
+                    written = sink(chunk)
+                    if written is not None and written != len(chunk):
+                        raise OSError("short stream fixture write")
+
+        streamed_map = Path(directory) / "streamed-map.json"
+        if not _write_project_map(
+            ChunkedMapProject(error_map),
+            str(streamed_map),
+            pretty=False,
+            check_diagnostics=True,
+        ):
+            raise AssertionError("streamed checked Map lost an error diagnostic")
+        if streamed_map.read_bytes() != error_map + b"\n":
+            raise AssertionError("streamed checked Map output bytes changed")
+        streamed_map.write_bytes(b"previous\n")
+        try:
+            _write_project_map(
+                ChunkedMapProject(b'{"artifact":"map","diagnostics":['),
+                str(streamed_map),
+                pretty=False,
+                check_diagnostics=True,
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("incomplete streamed Map diagnostics were accepted")
+        if streamed_map.read_bytes() != b"previous\n":
+            raise AssertionError("failed streamed Map replaced the prior artifact")
+
+        checked_root = Path(directory) / "checked-map"
+        (checked_root / "src").mkdir(parents=True)
+        (checked_root / "src/present.c").write_text(
+            "int present(void) { return 1; }\n", encoding="utf-8"
+        )
+        (checked_root / "archbird.json").write_text(
+            json.dumps(
+                {
+                    "project": "checked-map",
+                    "layers": [
+                        {
+                            "name": "present",
+                            "language": "c",
+                            "globs": ["src/**/*.c"],
+                        },
+                        {
+                            "name": "required-missing",
+                            "language": "c",
+                            "globs": ["missing/**/*.c"],
+                            "required": True,
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        checked_output = Path(directory) / "checked-map.json"
+        status = cli_main(
+            [
+                "map",
+                str(checked_root),
+                "--no-cache",
+                "--check",
+                "--progress",
+                "never",
+                "--format",
+                "json",
+                "--output",
+                str(checked_output),
+            ]
+        )
+        checked_document = json.loads(checked_output.read_bytes())
+        if status != 1 or not any(
+            row.get("severity") == "error"
+            for row in checked_document["diagnostics"]
+        ):
+            raise AssertionError(
+                "streamed compact Map --check did not preserve error exit status"
+            )
+
         saved_map = Path(directory) / "map.json"
         saved_map.write_bytes(first)
         for query_command, selector in (

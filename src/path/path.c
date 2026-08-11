@@ -442,13 +442,15 @@ static ArchbirdStatus graph_decode(ArchbirdEngine *engine,
   size_t index;
   size_t node_count = 0;
   size_t edge_count = 0;
-  size_t direction_factor = string_is(request->direction, "both") ? 2 : 1;
+  size_t direction_factor = string_is(request->direction, "both") ? 2u : 1u;
   size_t *cursor = NULL;
   memset(out, 0, sizeof(*out));
   for (index = 0; index < projection->item_count; index++) {
     const AbValue *record = attribute(&projection->items[index], "record_kind");
-    node_count += ab_projection_value_is(record, "node");
-    edge_count += ab_projection_value_is(record, "relation");
+    if (ab_projection_value_is(record, "node"))
+      node_count++;
+    if (ab_projection_value_is(record, "relation"))
+      edge_count++;
   }
   if (node_count > SIZE_MAX / sizeof(*out->nodes) ||
       edge_count > SIZE_MAX / sizeof(*out->edges) ||
@@ -607,7 +609,8 @@ static ArchbirdStatus candidates_build(ArchbirdEngine *engine,
   size_t index;
   memset(out, 0, sizeof(*out));
   for (index = 0; index < graph->node_count; index++)
-    out->count += endpoint_matches(endpoint, &graph->nodes[index]);
+    if (endpoint_matches(endpoint, &graph->nodes[index]))
+      out->count++;
   if (out->count > SIZE_MAX / sizeof(*out->items))
     return ARCHBIRD_LIMIT_EXCEEDED;
   out->items = (size_t *)ab_calloc(engine, out->count, sizeof(*out->items));
@@ -1150,8 +1153,7 @@ ArchbirdStatus archbird_map_path(ArchbirdEngine *engine,
   ArchbirdStatus status;
   if (!engine || !map_json || !map_length ||
       (!resolution_json && resolution_length) || !request_json ||
-      !request_length || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !request_length || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&output, engine);
   status = ab_json_value_decode(engine, map_json, map_length, &map);

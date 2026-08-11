@@ -53,6 +53,70 @@ def _assert_project_configuration_conformance() -> None:
         for entry in corpus["cases"]
         if entry["id"] == "all-projection-operators"
     )
+    expected_shapes = {
+        "artifact_routes": "relation",
+        "build_routes": "relation",
+        "component_edges": "relation",
+        "component_membership": "values",
+        "components": "set",
+        "constant_memberships": "set",
+        "constant_values": "values",
+        "file_edges": "relation",
+        "file_metrics": "values",
+        "graph": "graph",
+        "inventory_paths": "set",
+        "macro_members": "set",
+        "mapped_paths": "set",
+        "package_entrypoints": "relation",
+        "package_exports": "relation",
+        "provider_surface": "values",
+        "search_domain": "set",
+        "symbol_entities": "set",
+        "symbol_occurrences": "set",
+        "symbol_relations": "relation",
+        "symbols": "set",
+        "test_routes": "relation",
+        "test_selectors": "set",
+    }
+    projections = matrix["configuration"]["projections"]
+    assert len(projections) == len(expected_shapes)
+    assert {row["select"] for row in projections.values()} == set(expected_shapes)
+    report_map = (ROOT / "test/fixtures/report_map.json").read_bytes()
+    for projection_id, projection in projections.items():
+        result = json.loads(
+            evaluate_projection_json(
+                report_map, {"id": projection_id, **projection}
+            )
+        )
+        assert result["definition"]["select"] == projection["select"]
+        assert result["fact"]["shape"] == expected_shapes[projection["select"]]
+    required_field_cases = {
+        "constant_memberships": "constant projection requires a container",
+        "constant_values": "constant projection requires a container",
+        "file_metrics": "file_metrics requires metric bytes",
+        "graph": "graph requires level component, file, or symbol",
+        "macro_members": "macro_members requires call and selector",
+        "provider_surface": "provider_surface requires a name",
+        "symbol_occurrences": (
+            "symbol_occurrences requires exactly one non-empty symbol name"
+        ),
+    }
+    for select, message in required_field_cases.items():
+        configuration = {
+            "project": "conformance",
+            "layers": [
+                {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+            ],
+            "projections": {"missing-required": {"select": select}},
+        }
+        try:
+            compile_project_configuration(json.dumps(configuration).encode())
+        except RuntimeError as error:
+            assert str(error) == f"projection plan: {message} (status=8)"
+        else:
+            raise AssertionError(
+                f"projection {select} accepted missing required fields"
+            )
     for projection_id, projection in matrix["configuration"][
         "projections"
     ].items():

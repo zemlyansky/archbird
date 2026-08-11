@@ -517,8 +517,7 @@ ArchbirdStatus archbird_json_canonicalize(ArchbirdEngine *engine,
   yyjson_doc *document;
   JsonWriter writer;
   ArchbirdStatus status;
-  if (!engine || !write_fn ||
-      (flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE))) {
+  if (!engine || !write_fn || !ab_json_flags_valid(flags)) {
     if (engine) {
       return archbird_error_set(engine, ARCHBIRD_INVALID_ARGUMENT,
                                 ARCHBIRD_NO_OFFSET,

@@ -28,7 +28,7 @@ ArchbirdStatus archbird_constraints_evaluate(
   if (!engine || !config_json || !config_length || !map_json || !map_length ||
       (!resolution_json && resolution_length) ||
       (!request_json && request_length) || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_project_configuration_decode(engine, config_json, config_length,
                                            &configuration);
@@ -57,8 +57,7 @@ constraints_report(ArchbirdEngine *engine, const uint8_t *config_json,
       (!resolution_json && resolution_length) ||
       (!request_json && request_length) || !write_fn ||
       format < ARCHBIRD_VERIFICATION_MARKDOWN ||
-      format > ARCHBIRD_VERIFICATION_JUNIT ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      format > ARCHBIRD_VERIFICATION_JUNIT || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_project_configuration_decode(engine, config_json, config_length,
                                            &configuration);
@@ -115,7 +114,7 @@ ArchbirdStatus archbird_constraints_freeze(
       (!resolution_json && resolution_length) ||
       (!request_json && request_length) || !owner || !owner_length ||
       !rationale || !rationale_length || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_project_configuration_decode(engine, config_json, config_length,
                                            &configuration);

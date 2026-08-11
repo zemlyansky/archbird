@@ -1520,16 +1520,19 @@ static ArchbirdStatus surface_summary(AbOkfPublication *pub,
     }
     declared =
         declaration->length == 8 && !memcmp(declaration->data, "declared", 8);
-    summary->registered += declared;
-    summary->used += uses->as.array.count != 0;
-    summary->unused += declared && !uses->as.array.count;
-    summary->unregistered_use += declaration->length == 10 &&
-                                 !memcmp(declaration->data, "undeclared", 10) &&
-                                 uses->as.array.count != 0;
-    summary->unresolved +=
-        resolution->length == 10 && !memcmp(resolution->data, "unresolved", 10);
-    summary->ambiguous +=
-        resolution->length == 9 && !memcmp(resolution->data, "ambiguous", 9);
+    if (declared)
+      summary->registered++;
+    if (uses->as.array.count)
+      summary->used++;
+    if (declared && !uses->as.array.count)
+      summary->unused++;
+    if (declaration->length == 10 &&
+        !memcmp(declaration->data, "undeclared", 10) && uses->as.array.count)
+      summary->unregistered_use++;
+    if (resolution->length == 10 && !memcmp(resolution->data, "unresolved", 10))
+      summary->unresolved++;
+    if (resolution->length == 9 && !memcmp(resolution->data, "ambiguous", 9))
+      summary->ambiguous++;
   }
   return ARCHBIRD_OK;
 }

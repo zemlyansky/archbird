@@ -1321,11 +1321,109 @@ def _act_executor_submissions(
     return _native.json_canonicalize(encoded), tuple(files)
 
 
-def _write_project_map(project: Project, output: str, *, pretty: bool) -> None:
+class _MapDiagnosticTracker:
+    """Read the bounded top-level diagnostics array from a compact Map stream."""
+
+    _MARKER = b',"diagnostics":'
+
+    def __init__(self) -> None:
+        self._state = "key"
+        self._tail = b""
+        self._array = bytearray()
+        self._depth = 0
+        self._in_string = False
+        self._escaped = False
+        self.has_errors = False
+
+    def observe(self, chunk: bytes) -> None:
+        if self._state == "done" or not chunk:
+            return
+        data = chunk
+        if self._state == "key":
+            probe = self._tail + data if self._tail else data
+            marker = probe.find(self._MARKER)
+            if marker < 0:
+                retained = len(self._MARKER) - 1
+                self._tail = probe[-retained:] if len(probe) > retained else probe
+                return
+            self._tail = b""
+            self._state = "start"
+            data = probe
+            offset = marker + len(self._MARKER)
+        else:
+            offset = 0
+        if self._state == "start":
+            while offset < len(data) and data[offset] in b" \t\r\n":
+                offset += 1
+            if offset == len(data):
+                return
+            if data[offset] != ord("["):
+                raise RuntimeError("canonical Map diagnostics must be an array")
+            self._state = "array"
+        self._consume_array(data, offset)
+
+    def _consume_array(self, data: bytes, offset: int) -> None:
+        for index in range(offset, len(data)):
+            byte = data[index]
+            if self._in_string:
+                if self._escaped:
+                    self._escaped = False
+                elif byte == ord("\\"):
+                    self._escaped = True
+                elif byte == ord('"'):
+                    self._in_string = False
+                continue
+            if byte == ord('"'):
+                self._in_string = True
+            elif byte in (ord("["), ord("{")):
+                self._depth += 1
+            elif byte in (ord("]"), ord("}")):
+                self._depth -= 1
+                if self._depth < 0:
+                    raise RuntimeError("canonical Map diagnostics are malformed")
+                if self._depth == 0:
+                    self._array.extend(data[offset : index + 1])
+                    rows = json.loads(self._array)
+                    if not isinstance(rows, list):
+                        raise RuntimeError("canonical Map diagnostics must be an array")
+                    self.has_errors = any(
+                        isinstance(row, dict) and row.get("severity") == "error"
+                        for row in rows
+                    )
+                    self._state = "done"
+                    return
+        self._array.extend(data[offset:])
+
+    def finish(self) -> None:
+        if self._state != "done":
+            raise RuntimeError("canonical Map stream omitted complete diagnostics")
+
+
+def _write_project_map(
+    project: Project,
+    output: str,
+    *,
+    pretty: bool,
+    check_diagnostics: bool = False,
+) -> bool:
+    tracker = _MapDiagnosticTracker() if check_diagnostics else None
+
+    def write_map(sink: Callable[[bytes], object]) -> None:
+        if tracker is None:
+            project.write_map_json(sink, pretty=pretty)
+            return
+
+        def write(chunk: bytes) -> object:
+            tracker.observe(chunk)
+            return sink(chunk)
+
+        project.write_map_json(write, pretty=pretty)
+        tracker.finish()
+
     if output == "-":
-        project.write_map_json(sys.stdout.buffer.write, pretty=pretty)
+        write_map(sys.stdout.buffer.write)
         sys.stdout.buffer.write(b"\n")
-        return
+        return tracker.has_errors if tracker is not None else False
     destination = Path(output)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
@@ -1333,7 +1431,7 @@ def _write_project_map(project: Project, output: str, *, pretty: bool) -> None:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as stream:
-            project.write_map_json(stream.write, pretty=pretty)
+            write_map(stream.write)
             stream.write(b"\n")
         if destination.exists():
             temporary.chmod(stat.S_IMODE(destination.stat().st_mode))
@@ -1345,6 +1443,7 @@ def _write_project_map(project: Project, output: str, *, pretty: bool) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+    return tracker.has_errors if tracker is not None else False
 
 
 class _Progress:
@@ -3498,13 +3597,18 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             raise ValueError("--pretty applies only to JSON")
         project = _project_from_args(args, progress)
         progress.emit({"phase": "rendering", "artifact": "canonical Map"})
-        if args.format == "json" and not args.check:
-            _write_project_map(project, args.output, pretty=args.pretty)
+        if args.format == "json" and (not args.check or not args.pretty):
+            has_errors = _write_project_map(
+                project,
+                args.output,
+                pretty=args.pretty,
+                check_diagnostics=args.check,
+            )
             _warn_map_cache_stats(
                 project.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
             )
             progress.finish()
-            return 0
+            return 1 if has_errors else 0
         map_json = project.map_json(pretty=args.pretty and args.format == "json")
         _warn_map_cache_stats(
             project.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)

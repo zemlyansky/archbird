@@ -2405,8 +2405,7 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   size_t max_index_bytes = 0;
   ArchbirdStatus status;
   if (!engine || (!config_json && config_length) || !request_json ||
-      !inventory_json || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !inventory_json || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   state.engine = engine;
   ab_ignore_set_init(&state.ignores, engine);

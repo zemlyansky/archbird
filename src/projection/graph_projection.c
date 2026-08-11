@@ -1279,8 +1279,10 @@ static ArchbirdStatus add_group_relations(AbProjectionContext *context,
   ArchbirdStatus status = ARCHBIRD_OK;
   for (index = 0; index < initial_count; index++) {
     const AbValue *record = attribute(&graph->items[index], "record_kind");
-    membership_count += ab_projection_value_is(record, "membership");
-    relation_count += ab_projection_value_is(record, "relation");
+    if (ab_projection_value_is(record, "membership"))
+      membership_count++;
+    if (ab_projection_value_is(record, "relation"))
+      relation_count++;
   }
   if (membership_count)
     memberships = (AbGraphMembershipRef *)ab_calloc(

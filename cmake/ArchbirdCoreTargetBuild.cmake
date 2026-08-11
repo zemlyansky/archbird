@@ -167,6 +167,9 @@ function(archbird_apply_core_compile_contract target shared_library)
   else()
     target_compile_options(${target} PRIVATE
       -Wall -Wextra -Wpedantic -Wshadow)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+      target_compile_options(${target} PRIVATE -Wsign-conversion)
+    endif()
   endif()
   if(ARCHBIRD_ENABLE_SANITIZERS)
     target_compile_options(${target} PRIVATE

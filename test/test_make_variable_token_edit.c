@@ -112,7 +112,9 @@ static void expect_applied(const char *name, const char *source,
     return;
   }
   memcpy(actual, source, result->start_byte);
-  memcpy(actual + result->start_byte, replacement->data, replacement->length);
+  if (replacement->length) {
+    memcpy(actual + result->start_byte, replacement->data, replacement->length);
+  }
   memcpy(actual + result->start_byte + replacement->length,
          source + result->end_byte, source_length - result->end_byte);
   actual[actual_length] = '\0';

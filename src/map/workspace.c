@@ -1805,7 +1805,7 @@ archbird_workspace_plan(ArchbirdEngine *engine, const uint8_t *workspace_json,
   AbBuffer buffer;
   ArchbirdStatus status;
   if (!engine || (!workspace_json && workspace_length) || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   context.engine = engine;
   ab_buffer_init(&buffer, engine);
@@ -1835,7 +1835,7 @@ ArchbirdStatus archbird_workspace_analyze(
   ArchbirdStatus status;
   if (!engine || (!workspace_json && workspace_length) ||
       (!maps_json && maps_length) || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_build_identity_validate(engine);
   if (status != ARCHBIRD_OK)

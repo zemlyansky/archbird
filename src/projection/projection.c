@@ -238,8 +238,7 @@ ArchbirdStatus archbird_projection_evaluate(
   ArchbirdStatus status;
   if (!engine || !map_json || !map_length ||
       (!resolution_json && resolution_length) || !projection_json ||
-      !projection_length || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !projection_length || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&base, engine);
   ab_buffer_init(&full, engine);

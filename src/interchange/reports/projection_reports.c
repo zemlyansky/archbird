@@ -50,7 +50,8 @@ static size_t count_kind(const AbProjectionData *data, const char *kind) {
   size_t index;
   size_t count = 0;
   for (index = 0; index < data->item_count; index++)
-    count += item_is(&data->items[index], kind);
+    if (item_is(&data->items[index], kind))
+      count++;
   return count;
 }
 

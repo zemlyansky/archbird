@@ -4,7 +4,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  beginBrowserDiagnostics,
   browserEnvironment,
+  clickAndWaitForGraphLayout,
   createStaticServer,
   listen,
   loadChromium,
@@ -273,6 +275,9 @@ async function main() {
   fs.cpSync(sourceDirectory, noConfigDirectory, { recursive: true });
   fs.rmSync(path.join(noConfigDirectory, "archbird.json"));
   let browser;
+  let context;
+  let diagnostics;
+  let page;
   try {
     browser = await chromium.launch({
       executablePath,
@@ -286,12 +291,13 @@ async function main() {
         "--disable-setuid-sandbox",
       ],
     });
-    const context = await browser.newContext({
+    context = await browser.newContext({
       acceptDownloads: true,
       colorScheme: "dark",
       viewport: { width: 1440, height: 900 },
     });
-    const page = await context.newPage();
+    page = await context.newPage();
+    diagnostics = await beginBrowserDiagnostics(context, page, screenshot);
     const errors = [];
     const consoleErrors = [];
     const unexpectedApiRequests = [];
@@ -404,9 +410,12 @@ async function main() {
     await activateSelected(page, "Expand symbols");
     await selectGraphResult(page, "add");
     await page.locator(".inspector h2").getByText("add", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Collapse all", exact: true }).click();
+    await clickAndWaitForGraphLayout(
+      page,
+      page.getByRole("button", { name: "Collapse all", exact: true }),
+    );
     await zoomSlider.fill("150");
-    await page.getByText("150%", { exact: true }).waitFor();
+    await zoomControl(page).getByText("150%", { exact: true }).waitFor();
 
     await loadArtifact(page, verification, "verification");
     await page.waitForSelector(".verification-editor", { timeout: 10_000 });
@@ -560,7 +569,11 @@ async function main() {
     console.log(
       `offline app workflow passed (${browser.version()}, ${executablePath})`,
     );
+  } catch (error) {
+    if (diagnostics) await diagnostics.retain(error);
+    throw error;
   } finally {
+    if (diagnostics) await diagnostics.close();
     if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));
   }

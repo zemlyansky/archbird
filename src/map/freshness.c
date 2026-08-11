@@ -529,7 +529,7 @@ archbird_map_freshness(ArchbirdEngine *engine, const uint8_t *snapshot_json,
   ArchbirdStatus status;
   if (!engine || (!snapshot_json && snapshot_length) ||
       (!current_map_json && current_map_length) || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_build_identity_validate(engine);
   if (status != ARCHBIRD_OK)

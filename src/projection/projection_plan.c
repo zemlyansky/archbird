@@ -41,12 +41,55 @@ static int stable_id(const AbString *value) {
   return 1;
 }
 
-static int name_allowed(const AbString *name, const char *const *allowed,
-                        size_t count) {
+typedef struct ProjectionFieldName {
+  const char *name;
+  uint64_t bit;
+} ProjectionFieldName;
+
+static const ProjectionFieldName projection_fields[] = {
+    {"artifacts", AB_PROJECTION_FIELD_ARTIFACTS},
+    {"builds", AB_PROJECTION_FIELD_BUILDS},
+    {"call", AB_PROJECTION_FIELD_CALL},
+    {"components", AB_PROJECTION_FIELD_COMPONENTS},
+    {"configured_only", AB_PROJECTION_FIELD_CONFIGURED_ONLY},
+    {"container", AB_PROJECTION_FIELD_CONTAINER},
+    {"exclude", AB_PROJECTION_FIELD_EXCLUDE},
+    {"from_paths", AB_PROJECTION_FIELD_FROM_PATHS},
+    {"group", AB_PROJECTION_FIELD_GROUP},
+    {"group_by", AB_PROJECTION_FIELD_GROUP_BY},
+    {"include", AB_PROJECTION_FIELD_INCLUDE},
+    {"kind_patterns", AB_PROJECTION_FIELD_KIND_PATTERNS},
+    {"kinds", AB_PROJECTION_FIELD_KINDS},
+    {"layer", AB_PROJECTION_FIELD_LAYER},
+    {"level", AB_PROJECTION_FIELD_LEVEL},
+    {"metric", AB_PROJECTION_FIELD_METRIC},
+    {"name", AB_PROJECTION_FIELD_NAME},
+    {"name_patterns", AB_PROJECTION_FIELD_NAME_PATTERNS},
+    {"names", AB_PROJECTION_FIELD_NAMES},
+    {"overlays", AB_PROJECTION_FIELD_OVERLAYS},
+    {"packages", AB_PROJECTION_FIELD_PACKAGES},
+    {"paths", AB_PROJECTION_FIELD_PATHS},
+    {"public_only", AB_PROJECTION_FIELD_PUBLIC_ONLY},
+    {"relations", AB_PROJECTION_FIELD_RELATIONS},
+    {"resolutions", AB_PROJECTION_FIELD_RESOLUTIONS},
+    {"routes", AB_PROJECTION_FIELD_ROUTES},
+    {"selector", AB_PROJECTION_FIELD_SELECTOR},
+    {"selector_argument", AB_PROJECTION_FIELD_SELECTOR_ARGUMENT},
+    {"selectors", AB_PROJECTION_FIELD_SELECTORS},
+    {"strip_prefix", AB_PROJECTION_FIELD_STRIP_PREFIX},
+    {"strip_suffix", AB_PROJECTION_FIELD_STRIP_SUFFIX},
+    {"target_paths", AB_PROJECTION_FIELD_TARGET_PATHS},
+    {"to_paths", AB_PROJECTION_FIELD_TO_PATHS},
+    {"values_from_argument", AB_PROJECTION_FIELD_VALUES_FROM_ARGUMENT},
+};
+
+static uint64_t projection_field_bit(const AbString *name) {
   size_t index;
-  for (index = 0; index < count; index++)
-    if (string_is(name, allowed[index]))
-      return 1;
+  for (index = 0;
+       index < sizeof(projection_fields) / sizeof(projection_fields[0]);
+       index++)
+    if (string_is(name, projection_fields[index].name))
+      return projection_fields[index].bit;
   return 0;
 }
 
@@ -73,149 +116,13 @@ static int string_array_unique(const AbValue *value) {
   return 1;
 }
 
-static int select_supported(const AbValue *select) {
-  static const char *const supported[] = {
-      "artifact_routes",  "build_routes",
-      "component_edges",  "component_membership",
-      "components",       "constant_memberships",
-      "constant_values",  "file_edges",
-      "file_metrics",     "graph",
-      "inventory_paths",  "macro_members",
-      "mapped_paths",     "package_entrypoints",
-      "package_exports",  "provider_surface",
-      "search_domain",    "symbols",
-      "symbol_entities",  "symbol_occurrences",
-      "symbol_relations", "test_routes",
-      "test_selectors",
-  };
-  size_t index;
-  if (!select || select->kind != AB_VALUE_STRING)
-    return 0;
-  for (index = 0; index < sizeof(supported) / sizeof(supported[0]); index++)
-    if (string_is(&select->as.text, supported[index]))
-      return 1;
-  return 0;
-}
-
-static int select_is(const AbValue *select, const char *literal) {
-  return select && select->kind == AB_VALUE_STRING &&
-         string_is(&select->as.text, literal);
-}
-
-static int projection_field_allowed(const AbValue *select,
+static int projection_field_allowed(const AbProjectionDescriptor *descriptor,
                                     const AbString *name) {
-  static const char *const normalized[] = {"exclude", "include", "strip_prefix",
-                                           "strip_suffix"};
-  static const char *const normalized_operators[] = {
-      "component_membership", "constant_memberships", "constant_values",
-      "file_metrics",         "inventory_paths",      "macro_members",
-      "mapped_paths",         "provider_surface",     "symbols",
-      "test_selectors",
-  };
-  size_t index;
+  uint64_t bit;
   if (string_is(name, "id") || string_is(name, "select"))
     return 1;
-  for (index = 0;
-       index < sizeof(normalized_operators) / sizeof(normalized_operators[0]);
-       index++)
-    if (select_is(select, normalized_operators[index]) &&
-        name_allowed(name, normalized,
-                     sizeof(normalized) / sizeof(normalized[0])))
-      return 1;
-  if (select_is(select, "artifact_routes")) {
-    static const char *const fields[] = {"artifacts"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "build_routes")) {
-    static const char *const fields[] = {"builds"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "component_edges")) {
-    static const char *const fields[] = {"kind_patterns", "kinds",
-                                         "name_patterns"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "component_membership")) {
-    static const char *const fields[] = {"components"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "components")) {
-    static const char *const fields[] = {"names"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "constant_memberships")) {
-    static const char *const fields[] = {"container", "paths"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "constant_values")) {
-    static const char *const fields[] = {"container", "kinds", "paths"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "file_edges")) {
-    static const char *const fields[] = {"from_paths", "kind_patterns", "kinds",
-                                         "name_patterns", "to_paths"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "file_metrics")) {
-    static const char *const fields[] = {"metric"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "graph")) {
-    static const char *const fields[] = {"group_by", "level", "overlays",
-                                         "relations"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "macro_members")) {
-    static const char *const fields[] = {"call", "paths", "selector",
-                                         "selector_argument",
-                                         "values_from_argument"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "mapped_paths")) {
-    static const char *const fields[] = {"paths"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "package_entrypoints")) {
-    static const char *const fields[] = {"packages", "routes", "target_paths"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "package_exports")) {
-    static const char *const fields[] = {"name_patterns", "packages"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "provider_surface")) {
-    static const char *const fields[] = {"name"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "symbols")) {
-    static const char *const fields[] = {"kinds", "layer", "name_patterns",
-                                         "names", "paths", "public_only"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "symbol_entities")) {
-    static const char *const fields[] = {"kinds", "layer", "name_patterns",
-                                         "names", "paths", "public_only"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "symbol_occurrences")) {
-    static const char *const fields[] = {"names", "paths"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "symbol_relations")) {
-    static const char *const fields[] = {"from_paths", "kinds", "resolutions",
-                                         "to_paths"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "test_routes")) {
-    static const char *const fields[] = {"configured_only", "group", "paths",
-                                         "selectors", "target_paths"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  if (select_is(select, "test_selectors")) {
-    static const char *const fields[] = {"group", "paths", "selectors"};
-    return name_allowed(name, fields, sizeof(fields) / sizeof(fields[0]));
-  }
-  return 0;
+  bit = projection_field_bit(name);
+  return bit && (descriptor->allowed_fields & bit) != 0;
 }
 
 static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
@@ -233,6 +140,7 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
       "layer",    "level",        "metric",       "name",
       "selector", "strip_prefix", "strip_suffix",
   };
+  const AbProjectionDescriptor *descriptor;
   const AbValue *declared_id;
   const AbValue *select;
   uint64_t argument;
@@ -244,10 +152,13 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
                       !ab_string_equal(&declared_id->as.text, id)))
     return invalid(engine, "definition id does not match the plan id");
   select = ab_value_member(definition, "select");
-  if (!select_supported(select))
+  descriptor = select && select->kind == AB_VALUE_STRING
+                   ? ab_projection_descriptor_find(&select->as.text)
+                   : NULL;
+  if (!descriptor)
     return invalid(engine, "definition has an unsupported select operator");
   for (index = 0; index < definition->as.object.count; index++)
-    if (!projection_field_allowed(select,
+    if (!projection_field_allowed(descriptor,
                                   &definition->as.object.fields[index].name))
       return invalid(engine,
                      "definition contains a field unsupported by its select "
@@ -267,10 +178,16 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
       (ab_value_member(definition, "public_only") &&
        ab_value_member(definition, "public_only")->kind != AB_VALUE_BOOL))
     return invalid(engine, "projection boolean field has the wrong type");
-  if (string_is(&select->as.text, "file_metrics") &&
+  for (index = 0;
+       index < sizeof(projection_fields) / sizeof(projection_fields[0]);
+       index++)
+    if ((descriptor->required_fields & projection_fields[index].bit) != 0 &&
+        !ab_value_member(definition, projection_fields[index].name))
+      return invalid(engine, descriptor->required_message);
+  if (descriptor->kind == AB_PROJECTION_KIND_FILE_METRICS &&
       !ab_value_string_is(ab_value_member(definition, "metric"), "bytes"))
     return invalid(engine, "file_metrics requires metric bytes");
-  if (string_is(&select->as.text, "graph")) {
+  if (descriptor->kind == AB_PROJECTION_KIND_GRAPH) {
     const AbValue *level = ab_value_member(definition, "level");
     const AbValue *group = ab_value_member(definition, "group_by");
     const AbValue *relations = ab_value_member(definition, "relations");
@@ -317,10 +234,10 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
         return invalid(engine, "graph overlays contains an unsupported kind");
     }
   }
-  if (string_is(&select->as.text, "provider_surface") &&
+  if (descriptor->kind == AB_PROJECTION_KIND_PROVIDER_SURFACE &&
       !ab_projection_nonblank(ab_value_member(definition, "name")))
     return invalid(engine, "provider_surface requires a name");
-  if (string_is(&select->as.text, "symbol_occurrences")) {
+  if (descriptor->kind == AB_PROJECTION_KIND_SYMBOL_OCCURRENCES) {
     const AbValue *names = ab_value_member(definition, "names");
     if (!names || !string_array_unique(names) || names->as.array.count != 1 ||
         !ab_projection_nonblank(&names->as.array.items[0]))
@@ -328,11 +245,11 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
           engine,
           "symbol_occurrences requires exactly one non-empty symbol name");
   }
-  if ((string_is(&select->as.text, "constant_values") ||
-       string_is(&select->as.text, "constant_memberships")) &&
+  if ((descriptor->kind == AB_PROJECTION_KIND_CONSTANT_VALUES ||
+       descriptor->kind == AB_PROJECTION_KIND_CONSTANT_MEMBERSHIPS) &&
       !ab_projection_nonblank(ab_value_member(definition, "container")))
     return invalid(engine, "constant projection requires a container");
-  if (string_is(&select->as.text, "macro_members") &&
+  if (descriptor->kind == AB_PROJECTION_KIND_MACRO_MEMBERS &&
       (!ab_projection_nonblank(ab_value_member(definition, "call")) ||
        !ab_projection_nonblank(ab_value_member(definition, "selector"))))
     return invalid(engine, "macro_members requires call and selector");

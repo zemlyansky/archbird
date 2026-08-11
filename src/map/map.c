@@ -3220,8 +3220,7 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
   size_t index;
   size_t rendered_files = 0;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!engine || !project || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+  if (!engine || !project || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_build_identity_validate(engine);
   if (status != ARCHBIRD_OK)

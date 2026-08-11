@@ -1714,7 +1714,7 @@ ArchbirdStatus archbird_map_diff(ArchbirdEngine *engine,
   ArchbirdStatus status;
   if (!engine || (!before_json && before_length) ||
       (!after_json && after_length) || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_build_identity_validate(engine);
   if (status != ARCHBIRD_OK)

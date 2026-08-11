@@ -88,6 +88,59 @@ typedef struct QueryContextPolicy {
   size_t test_match_offset;
 } QueryContextPolicy;
 
+typedef struct QueryReportViewContext {
+  ArchbirdEngine *engine;
+  const AbValue *map;
+  const AbValue *query;
+  const AbValue *verification;
+  AbBuffer *out;
+  const AbValue *map_files;
+  const AbValue *files;
+  const AbValue *edges;
+  const AbValue *metadata;
+  const AbValue *evidence;
+  const AbValue *source_tool;
+  const AbValue *tool;
+  const AbValue *discovery;
+  const AbValue *focus;
+  const AbValue *seeds;
+  const AbValue *seed_identities;
+  const AbValue *change_set;
+  const AbValue *retrieval;
+  const AbValue *plan;
+  const AbString *project;
+  const AbString *direction;
+  const AbString *config;
+  const AbString *inputs;
+  const AbString *plan_id;
+  const AbString *plan_kind;
+  const AbString *scope;
+  const AbString *producer_policy;
+  const AbString *producer_compatibility;
+  QueryReportFile *report_files;
+  QueryContextPolicy policy;
+  ArchbirdReportDetail detail;
+  size_t node_limit;
+  size_t compact_symbols;
+  size_t compact_edges;
+  size_t eligible_files;
+  size_t visible_start;
+  size_t visible_count;
+  size_t test_eligible_count;
+  size_t test_emitted_count;
+  size_t test_candidate_collapsed_count;
+  size_t test_conservative_collapsed_count;
+  size_t test_excluded_count;
+  size_t test_start;
+  int include_neighborhood;
+  int include_routed;
+  int compact_header;
+  int change_view;
+  int full_detail;
+  int compact_detail;
+  int named_plan;
+} QueryReportViewContext;
+
 static ArchbirdStatus query_schema_error(ArchbirdEngine *engine,
                                          const char *message) {
   return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
@@ -1536,105 +1589,109 @@ cleanup:
   return status;
 }
 
-static ArchbirdStatus render_query_view(
-    ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
-    const AbValue *verification, size_t node_limit, int include_neighborhood,
-    int include_routed, int compact_header, ArchbirdQueryView view,
-    ArchbirdReportDetail detail, AbBuffer *out) {
-  const AbValue *map_files = optional_array(map, "files");
-  const AbValue *files = optional_array(query, "files");
-  const AbValue *edges = optional_array(query, "edges");
-  const AbValue *metadata = ab_report_object(query, "query");
-  const AbValue *evidence = ab_report_object(query, "evidence");
-  const AbValue *source_tool = ab_report_object(query, "source_tool");
-  const AbValue *tool = ab_report_object(query, "tool");
-  const AbValue *discovery = optional_object(query, "discovery");
-  const AbString *project = ab_report_string(query, "project");
-  const AbString *direction;
-  const AbString *config;
-  const AbString *inputs;
-  const AbValue *focus;
-  const AbValue *seeds;
-  const AbValue *seed_identities;
-  const AbValue *change_set;
-  const AbValue *retrieval;
-  const AbValue *plan;
-  const AbString *plan_id;
-  const AbString *plan_kind;
-  const AbString *scope;
-  const AbString *producer_policy;
-  const AbString *producer_compatibility;
-  int change_view = view == ARCHBIRD_QUERY_VIEW_CHANGES;
-  int full_detail = detail == ARCHBIRD_REPORT_DETAIL_FULL;
-  int compact_detail = detail == ARCHBIRD_REPORT_DETAIL_COMPACT;
-  int named_plan;
-  QueryReportFile *report_files = NULL;
-  QueryContextPolicy policy;
-  size_t compact_symbols =
-      ab_report_size(optional_object(map, "limits"), "compact_symbols", 10);
-  size_t compact_edges =
-      ab_report_size(optional_object(map, "limits"), "compact_edge_names", 12);
+static void query_report_view_free(QueryReportViewContext *view) {
   size_t index;
-  size_t omitted;
-  size_t eligible_files = 0;
-  size_t visible_start = 0;
-  size_t visible_count = 0;
-  size_t test_eligible_count = 0;
-  size_t test_emitted_count = 0;
-  size_t test_candidate_collapsed_count = 0;
-  size_t test_conservative_collapsed_count = 0;
-  size_t test_excluded_count = 0;
-  size_t test_start = 0;
+  if (!view)
+    return;
+  if (view->report_files && view->files)
+    for (index = 0; index < view->files->as.array.count; index++)
+      ab_report_list_free(&view->report_files[index].incoming);
+  ab_free(view->engine, view->report_files);
+  view->report_files = NULL;
+}
+
+static ArchbirdStatus
+query_report_view_init(QueryReportViewContext *view, ArchbirdEngine *engine,
+                       const AbValue *map, const AbValue *query,
+                       const AbValue *verification, size_t node_limit,
+                       int include_neighborhood, int include_routed,
+                       int compact_header, ArchbirdQueryView selected_view,
+                       ArchbirdReportDetail detail, AbBuffer *out) {
+  size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!metadata || !evidence || !source_tool || !tool || !project ||
+  memset(view, 0, sizeof(*view));
+  view->engine = engine;
+  view->map = map;
+  view->query = query;
+  view->verification = verification;
+  view->out = out;
+  view->node_limit = node_limit;
+  view->include_neighborhood = include_neighborhood;
+  view->include_routed = include_routed;
+  view->compact_header = compact_header;
+  view->detail = detail;
+  view->change_view = selected_view == ARCHBIRD_QUERY_VIEW_CHANGES;
+  view->full_detail = detail == ARCHBIRD_REPORT_DETAIL_FULL;
+  view->compact_detail = detail == ARCHBIRD_REPORT_DETAIL_COMPACT;
+  view->map_files = optional_array(map, "files");
+  view->files = optional_array(query, "files");
+  view->edges = optional_array(query, "edges");
+  view->metadata = ab_report_object(query, "query");
+  view->evidence = ab_report_object(query, "evidence");
+  view->source_tool = ab_report_object(query, "source_tool");
+  view->tool = ab_report_object(query, "tool");
+  view->discovery = optional_object(query, "discovery");
+  view->project = ab_report_string(query, "project");
+  if (!view->metadata || !view->evidence || !view->source_tool || !view->tool ||
+      !view->project ||
       !ab_value_string_is(ab_value_member(query, "artifact"), "query"))
     return query_schema_error(engine, "query report input is malformed");
-  direction = ab_report_string(metadata, "direction");
-  config = ab_report_string(evidence, "config_sha256");
-  inputs = ab_report_string(evidence, "input_sha256");
-  focus = optional_array(metadata, "focus");
-  seeds = optional_array(metadata, "seeds");
-  seed_identities = optional_array(metadata, "seed_identities");
-  change_set = ab_value_member(metadata, "change_set");
-  retrieval = ab_value_member(metadata, "retrieval");
-  plan = optional_object(metadata, "plan");
-  plan_id = plan ? ab_report_string(plan, "id") : NULL;
-  plan_kind = plan ? ab_report_string(plan, "kind") : NULL;
-  if (plan && (!plan_id || (!ab_report_string_equal(plan_kind, "ad_hoc") &&
-                            !ab_report_string_equal(plan_kind, "configured"))))
+  view->direction = ab_report_string(view->metadata, "direction");
+  view->config = ab_report_string(view->evidence, "config_sha256");
+  view->inputs = ab_report_string(view->evidence, "input_sha256");
+  view->focus = optional_array(view->metadata, "focus");
+  view->seeds = optional_array(view->metadata, "seeds");
+  view->seed_identities = optional_array(view->metadata, "seed_identities");
+  view->change_set = ab_value_member(view->metadata, "change_set");
+  view->retrieval = ab_value_member(view->metadata, "retrieval");
+  view->plan = optional_object(view->metadata, "plan");
+  view->plan_id = view->plan ? ab_report_string(view->plan, "id") : NULL;
+  view->plan_kind = view->plan ? ab_report_string(view->plan, "kind") : NULL;
+  if (view->plan && (!view->plan_id ||
+                     (!ab_report_string_equal(view->plan_kind, "ad_hoc") &&
+                      !ab_report_string_equal(view->plan_kind, "configured"))))
     return query_schema_error(engine, "query plan identity is malformed");
-  named_plan = plan_kind && ab_report_string_equal(plan_kind, "configured");
-  if (retrieval && retrieval->kind != AB_VALUE_OBJECT)
+  view->named_plan =
+      view->plan_kind && ab_report_string_equal(view->plan_kind, "configured");
+  if (view->retrieval && view->retrieval->kind != AB_VALUE_OBJECT)
     return query_schema_error(engine, "query retrieval must be an object");
-  scope = string_or_empty(metadata, "scope");
-  producer_policy = string_or_empty(metadata, "producer_policy");
-  producer_compatibility = string_or_empty(metadata, "producer_compatibility");
-  if (!direction || !config || !inputs || config->length < 16 ||
-      inputs->length < 16 || node_limit > files->as.array.count)
+  view->scope = string_or_empty(view->metadata, "scope");
+  view->producer_policy = string_or_empty(view->metadata, "producer_policy");
+  view->producer_compatibility =
+      string_or_empty(view->metadata, "producer_compatibility");
+  if (!view->direction || !view->config || !view->inputs ||
+      view->config->length < 16 || view->inputs->length < 16 ||
+      node_limit > view->files->as.array.count)
     return query_schema_error(engine, "query report evidence is malformed");
-  status = query_context_policy(engine, metadata, &policy);
+  status = query_context_policy(engine, view->metadata, &view->policy);
   if (status != ARCHBIRD_OK)
     return status;
-  if (compact_detail) {
-    if (compact_symbols > 5)
-      compact_symbols = 5;
-    if (compact_edges > 5)
-      compact_edges = 5;
-  } else if (full_detail) {
-    compact_symbols = SIZE_MAX;
-    compact_edges = SIZE_MAX;
+  view->compact_symbols =
+      ab_report_size(optional_object(map, "limits"), "compact_symbols", 10);
+  view->compact_edges =
+      ab_report_size(optional_object(map, "limits"), "compact_edge_names", 12);
+  if (view->compact_detail) {
+    if (view->compact_symbols > 5)
+      view->compact_symbols = 5;
+    if (view->compact_edges > 5)
+      view->compact_edges = 5;
+  } else if (view->full_detail) {
+    view->compact_symbols = SIZE_MAX;
+    view->compact_edges = SIZE_MAX;
   }
-  if (files->as.array.count) {
-    report_files = (QueryReportFile *)ab_calloc(engine, files->as.array.count,
-                                                sizeof(*report_files));
-    if (!report_files)
-      return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                                ARCHBIRD_NO_OFFSET,
-                                "out of memory indexing query report");
+  if (view->files->as.array.count) {
+    view->report_files = (QueryReportFile *)ab_calloc(
+        engine, view->files->as.array.count, sizeof(*view->report_files));
+    if (!view->report_files) {
+      status =
+          archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+                             "out of memory indexing query report");
+      goto cleanup;
+    }
   }
-  for (index = 0; index < files->as.array.count; index++) {
-    QueryReportFile *file = &report_files[index];
-    file->row = &files->as.array.items[index];
+  for (index = 0; index < view->files->as.array.count; index++) {
+    QueryReportFile *file = &view->report_files[index];
+    file->row = &view->files->as.array.items[index];
     file->path = ab_report_string(file->row, "path");
     file->layer = ab_report_string(file->row, "layer");
     file->language = ab_report_string(file->row, "language");
@@ -1647,13 +1704,14 @@ static ArchbirdStatus render_query_view(
       goto cleanup;
     }
   }
-  for (index = 0; index < edges->as.array.count; index++) {
-    const AbValue *edge = &edges->as.array.items[index];
+  for (index = 0; index < view->edges->as.array.count; index++) {
+    const AbValue *edge = &view->edges->as.array.items[index];
     const AbString *target = ab_report_string(edge, "target");
     const AbValue *names = optional_array(edge, "names");
-    size_t target_index =
-        target ? file_index(report_files, files->as.array.count, target)
-               : SIZE_MAX;
+    size_t target_index = target
+                              ? file_index(view->report_files,
+                                           view->files->as.array.count, target)
+                              : SIZE_MAX;
     size_t name_index;
     if (target_index == SIZE_MAX)
       continue;
@@ -1663,37 +1721,73 @@ static ArchbirdStatus render_query_view(
         status = query_schema_error(engine, "query.edges[].names is malformed");
         goto cleanup;
       }
-      QUERY_TRY(ab_report_list_add(&report_files[target_index].incoming,
-                                   name->as.text.data, name->as.text.length));
+      status = ab_report_list_add(&view->report_files[target_index].incoming,
+                                  name->as.text.data, name->as.text.length);
+      if (status != ARCHBIRD_OK)
+        goto cleanup;
     }
   }
-  for (index = 0; index < files->as.array.count; index++)
-    ab_report_list_sort_unique(&report_files[index].incoming);
-  while (eligible_files < files->as.array.count &&
-         report_files[eligible_files].distance <= policy.max_seed_distance)
-    eligible_files++;
-  visible_start =
-      policy.file_offset < eligible_files ? policy.file_offset : eligible_files;
-  visible_count = eligible_files - visible_start;
-  if (visible_count > policy.file_quota)
-    visible_count = policy.file_quota;
-  if (visible_count > node_limit)
-    visible_count = node_limit;
-  {
-    const AbValue *matches = optional_array(query, "test_matches");
-    status = query_test_selection_stats(
-        engine, matches, &policy, &test_eligible_count,
-        &test_candidate_collapsed_count, &test_conservative_collapsed_count,
-        &test_excluded_count);
-    if (status != ARCHBIRD_OK)
-      goto cleanup;
-    test_start = policy.test_match_offset < test_eligible_count
-                     ? policy.test_match_offset
-                     : test_eligible_count;
-    test_emitted_count = test_eligible_count - test_start;
-    if (test_emitted_count > policy.test_match_quota)
-      test_emitted_count = policy.test_match_quota;
-  }
+  for (index = 0; index < view->files->as.array.count; index++)
+    ab_report_list_sort_unique(&view->report_files[index].incoming);
+  while (view->eligible_files < view->files->as.array.count &&
+         view->report_files[view->eligible_files].distance <=
+             view->policy.max_seed_distance)
+    view->eligible_files++;
+  view->visible_start = view->policy.file_offset < view->eligible_files
+                            ? view->policy.file_offset
+                            : view->eligible_files;
+  view->visible_count = view->eligible_files - view->visible_start;
+  if (view->visible_count > view->policy.file_quota)
+    view->visible_count = view->policy.file_quota;
+  if (view->visible_count > node_limit)
+    view->visible_count = node_limit;
+  status = query_test_selection_stats(
+      engine, optional_array(query, "test_matches"), &view->policy,
+      &view->test_eligible_count, &view->test_candidate_collapsed_count,
+      &view->test_conservative_collapsed_count, &view->test_excluded_count);
+  if (status != ARCHBIRD_OK)
+    goto cleanup;
+  view->test_start = view->policy.test_match_offset < view->test_eligible_count
+                         ? view->policy.test_match_offset
+                         : view->test_eligible_count;
+  view->test_emitted_count = view->test_eligible_count - view->test_start;
+  if (view->test_emitted_count > view->policy.test_match_quota)
+    view->test_emitted_count = view->policy.test_match_quota;
+
+cleanup:
+  if (status != ARCHBIRD_OK)
+    query_report_view_free(view);
+  return status;
+}
+
+static ArchbirdStatus render_query_header(QueryReportViewContext *view) {
+  ArchbirdEngine *engine = view->engine;
+  const AbValue *files = view->files;
+  const AbValue *metadata = view->metadata;
+  const AbValue *source_tool = view->source_tool;
+  const AbValue *tool = view->tool;
+  const AbValue *focus = view->focus;
+  const AbValue *seeds = view->seeds;
+  const AbValue *seed_identities = view->seed_identities;
+  const AbValue *retrieval = view->retrieval;
+  const AbString *project = view->project;
+  const AbString *direction = view->direction;
+  const AbString *config = view->config;
+  const AbString *inputs = view->inputs;
+  const AbString *plan_id = view->plan_id;
+  const AbString *producer_policy = view->producer_policy;
+  const AbString *producer_compatibility = view->producer_compatibility;
+  QueryContextPolicy policy = view->policy;
+  AbBuffer *out = view->out;
+  size_t index;
+  size_t eligible_files = view->eligible_files;
+  size_t visible_start = view->visible_start;
+  size_t visible_count = view->visible_count;
+  int compact_header = view->compact_header;
+  int change_view = view->change_view;
+  int compact_detail = view->compact_detail;
+  int named_plan = view->named_plan;
+  ArchbirdStatus status = ARCHBIRD_OK;
 
   QUERY_TRY(ab_report_linef(out,
                             change_view ? "# Change brief: %.*s"
@@ -1813,6 +1907,29 @@ static ArchbirdStatus render_query_view(
   }
   if (retrieval)
     QUERY_TRY(render_retrieval_summary(engine, retrieval, compact_detail, out));
+
+cleanup:
+  return status;
+}
+
+static ArchbirdStatus
+render_query_change_context(QueryReportViewContext *view) {
+  ArchbirdEngine *engine = view->engine;
+  const AbValue *map = view->map;
+  const AbValue *query = view->query;
+  const AbValue *verification = view->verification;
+  const AbValue *map_files = view->map_files;
+  const AbValue *change_set = view->change_set;
+  const AbValue *discovery = view->discovery;
+  AbBuffer *out = view->out;
+  ArchbirdReportDetail detail = view->detail;
+  size_t compact_edges = view->compact_edges;
+  size_t index;
+  int change_view = view->change_view;
+  int full_detail = view->full_detail;
+  int compact_detail = view->compact_detail;
+  ArchbirdStatus status = ARCHBIRD_OK;
+
   if (change_view && change_set) {
     const AbValue *source = ab_report_object(change_set, "source");
     const AbValue *entries = ab_report_array(change_set, "entries");
@@ -1832,7 +1949,8 @@ static ArchbirdStatus render_query_view(
         status = query_schema_error(engine, "query change entry is malformed");
         goto cleanup;
       }
-      mapped += path_is_mapped(map_files, path);
+      if (path_is_mapped(map_files, path))
+        mapped++;
     }
     QUERY_TRY(ab_report_literal_line(out, "## Changed paths"));
     QUERY_TRY(ab_report_blank(out));
@@ -1905,6 +2023,20 @@ static ArchbirdStatus render_query_view(
     }
   }
 
+cleanup:
+  return status;
+}
+
+static ArchbirdStatus render_query_scope_summary(QueryReportViewContext *view) {
+  ArchbirdEngine *engine = view->engine;
+  const AbValue *query = view->query;
+  AbBuffer *out = view->out;
+  size_t compact_edges = view->compact_edges;
+  size_t index;
+  int compact_header = view->compact_header;
+  int change_view = view->change_view;
+  ArchbirdStatus status = ARCHBIRD_OK;
+
   {
     const AbValue *components = optional_array(query, "components");
     const AbValue *packages = optional_array(query, "packages");
@@ -1961,6 +2093,27 @@ static ArchbirdStatus render_query_view(
     if (components->as.array.count || packages->as.array.count)
       QUERY_TRY(ab_report_blank(out));
   }
+
+cleanup:
+  return status;
+}
+
+static ArchbirdStatus render_query_neighborhood(QueryReportViewContext *view) {
+  ArchbirdEngine *engine = view->engine;
+  const AbValue *map_files = view->map_files;
+  const AbValue *files = view->files;
+  const AbValue *edges = view->edges;
+  const AbValue *seeds = view->seeds;
+  QueryReportFile *report_files = view->report_files;
+  AbBuffer *out = view->out;
+  size_t compact_symbols = view->compact_symbols;
+  size_t visible_start = view->visible_start;
+  size_t visible_count = view->visible_count;
+  size_t index;
+  size_t omitted;
+  int include_neighborhood = view->include_neighborhood;
+  int change_view = view->change_view;
+  ArchbirdStatus status = ARCHBIRD_OK;
 
   if (include_neighborhood) {
     QUERY_TRY(ab_report_literal_line(
@@ -2051,483 +2204,575 @@ static ArchbirdStatus render_query_view(
           omitted));
     QUERY_TRY(ab_report_literal_line(out, "```"));
   }
-  if (include_routed) {
-    QUERY_TRY(ab_report_blank(out));
-    QUERY_TRY(ab_report_literal_line(out, change_view
-                                              ? "## Routes, tests, and delivery"
-                                              : "## Routed evidence"));
-    QUERY_TRY(ab_report_blank(out));
-    QUERY_TRY(ab_report_literal_line(out, "```text"));
-    if (ab_report_string_equal(scope, "symbol")) {
-      const AbValue *local_calls = optional_array(query, "symbol_calls");
-      const AbValue *local_references =
-          optional_array(query, "symbol_references");
-      QUERY_TRY(ab_report_literal_line(out, "symbol-local relations:"));
-      if (!local_calls->as.array.count && !local_references->as.array.count)
-        QUERY_TRY(ab_report_literal_line(
-            out, "  none; no symbol-local static relation was established"));
-    }
-    QUERY_TRY(render_symbol_relation_routes(
-        engine, query, "symbol_calls", "symbol-calls", 0,
-        policy.symbol_call_offset, policy.symbol_call_quota, out));
-    QUERY_TRY(render_symbol_relation_routes(
-        engine, query, "symbol_references", "symbol-references", 1,
-        policy.symbol_reference_offset, policy.symbol_reference_quota, out));
-    {
-      const AbValue *resolutions = optional_array(query, "call_resolutions");
-      size_t counts[sizeof(query_resolution_kinds) /
-                    sizeof(query_resolution_kinds[0])] = {0};
-      size_t resolution_index;
-      if (ab_report_string_equal(scope, "symbol"))
-        QUERY_TRY(ab_report_literal_line(
-            out,
-            "file fallback (selected files; not proof of focus-symbol use):"));
-      QUERY_TRY(ab_buffer_literal(out, "calls"));
-      for (resolution_index = 0; resolution_index < resolutions->as.array.count;
-           resolution_index++) {
-        const AbValue *row = &resolutions->as.array.items[resolution_index];
-        const AbString *source = ab_report_string(row, "source");
-        const AbString *kind = ab_report_string(row, "kind");
-        size_t kind_index;
-        size_t source_index =
-            source ? file_index(report_files, files->as.array.count, source)
-                   : SIZE_MAX;
-        if (source_index == SIZE_MAX ||
-            !index_visible(source_index, visible_start, visible_count))
-          continue;
-        for (kind_index = 0; kind_index < sizeof(query_resolution_kinds) /
-                                              sizeof(query_resolution_kinds[0]);
-             kind_index++)
-          if (ab_report_string_equal(kind, query_resolution_kinds[kind_index]))
-            counts[kind_index] += ab_report_size(row, "count", 0);
+
+cleanup:
+  return status;
+}
+
+static ArchbirdStatus render_query_test_routes(QueryReportViewContext *view) {
+  ArchbirdEngine *engine = view->engine;
+  const AbValue *query = view->query;
+  QueryContextPolicy policy = view->policy;
+  AbBuffer *out = view->out;
+  size_t test_eligible_count = view->test_eligible_count;
+  size_t test_emitted_count = view->test_emitted_count;
+  size_t test_candidate_collapsed_count = view->test_candidate_collapsed_count;
+  size_t test_conservative_collapsed_count =
+      view->test_conservative_collapsed_count;
+  size_t test_excluded_count = view->test_excluded_count;
+  size_t test_start = view->test_start;
+  ArchbirdStatus status = ARCHBIRD_OK;
+
+  {
+    const AbValue *matches = optional_array(query, "test_matches");
+    if (matches->as.array.count) {
+      QueryReportTest *ranked =
+          matches->as.array.count
+              ? (QueryReportTest *)ab_calloc(engine, matches->as.array.count,
+                                             sizeof(*ranked))
+              : NULL;
+      QueryCollapsedTestGroup *collapsed_groups =
+          matches->as.array.count
+              ? (QueryCollapsedTestGroup *)ab_calloc(
+                    engine, matches->as.array.count, sizeof(*collapsed_groups))
+              : NULL;
+      size_t evidence_counts[6] = {0};
+      size_t provenance_counts[3] = {0};
+      size_t confidence_counts[4] = {0};
+      int classified = 0;
+      size_t match_index;
+      size_t eligible_count = 0;
+      size_t candidate_collapsed_count = 0;
+      size_t conservative_collapsed_count = 0;
+      size_t collapsed_group_count = 0;
+      size_t excluded_count = 0;
+      size_t start;
+      size_t limit;
+      AbReportStringList rows;
+      if (matches->as.array.count && (!ranked || !collapsed_groups)) {
+        status = archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "out of memory ranking query tests");
+        ab_free(engine, ranked);
+        ab_free(engine, collapsed_groups);
+        goto cleanup;
       }
-      for (resolution_index = 0;
-           resolution_index <
-           sizeof(query_resolution_kinds) / sizeof(query_resolution_kinds[0]);
-           resolution_index++)
-        QUERY_TRY(ab_report_appendf(out, " %s=%zu",
-                                    query_resolution_kinds[resolution_index],
-                                    counts[resolution_index]));
-      QUERY_TRY(ab_buffer_literal(out, "\n"));
-      if (change_view && (counts[2] || counts[3]))
-        QUERY_TRY(ab_report_linef(
-            out,
-            "uncertainty: ambiguous=%zu unresolved=%zu; these calls are "
-            "retained as unknown rather than assigned a target",
-            counts[2], counts[3]));
-    }
-    {
-      const AbValue *matches = optional_array(query, "test_matches");
-      if (matches->as.array.count) {
-        QueryReportTest *ranked =
-            matches->as.array.count
-                ? (QueryReportTest *)ab_calloc(engine, matches->as.array.count,
-                                               sizeof(*ranked))
-                : NULL;
-        QueryCollapsedTestGroup *collapsed_groups =
-            matches->as.array.count ? (QueryCollapsedTestGroup *)ab_calloc(
-                                          engine, matches->as.array.count,
-                                          sizeof(*collapsed_groups))
-                                    : NULL;
-        size_t evidence_counts[6] = {0};
-        size_t provenance_counts[3] = {0};
-        size_t confidence_counts[4] = {0};
-        int classified = 0;
-        size_t match_index;
-        size_t eligible_count = 0;
-        size_t candidate_collapsed_count = 0;
-        size_t conservative_collapsed_count = 0;
-        size_t collapsed_group_count = 0;
-        size_t excluded_count = 0;
-        size_t start;
-        size_t limit;
-        AbReportStringList rows;
-        if (matches->as.array.count && (!ranked || !collapsed_groups)) {
-          status = archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
-                                      ARCHBIRD_NO_OFFSET,
-                                      "out of memory ranking query tests");
-          ab_free(engine, ranked);
-          ab_free(engine, collapsed_groups);
-          goto cleanup;
+      ab_report_list_init(&rows, engine);
+      for (match_index = 0; match_index < matches->as.array.count;
+           match_index++) {
+        const AbValue *row = &matches->as.array.items[match_index];
+        const AbString *evidence_kind = ab_report_string(row, "evidence");
+        const AbString *classification =
+            ab_report_string(row, "classification");
+        const AbString *provenance = ab_report_string(row, "provenance");
+        const AbString *confidence = ab_report_string(row, "confidence");
+        const AbString *evidence_scope =
+            ab_report_string(row, "evidence_scope");
+        const AbString *target_role = ab_report_string(row, "target_role");
+        const AbValue *target = ab_value_member(row, "target");
+        size_t legacy_rank = SIZE_MAX;
+        QueryReportTest candidate = {0};
+        if (classification)
+          classified = 1;
+        if ((provenance || confidence || evidence_scope || target_role ||
+             target) &&
+            (!provenance || !confidence || !evidence_scope || !target_role ||
+             !target)) {
+          status = query_schema_error(
+              engine, "query test route axes are partially specified");
+          break;
         }
-        ab_report_list_init(&rows, engine);
-        for (match_index = 0; match_index < matches->as.array.count;
-             match_index++) {
-          const AbValue *row = &matches->as.array.items[match_index];
-          const AbString *evidence_kind = ab_report_string(row, "evidence");
-          const AbString *classification =
-              ab_report_string(row, "classification");
-          const AbString *provenance = ab_report_string(row, "provenance");
-          const AbString *confidence = ab_report_string(row, "confidence");
-          const AbString *evidence_scope =
-              ab_report_string(row, "evidence_scope");
-          const AbString *target_role = ab_report_string(row, "target_role");
-          const AbValue *target = ab_value_member(row, "target");
-          size_t legacy_rank = SIZE_MAX;
-          QueryReportTest candidate = {0};
-          if (classification)
-            classified = 1;
-          if ((provenance || confidence || evidence_scope || target_role ||
-               target) &&
-              (!provenance || !confidence || !evidence_scope || !target_role ||
-               !target)) {
+        if (provenance && confidence && evidence_scope && target_role &&
+            target) {
+          if (ab_report_string_equal(provenance, "observed"))
+            provenance_counts[0]++;
+          else if (ab_report_string_equal(provenance, "asserted"))
+            provenance_counts[1]++;
+          else if (ab_report_string_equal(provenance, "derived"))
+            provenance_counts[2]++;
+          else {
             status = query_schema_error(
-                engine, "query test route axes are partially specified");
+                engine, "query test route provenance is invalid");
             break;
           }
-          if (provenance && confidence && evidence_scope && target_role &&
-              target) {
-            if (ab_report_string_equal(provenance, "observed"))
-              provenance_counts[0]++;
-            else if (ab_report_string_equal(provenance, "asserted"))
-              provenance_counts[1]++;
-            else if (ab_report_string_equal(provenance, "derived"))
-              provenance_counts[2]++;
-            else {
-              status = query_schema_error(
-                  engine, "query test route provenance is invalid");
-              break;
-            }
-            if (ab_report_string_equal(confidence, "exact"))
-              confidence_counts[0]++;
-            else if (ab_report_string_equal(confidence, "candidate"))
-              confidence_counts[1]++;
-            else if (ab_report_string_equal(confidence, "conservative"))
-              confidence_counts[2]++;
-            else if (ab_report_string_equal(confidence, "unresolved"))
-              confidence_counts[3]++;
-            else {
-              status = query_schema_error(
-                  engine, "query test route confidence is invalid");
-              break;
-            }
-            if (!ab_report_string_equal(evidence_scope, "case") &&
-                !ab_report_string_equal(evidence_scope, "file") &&
-                !ab_report_string_equal(evidence_scope, "unresolved")) {
-              status =
-                  query_schema_error(engine, "query test scope is invalid");
-              break;
-            }
-          }
-          if (classification)
-            legacy_rank =
-                ab_report_string_equal(classification, "observed")       ? 0
-                : ab_report_string_equal(classification, "direct")       ? 1
-                : ab_report_string_equal(classification, "asserted")     ? 2
-                : ab_report_string_equal(classification, "candidate")    ? 3
-                : ab_report_string_equal(classification, "conservative") ? 4
-                : ab_report_string_equal(classification, "unresolved")   ? 5
-                                                                         : 6;
-          else
-            legacy_rank =
-                ab_report_string_equal(evidence_kind, "configured")   ? 0
-                : ab_report_string_equal(evidence_kind, "static")     ? 1
-                : ab_report_string_equal(evidence_kind, "unresolved") ? 2
-                                                                      : 3;
-          candidate.row = row;
-          candidate.evidence = evidence_kind;
-          candidate.classification = classification;
-          candidate.provenance = provenance;
-          candidate.confidence = confidence;
-          candidate.evidence_scope = evidence_scope;
-          candidate.target_role = target_role;
-          candidate.target = target;
-          candidate.group = ab_report_string(row, "group");
-          candidate.path = ab_report_string(row, "path");
-          candidate.selector = ab_report_string(row, "selector");
-          candidate.line = ab_report_size(row, "line", 0);
-          candidate.seed_distance =
-              ab_report_size(row, "seed_distance", SIZE_MAX);
-          candidate.symbol_distance =
-              ab_report_size(row, "symbol_distance", SIZE_MAX);
-          candidate.route_count = optional_array(row, "route")->as.array.count;
-          candidate.ranking_affinity =
-              ab_report_size(row, "ranking_affinity", 0);
-          if (!candidate.evidence || !candidate.group || !candidate.path ||
-              !candidate.selector) {
-            status =
-                query_schema_error(engine, "query.test_matches[] is malformed");
+          if (ab_report_string_equal(confidence, "exact"))
+            confidence_counts[0]++;
+          else if (ab_report_string_equal(confidence, "candidate"))
+            confidence_counts[1]++;
+          else if (ab_report_string_equal(confidence, "conservative"))
+            confidence_counts[2]++;
+          else if (ab_report_string_equal(confidence, "unresolved"))
+            confidence_counts[3]++;
+          else {
+            status = query_schema_error(
+                engine, "query test route confidence is invalid");
             break;
           }
-          if (legacy_rank < (classification ? 6u : 3u))
-            evidence_counts[legacy_rank]++;
-          if (provenance && confidence) {
-            if (!policy_evidence_allowed(&policy, provenance, confidence) ||
-                (candidate.seed_distance != SIZE_MAX &&
-                 candidate.seed_distance > policy.max_seed_distance)) {
-              excluded_count++;
-              continue;
-            }
-            if (ab_report_string_equal(confidence, "candidate") &&
-                !ab_report_string_equal(policy.candidate, "expand")) {
-              if (ab_report_string_equal(policy.candidate, "collapse")) {
-                candidate_collapsed_count++;
-                status = collapsed_test_group_add(engine, collapsed_groups,
-                                                  &collapsed_group_count,
-                                                  &candidate);
-              } else {
-                excluded_count++;
-              }
-              if (status != ARCHBIRD_OK)
-                break;
-              continue;
-            }
-            if (ab_report_string_equal(confidence, "conservative") &&
-                !ab_report_string_equal(policy.conservative, "expand")) {
-              if (ab_report_string_equal(policy.conservative, "collapse")) {
-                conservative_collapsed_count++;
-                status = collapsed_test_group_add(engine, collapsed_groups,
-                                                  &collapsed_group_count,
-                                                  &candidate);
-              } else {
-                excluded_count++;
-              }
-              if (status != ARCHBIRD_OK)
-                break;
-              continue;
-            }
+          if (!ab_report_string_equal(evidence_scope, "case") &&
+              !ab_report_string_equal(evidence_scope, "file") &&
+              !ab_report_string_equal(evidence_scope, "unresolved")) {
+            status = query_schema_error(engine, "query test scope is invalid");
+            break;
           }
-          ranked[eligible_count++] = candidate;
         }
-        if (status == ARCHBIRD_OK && classified)
-          status = ab_report_linef(
-              out,
-              "test-matches observed=%zu direct=%zu asserted=%zu candidate=%zu "
-              "conservative=%zu unresolved=%zu",
-              evidence_counts[0], evidence_counts[1], evidence_counts[2],
-              evidence_counts[3], evidence_counts[4], evidence_counts[5]);
-        else if (status == ARCHBIRD_OK)
-          status = ab_report_linef(
-              out, "test-matches configured=%zu static=%zu unresolved=%zu",
-              evidence_counts[0], evidence_counts[1], evidence_counts[2]);
-        if (status == ARCHBIRD_OK &&
-            provenance_counts[0] + provenance_counts[1] + provenance_counts[2])
-          status = ab_report_linef(
-              out,
-              "route-provenance observed=%zu asserted=%zu derived=%zu; "
-              "confidence exact=%zu candidate=%zu conservative=%zu "
-              "unresolved=%zu",
-              provenance_counts[0], provenance_counts[1], provenance_counts[2],
-              confidence_counts[0], confidence_counts[1], confidence_counts[2],
-              confidence_counts[3]);
-        start = policy.test_match_offset < eligible_count
-                    ? policy.test_match_offset
-                    : eligible_count;
-        limit = eligible_count - start;
-        if (limit > policy.test_match_quota)
-          limit = policy.test_match_quota;
-        test_eligible_count = eligible_count;
-        test_emitted_count = limit;
-        test_candidate_collapsed_count = candidate_collapsed_count;
-        test_conservative_collapsed_count = conservative_collapsed_count;
-        test_excluded_count = excluded_count;
-        test_start = start;
-        if (status == ARCHBIRD_OK)
-          status = ab_report_linef(
-              out,
-              "route-selection emitted=%zu eligible=%zu "
-              "candidate-collapsed=%zu conservative-collapsed=%zu "
-              "excluded=%zu offset=%zu",
-              limit, eligible_count, candidate_collapsed_count,
-              conservative_collapsed_count, excluded_count, start);
-        for (match_index = start;
-             status == ARCHBIRD_OK && match_index < start + limit;
-             match_index++) {
-          const QueryReportTest *match = &ranked[match_index];
-          const AbValue *route = optional_array(match->row, "route");
-          const AbValue *configured =
-              optional_array(match->row, "configured_targets");
-          const AbValue *target =
-              match->target && match->target->kind == AB_VALUE_OBJECT
-                  ? match->target
-                  : NULL;
-          const AbString *target_path =
-              target ? ab_report_string(target, "path") : NULL;
-          const AbString *target_symbol =
-              target ? ab_report_string(target, "symbol") : NULL;
-          AbBuffer text;
-          const AbString *label =
-              match->classification ? match->classification : match->evidence;
-          size_t route_index;
-          ab_buffer_init(&text, engine);
-          status = ab_report_appendf(
-              &text, "%.*s:%.*s:%zu:%.*s [%.*s", (int)match->group->length,
-              match->group->data, (int)match->path->length, match->path->data,
-              match->line, (int)match->selector->length, match->selector->data,
-              (int)label->length, label->data);
-          if (status == ARCHBIRD_OK && match->classification)
-            status = ab_report_appendf(&text, "; source=%.*s",
-                                       (int)match->evidence->length,
-                                       match->evidence->data);
-          if (status == ARCHBIRD_OK)
-            status = ab_buffer_literal(&text, "]");
-          if (status == ARCHBIRD_OK && match->provenance)
-            status = ab_report_appendf(
-                &text,
-                " [provenance=%.*s; confidence=%.*s; scope=%.*s; "
-                "seed-distance=",
-                (int)match->provenance->length, match->provenance->data,
-                (int)match->confidence->length, match->confidence->data,
-                (int)match->evidence_scope->length,
-                match->evidence_scope->data);
-          if (status == ARCHBIRD_OK && match->provenance &&
-              match->seed_distance == SIZE_MAX)
-            status = ab_buffer_literal(&text, "unresolved");
-          else if (status == ARCHBIRD_OK && match->provenance)
-            status = ab_report_appendf(&text, "%zu", match->seed_distance);
-          if (status == ARCHBIRD_OK && match->provenance)
-            status = ab_buffer_literal(&text, "; symbol-distance=");
-          if (status == ARCHBIRD_OK && match->provenance &&
-              match->symbol_distance == SIZE_MAX)
-            status = ab_buffer_literal(&text, "unresolved");
-          else if (status == ARCHBIRD_OK && match->provenance)
-            status = ab_report_appendf(&text, "%zu", match->symbol_distance);
-          if (status == ARCHBIRD_OK && match->provenance)
-            status = ab_report_appendf(&text, "; target-role=%.*s",
-                                       (int)match->target_role->length,
-                                       match->target_role->data);
-          if (status == ARCHBIRD_OK && match->provenance)
-            status = ab_report_appendf(&text, "; affinity=%zu",
-                                       match->ranking_affinity);
-          if (status == ARCHBIRD_OK && match->provenance && target_path) {
-            status =
-                ab_report_appendf(&text, "; target=%.*s",
-                                  (int)target_path->length, target_path->data);
-            if (status == ARCHBIRD_OK && target_symbol)
-              status =
-                  ab_report_appendf(&text, ":%.*s", (int)target_symbol->length,
-                                    target_symbol->data);
+        if (classification)
+          legacy_rank =
+              ab_report_string_equal(classification, "observed")       ? 0
+              : ab_report_string_equal(classification, "direct")       ? 1
+              : ab_report_string_equal(classification, "asserted")     ? 2
+              : ab_report_string_equal(classification, "candidate")    ? 3
+              : ab_report_string_equal(classification, "conservative") ? 4
+              : ab_report_string_equal(classification, "unresolved")   ? 5
+                                                                       : 6;
+        else
+          legacy_rank = ab_report_string_equal(evidence_kind, "configured") ? 0
+                        : ab_report_string_equal(evidence_kind, "static")   ? 1
+                        : ab_report_string_equal(evidence_kind, "unresolved")
+                            ? 2
+                            : 3;
+        candidate.row = row;
+        candidate.evidence = evidence_kind;
+        candidate.classification = classification;
+        candidate.provenance = provenance;
+        candidate.confidence = confidence;
+        candidate.evidence_scope = evidence_scope;
+        candidate.target_role = target_role;
+        candidate.target = target;
+        candidate.group = ab_report_string(row, "group");
+        candidate.path = ab_report_string(row, "path");
+        candidate.selector = ab_report_string(row, "selector");
+        candidate.line = ab_report_size(row, "line", 0);
+        candidate.seed_distance =
+            ab_report_size(row, "seed_distance", SIZE_MAX);
+        candidate.symbol_distance =
+            ab_report_size(row, "symbol_distance", SIZE_MAX);
+        candidate.route_count = optional_array(row, "route")->as.array.count;
+        candidate.ranking_affinity = ab_report_size(row, "ranking_affinity", 0);
+        if (!candidate.evidence || !candidate.group || !candidate.path ||
+            !candidate.selector) {
+          status =
+              query_schema_error(engine, "query.test_matches[] is malformed");
+          break;
+        }
+        if (legacy_rank < (classification ? 6u : 3u))
+          evidence_counts[legacy_rank]++;
+        if (provenance && confidence) {
+          if (!policy_evidence_allowed(&policy, provenance, confidence) ||
+              (candidate.seed_distance != SIZE_MAX &&
+               candidate.seed_distance > policy.max_seed_distance)) {
+            excluded_count++;
+            continue;
           }
-          if (status == ARCHBIRD_OK && match->provenance)
-            status = ab_buffer_literal(&text, "]");
-          if (status == ARCHBIRD_OK)
+          if (ab_report_string_equal(confidence, "candidate") &&
+              !ab_report_string_equal(policy.candidate, "expand")) {
+            if (ab_report_string_equal(policy.candidate, "collapse")) {
+              candidate_collapsed_count++;
+              status = collapsed_test_group_add(
+                  engine, collapsed_groups, &collapsed_group_count, &candidate);
+            } else {
+              excluded_count++;
+            }
+            if (status != ARCHBIRD_OK)
+              break;
+            continue;
+          }
+          if (ab_report_string_equal(confidence, "conservative") &&
+              !ab_report_string_equal(policy.conservative, "expand")) {
+            if (ab_report_string_equal(policy.conservative, "collapse")) {
+              conservative_collapsed_count++;
+              status = collapsed_test_group_add(
+                  engine, collapsed_groups, &collapsed_group_count, &candidate);
+            } else {
+              excluded_count++;
+            }
+            if (status != ARCHBIRD_OK)
+              break;
+            continue;
+          }
+        }
+        ranked[eligible_count++] = candidate;
+      }
+      if (status == ARCHBIRD_OK && classified)
+        status = ab_report_linef(
+            out,
+            "test-matches observed=%zu direct=%zu asserted=%zu candidate=%zu "
+            "conservative=%zu unresolved=%zu",
+            evidence_counts[0], evidence_counts[1], evidence_counts[2],
+            evidence_counts[3], evidence_counts[4], evidence_counts[5]);
+      else if (status == ARCHBIRD_OK)
+        status = ab_report_linef(
+            out, "test-matches configured=%zu static=%zu unresolved=%zu",
+            evidence_counts[0], evidence_counts[1], evidence_counts[2]);
+      if (status == ARCHBIRD_OK &&
+          provenance_counts[0] + provenance_counts[1] + provenance_counts[2])
+        status = ab_report_linef(
+            out,
+            "route-provenance observed=%zu asserted=%zu derived=%zu; "
+            "confidence exact=%zu candidate=%zu conservative=%zu "
+            "unresolved=%zu",
+            provenance_counts[0], provenance_counts[1], provenance_counts[2],
+            confidence_counts[0], confidence_counts[1], confidence_counts[2],
+            confidence_counts[3]);
+      start = policy.test_match_offset < eligible_count
+                  ? policy.test_match_offset
+                  : eligible_count;
+      limit = eligible_count - start;
+      if (limit > policy.test_match_quota)
+        limit = policy.test_match_quota;
+      test_eligible_count = eligible_count;
+      test_emitted_count = limit;
+      test_candidate_collapsed_count = candidate_collapsed_count;
+      test_conservative_collapsed_count = conservative_collapsed_count;
+      test_excluded_count = excluded_count;
+      test_start = start;
+      if (status == ARCHBIRD_OK)
+        status = ab_report_linef(
+            out,
+            "route-selection emitted=%zu eligible=%zu "
+            "candidate-collapsed=%zu conservative-collapsed=%zu "
+            "excluded=%zu offset=%zu",
+            limit, eligible_count, candidate_collapsed_count,
+            conservative_collapsed_count, excluded_count, start);
+      for (match_index = start;
+           status == ARCHBIRD_OK && match_index < start + limit;
+           match_index++) {
+        const QueryReportTest *match = &ranked[match_index];
+        const AbValue *route = optional_array(match->row, "route");
+        const AbValue *configured =
+            optional_array(match->row, "configured_targets");
+        const AbValue *target =
+            match->target && match->target->kind == AB_VALUE_OBJECT
+                ? match->target
+                : NULL;
+        const AbString *target_path =
+            target ? ab_report_string(target, "path") : NULL;
+        const AbString *target_symbol =
+            target ? ab_report_string(target, "symbol") : NULL;
+        AbBuffer text;
+        const AbString *label =
+            match->classification ? match->classification : match->evidence;
+        size_t route_index;
+        ab_buffer_init(&text, engine);
+        status = ab_report_appendf(
+            &text, "%.*s:%.*s:%zu:%.*s [%.*s", (int)match->group->length,
+            match->group->data, (int)match->path->length, match->path->data,
+            match->line, (int)match->selector->length, match->selector->data,
+            (int)label->length, label->data);
+        if (status == ARCHBIRD_OK && match->classification)
+          status = ab_report_appendf(&text, "; source=%.*s",
+                                     (int)match->evidence->length,
+                                     match->evidence->data);
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(&text, "]");
+        if (status == ARCHBIRD_OK && match->provenance)
+          status = ab_report_appendf(
+              &text,
+              " [provenance=%.*s; confidence=%.*s; scope=%.*s; "
+              "seed-distance=",
+              (int)match->provenance->length, match->provenance->data,
+              (int)match->confidence->length, match->confidence->data,
+              (int)match->evidence_scope->length, match->evidence_scope->data);
+        if (status == ARCHBIRD_OK && match->provenance &&
+            match->seed_distance == SIZE_MAX)
+          status = ab_buffer_literal(&text, "unresolved");
+        else if (status == ARCHBIRD_OK && match->provenance)
+          status = ab_report_appendf(&text, "%zu", match->seed_distance);
+        if (status == ARCHBIRD_OK && match->provenance)
+          status = ab_buffer_literal(&text, "; symbol-distance=");
+        if (status == ARCHBIRD_OK && match->provenance &&
+            match->symbol_distance == SIZE_MAX)
+          status = ab_buffer_literal(&text, "unresolved");
+        else if (status == ARCHBIRD_OK && match->provenance)
+          status = ab_report_appendf(&text, "%zu", match->symbol_distance);
+        if (status == ARCHBIRD_OK && match->provenance)
+          status = ab_report_appendf(&text, "; target-role=%.*s",
+                                     (int)match->target_role->length,
+                                     match->target_role->data);
+        if (status == ARCHBIRD_OK && match->provenance)
+          status = ab_report_appendf(&text, "; affinity=%zu",
+                                     match->ranking_affinity);
+        if (status == ARCHBIRD_OK && match->provenance && target_path) {
+          status =
+              ab_report_appendf(&text, "; target=%.*s",
+                                (int)target_path->length, target_path->data);
+          if (status == ARCHBIRD_OK && target_symbol)
+            status =
+                ab_report_appendf(&text, ":%.*s", (int)target_symbol->length,
+                                  target_symbol->data);
+        }
+        if (status == ARCHBIRD_OK && match->provenance)
+          status = ab_buffer_literal(&text, "]");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_literal(&text, " -> ");
+        if (status == ARCHBIRD_OK && !route->as.array.count)
+          status = ab_buffer_literal(&text, "unresolved");
+        for (route_index = 0;
+             status == ARCHBIRD_OK && route_index < route->as.array.count;
+             route_index++) {
+          const AbValue *part = &route->as.array.items[route_index];
+          if (part->kind != AB_VALUE_STRING) {
+            status =
+                query_schema_error(engine, "query test route is malformed");
+            break;
+          }
+          if (route_index)
             status = ab_buffer_literal(&text, " -> ");
-          if (status == ARCHBIRD_OK && !route->as.array.count)
-            status = ab_buffer_literal(&text, "unresolved");
-          for (route_index = 0;
-               status == ARCHBIRD_OK && route_index < route->as.array.count;
+          if (status == ARCHBIRD_OK)
+            status = ab_buffer_append(&text, part->as.text.data,
+                                      part->as.text.length);
+        }
+        if (status == ARCHBIRD_OK && configured->as.array.count) {
+          status = ab_buffer_literal(&text, " {configured: ");
+          for (route_index = 0; status == ARCHBIRD_OK &&
+                                route_index < configured->as.array.count;
                route_index++) {
-            const AbValue *part = &route->as.array.items[route_index];
+            const AbValue *part = &configured->as.array.items[route_index];
             if (part->kind != AB_VALUE_STRING) {
-              status =
-                  query_schema_error(engine, "query test route is malformed");
+              status = query_schema_error(
+                  engine, "query configured targets are malformed");
               break;
             }
             if (route_index)
-              status = ab_buffer_literal(&text, " -> ");
+              status = ab_buffer_literal(&text, ",");
             if (status == ARCHBIRD_OK)
               status = ab_buffer_append(&text, part->as.text.data,
                                         part->as.text.length);
           }
-          if (status == ARCHBIRD_OK && configured->as.array.count) {
-            status = ab_buffer_literal(&text, " {configured: ");
-            for (route_index = 0; status == ARCHBIRD_OK &&
-                                  route_index < configured->as.array.count;
-                 route_index++) {
-              const AbValue *part = &configured->as.array.items[route_index];
-              if (part->kind != AB_VALUE_STRING) {
-                status = query_schema_error(
-                    engine, "query configured targets are malformed");
-                break;
-              }
-              if (route_index)
-                status = ab_buffer_literal(&text, ",");
-              if (status == ARCHBIRD_OK)
-                status = ab_buffer_append(&text, part->as.text.data,
-                                          part->as.text.length);
-            }
-            if (status == ARCHBIRD_OK)
-              status = ab_buffer_literal(&text, "}");
-          }
           if (status == ARCHBIRD_OK)
-            status =
-                ab_report_list_add(&rows, (const char *)text.data, text.length);
-          ab_buffer_free(&text);
+            status = ab_buffer_literal(&text, "}");
         }
-        if (status == ARCHBIRD_OK && start)
-          status =
-              ab_report_list_addf(&rows, "… %zu earlier rows skipped", start);
-        if (status == ARCHBIRD_OK && eligible_count > start + limit)
-          status = ab_report_list_addf(&rows, "…+%zu",
-                                       eligible_count - start - limit);
-        for (match_index = 0;
-             status == ARCHBIRD_OK && match_index < collapsed_group_count;
-             match_index++)
-          status = collapsed_test_group_render(&rows,
-                                               &collapsed_groups[match_index]);
-        if (status == ARCHBIRD_OK && candidate_collapsed_count)
-          status = ab_report_list_addf(
-              &rows, "… expand %zu candidate routes with `--candidate expand`",
-              candidate_collapsed_count);
-        if (status == ARCHBIRD_OK && conservative_collapsed_count)
-          status = ab_report_list_addf(
-              &rows,
-              "… expand %zu conservative routes with `--conservative expand`",
-              conservative_collapsed_count);
         if (status == ARCHBIRD_OK)
-          status = ab_report_chunks(out, &rows, "tests: ", QUERY_REPORT_WIDTH);
-        ab_report_list_free(&rows);
-        ab_free(engine, ranked);
-        ab_free(engine, collapsed_groups);
-        if (status != ARCHBIRD_OK)
-          goto cleanup;
-      }
-    }
-    {
-      const AbValue *builds = optional_array(query, "builds");
-      AbReportStringList rows;
-      ab_report_list_init(&rows, engine);
-      for (index = 0; status == ARCHBIRD_OK && index < builds->as.array.count;
-           index++) {
-        const AbValue *route = &builds->as.array.items[index];
-        const AbString *source = ab_report_string(route, "source");
-        const AbString *name = ab_report_string(route, "name");
-        if (!source || !name)
-          status = query_schema_error(engine, "query.builds[] is malformed");
-        else
           status =
-              ab_report_list_addf(&rows, "%.*s:%.*s", (int)source->length,
-                                  source->data, (int)name->length, name->data);
+              ab_report_list_add(&rows, (const char *)text.data, text.length);
+        ab_buffer_free(&text);
       }
-      if (status == ARCHBIRD_OK && rows.count)
-        status = ab_report_chunks(out, &rows, "builds: ", QUERY_REPORT_WIDTH);
+      if (status == ARCHBIRD_OK && start)
+        status =
+            ab_report_list_addf(&rows, "… %zu earlier rows skipped", start);
+      if (status == ARCHBIRD_OK && eligible_count > start + limit)
+        status =
+            ab_report_list_addf(&rows, "…+%zu", eligible_count - start - limit);
+      for (match_index = 0;
+           status == ARCHBIRD_OK && match_index < collapsed_group_count;
+           match_index++)
+        status =
+            collapsed_test_group_render(&rows, &collapsed_groups[match_index]);
+      if (status == ARCHBIRD_OK && candidate_collapsed_count)
+        status = ab_report_list_addf(
+            &rows, "… expand %zu candidate routes with `--candidate expand`",
+            candidate_collapsed_count);
+      if (status == ARCHBIRD_OK && conservative_collapsed_count)
+        status = ab_report_list_addf(
+            &rows,
+            "… expand %zu conservative routes with `--conservative expand`",
+            conservative_collapsed_count);
+      if (status == ARCHBIRD_OK)
+        status = ab_report_chunks(out, &rows, "tests: ", QUERY_REPORT_WIDTH);
       ab_report_list_free(&rows);
+      ab_free(engine, ranked);
+      ab_free(engine, collapsed_groups);
       if (status != ARCHBIRD_OK)
         goto cleanup;
     }
-    {
-      const AbValue *artifacts = optional_array(query, "artifacts");
-      for (index = 0; index < artifacts->as.array.count; index++) {
-        status = render_query_artifact(
-            engine, &artifacts->as.array.items[index], compact_edges, out);
-        if (status != ARCHBIRD_OK)
-          goto cleanup;
-      }
-    }
-    {
-      const AbValue *surfaces = optional_array(query, "surfaces");
-      for (index = 0; index < surfaces->as.array.count; index++) {
-        const AbValue *surface = &surfaces->as.array.items[index];
-        const AbString *name = ab_report_string(surface, "name");
-        if (!name) {
-          status = query_schema_error(engine, "query.surfaces[] is malformed");
-          goto cleanup;
-        }
-        QUERY_TRY(ab_report_linef(
-            out,
-            "surface %.*s: registered=%zu used=%zu unused=%zu unregistered=%zu "
-            "unresolved=%zu ambiguous=%zu",
-            (int)name->length, name->data,
-            surface_summary(surface, "registered"),
-            surface_summary(surface, "used"),
-            surface_summary(surface, "unused"),
-            surface_summary(surface, "unregistered_use"),
-            surface_summary(surface, "unresolved"),
-            surface_summary(surface, "ambiguous")));
-      }
-    }
-    QUERY_TRY(ab_report_literal_line(out, "```"));
   }
+
+cleanup:
+  view->test_eligible_count = test_eligible_count;
+  view->test_emitted_count = test_emitted_count;
+  view->test_candidate_collapsed_count = test_candidate_collapsed_count;
+  view->test_conservative_collapsed_count = test_conservative_collapsed_count;
+  view->test_excluded_count = test_excluded_count;
+  view->test_start = test_start;
+  return status;
+}
+
+static ArchbirdStatus render_query_call_routes(QueryReportViewContext *view) {
+  ArchbirdEngine *engine = view->engine;
+  const AbValue *query = view->query;
+  const AbValue *files = view->files;
+  const AbString *scope = view->scope;
+  QueryReportFile *report_files = view->report_files;
+  QueryContextPolicy policy = view->policy;
+  AbBuffer *out = view->out;
+  size_t visible_start = view->visible_start;
+  size_t visible_count = view->visible_count;
+  int change_view = view->change_view;
+  ArchbirdStatus status = ARCHBIRD_OK;
+
+  if (ab_report_string_equal(scope, "symbol")) {
+    const AbValue *local_calls = optional_array(query, "symbol_calls");
+    const AbValue *local_references =
+        optional_array(query, "symbol_references");
+    QUERY_TRY(ab_report_literal_line(out, "symbol-local relations:"));
+    if (!local_calls->as.array.count && !local_references->as.array.count)
+      QUERY_TRY(ab_report_literal_line(
+          out, "  none; no symbol-local static relation was established"));
+  }
+  QUERY_TRY(render_symbol_relation_routes(
+      engine, query, "symbol_calls", "symbol-calls", 0,
+      policy.symbol_call_offset, policy.symbol_call_quota, out));
+  QUERY_TRY(render_symbol_relation_routes(
+      engine, query, "symbol_references", "symbol-references", 1,
+      policy.symbol_reference_offset, policy.symbol_reference_quota, out));
+  {
+    const AbValue *resolutions = optional_array(query, "call_resolutions");
+    size_t counts[sizeof(query_resolution_kinds) /
+                  sizeof(query_resolution_kinds[0])] = {0};
+    size_t resolution_index;
+    if (ab_report_string_equal(scope, "symbol"))
+      QUERY_TRY(ab_report_literal_line(
+          out,
+          "file fallback (selected files; not proof of focus-symbol use):"));
+    QUERY_TRY(ab_buffer_literal(out, "calls"));
+    for (resolution_index = 0; resolution_index < resolutions->as.array.count;
+         resolution_index++) {
+      const AbValue *row = &resolutions->as.array.items[resolution_index];
+      const AbString *source = ab_report_string(row, "source");
+      const AbString *kind = ab_report_string(row, "kind");
+      size_t kind_index;
+      size_t source_index =
+          source ? file_index(report_files, files->as.array.count, source)
+                 : SIZE_MAX;
+      if (source_index == SIZE_MAX ||
+          !index_visible(source_index, visible_start, visible_count))
+        continue;
+      for (kind_index = 0; kind_index < sizeof(query_resolution_kinds) /
+                                            sizeof(query_resolution_kinds[0]);
+           kind_index++)
+        if (ab_report_string_equal(kind, query_resolution_kinds[kind_index]))
+          counts[kind_index] += ab_report_size(row, "count", 0);
+    }
+    for (resolution_index = 0;
+         resolution_index <
+         sizeof(query_resolution_kinds) / sizeof(query_resolution_kinds[0]);
+         resolution_index++)
+      QUERY_TRY(ab_report_appendf(out, " %s=%zu",
+                                  query_resolution_kinds[resolution_index],
+                                  counts[resolution_index]));
+    QUERY_TRY(ab_buffer_literal(out, "\n"));
+    if (change_view && (counts[2] || counts[3]))
+      QUERY_TRY(ab_report_linef(
+          out,
+          "uncertainty: ambiguous=%zu unresolved=%zu; these calls are "
+          "retained as unknown rather than assigned a target",
+          counts[2], counts[3]));
+  }
+
+cleanup:
+  return status;
+}
+
+static ArchbirdStatus
+render_query_delivery_routes(QueryReportViewContext *view) {
+  ArchbirdEngine *engine = view->engine;
+  const AbValue *query = view->query;
+  AbBuffer *out = view->out;
+  size_t compact_edges = view->compact_edges;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+
+  {
+    const AbValue *builds = optional_array(query, "builds");
+    AbReportStringList rows;
+    ab_report_list_init(&rows, engine);
+    for (index = 0; status == ARCHBIRD_OK && index < builds->as.array.count;
+         index++) {
+      const AbValue *route = &builds->as.array.items[index];
+      const AbString *source = ab_report_string(route, "source");
+      const AbString *name = ab_report_string(route, "name");
+      if (!source || !name)
+        status = query_schema_error(engine, "query.builds[] is malformed");
+      else
+        status =
+            ab_report_list_addf(&rows, "%.*s:%.*s", (int)source->length,
+                                source->data, (int)name->length, name->data);
+    }
+    if (status == ARCHBIRD_OK && rows.count)
+      status = ab_report_chunks(out, &rows, "builds: ", QUERY_REPORT_WIDTH);
+    ab_report_list_free(&rows);
+    if (status != ARCHBIRD_OK)
+      goto cleanup;
+  }
+  {
+    const AbValue *artifacts = optional_array(query, "artifacts");
+    for (index = 0; index < artifacts->as.array.count; index++) {
+      status = render_query_artifact(engine, &artifacts->as.array.items[index],
+                                     compact_edges, out);
+      if (status != ARCHBIRD_OK)
+        goto cleanup;
+    }
+  }
+  {
+    const AbValue *surfaces = optional_array(query, "surfaces");
+    for (index = 0; index < surfaces->as.array.count; index++) {
+      const AbValue *surface = &surfaces->as.array.items[index];
+      const AbString *name = ab_report_string(surface, "name");
+      if (!name) {
+        status = query_schema_error(engine, "query.surfaces[] is malformed");
+        goto cleanup;
+      }
+      QUERY_TRY(ab_report_linef(
+          out,
+          "surface %.*s: registered=%zu used=%zu unused=%zu unregistered=%zu "
+          "unresolved=%zu ambiguous=%zu",
+          (int)name->length, name->data, surface_summary(surface, "registered"),
+          surface_summary(surface, "used"), surface_summary(surface, "unused"),
+          surface_summary(surface, "unregistered_use"),
+          surface_summary(surface, "unresolved"),
+          surface_summary(surface, "ambiguous")));
+    }
+  }
+
+cleanup:
+  return status;
+}
+
+static ArchbirdStatus
+render_query_routed_evidence(QueryReportViewContext *view) {
+  AbBuffer *out = view->out;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!view->include_routed)
+    return ARCHBIRD_OK;
+  QUERY_TRY(ab_report_blank(out));
+  QUERY_TRY(ab_report_literal_line(out, view->change_view
+                                            ? "## Routes, tests, and delivery"
+                                            : "## Routed evidence"));
+  QUERY_TRY(ab_report_blank(out));
+  QUERY_TRY(ab_report_literal_line(out, "```text"));
+  QUERY_TRY(render_query_call_routes(view));
+  QUERY_TRY(render_query_test_routes(view));
+  QUERY_TRY(render_query_delivery_routes(view));
+  QUERY_TRY(ab_report_literal_line(out, "```"));
+
+cleanup:
+  return status;
+}
+
+static ArchbirdStatus
+render_query_selection_manifest(QueryReportViewContext *view) {
+  const AbValue *query = view->query;
+  const AbValue *files = view->files;
+  const AbValue *metadata = view->metadata;
+  const AbString *plan_id = view->plan_id;
+  QueryContextPolicy policy = view->policy;
+  AbBuffer *out = view->out;
+  size_t eligible_files = view->eligible_files;
+  size_t visible_start = view->visible_start;
+  size_t visible_count = view->visible_count;
+  size_t test_eligible_count = view->test_eligible_count;
+  size_t test_emitted_count = view->test_emitted_count;
+  size_t test_candidate_collapsed_count = view->test_candidate_collapsed_count;
+  size_t test_conservative_collapsed_count =
+      view->test_conservative_collapsed_count;
+  size_t test_excluded_count = view->test_excluded_count;
+  size_t test_start = view->test_start;
+  int include_neighborhood = view->include_neighborhood;
+  int include_routed = view->include_routed;
+  int change_view = view->change_view;
+  int full_detail = view->full_detail;
+  int named_plan = view->named_plan;
+  ArchbirdStatus status = ARCHBIRD_OK;
+
   {
     const AbValue *requested = ab_value_member(metadata, "context");
     const AbValue *symbol_calls = optional_array(query, "symbol_calls");
@@ -2643,11 +2888,30 @@ static ArchbirdStatus render_query_view(
   }
 
 cleanup:
-  if (report_files) {
-    for (index = 0; index < files->as.array.count; index++)
-      ab_report_list_free(&report_files[index].incoming);
-  }
-  ab_free(engine, report_files);
+  return status;
+}
+
+static ArchbirdStatus render_query_view(
+    ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
+    const AbValue *verification, size_t node_limit, int include_neighborhood,
+    int include_routed, int compact_header, ArchbirdQueryView selected_view,
+    ArchbirdReportDetail detail, AbBuffer *out) {
+  QueryReportViewContext report;
+  ArchbirdStatus status =
+      query_report_view_init(&report, engine, map, query, verification,
+                             node_limit, include_neighborhood, include_routed,
+                             compact_header, selected_view, detail, out);
+  if (status != ARCHBIRD_OK)
+    return status;
+  QUERY_TRY(render_query_header(&report));
+  QUERY_TRY(render_query_change_context(&report));
+  QUERY_TRY(render_query_scope_summary(&report));
+  QUERY_TRY(render_query_neighborhood(&report));
+  QUERY_TRY(render_query_routed_evidence(&report));
+  QUERY_TRY(render_query_selection_manifest(&report));
+
+cleanup:
+  query_report_view_free(&report);
   return status;
 }
 

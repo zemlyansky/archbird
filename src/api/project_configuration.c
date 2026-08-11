@@ -14,7 +14,7 @@ ArchbirdStatus archbird_project_configuration_compile(
   AbBuffer buffer;
   ArchbirdStatus status;
   if (!engine || !config_json || !config_length || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&buffer, engine);
   status = ab_project_configuration_decode(engine, config_json, config_length,

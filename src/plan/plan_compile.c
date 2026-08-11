@@ -1165,7 +1165,7 @@ archbird_plan_compile(ArchbirdEngine *engine, const ArchbirdProject *project,
   if (!engine || !project || !map_json || !map_length ||
       (!before_map_json && before_map_length) || !verification_json ||
       !verification_length || (!request_json && request_length) || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(&context, 0, sizeof(context));
   context.engine = engine;

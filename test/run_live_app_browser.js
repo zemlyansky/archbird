@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
+  beginBrowserDiagnostics,
   browserEnvironment,
   loadChromium,
   sharedChromium,
@@ -141,7 +142,9 @@ async function main() {
   const executablePath = sharedChromium(chromium);
   let server;
   let browser;
+  let diagnostics;
   let originalCandidate;
+  let page;
   try {
     browser = await chromium.launch({
       executablePath,
@@ -176,7 +179,8 @@ async function main() {
       });
     }
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
+    page = await context.newPage();
+    diagnostics = await beginBrowserDiagnostics(context, page, screenshot);
     const errors = [];
     const consoleErrors = [];
     const hostMethods = [];
@@ -470,7 +474,11 @@ async function main() {
     console.log(
       `local live app watch/diff/last-good passed (${browser.version()}, ${executablePath})`,
     );
+  } catch (error) {
+    if (diagnostics) await diagnostics.retain(error);
+    throw error;
   } finally {
+    if (diagnostics) await diagnostics.close();
     if (originalCandidate) {
       const { LiveRepository } = require("../js/src/serve");
       LiveRepository.prototype.candidate = originalCandidate;

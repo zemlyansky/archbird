@@ -48,6 +48,13 @@
 #define ARCHBIRD_PATH_SCHEMA_CURRENT 1u
 #define ARCHBIRD_PATH_SCHEMA_CURRENT_TEXT "1"
 #define ARCHBIRD_PATH_SCHEMA_SUPPORTED_TEXT "1"
+
+#define AB_JSON_FLAGS_SUPPORTED                                                \
+  ((uint32_t)ARCHBIRD_JSON_PRETTY | (uint32_t)ARCHBIRD_JSON_TRAILING_NEWLINE)
+
+static inline int ab_json_flags_valid(uint32_t flags) {
+  return (flags & ~AB_JSON_FLAGS_SUPPORTED) == 0u;
+}
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_C
 #ifndef ARCHBIRD_TREE_SITTER_C_IMPLEMENTATION_SHA256
 #define ARCHBIRD_TREE_SITTER_C_IMPLEMENTATION_SHA256                           \

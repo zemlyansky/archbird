@@ -28,12 +28,12 @@ typedef struct AbTokenList {
   size_t capacity;
 } AbTokenList;
 
-enum AbLexFlags {
-  AB_LEX_C_PREPROCESSOR = 1u << 0,
-  AB_LEX_JAVASCRIPT = 1u << 1,
-  AB_LEX_R = 1u << 2,
-  AB_LEX_PYTHON = 1u << 3
-};
+#define AB_LEX_C_PREPROCESSOR (1u << 0)
+#define AB_LEX_JAVASCRIPT (1u << 1)
+#define AB_LEX_R (1u << 2)
+#define AB_LEX_PYTHON (1u << 3)
+#define AB_LEX_FLAGS_SUPPORTED                                                 \
+  (AB_LEX_C_PREPROCESSOR | AB_LEX_JAVASCRIPT | AB_LEX_R | AB_LEX_PYTHON)
 
 ArchbirdStatus ab_tokenize(ArchbirdEngine *engine, const uint8_t *source,
                            size_t source_length, uint32_t flags,

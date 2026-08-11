@@ -59,8 +59,7 @@ ArchbirdStatus archbird_query_plan_compile(
   int named = query_id_length != 0;
   if (!engine || (!config_json && config_length) ||
       (!query_id && query_id_length) || (!overrides_json && overrides_length) ||
-      !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   if (!stable_id(id.data, id.length) || (named && !config_length))
     return invalid(engine, "query id is not a stable identifier");

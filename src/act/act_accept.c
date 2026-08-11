@@ -364,7 +364,7 @@ ArchbirdStatus archbird_act_accept(
       !before_map_length || !after_map_json || !after_map_length ||
       !verification_json || !verification_length || !write_fn ||
       (!gate_results_json && gate_results_length) ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&unsealed, engine);
   ab_buffer_init(&canonical, engine);

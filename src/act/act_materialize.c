@@ -1635,8 +1635,7 @@ ArchbirdStatus archbird_act_materialize(
       !map_length || !verification_json || !verification_length ||
       !source_metadata_json || !source_metadata_length ||
       (!executor_submissions_json && executor_submissions_length) ||
-      !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(&plan, 0, sizeof(plan));
   memset(&context, 0, sizeof(context));

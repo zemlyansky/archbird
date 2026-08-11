@@ -1054,6 +1054,54 @@ assert.ok(cachedCold.cacheStats.misses > 0);
 assert.equal(cachedCold.cacheStats.writes, cachedCold.cacheStats.misses);
 assert.equal(cachedWarm.cacheStats.hits, cachedCold.cacheStats.writes);
 assert.equal(cachedWarm.cacheStats.misses, 0);
+const providerPrefixes = fs.readdirSync(path.join(cacheRoot, "providers-v1"));
+const providerFiles = providerPrefixes.flatMap((prefix) => {
+  const directory = path.join(cacheRoot, "providers-v1", prefix);
+  return fs.readdirSync(directory).map((entry) => path.join(directory, entry));
+});
+assert.ok(providerFiles.length > 0, "Node provider cache produced no persistent entries");
+fs.writeFileSync(providerFiles[0], "{broken");
+const cachedRecovered = Project.fromConfig(
+  path.join(repositoryFixture, "archbird.json"),
+  {
+    root: repositoryFixture, typescript: false, cacheDir: cacheRoot,
+    mapCache: false,
+  },
+);
+assert.deepEqual(cachedRecovered.mapJson(), repositoryMapJson);
+assert.equal(cachedRecovered.cacheStats.invalid, 1);
+assert.equal(cachedRecovered.cacheStats.misses, 1);
+assert.equal(cachedRecovered.cacheStats.writes, 1);
+const cachedRewarmed = Project.fromConfig(
+  path.join(repositoryFixture, "archbird.json"),
+  {
+    root: repositoryFixture, typescript: false, cacheDir: cacheRoot,
+    mapCache: false,
+  },
+);
+assert.deepEqual(cachedRewarmed.mapJson(), repositoryMapJson);
+assert.equal(cachedRewarmed.cacheStats.invalid, 0);
+assert.equal(cachedRewarmed.cacheStats.misses, 0);
+assert.equal(cachedRewarmed.cacheStats.hits, cachedCold.cacheStats.writes);
+const transitionCacheRoot = path.resolve(
+  process.argv[3], "build/test-provider-cache-transition-node",
+);
+fs.rmSync(transitionCacheRoot, { force: true, recursive: true });
+const transitionCache = new ProviderCache(transitionCacheRoot);
+const transitionParameters = {
+  namespace: "provider-implementation-v1",
+  project: "cache-transition",
+  providerId: "fixture",
+  path: "a.js",
+  sourceSha256: "1".repeat(64),
+};
+transitionCache.store(Buffer.from("{}"), transitionParameters);
+assert.equal(transitionCache.load({
+  ...transitionParameters,
+  namespace: "provider-implementation-v2",
+}), null);
+assert.deepEqual(transitionCache.load(transitionParameters), Buffer.from("{}"));
+fs.rmSync(transitionCacheRoot, { force: true, recursive: true });
 const cInputCacheRoot = path.resolve(
   process.argv[3], "build/test-c-input-cache-node",
 );

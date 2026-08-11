@@ -644,8 +644,7 @@ ArchbirdStatus archbird_project_render_file_facts(
   AbBuffer buffer;
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!engine || !project || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+  if (!engine || !project || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   if (!ab_project_providers_finalized(project))
     return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,

@@ -3,7 +3,9 @@
 
 const path = require("node:path");
 const {
+  beginBrowserDiagnostics,
   browserEnvironment,
+  clickAndWaitForGraphLayout,
   loadChromium,
   sharedChromium,
 } = require("./browser_harness");
@@ -164,6 +166,8 @@ async function main() {
     root: repositoryRoot,
   });
   let browser;
+  let diagnostics;
+  let page;
   try {
     browser = await chromium.launch({
       executablePath,
@@ -177,7 +181,8 @@ async function main() {
         "--disable-setuid-sandbox",
       ],
     });
-    const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    diagnostics = await beginBrowserDiagnostics(page.context(), page, screenshot);
     const pageErrors = [];
     const consoleErrors = [];
     const hostMethods = [];
@@ -292,9 +297,11 @@ async function main() {
     await page.getByText("Source · utf-8").waitFor({ timeout: 30_000 });
     await page.screenshot({ path: screenshot });
 
-    await page.getByRole("button", { name: "Collapse all", exact: true }).click();
-    await page.locator('.graph-canvas[data-layout-ready="true"]')
-      .waitFor({ timeout: 60_000 });
+    await clickAndWaitForGraphLayout(
+      page,
+      page.getByRole("button", { name: "Collapse all", exact: true }),
+      60_000,
+    );
     if (await nodeCount(page) !== collapsedArchitecture) {
       throw new Error("collapse-all did not restore the current architecture frontier");
     }
@@ -322,7 +329,11 @@ async function main() {
       + `${Math.round(refreshMs)} ms refresh, `
       + `${browser.version()})`,
     );
+  } catch (error) {
+    if (diagnostics) await diagnostics.retain(error);
+    throw error;
   } finally {
+    if (diagnostics) await diagnostics.close();
     if (browser) await browser.close();
     await server.close();
   }

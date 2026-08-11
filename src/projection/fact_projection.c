@@ -6148,57 +6148,163 @@ static ArchbirdStatus extract_macro_members(AbProjectionContext *context,
   return status;
 }
 
+static const AbProjectionDescriptor projection_descriptors[] = {
+    {AB_PROJECTION_KIND_ARTIFACT_ROUTES, "artifact_routes", "relation",
+     AB_PROJECTION_FIELD_ARTIFACTS, 0, NULL, extract_artifact_routes},
+    {AB_PROJECTION_KIND_BUILD_ROUTES, "build_routes", "relation",
+     AB_PROJECTION_FIELD_BUILDS, 0, NULL, extract_build_routes},
+    {AB_PROJECTION_KIND_COMPONENT_EDGES, "component_edges", "relation",
+     AB_PROJECTION_FIELD_KIND_PATTERNS | AB_PROJECTION_FIELD_KINDS |
+         AB_PROJECTION_FIELD_NAME_PATTERNS,
+     0, NULL, extract_component_edges},
+    {AB_PROJECTION_KIND_COMPONENT_MEMBERSHIP, "component_membership", "values",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_COMPONENTS, 0, NULL,
+     extract_component_membership},
+    {AB_PROJECTION_KIND_COMPONENTS, "components", "set",
+     AB_PROJECTION_FIELD_NAMES, 0, NULL, extract_components},
+    {AB_PROJECTION_KIND_CONSTANT_MEMBERSHIPS, "constant_memberships", "set",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_CONTAINER |
+         AB_PROJECTION_FIELD_PATHS,
+     AB_PROJECTION_FIELD_CONTAINER, "constant projection requires a container",
+     extract_constant_memberships},
+    {AB_PROJECTION_KIND_CONSTANT_VALUES, "constant_values", "values",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_CONTAINER |
+         AB_PROJECTION_FIELD_KINDS | AB_PROJECTION_FIELD_PATHS,
+     AB_PROJECTION_FIELD_CONTAINER, "constant projection requires a container",
+     extract_constant_values},
+    {AB_PROJECTION_KIND_FILE_EDGES, "file_edges", "relation",
+     AB_PROJECTION_FIELD_FROM_PATHS | AB_PROJECTION_FIELD_KIND_PATTERNS |
+         AB_PROJECTION_FIELD_KINDS | AB_PROJECTION_FIELD_NAME_PATTERNS |
+         AB_PROJECTION_FIELD_TO_PATHS,
+     0, NULL, extract_file_edges},
+    {AB_PROJECTION_KIND_FILE_METRICS, "file_metrics", "values",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_METRIC,
+     AB_PROJECTION_FIELD_METRIC, "file_metrics requires metric bytes",
+     extract_file_metrics},
+    {AB_PROJECTION_KIND_GRAPH, "graph", "graph",
+     AB_PROJECTION_FIELD_GROUP_BY | AB_PROJECTION_FIELD_LEVEL |
+         AB_PROJECTION_FIELD_OVERLAYS | AB_PROJECTION_FIELD_RELATIONS,
+     AB_PROJECTION_FIELD_LEVEL,
+     "graph requires level component, file, or symbol",
+     ab_projection_extract_graph},
+    {AB_PROJECTION_KIND_INVENTORY_PATHS, "inventory_paths", "set",
+     AB_PROJECTION_FIELDS_NORMALIZED, 0, NULL, extract_inventory_paths},
+    {AB_PROJECTION_KIND_MACRO_MEMBERS, "macro_members", "set",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_CALL |
+         AB_PROJECTION_FIELD_PATHS | AB_PROJECTION_FIELD_SELECTOR |
+         AB_PROJECTION_FIELD_SELECTOR_ARGUMENT |
+         AB_PROJECTION_FIELD_VALUES_FROM_ARGUMENT,
+     AB_PROJECTION_FIELD_CALL | AB_PROJECTION_FIELD_SELECTOR,
+     "macro_members requires call and selector", extract_macro_members},
+    {AB_PROJECTION_KIND_MAPPED_PATHS, "mapped_paths", "set",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_PATHS, 0, NULL,
+     extract_mapped_paths},
+    {AB_PROJECTION_KIND_PACKAGE_ENTRYPOINTS, "package_entrypoints", "relation",
+     AB_PROJECTION_FIELD_PACKAGES | AB_PROJECTION_FIELD_ROUTES |
+         AB_PROJECTION_FIELD_TARGET_PATHS,
+     0, NULL, extract_package_entrypoints},
+    {AB_PROJECTION_KIND_PACKAGE_EXPORTS, "package_exports", "relation",
+     AB_PROJECTION_FIELD_NAME_PATTERNS | AB_PROJECTION_FIELD_PACKAGES, 0, NULL,
+     extract_package_exports},
+    {AB_PROJECTION_KIND_PROVIDER_SURFACE, "provider_surface", "values",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_NAME,
+     AB_PROJECTION_FIELD_NAME, "provider_surface requires a name",
+     extract_provider_surface},
+    {AB_PROJECTION_KIND_SEARCH_DOMAIN, "search_domain", "set", 0, 0, NULL,
+     extract_search_domain},
+    {AB_PROJECTION_KIND_SYMBOL_ENTITIES, "symbol_entities", "set",
+     AB_PROJECTION_FIELD_KINDS | AB_PROJECTION_FIELD_LAYER |
+         AB_PROJECTION_FIELD_NAME_PATTERNS | AB_PROJECTION_FIELD_NAMES |
+         AB_PROJECTION_FIELD_PATHS | AB_PROJECTION_FIELD_PUBLIC_ONLY,
+     0, NULL, extract_symbol_entities},
+    {AB_PROJECTION_KIND_SYMBOL_OCCURRENCES, "symbol_occurrences", "set",
+     AB_PROJECTION_FIELD_NAMES | AB_PROJECTION_FIELD_PATHS,
+     AB_PROJECTION_FIELD_NAMES,
+     "symbol_occurrences requires exactly one non-empty symbol name",
+     extract_symbol_occurrences},
+    {AB_PROJECTION_KIND_SYMBOL_RELATIONS, "symbol_relations", "relation",
+     AB_PROJECTION_FIELD_FROM_PATHS | AB_PROJECTION_FIELD_KINDS |
+         AB_PROJECTION_FIELD_RESOLUTIONS | AB_PROJECTION_FIELD_TO_PATHS,
+     0, NULL, extract_symbol_relations},
+    {AB_PROJECTION_KIND_SYMBOLS, "symbols", "set",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_KINDS |
+         AB_PROJECTION_FIELD_LAYER | AB_PROJECTION_FIELD_NAME_PATTERNS |
+         AB_PROJECTION_FIELD_NAMES | AB_PROJECTION_FIELD_PATHS |
+         AB_PROJECTION_FIELD_PUBLIC_ONLY,
+     0, NULL, extract_symbols},
+    {AB_PROJECTION_KIND_TEST_ROUTES, "test_routes", "relation",
+     AB_PROJECTION_FIELD_CONFIGURED_ONLY | AB_PROJECTION_FIELD_GROUP |
+         AB_PROJECTION_FIELD_PATHS | AB_PROJECTION_FIELD_SELECTORS |
+         AB_PROJECTION_FIELD_TARGET_PATHS,
+     0, NULL, extract_test_routes},
+    {AB_PROJECTION_KIND_TEST_SELECTORS, "test_selectors", "set",
+     AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_GROUP |
+         AB_PROJECTION_FIELD_PATHS | AB_PROJECTION_FIELD_SELECTORS,
+     0, NULL, extract_test_selectors},
+};
+
+_Static_assert(sizeof(projection_descriptors) /
+                       sizeof(projection_descriptors[0]) ==
+                   AB_PROJECTION_KIND_COUNT,
+               "projection descriptor inventory is incomplete");
+
+static size_t projection_descriptor_count(void) {
+  return sizeof(projection_descriptors) / sizeof(projection_descriptors[0]);
+}
+
+static int projection_descriptor_name_compare(const AbString *name,
+                                              const char *candidate) {
+  size_t candidate_length = strlen(candidate);
+  size_t common =
+      name->length < candidate_length ? name->length : candidate_length;
+  int order = common ? memcmp(name->data, candidate, common) : 0;
+  if (order)
+    return order;
+  if (name->length < candidate_length)
+    return -1;
+  return name->length > candidate_length;
+}
+
+const AbProjectionDescriptor *
+ab_projection_descriptor_find(const AbString *name) {
+  size_t left = 0;
+  size_t right = projection_descriptor_count();
+  if (!name)
+    return NULL;
+  while (left < right) {
+    size_t middle = left + (right - left) / 2;
+    int order = projection_descriptor_name_compare(
+        name, projection_descriptors[middle].name);
+    if (!order)
+      return &projection_descriptors[middle];
+    if (order < 0)
+      right = middle;
+    else
+      left = middle + 1;
+  }
+  return NULL;
+}
+
 static ArchbirdStatus extract_map_fact(AbProjectionContext *context,
                                        const AbProjectionPlan *plan,
                                        AbProjectionData *fact) {
   const AbValue *select = ab_value_member(&plan->definition, "select");
-  if (ab_projection_value_is(select, "symbols"))
-    return extract_symbols(context, plan, fact);
-  if (ab_projection_value_is(select, "symbol_entities"))
-    return extract_symbol_entities(context, plan, fact);
-  if (ab_projection_value_is(select, "symbol_occurrences"))
-    return extract_symbol_occurrences(context, plan, fact);
-  if (ab_projection_value_is(select, "symbol_relations"))
-    return extract_symbol_relations(context, plan, fact);
-  if (ab_projection_value_is(select, "file_edges"))
-    return extract_file_edges(context, plan, fact);
-  if (ab_projection_value_is(select, "file_metrics"))
-    return extract_file_metrics(context, plan, fact);
-  if (ab_projection_value_is(select, "mapped_paths"))
-    return extract_mapped_paths(context, plan, fact);
-  if (ab_projection_value_is(select, "inventory_paths"))
-    return extract_inventory_paths(context, plan, fact);
-  if (ab_projection_value_is(select, "component_membership"))
-    return extract_component_membership(context, plan, fact);
-  if (ab_projection_value_is(select, "components"))
-    return extract_components(context, plan, fact);
-  if (ab_projection_value_is(select, "component_edges"))
-    return extract_component_edges(context, plan, fact);
-  if (ab_projection_value_is(select, "artifact_routes"))
-    return extract_artifact_routes(context, plan, fact);
-  if (ab_projection_value_is(select, "build_routes"))
-    return extract_build_routes(context, plan, fact);
-  if (ab_projection_value_is(select, "package_entrypoints"))
-    return extract_package_entrypoints(context, plan, fact);
-  if (ab_projection_value_is(select, "package_exports"))
-    return extract_package_exports(context, plan, fact);
-  if (ab_projection_value_is(select, "test_routes"))
-    return extract_test_routes(context, plan, fact);
-  if (ab_projection_value_is(select, "test_selectors"))
-    return extract_test_selectors(context, plan, fact);
-  if (ab_projection_value_is(select, "provider_surface"))
-    return extract_provider_surface(context, plan, fact);
-  if (ab_projection_value_is(select, "search_domain"))
-    return extract_search_domain(context, plan, fact);
-  if (ab_projection_value_is(select, "constant_values"))
-    return extract_constant_values(context, plan, fact);
-  if (ab_projection_value_is(select, "constant_memberships"))
-    return extract_constant_memberships(context, plan, fact);
-  if (ab_projection_value_is(select, "macro_members"))
-    return extract_macro_members(context, plan, fact);
-  if (ab_projection_value_is(select, "graph"))
-    return ab_projection_extract_graph(context, plan, fact);
-  return ARCHBIRD_CONFLICT;
+  const AbProjectionDescriptor *descriptor =
+      select && select->kind == AB_VALUE_STRING
+          ? ab_projection_descriptor_find(&select->as.text)
+          : NULL;
+  ArchbirdStatus status;
+  if (!descriptor || !descriptor->extract)
+    return ARCHBIRD_CONFLICT;
+  status = descriptor->extract(context, plan, fact);
+  if (status == ARCHBIRD_OK &&
+      !string_literal(&fact->shape, descriptor->shape)) {
+    ab_projection_data_free(context->engine, fact);
+    return archbird_error_set(context->engine, ARCHBIRD_CONFLICT,
+                              ARCHBIRD_NO_OFFSET,
+                              "projection extractor returned the wrong shape");
+  }
+  return status;
 }
 
 ArchbirdStatus ab_projection_extract_map(ArchbirdEngine *engine,

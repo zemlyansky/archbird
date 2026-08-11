@@ -114,12 +114,33 @@ def assert_tree_sitter_scanner_abi_contract(repository: Path) -> None:
         )
 
 
+def cmake_module_text(repository: Path, filename: str) -> str:
+    root_cmake = (repository / "CMakeLists.txt").read_text(encoding="utf-8")
+    include = f'include("${{CMAKE_CURRENT_SOURCE_DIR}}/cmake/{filename}")'
+    if root_cmake.count(include) != 1:
+        raise AssertionError(
+            f"root CMake must include cmake/{filename} exactly once"
+        )
+    path = repository / "cmake" / filename
+    if not path.is_file():
+        raise AssertionError(f"root CMake includes missing module: {path}")
+    return path.read_text(encoding="utf-8")
+
+
 def assert_fuzz_sanitizer_contract(repository: Path) -> None:
-    cmake = (repository / "CMakeLists.txt").read_text(encoding="utf-8")
+    cmake = cmake_module_text(repository, "ArchbirdFuzzing.cmake")
     if "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1" not in cmake:
         raise AssertionError("fuzz smoke does not make UBSan findings fatal")
     if "ASAN_OPTIONS=halt_on_error=1:abort_on_error=1" not in cmake:
         raise AssertionError("fuzz smoke does not make ASan findings fatal")
+    smoke_options = (
+        "-runs=256 -seed=1 -verbosity=0 -print_funcs=0 -max_len=65536"
+    )
+    if smoke_options not in cmake:
+        raise AssertionError(
+            "fuzz smoke must retain its deterministic run budget without "
+            "starting a symbolizer for routine coverage updates"
+        )
     unguarded = re.findall(r"\bCOMMAND\s+(archbird_fuzz_[A-Za-z0-9_]+)", cmake)
     if unguarded:
         raise AssertionError(
@@ -135,6 +156,49 @@ def assert_fuzz_sanitizer_contract(repository: Path) -> None:
         raise AssertionError(
             "fuzz smoke must run each of its 15 targets once through the "
             f"fatal sanitizer environment; observed={sorted(guarded)}"
+        )
+
+
+def assert_native_testing_module_contract(repository: Path) -> None:
+    cmake = cmake_module_text(repository, "ArchbirdTesting.cmake")
+    root_cmake = (repository / "CMakeLists.txt").read_text(encoding="utf-8")
+    helper = "function(archbird_add_native_test_program target)"
+    if cmake.count(helper) != 1:
+        raise AssertionError("native testing module must own one target helper")
+    if "if(BUILD_TESTING)" not in cmake:
+        raise AssertionError("native testing module is not guarded by BUILD_TESTING")
+    required_sanitizer_fragments = {
+        "function(archbird_apply_sanitizer_test_environment)",
+        "get_property(ARCHBIRD_SANITIZER_TESTS DIRECTORY PROPERTY TESTS)",
+        "set_tests_properties(${ARCHBIRD_SANITIZER_TESTS} PROPERTIES",
+        "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1",
+        "ASAN_OPTIONS=halt_on_error=1:abort_on_error=1",
+    }
+    missing = sorted(
+        fragment
+        for fragment in required_sanitizer_fragments
+        if fragment not in cmake
+    )
+    if missing:
+        raise AssertionError(
+            "sanitizer CTest diagnostics are not fatal for every registered "
+            f"test: missing={missing}"
+        )
+    sanitizer_apply = "archbird_apply_sanitizer_test_environment()"
+    if root_cmake.count(sanitizer_apply) != 1:
+        raise AssertionError(
+            "root CMake must apply the sanitizer environment exactly once "
+            "after all optional frontend tests are registered"
+        )
+    last_frontend_test = max(
+        root_cmake.index("NAME archbird_native_python_repository"),
+        root_cmake.index("NAME archbird_native_node_frontend"),
+        root_cmake.index("NAME archbird_native_resolution_frontend_parity"),
+    )
+    if root_cmake.index(sanitizer_apply) < last_frontend_test:
+        raise AssertionError(
+            "sanitizer environment is applied before optional frontend "
+            "tests are registered"
         )
 
 
@@ -370,6 +434,13 @@ def assert_core_target_commands(
                 raise AssertionError(
                     f"{path} has no shadow-warning ratchet in {build.name}"
                 )
+            if (
+                "/W4" not in arguments
+                and "-Wsign-conversion" not in arguments
+            ):
+                raise AssertionError(
+                    f"{path} has no sign-conversion ratchet in {build.name}"
+                )
             include_paths: list[Path] = []
             index = 0
             while index < len(arguments):
@@ -511,6 +582,7 @@ def main() -> int:
     source_groups = dict(target_inventory.source_groups)
     assert_tree_sitter_scanner_abi_contract(repository)
     assert_fuzz_sanitizer_contract(repository)
+    assert_native_testing_module_contract(repository)
     assert_package_scanner_abi_contract(repository)
     makefile = repository / "Makefile"
     required = prerequisites(makefile, "test-js")

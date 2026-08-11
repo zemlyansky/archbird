@@ -117,6 +117,69 @@ function browserEnvironment(rootValue) {
   return { ...process.env, TEMP: base, TMP: base, TMPDIR: base };
 }
 
+function diagnosticPath(outputValue, suffix, extension) {
+  const output = path.resolve(outputValue);
+  const currentExtension = path.extname(output);
+  const stem = currentExtension ? output.slice(0, -currentExtension.length) : output;
+  return `${stem}-${suffix}${extension}`;
+}
+
+async function beginBrowserDiagnostics(context, page, output) {
+  let active = true;
+  await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  return {
+    async close() {
+      if (!active) return;
+      active = false;
+      await context.tracing.stop();
+    },
+    async retain(error) {
+      if (!active) return;
+      const retained = [];
+      const failures = [];
+      const failureScreenshot = diagnosticPath(output, "failure", ".png");
+      const failureTrace = diagnosticPath(output, "failure-trace", ".zip");
+      try {
+        await page.screenshot({ path: failureScreenshot, fullPage: true });
+        retained.push(failureScreenshot);
+      } catch (captureError) {
+        failures.push(`screenshot: ${captureError.message}`);
+      }
+      try {
+        await context.tracing.stop({ path: failureTrace });
+        retained.push(failureTrace);
+      } catch (captureError) {
+        failures.push(`trace: ${captureError.message}`);
+      }
+      active = false;
+      const detail = [
+        retained.length ? `browser failure artifacts: ${retained.join(", ")}` : "",
+        failures.length ? `browser diagnostic failures: ${failures.join("; ")}` : "",
+      ].filter(Boolean).join("\n");
+      if (detail && error instanceof Error) error.message += `\n${detail}`;
+      else if (detail) console.error(detail);
+    },
+  };
+}
+
+async function clickAndWaitForGraphLayout(page, button, timeout = 30_000) {
+  const canvas = page.locator(".graph-canvas");
+  const generation = Number(await canvas.getAttribute("data-layout-generation"));
+  if (!Number.isSafeInteger(generation) || generation < 1) {
+    throw new Error(`graph has no completed layout generation: ${generation}`);
+  }
+  const completed = page.waitForFunction(
+    (previous) => {
+      const graph = document.querySelector(".graph-canvas");
+      return graph?.getAttribute("data-layout-ready") === "true"
+        && Number(graph.getAttribute("data-layout-generation")) > previous;
+    },
+    generation,
+    { timeout },
+  );
+  await Promise.all([completed, button.click()]);
+}
+
 async function listen(server) {
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -126,7 +189,9 @@ async function listen(server) {
 }
 
 module.exports = {
+  beginBrowserDiagnostics,
   browserEnvironment,
+  clickAndWaitForGraphLayout,
   createStaticServer,
   listen,
   loadChromium,

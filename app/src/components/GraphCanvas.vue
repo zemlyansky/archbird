@@ -35,6 +35,7 @@ let requestId = 0;
 let lastNodeTap: { at: number; id: string } | null = null;
 const layoutError = ref("");
 const layoutReady = ref(false);
+const layoutGeneration = ref(0);
 const hasCompletedLayout = ref(false);
 const layoutAnchorDrift = ref<number | null>(null);
 const focusCount = ref(0);
@@ -322,6 +323,7 @@ async function layout(viewport: PreservedViewport | null) {
       includeOverlays: false,
     });
     layoutExtent.value = { height: bounds.h, width: bounds.w };
+    layoutGeneration.value += 1;
     layoutReady.value = true;
     hasCompletedLayout.value = true;
     emit("layoutEnd");
@@ -810,6 +812,7 @@ onBeforeUnmount(() => {
       aria-label="Architecture graph"
       :data-anchor-drift="layoutAnchorDrift === null ? undefined : layoutAnchorDrift.toFixed(3)"
       :data-has-layout="hasCompletedLayout"
+      :data-layout-generation="layoutGeneration"
       :data-layout-ready="layoutReady"
       :data-layout-height="layoutExtent === null ? undefined : layoutExtent.height.toFixed(3)"
       :data-layout-width="layoutExtent === null ? undefined : layoutExtent.width.toFixed(3)"

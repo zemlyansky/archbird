@@ -15,7 +15,7 @@ archbird_okf_analyze(ArchbirdEngine *engine, const uint8_t *source_bundle_json,
       (!query_json && query_length) || !write_fn ||
       (format != ARCHBIRD_OKF_JSON && format != ARCHBIRD_OKF_MARKDOWN) ||
       (include_body != 0 && include_body != 1) ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&rendered, engine);
   status = ab_okf_index_load(engine, source_bundle_json, source_bundle_length,

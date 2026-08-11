@@ -454,8 +454,7 @@ ArchbirdStatus archbird_discovery_render(ArchbirdEngine *engine,
   size_t index;
   int first = 1;
   ArchbirdStatus status = ARCHBIRD_OK;
-  if (!engine || !discovery || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+  if (!engine || !discovery || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&buffer, engine);
   status = ab_buffer_literal(

@@ -2966,8 +2966,10 @@ static ArchbirdStatus map_render_brief_identity(const MapReportContext *context,
   for (index = 0; index < context->diagnostics->as.array.count; index++) {
     const AbString *severity = ab_report_string(
         &context->diagnostics->as.array.items[index], "severity");
-    errors += ab_report_string_equal(severity, "error");
-    warnings += ab_report_string_equal(severity, "warning");
+    if (ab_report_string_equal(severity, "error"))
+      errors++;
+    if (ab_report_string_equal(severity, "warning"))
+      warnings++;
   }
   MAP_REPORT_TRY(ab_report_linef(out, "# %.*s architecture",
                                  (int)project->length, project->data));

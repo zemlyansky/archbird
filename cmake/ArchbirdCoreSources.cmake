@@ -65,6 +65,11 @@ set(ARCHBIRD_DECLARED_CORE_SOURCE_PATHS
   src/evidence/manifests/autoconf_manifest.c
   src/evidence/manifests/pyproject_manifest.c
   src/evidence/project.c
+  src/evidence/project/observation_store.c
+  src/evidence/project/provider_merge.c
+  src/evidence/project/provider_report.c
+  src/evidence/project/provider_store.c
+  src/evidence/project/source_store.c
   src/evidence/provider_registry.c
   src/evidence/python/definitions.c
   src/evidence/python/tokens.c

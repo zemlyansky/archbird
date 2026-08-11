@@ -230,8 +230,7 @@ ArchbirdStatus archbird_plan_source_requirements(
   ArchbirdStatus status;
   if (!engine || !plan_json || !plan_length ||
       (!executor_submissions_json && executor_submissions_length) ||
-      !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&document, engine);
   memset(resolved_paths, 0, sizeof(resolved_paths));
@@ -297,7 +296,7 @@ ArchbirdStatus archbird_act_source_requirements(
   AbBuffer document;
   ArchbirdStatus status;
   if (!engine || !act_json || !act_length || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   ab_buffer_init(&document, engine);
   status = ab_act_load(engine, act_json, act_length, &act);

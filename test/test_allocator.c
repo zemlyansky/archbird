@@ -321,22 +321,50 @@ static ArchbirdStatus exercise_config_resolution(TestAllocator *allocator) {
   return status;
 }
 
+static const char allocator_project_manifest[] =
+    "{\"artifact\":\"archbird-source-manifest\",\"files\":[{\"bytes\":3,"
+    "\"language\":\"c\",\"layer\":\"core\",\"path\":\"src/a.c\","
+    "\"roles\":[\"source\"],\"sha256\":"
+    "\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\""
+    "}],\"producer\":{\"implementation_sha256\":"
+    "\"1111111111111111111111111111111111111111111111111111111111111111\","
+    "\"name\":\"allocator-test\",\"version\":\"1\"},\"project\":"
+    "\"allocator-test\",\"schema_version\":1}";
+
+static const char allocator_project_config[] =
+    "{\"project\":\"allocator-test\","
+    "\"description\":\"Allocator ownership fixture\",\"layers\":[{"
+    "\"name\":\"core\",\"role\":\"core\",\"language\":\"c\","
+    "\"globs\":[\"src/**\"]}],\"components\":[{\"name\":\"core\","
+    "\"paths\":[\"src/**\"]}],\"limits\":{\"compact_symbols\":7}}";
+
+static ArchbirdStatus prepare_allocator_project(ArchbirdEngine *engine,
+                                                ArchbirdProject **out_project) {
+  ArchbirdProject *project = NULL;
+  ArchbirdStatus status = archbird_project_create(
+      engine, (const uint8_t *)allocator_project_manifest,
+      sizeof(allocator_project_manifest) - 1, &project);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_add_source(engine, project, "src/a.c", 7,
+                                         (const uint8_t *)"abc", 3);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_finalize_sources(engine, project);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_set_config(
+        engine, project, (const uint8_t *)allocator_project_config,
+        sizeof(allocator_project_config) - 1);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_scan_builtin(engine, project,
+                                           ARCHBIRD_PROVIDER_PRIMARY);
+  if (status != ARCHBIRD_OK) {
+    archbird_project_destroy(project);
+    project = NULL;
+  }
+  *out_project = project;
+  return status;
+}
+
 static ArchbirdStatus exercise_map(TestAllocator *allocator) {
-  static const char manifest[] =
-      "{\"artifact\":\"archbird-source-manifest\",\"files\":[{\"bytes\":3,"
-      "\"language\":\"c\",\"layer\":\"core\",\"path\":\"src/a.c\","
-      "\"roles\":[\"source\"],\"sha256\":"
-      "\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\""
-      "}],\"producer\":{\"implementation_sha256\":"
-      "\"1111111111111111111111111111111111111111111111111111111111111111\","
-      "\"name\":\"allocator-test\",\"version\":\"1\"},\"project\":"
-      "\"allocator-test\",\"schema_version\":1}";
-  static const char config[] =
-      "{\"project\":\"allocator-test\","
-      "\"description\":\"Allocator ownership fixture\",\"layers\":[{"
-      "\"name\":\"core\",\"role\":\"core\",\"language\":\"c\","
-      "\"globs\":[\"src/**\"]}],\"components\":[{\"name\":\"core\","
-      "\"paths\":[\"src/**\"]}],\"limits\":{\"compact_symbols\":7}}";
   static const char query[] =
       "{\"paths\":[\"src/a.c\"],\"direction\":\"both\",\"depth\":0,"
       "\"test_depth\":0}";
@@ -348,19 +376,7 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
   CountingOutput output = {0};
   if (!engine)
     return status;
-  status = archbird_project_create(engine, (const uint8_t *)manifest,
-                                   sizeof(manifest) - 1, &project);
-  if (status == ARCHBIRD_OK)
-    status = archbird_project_add_source(engine, project, "src/a.c", 7,
-                                         (const uint8_t *)"abc", 3);
-  if (status == ARCHBIRD_OK)
-    status = archbird_project_finalize_sources(engine, project);
-  if (status == ARCHBIRD_OK)
-    status = archbird_project_set_config(
-        engine, project, (const uint8_t *)config, sizeof(config) - 1);
-  if (status == ARCHBIRD_OK)
-    status = archbird_project_scan_builtin(engine, project,
-                                           ARCHBIRD_PROVIDER_PRIMARY);
+  status = prepare_allocator_project(engine, &project);
   if (status == ARCHBIRD_OK)
     status = archbird_project_finalize_providers(engine, project);
   if (status == ARCHBIRD_OK)
@@ -400,6 +416,87 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
   archbird_project_destroy(project);
   archbird_engine_destroy(engine);
   return status;
+}
+
+static void test_provider_merge_retry(void) {
+  TestAllocator baseline = {0};
+  ArchbirdStatus status;
+  ArchbirdEngine *engine = create_engine(&baseline, &status);
+  ArchbirdProject *project = NULL;
+  FixedOutput expected = {{0}, 0};
+  size_t before_calls;
+  size_t merge_calls;
+  size_t fail_offset;
+  if (!engine || prepare_allocator_project(engine, &project) != ARCHBIRD_OK) {
+    fail("provider-merge-retry", "cannot prepare baseline project");
+    archbird_project_destroy(project);
+    archbird_engine_destroy(engine);
+    return;
+  }
+  before_calls = baseline.calls;
+  status = archbird_project_finalize_providers(engine, project);
+  merge_calls = baseline.calls - before_calls;
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_project_render_map(engine, project, 0, fixed_write, &expected);
+  archbird_project_destroy(project);
+  archbird_engine_destroy(engine);
+  if (status != ARCHBIRD_OK || !merge_calls || !expected.length ||
+      baseline.corrupted || baseline.outstanding || baseline.bytes) {
+    fail("provider-merge-retry", "baseline merge did not complete cleanly");
+    return;
+  }
+  for (fail_offset = 1; fail_offset <= merge_calls; fail_offset++) {
+    TestAllocator allocator = {0};
+    ArchbirdMergeSummary summary;
+    FixedOutput actual = {{0}, 0};
+    size_t before_outstanding;
+    size_t before_bytes;
+    engine = create_engine(&allocator, &status);
+    project = NULL;
+    if (!engine || prepare_allocator_project(engine, &project) != ARCHBIRD_OK) {
+      fail("provider-merge-retry", "cannot prepare failure project");
+      archbird_project_destroy(project);
+      archbird_engine_destroy(engine);
+      return;
+    }
+    before_outstanding = allocator.outstanding;
+    before_bytes = allocator.bytes;
+    memset(&summary, 0, sizeof(summary));
+    summary.struct_size = sizeof(summary);
+    allocator.fail_at = allocator.calls + fail_offset;
+    status = archbird_project_finalize_providers(engine, project);
+    if (status != ARCHBIRD_OUT_OF_MEMORY || !allocator.failed ||
+        allocator.corrupted || allocator.outstanding != before_outstanding ||
+        allocator.bytes != before_bytes ||
+        archbird_project_merge_summary(project, &summary) !=
+            ARCHBIRD_CONFLICT) {
+      fail("provider-merge-retry",
+           "failed merge changed project ownership or finalization state");
+      archbird_project_destroy(project);
+      archbird_engine_destroy(engine);
+      return;
+    }
+    allocator.fail_at = 0;
+    status = archbird_project_finalize_providers(engine, project);
+    if (status == ARCHBIRD_OK)
+      status =
+          archbird_project_render_map(engine, project, 0, fixed_write, &actual);
+    if (status != ARCHBIRD_OK || actual.length != expected.length ||
+        memcmp(actual.bytes, expected.bytes, expected.length) != 0) {
+      fail("provider-merge-retry",
+           "retry did not reproduce the baseline canonical Map");
+      archbird_project_destroy(project);
+      archbird_engine_destroy(engine);
+      return;
+    }
+    archbird_project_destroy(project);
+    archbird_engine_destroy(engine);
+    if (allocator.corrupted || allocator.outstanding || allocator.bytes) {
+      fail("provider-merge-retry", "retry leaked or corrupted allocations");
+      return;
+    }
+  }
 }
 
 static ArchbirdStatus exercise_map_diff(TestAllocator *allocator) {
@@ -989,6 +1086,7 @@ int main(void) {
   test_invalid_options();
   test_invalid_okf_layer_cleanup();
   test_path_writer_failures();
+  test_provider_merge_retry();
   run_failure_sweep("json-every-n", exercise_json);
   run_failure_sweep("json-pointer-edit-every-n", exercise_json_pointer_edit);
   run_failure_sweep("pattern-every-n", exercise_pattern);

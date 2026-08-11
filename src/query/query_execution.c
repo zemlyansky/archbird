@@ -5216,7 +5216,7 @@ ArchbirdStatus archbird_map_query(ArchbirdEngine *engine,
   if (!engine || (!map_json && map_length) ||
       (!resolution_json && resolution_length) ||
       (!query_json && query_length) || !write_fn ||
-      (json_flags & ~(ARCHBIRD_JSON_PRETTY | ARCHBIRD_JSON_TRAILING_NEWLINE)))
+      !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
   status = ab_build_identity_validate(engine);
   if (status != ARCHBIRD_OK)
