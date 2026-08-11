@@ -7,6 +7,7 @@ CLANG ?= clang
 EMCMAKE ?= emcmake
 CLANG_FORMAT ?= clang-format
 CPPCHECK ?= cppcheck
+ACTIONLINT ?=
 BUILD_JOBS ?= 2
 CPPCHECK_JOBS ?= $(BUILD_JOBS)
 ESBUILD ?= $(CURDIR)/app/node_modules/.bin/esbuild
@@ -56,7 +57,7 @@ NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Ivendor/yyjson/src \
 	-I$(NATIVE_BUILD)/vendor/pcre2 -Ivendor/pcre2/src \
 	-Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter/lib/src \
 	-Ivendor/tree-sitter-c/src
-.PHONY: test verify version-check evaluation-test schema-snapshots build-c build-py editable-install test-py js-dependencies build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-test-fast native-test-soak native-sanitize \
+.PHONY: test verify version-check workflow-check evaluation-test schema-snapshots build-c build-py editable-install test-py js-dependencies build-js test-js app-test app-live-test app-py-live-test app-browser-test native-configure native-build native-test native-test-fast native-test-soak native-sanitize \
 	native-warnings native-wasm-smoke native-fuzz-smoke native-json-corpus native-sha256-vectors native-analyze \
 	native-boundaries release-source-check release-self-check release-py release-js release clean \
 	release-check
@@ -66,13 +67,18 @@ NATIVE_INCLUDE_FLAGS = -Iinclude -Isrc -Ivendor/yyjson/src \
 test verify: export TMPDIR := $(BUILD_TMP)
 test verify: export XDG_CACHE_HOME := $(TEST_CACHE)
 
-test: version-check evaluation-test schema-snapshots native-test test-py test-js app-test app-live-test app-py-live-test
+test: version-check workflow-check evaluation-test schema-snapshots native-test test-py test-js app-test app-live-test app-py-live-test
 
 version-check:
 	$(PYTHON) tools/check_versions.py
 	$(PYTHON) tools/core_source_manifest.py $(CURDIR)
 	$(PYTHON) tools/core_target_manifest.py $(CURDIR)
 	$(PYTHON) tools/private_include_boundaries.py $(CURDIR)
+
+workflow-check:
+	$(PYTHON) tools/check_github_workflows.py $(CURDIR) \
+		--cache-dir $(CURDIR)/build/tools \
+		--scratch-dir $(BUILD_TMP)/workflow-check $(if $(ACTIONLINT),--actionlint=$(ACTIONLINT),)
 
 schema-snapshots:
 	$(PYTHON) tools/sync_schemas.py --check python node
@@ -368,7 +374,7 @@ native-boundaries:
 	$(PYTHON) tools/core_target_manifest.py $(CURDIR)
 	$(PYTHON) tools/private_include_boundaries.py $(CURDIR)
 
-release-source-check: version-check
+release-source-check: version-check workflow-check
 	$(PYTHON) tools/stage_release_provenance.py check
 
 release-self-check: release-source-check build-py
@@ -586,7 +592,7 @@ release-check: version-check release-self-check release-py release-js
 
 release: release-check
 
-verify: version-check evaluation-test schema-snapshots native-test test-py test-js app-browser-test native-analyze native-warnings
+verify: version-check workflow-check evaluation-test schema-snapshots native-test test-py test-js app-browser-test native-analyze native-warnings
 	$(PYTHON) -m compileall -q \
 		-x '(^|/)test/(fixtures|fuzz/corpus)(/|$$)' \
 		py/archbird py/tests test
