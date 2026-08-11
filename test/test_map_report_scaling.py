@@ -397,6 +397,57 @@ def _check_symbol_occurrence_scaling() -> None:
     )
 
 
+def _check_diagnostic_report_scaling(document: dict[str, object]) -> None:
+    count = 5_000
+    cause_count = 50
+    path_count = 100
+    scaled = dict(document)
+    scaled["diagnostics"] = [
+        {
+            "code": "unresolved-import",
+            "message": (
+                "import is not resolved internally, builtin, or declared "
+                f"external: dependency-{index % cause_count:02d}"
+            ),
+            "path": f"bulk/consumer-{(index // cause_count) % path_count:03d}.py",
+            "severity": "warning",
+        }
+        for index in range(count)
+    ]
+    encoded = json.dumps(
+        scaled, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode()
+    outputs = []
+    durations = []
+    for _ in range(4):
+        started = perf_counter()
+        outputs.append(render_map_markdown(encoded, max_chars=12_000))
+        durations.append(perf_counter() - started)
+    if len(set(outputs)) != 1:
+        raise AssertionError("high-cardinality diagnostic report is not repeatable")
+    report = outputs[-1]
+    if (
+        len(report.decode()) > 12_000
+        or b"5000 canonical records grouped into 50 exact causes" not in report
+        or report.count(b"occurrences=100; paths=100") < 10
+        or report.count(b"`layers[].import_roots`") != 1
+        or b"cause groups" not in report
+    ):
+        raise AssertionError(
+            "high-cardinality diagnostic report lost grouping or its budget"
+        )
+    elapsed = statistics.median(durations[1:])
+    if elapsed >= 2.0:
+        raise AssertionError(
+            f"high-cardinality diagnostic report exceeded 2s: {elapsed:.3f}s"
+        )
+    print(
+        "diagnostic report grouping passed "
+        f"({count} records, {cause_count} causes, {path_count} paths, "
+        f"{elapsed:.3f}s)"
+    )
+
+
 def main() -> int:
     fixture = Path(__file__).parent / "fixtures/report_map.json"
     document = json.loads(fixture.read_bytes())
@@ -431,6 +482,7 @@ def main() -> int:
     _check_empty_summary()
     print("empty Map report summary passed")
     _check_symbol_occurrence_scaling()
+    _check_diagnostic_report_scaling(document)
     return 0
 
 

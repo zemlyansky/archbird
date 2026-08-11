@@ -240,10 +240,15 @@ the resulting typed ProjectionResult drives both Markdown and the application.
 for its corresponding values. `--max-chars` is a final presentation guard; it
 never changes the canonical Map or turns incomplete evidence into success.
 Compact and standard Markdown rank structural groups, aggregated dependency
-flows, and file landmarks while reporting what the presentation omitted.
-`--detail full` enumerates the exhaustive selected graph records. Dependency
-flow is shown provider to consumer; the underlying canonical relation remains
-consumer to provider (`A` uses `B`).
+flows, and file landmarks while reporting what the presentation omitted. File
+landmarks use separate bounded production/API, test/fixture, and build/artifact
+shortlists, followed by an unresolved-import frontier; their visible relation,
+degree, and symbol counts are orientation signals rather than correctness
+claims. Diagnostics are grouped by exact severity, code, and message, with
+canonical occurrence counts and representative paths. `--detail full`
+enumerates the exhaustive selected graph records instead. Dependency flow is
+shown provider to consumer; the underlying canonical relation remains consumer
+to provider (`A` uses `B`).
 
 Graph completeness and repository coverage are reported separately. A graph can
 exhaustively represent every selected supported fact while discovery still

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -564,6 +565,166 @@ def _assert_import_resolution_soundness() -> None:
     )
 
 
+def _assert_projection_markdown_explainability() -> None:
+    report_map = json.loads(
+        (ROOT / "test/fixtures/report_map.json").read_bytes()
+    )
+    template = next(
+        row for row in report_map["files"] if row["path"] == "js/index.js"
+    )
+
+    def add_file(path: str, *, layer: str = "javascript") -> None:
+        row = json.loads(json.dumps(template))
+        row["path"] = path
+        row["layer"] = layer
+        row["sha256"] = hashlib.sha256(path.encode()).hexdigest()
+        report_map["files"].append(row)
+
+    report_map["layers"].extend(
+        [
+            {
+                "files": 1,
+                "language": "javascript",
+                "name": "ci-runner",
+                "role": "test-runner",
+                "symbols": 0,
+            },
+            {
+                "files": 1,
+                "language": "javascript",
+                "name": "generated-delivery",
+                "role": "generated-delivery",
+                "symbols": 0,
+            },
+        ]
+    )
+
+    for path in (
+        "graphify/build.py",
+        "not-tests/testimonial.js",
+        "notpublic/wasm/source.js",
+    ):
+        add_file(path)
+    for index in range(10):
+        add_file(f"tests/fixtures/hot-{index}.js")
+    add_file("ci/runner.js", layer="ci-runner")
+    for path in (
+        "public/wasm/generated.js",
+        "scripts/prepack.js",
+        "webpack.config.js",
+        "build/output.js",
+        "artifacts/release.js",
+    ):
+        add_file(path)
+    add_file("opaque/bundle.js", layer="generated-delivery")
+    report_map["files"].sort(key=lambda row: row["path"])
+
+    diagnostics = []
+    diagnostics.extend(
+        {
+            "code": "unresolved-import",
+            "message": (
+                "import is not resolved internally, builtin, or declared "
+                "external: numpy"
+            ),
+            "path": "tests/fixtures/hot-0.js" if index < 5 else "js/index.js",
+            "severity": "warning",
+        }
+        for index in range(7)
+    )
+    diagnostics.extend(
+        {
+            "code": "unresolved-import",
+            "message": (
+                "import is not resolved internally, builtin, or declared "
+                "external: sample.local"
+            ),
+            "path": f"tests/fixtures/hot-{index + 1}.js",
+            "severity": "warning",
+        }
+        for index in range(3)
+    )
+    diagnostics.extend(
+        [
+            {
+                "code": "tree-sitter-error",
+                "message": (
+                    "Tree-sitter javascript recovered from 1 ERROR node(s)"
+                ),
+                "path": "not-tests/testimonial.js",
+                "severity": "warning",
+            },
+            {
+                "code": "tree-sitter-missing",
+                "message": (
+                    "Tree-sitter javascript inserted 1 MISSING node(s)"
+                ),
+                "path": "notpublic/wasm/source.js",
+                "severity": "warning",
+            },
+        ]
+    )
+    diagnostics.append(
+        {
+            "code": "provider-error",
+            "message": "provider failed before producing evidence",
+            "path": "graphify/build.py",
+            "severity": "error",
+        }
+    )
+    report_map["diagnostics"] = diagnostics
+    encoded = json.dumps(
+        report_map, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode()
+    graph_definition = {
+        "id": "explainability-regression",
+        "select": "graph",
+        "group_by": "directory",
+        "level": "file",
+        "relations": ["builds", "bridges", "imports", "packages", "tests"],
+        "overlays": ["diagnostics", "evidence-quality"],
+    }
+    projection_before = evaluate_projection_json(encoded, graph_definition)
+    report = render_map_markdown(encoded, detail="standard").decode()
+    assert evaluate_projection_json(encoded, graph_definition) == projection_before
+    assert "Selected files by presentation category: production/API=13; " in report
+    assert "test/fixture=11; build/artifact=6." in report
+    assert (
+        "Category shortlist: production/API=6/13; test/fixture=3/11; "
+        "build/artifact=3/6."
+    ) in report
+    assert "### Production and API candidates" in report
+    assert "### Tests and fixtures" in report
+    assert "### Build and artifact paths" in report
+    assert "### Unresolved frontier" in report
+    assert "showing 4 of 5 paths" in report
+    assert (
+        "13 canonical records grouped into 5 exact causes by severity, code, "
+        "and message"
+    ) in report
+    numpy_group = (
+        "`unresolved-import` - occurrences=7; paths=2; import is not resolved "
+        "internally, builtin, or declared external: numpy"
+    )
+    assert report.count(numpy_group) == 1
+    assert (
+        "Representative paths: `tests/fixtures/hot-0.js` (5), "
+        "`js/index.js` (2)"
+    ) in report
+    assert report.count("`layers[].import_roots`") == 1
+    assert report.count("`tree-sitter-*`") == 1
+    assert report.index("**error** `provider-error`") < report.index(
+        "**warning** `unresolved-import`"
+    )
+    compact = render_map_markdown(encoded, detail="compact")
+    assert compact == render_map_markdown(encoded, detail="compact")
+    full = render_map_markdown(encoded, detail="full")
+    assert b"canonical records grouped into" not in full
+    assert full.count(b"`unresolved-import`") == 10
+    bounded = render_map_markdown(encoded, detail="standard", max_chars=3_500)
+    assert len(bounded.decode()) <= 3_500
+
+
 def _assert_partial_configuration_overlay() -> None:
     root = ROOT / "build/partial-configuration-overlay"
     shutil.rmtree(root, ignore_errors=True)
@@ -826,6 +987,7 @@ def _assert_symbol_occurrence_projection() -> None:
 def main() -> None:
     _assert_project_configuration_conformance()
     _assert_import_resolution_soundness()
+    _assert_projection_markdown_explainability()
     _assert_partial_configuration_overlay()
     _assert_symbol_occurrence_projection()
     project_model = json.loads((ROOT / "archbird.json").read_text())
