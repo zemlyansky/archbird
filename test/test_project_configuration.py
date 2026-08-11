@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 from archbird import _native
 from archbird.errors import ConfigError
@@ -560,7 +561,9 @@ def _assert_partial_configuration_overlay() -> None:
 
     completed = subprocess.run(
         [
-            str(ROOT / "archbird"),
+            sys.executable,
+            "-m",
+            "archbird",
             "verify",
             "--root",
             str(root),

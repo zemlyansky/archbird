@@ -386,8 +386,10 @@ typedef struct AbMapState {
   size_t package_count;
   AbMapBuildRoute *builds;
   size_t build_count;
+  size_t build_capacity;
   AbMapCompileCommand *compile_commands;
   size_t compile_command_count;
+  size_t compile_command_capacity;
   AbMapCompileContext *compile_contexts;
   size_t compile_context_count;
   size_t *compile_file_context_offsets;

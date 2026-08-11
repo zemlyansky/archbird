@@ -334,6 +334,51 @@ def main() -> int:
     )
     assert "evidence" not in orphan_edge, orphan_edge
 
+    matching_commands = [
+        {
+            "arguments": ["cc", "-c", "/checkout/deep/raw.c"],
+            "directory": "/checkout",
+            "file": "/checkout/deep/raw.c",
+        },
+        {
+            "arguments": ["clang-cl", "/c", "src\\windows.c"],
+            "directory": "C:\\checkout\\nested",
+            "file": "src\\windows.c",
+        },
+    ]
+    matching_sources = {
+        "compile_commands.json": canonical(matching_commands),
+        "deep/raw.c": b"int raw(void) { return 0; }\n",
+        "nested/src/windows.c": b"int windows(void) { return 0; }\n",
+        "src/windows.c": b"int fallback(void) { return 0; }\n",
+    }
+    matching_config = {
+        "project": "compile-commands",
+        "layers": [
+            {
+                "name": "core",
+                "role": "core",
+                "language": "c",
+                "globs": ["**/*.c"],
+            }
+        ],
+        "builds": [
+            {
+                "kind": "compile_commands",
+                "name": "commands",
+                "path": "compile_commands.json",
+                "variant": "default",
+            }
+        ],
+    }
+    matching = build_map(extension, matching_sources, matching_config)
+    assert [
+        (row["name"], row["conditions"][0]) for row in matching["builds"]
+    ] == [
+        ("deep/raw.c", "compile-source:suffix"),
+        ("nested/src/windows.c", "compile-source:directory-suffix"),
+    ], matching["builds"]
+
     changed = json.loads(json.dumps(mapped))
     changed["builds"][0]["variant"] = "asan"
     diff = json.loads(extension.map_diff(canonical(mapped), canonical(changed)))

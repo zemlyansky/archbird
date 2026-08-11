@@ -810,18 +810,22 @@ recipe_paths(ArchbirdEngine *engine, const AbStringArray *recipes,
 static ArchbirdStatus reserve_build(AbMapState *state,
                                     const AbConfigBuild *config,
                                     AbMapBuildRoute **out) {
-  AbMapBuildRoute *resized;
-  if (state->build_count == SIZE_MAX / sizeof(*state->builds))
-    return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
-                              ARCHBIRD_NO_OFFSET, "too many build routes");
-  resized = (AbMapBuildRoute *)ab_realloc(state->engine, state->builds,
-                                          (state->build_count + 1) *
-                                              sizeof(*state->builds));
-  if (!resized)
-    return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
-                              ARCHBIRD_NO_OFFSET,
-                              "out of memory storing build routes");
-  state->builds = resized;
+  if (state->build_count == state->build_capacity) {
+    size_t capacity = state->build_capacity ? state->build_capacity * 2 : 16;
+    AbMapBuildRoute *resized;
+    if (capacity < state->build_capacity ||
+        capacity > SIZE_MAX / sizeof(*state->builds))
+      return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET, "too many build routes");
+    resized = (AbMapBuildRoute *)ab_realloc(state->engine, state->builds,
+                                            capacity * sizeof(*state->builds));
+    if (!resized)
+      return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory storing build routes");
+    state->builds = resized;
+    state->build_capacity = capacity;
+  }
   *out = &state->builds[state->build_count];
   memset(*out, 0, sizeof(**out));
   if (config->variant.length)
@@ -1033,68 +1037,66 @@ static const AbString *compile_string(const AbValue *row, const char *name) {
   return value && value->kind == AB_VALUE_STRING ? &value->as.text : NULL;
 }
 
-static const AbManifestFile *compile_source_file(const AbMapState *state,
-                                                 const AbString *directory,
-                                                 const AbString *file,
-                                                 const char **out_evidence) {
-  const AbManifestFile *best = NULL;
-  const char *best_evidence = NULL;
-  size_t index;
-  for (index = 0; index < state->manifest->file_count; index++) {
-    const AbManifestFile *candidate = &state->manifest->files[index];
-    const AbString *path = &candidate->path;
-    int matched = 0;
-    const char *evidence = NULL;
-    size_t part;
-    if (!candidate->has_layer)
-      continue;
-    if (path->length == file->length &&
-        !memcmp(path->data, file->data, path->length))
-      matched = 1;
-    if (matched)
-      evidence = "compile-source:exact";
-    else if (path->length < file->length &&
-             (file->data[file->length - path->length - 1] == '/' ||
-              file->data[file->length - path->length - 1] == '\\') &&
-             !memcmp(path->data, file->data + file->length - path->length,
-                     path->length))
-      matched = 1;
-    if (matched && !evidence)
-      evidence = "compile-source:suffix";
-    if (!matched && directory) {
-      size_t joined_length = directory->length + 1 + file->length;
-      if (path->length <= joined_length) {
-        size_t offset = joined_length - path->length;
-        if (offset == 0)
-          matched = 1;
-        else {
-          char boundary = offset - 1 < directory->length
-                              ? directory->data[offset - 1]
-                              : file->data[offset - directory->length - 1];
-          matched = boundary == '/' || boundary == '\\';
-        }
-        for (part = 0; matched && part < path->length; part++) {
-          size_t source = offset + part;
-          char byte = source < directory->length ? directory->data[source]
-                      : source == directory->length
-                          ? '/'
-                          : file->data[source - directory->length - 1];
-          if (byte == '\\')
-            byte = '/';
-          if (byte != path->data[part])
-            matched = 0;
-        }
-      }
-      if (matched)
-        evidence = "compile-source:directory-suffix";
-    }
-    if (matched && (!best || path->length > best->path.length)) {
-      best = candidate;
-      best_evidence = evidence;
-    }
+static const AbManifestFile *
+compile_source_suffix(const AbSourceManifest *manifest, const char *path,
+                      size_t path_length) {
+  size_t start = 0;
+  for (;;) {
+    const char *suffix = path_length ? path + start : "";
+    const AbManifestFile *candidate =
+        ab_map_manifest_file(manifest, suffix, path_length - start);
+    if (candidate && candidate->has_layer)
+      return candidate;
+    while (start < path_length && path[start] != '/' && path[start] != '\\')
+      start++;
+    if (start == path_length)
+      return NULL;
+    start++;
   }
-  *out_evidence = best_evidence;
-  return best;
+}
+
+static ArchbirdStatus compile_source_file(const AbMapState *state,
+                                          const AbString *directory,
+                                          const AbString *file,
+                                          const AbManifestFile **out_source,
+                                          const char **out_evidence) {
+  const AbManifestFile *raw =
+      compile_source_suffix(state->manifest, file->data, file->length);
+  const AbManifestFile *joined = NULL;
+  AbBuffer normalized;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  size_t index;
+
+  *out_source = raw;
+  *out_evidence = raw ? raw->path.length == file->length
+                            ? "compile-source:exact"
+                            : "compile-source:suffix"
+                      : NULL;
+  ab_buffer_init(&normalized, state->engine);
+  if (directory) {
+    status = ab_buffer_append(&normalized, directory->data, directory->length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&normalized, "/");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_append(&normalized, file->data, file->length);
+    for (index = 0; status == ARCHBIRD_OK && index < normalized.length;
+         index++) {
+      if (normalized.data[index] == '\\')
+        normalized.data[index] = '/';
+    }
+    if (status == ARCHBIRD_OK)
+      joined = compile_source_suffix(
+          state->manifest, (const char *)normalized.data, normalized.length);
+  }
+  if (joined &&
+      (!*out_source || joined->path.length > (*out_source)->path.length ||
+       (joined->path.length == (*out_source)->path.length &&
+        ab_string_compare(&joined->path, &(*out_source)->path) < 0))) {
+    *out_source = joined;
+    *out_evidence = "compile-source:directory-suffix";
+  }
+  ab_buffer_free(&normalized);
+  return status;
 }
 
 static ArchbirdStatus tokenize_compile_command(ArchbirdEngine *engine,
@@ -1462,20 +1464,26 @@ static ArchbirdStatus reserve_compile_command(AbMapState *state,
                                               const AbConfigBuild *config,
                                               const AbManifestFile *source,
                                               AbMapCompileCommand **out) {
-  AbMapCompileCommand *resized;
-  if (state->compile_command_count ==
-      SIZE_MAX / sizeof(*state->compile_commands))
-    return archbird_error_set(state->engine, ARCHBIRD_LIMIT_EXCEEDED,
-                              ARCHBIRD_NO_OFFSET,
-                              "too many compilation commands");
-  resized = (AbMapCompileCommand *)ab_realloc(
-      state->engine, state->compile_commands,
-      (state->compile_command_count + 1) * sizeof(*state->compile_commands));
-  if (!resized)
-    return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
-                              ARCHBIRD_NO_OFFSET,
-                              "out of memory storing compilation commands");
-  state->compile_commands = resized;
+  if (state->compile_command_count == state->compile_command_capacity) {
+    size_t capacity = state->compile_command_capacity
+                          ? state->compile_command_capacity * 2
+                          : 64;
+    AbMapCompileCommand *resized;
+    if (capacity < state->compile_command_capacity ||
+        capacity > SIZE_MAX / sizeof(*state->compile_commands))
+      return archbird_error_set(state->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "too many compilation commands");
+    resized = (AbMapCompileCommand *)ab_realloc(
+        state->engine, state->compile_commands,
+        capacity * sizeof(*state->compile_commands));
+    if (!resized)
+      return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory storing compilation commands");
+    state->compile_commands = resized;
+    state->compile_command_capacity = capacity;
+  }
   *out = &state->compile_commands[state->compile_command_count++];
   memset(*out, 0, sizeof(**out));
   (*out)->source = source;
@@ -1598,7 +1606,12 @@ static ArchbirdStatus add_compile_commands_routes(AbMapState *state,
       string_array_free(state->engine, &arguments);
       continue;
     }
-    source = compile_source_file(state, directory, file, &source_evidence);
+    status =
+        compile_source_file(state, directory, file, &source, &source_evidence);
+    if (status != ARCHBIRD_OK) {
+      string_array_free(state->engine, &arguments);
+      break;
+    }
     if (!source) {
       unmapped++;
       string_array_free(state->engine, &arguments);

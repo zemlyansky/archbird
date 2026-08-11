@@ -194,26 +194,32 @@ def main() -> None:
     small_commands = max(1, large_commands // 2)
     small_files = max(small_commands, large_files // 2)
 
-    measurements: dict[str, dict] = {}
+    samples: dict[str, list[dict]] = {"small": [], "large": []}
     for label, command_count, file_count in (
         ("small", small_commands, small_files),
         ("large", large_commands, large_files),
+        ("large", large_commands, large_files),
+        ("small", small_commands, small_files),
     ):
-        first = run_worker(extension, command_count, file_count)
-        second = run_worker(extension, command_count, file_count)
-        if first["sha256"] != second["sha256"]:
+        samples[label].append(
+            run_worker(extension, command_count, file_count)
+        )
+
+    measurements: dict[str, dict] = {}
+    for label in ("small", "large"):
+        if len({sample["sha256"] for sample in samples[label]}) != 1:
             raise AssertionError(
                 f"{label} compile-context Map is not deterministic"
             )
         measurements[label] = {
-            "elapsed": min(first["elapsed"], second["elapsed"]),
-            "rss_kib": max(first["rss_kib"], second["rss_kib"]),
+            "elapsed": min(sample["elapsed"] for sample in samples[label]),
+            "rss_kib": max(sample["rss_kib"] for sample in samples[label]),
         }
 
     if (
         measurements["large"]["elapsed"]
-        > measurements["small"]["elapsed"] * 3.2 + 0.15
-        or measurements["large"]["elapsed"] >= 8.0
+        > measurements["small"]["elapsed"] * 2.8 + 0.08
+        or measurements["large"]["elapsed"] >= 4.0
     ):
         raise AssertionError(
             "equivalent compile contexts no longer scale near-linearly: "
