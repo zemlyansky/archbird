@@ -431,7 +431,7 @@ def _check_diagnostic_report_scaling(document: dict[str, object]) -> None:
         or b"5000 canonical records grouped into 50 exact causes" not in report
         or report.count(b"occurrences=100; paths=100") < 10
         or report.count(b"`layers[].import_roots`") != 1
-        or b"cause groups" not in report
+        or b"review groups" not in report
     ):
         raise AssertionError(
             "high-cardinality diagnostic report lost grouping or its budget"

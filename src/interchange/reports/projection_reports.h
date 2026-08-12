@@ -6,6 +6,7 @@
 ArchbirdStatus ab_projection_report_markdown(ArchbirdEngine *engine,
                                              const AbProjectionPlan *plan,
                                              const AbProjectionResult *result,
+                                             const AbValue *map,
                                              ArchbirdReportDetail detail,
                                              size_t max_chars, AbBuffer *out);
 

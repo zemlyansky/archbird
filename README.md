@@ -242,13 +242,20 @@ never changes the canonical Map or turns incomplete evidence into success.
 Compact and standard Markdown rank structural groups, aggregated dependency
 flows, and file landmarks while reporting what the presentation omitted. File
 landmarks use separate bounded production/API, test/fixture, and build/artifact
-shortlists, followed by an unresolved-import frontier; their visible relation,
+shortlists, followed by an unresolved-import frontier. Classification consults
+the Map's file-role evidence first and then conservative repository-path
+conventions. Build outputs/tooling and third-party/generated candidates take
+precedence over test candidates, while participation metadata such as
+`artifact-input` does not by itself demote production source. Visible relation,
 degree, and symbol counts are orientation signals rather than correctness
-claims. Diagnostics are grouped by exact severity, code, and message, with
-canonical occurrence counts and representative paths. `--detail full`
-enumerates the exhaustive selected graph records instead. Dependency flow is
-shown provider to consumer; the underlying canonical relation remains consumer
-to provider (`A` uses `B`).
+claims. Standard dependency rows show at most eight relation kinds and disclose
+the omitted and total counts. Diagnostics retain their exact canonical cause
+count; recognized Tree-sitter recovery and missing node messages are additionally
+summarized by language and parser action, with node-count ranges and
+representative paths. Other diagnostics remain grouped by exact severity, code,
+and message. `--detail full` enumerates the exhaustive selected graph records
+instead. Dependency flow is shown provider to consumer; the underlying canonical
+relation remains consumer to provider (`A` uses `B`).
 
 Graph completeness and repository coverage are reported separately. A graph can
 exhaustively represent every selected supported fact while discovery still

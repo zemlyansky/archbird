@@ -70,7 +70,7 @@ ArchbirdStatus archbird_projection_render_markdown(
     status = ab_projection_plan_evaluate(
         engine, &plan, &map, resolution_length ? &resolution : NULL, &result);
   if (status == ARCHBIRD_OK)
-    status = ab_projection_report_markdown(engine, &plan, &result, detail,
+    status = ab_projection_report_markdown(engine, &plan, &result, &map, detail,
                                            max_chars, &report);
   if (status == ARCHBIRD_OK && write_fn(user_data, report.data, report.length))
     status =

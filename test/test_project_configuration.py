@@ -573,12 +573,25 @@ def _assert_projection_markdown_explainability() -> None:
         row for row in report_map["files"] if row["path"] == "js/index.js"
     )
 
-    def add_file(path: str, *, layer: str = "javascript") -> None:
+    def add_file(
+        path: str, *, layer: str = "javascript", roles: list[str] | None = None
+    ) -> None:
         row = json.loads(json.dumps(template))
         row["path"] = path
         row["layer"] = layer
         row["sha256"] = hashlib.sha256(path.encode()).hexdigest()
         report_map["files"].append(row)
+        if roles is not None:
+            report_map.setdefault("inputs", []).append(
+                {
+                    "bytes": row["bytes"],
+                    "language": row["language"],
+                    "layer": layer,
+                    "path": path,
+                    "roles": sorted({"source", *roles}),
+                    "sha256": row["sha256"],
+                }
+            )
 
     report_map["layers"].extend(
         [
@@ -601,6 +614,7 @@ def _assert_projection_markdown_explainability() -> None:
 
     for path in (
         "graphify/build.py",
+        "mesonbuild/cmake/common.py",
         "not-tests/testimonial.js",
         "notpublic/wasm/source.js",
     ):
@@ -614,10 +628,21 @@ def _assert_projection_markdown_explainability() -> None:
         "webpack.config.js",
         "build/output.js",
         "artifacts/release.js",
+        "cmake/tool.c",
+        "include/library/fmt/bundled/format.h",
     ):
         add_file(path)
     add_file("opaque/bundle.js", layer="generated-delivery")
+    add_file("test cases/common/basic.py")
+    add_file("manual tests/runner.py")
+    add_file("unittests/allplatform.py")
+    add_file("runtime-tests/server.test.ts")
+    add_file("typing_tests/check_types.py")
+    add_file("role-only/specimen.js", roles=["test-candidate"])
+    add_file("tests/vendor-source.js", roles=["third-party-candidate"])
+    add_file("build/test-source.js", roles=["test-candidate"])
     report_map["files"].sort(key=lambda row: row["path"])
+    report_map["inputs"].sort(key=lambda row: row["path"])
 
     diagnostics = []
     diagnostics.extend(
@@ -687,11 +712,11 @@ def _assert_projection_markdown_explainability() -> None:
     projection_before = evaluate_projection_json(encoded, graph_definition)
     report = render_map_markdown(encoded, detail="standard").decode()
     assert evaluate_projection_json(encoded, graph_definition) == projection_before
-    assert "Selected files by presentation category: production/API=13; " in report
-    assert "test/fixture=11; build/artifact=6." in report
+    assert "Selected files by presentation category: production/API=14; " in report
+    assert "test/fixture=18; build/artifact=9." in report
     assert (
-        "Category shortlist: production/API=6/13; test/fixture=3/11; "
-        "build/artifact=3/6."
+        "Category shortlist: production/API=6/14; test/fixture=3/18; "
+        "build/artifact=3/9."
     ) in report
     assert "### Production and API candidates" in report
     assert "### Tests and fixtures" in report
@@ -723,6 +748,177 @@ def _assert_projection_markdown_explainability() -> None:
     assert full.count(b"`unresolved-import`") == 10
     bounded = render_map_markdown(encoded, detail="standard", max_chars=3_500)
     assert len(bounded.decode()) <= 3_500
+
+    for path, roles, expected in (
+        ("mesonbuild/cmake/common.py", [], "production/API=11; test/fixture=0; build/artifact=0"),
+        ("test cases/common/basic.py", [], "production/API=10; test/fixture=1; build/artifact=0"),
+        ("manual tests/runner.py", [], "production/API=10; test/fixture=1; build/artifact=0"),
+        ("unittests/allplatform.py", [], "production/API=10; test/fixture=1; build/artifact=0"),
+        ("runtime-tests/server.test.ts", [], "production/API=10; test/fixture=1; build/artifact=0"),
+        ("typing_tests/check_types.py", [], "production/API=10; test/fixture=1; build/artifact=0"),
+        (
+            "role-only/specimen.js",
+            ["test-candidate"],
+            "production/API=10; test/fixture=1; build/artifact=0",
+        ),
+        (
+            "role-only/library.js",
+            ["artifact-input"],
+            "production/API=11; test/fixture=0; build/artifact=0",
+        ),
+        (
+            "role-only/build.js",
+            ["build"],
+            "production/API=10; test/fixture=0; build/artifact=1",
+        ),
+        (
+            "role-only/generated.js",
+            ["generated-candidate"],
+            "production/API=10; test/fixture=0; build/artifact=1",
+        ),
+        (
+            "tests/vendor-source.js",
+            ["third-party-candidate"],
+            "production/API=10; test/fixture=0; build/artifact=1",
+        ),
+        (
+            "build/test-source.js",
+            ["test-candidate"],
+            "production/API=10; test/fixture=1; build/artifact=0",
+        ),
+        (
+            "vendor/tests/combined.js",
+            ["test-candidate", "third-party-candidate"],
+            "production/API=10; test/fixture=0; build/artifact=1",
+        ),
+        (
+            "cmake/tool.c",
+            [],
+            "production/API=10; test/fixture=0; build/artifact=1",
+        ),
+        (
+            "include/library/fmt/bundled/format.h",
+            [],
+            "production/API=10; test/fixture=0; build/artifact=1",
+        ),
+    ):
+        classification_map = json.loads(
+            (ROOT / "test/fixtures/report_map.json").read_bytes()
+        )
+        classification_row = json.loads(json.dumps(template))
+        classification_row["path"] = path
+        classification_row["sha256"] = hashlib.sha256(path.encode()).hexdigest()
+        classification_map["files"].append(classification_row)
+        classification_map["files"].sort(key=lambda row: row["path"])
+        if roles:
+            classification_map["inputs"] = [
+                {
+                    "bytes": classification_row["bytes"],
+                    "language": classification_row["language"],
+                    "layer": classification_row["layer"],
+                    "path": path,
+                    "roles": sorted({"source", *roles}),
+                    "sha256": classification_row["sha256"],
+                }
+            ]
+        classification_report = render_map_markdown(
+            json.dumps(
+                classification_map,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode(),
+            detail="standard",
+        ).decode()
+        assert f"Selected files by presentation category: {expected}." in (
+            classification_report
+        ), path
+
+    diagnostic_map = json.loads(json.dumps(report_map))
+    diagnostic_map["diagnostics"] = [
+        {
+            "code": "tree-sitter-error",
+            "message": f"Tree-sitter javascript recovered from {nodes} ERROR node(s)",
+            "path": path,
+            "severity": "warning",
+        }
+        for nodes, path in ((1, "js/index.js"), (7, "js/main.js"), (7, "js/main.js"))
+    ] + [
+        {
+            "code": "tree-sitter-missing",
+            "message": "Tree-sitter javascript inserted 2 MISSING node(s)",
+            "path": "js/runtime.js",
+            "severity": "warning",
+        },
+        {
+            "code": "tree-sitter-error",
+            "message": "Tree-sitter javascript recovered from many ERROR node(s)",
+            "path": "js/worker.js",
+            "severity": "warning",
+        },
+        {
+            "code": "tree-sitter-error",
+            "message": "Tree-sitter javascript recovered from 01 ERROR node(s)",
+            "path": "js/worker.js",
+            "severity": "warning",
+        },
+    ]
+    diagnostic_encoded = json.dumps(
+        diagnostic_map, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode()
+    diagnostic_projection_before = evaluate_projection_json(
+        diagnostic_encoded, graph_definition
+    )
+    diagnostic_report = render_map_markdown(
+        diagnostic_encoded, detail="standard"
+    ).decode()
+    assert (
+        evaluate_projection_json(diagnostic_encoded, graph_definition)
+        == diagnostic_projection_before
+    )
+    assert (
+        "6 canonical records across 5 exact causes; summarized into 4 review "
+        "groups"
+    ) in diagnostic_report
+    assert (
+        "occurrences=3; paths=2; exact-causes=2; Tree-sitter javascript parser "
+        "recovery; ERROR nodes=15 total; per-record=1..7"
+    ) in diagnostic_report
+    assert "Tree-sitter javascript recovered from many ERROR node(s)" in (
+        diagnostic_report
+    )
+    assert "Tree-sitter javascript recovered from 01 ERROR node(s)" in (
+        diagnostic_report
+    )
+    diagnostic_full = render_map_markdown(diagnostic_encoded, detail="full")
+    assert diagnostic_full.count(b"`tree-sitter-error`") == 5
+
+    many_kind_map = json.loads(json.dumps(report_map))
+    many_kind_map["packages"][0]["entrypoints"].update(
+        {f"exports:./feature-{index:02d}": "js/index.js" for index in range(20)}
+    )
+    many_kind_encoded = json.dumps(
+        many_kind_map, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode()
+    many_kind_projection = json.loads(
+        evaluate_projection_json(many_kind_encoded, graph_definition)
+    )
+    package_flow = next(
+        row
+        for row in many_kind_projection["fact"]["items"]
+        if row["attributes"].get("record_kind") == "group_relation"
+        and row["attributes"].get("family") == "packages"
+        and len(row["attributes"].get("relation_kinds", [])) > 8
+    )
+    kind_count = len(package_flow["attributes"]["relation_kinds"])
+    many_kind_report = render_map_markdown(
+        many_kind_encoded, detail="standard"
+    ).decode()
+    assert f"+{kind_count - 8} more ({kind_count} total)" in many_kind_report
+    assert max(map(len, many_kind_report.splitlines())) < 1_000
+    assert "exports:./feature-19" not in many_kind_report
+    many_kind_full = render_map_markdown(many_kind_encoded, detail="full").decode()
+    assert "packages/exports:./feature-19" in many_kind_full
 
 
 def _assert_partial_configuration_overlay() -> None:

@@ -138,19 +138,29 @@ static ArchbirdStatus render_names(AbBuffer *out,
   return ARCHBIRD_OK;
 }
 
+enum { RELATION_KIND_DISPLAY_LIMIT = 8 };
+
 static ArchbirdStatus render_relation_kinds(AbBuffer *out,
                                             const AbProjectionItem *item) {
   const AbValue *kinds = item_attribute(item, "relation_kinds");
+  size_t shown;
   size_t index;
   if (!kinds || kinds->kind != AB_VALUE_ARRAY || !kinds->as.array.count)
     return ARCHBIRD_OK;
+  shown = kinds->as.array.count < RELATION_KIND_DISPLAY_LIMIT
+              ? kinds->as.array.count
+              : RELATION_KIND_DISPLAY_LIMIT;
   REPORT_TRY(ab_buffer_literal(out, "; kinds="));
-  for (index = 0; index < kinds->as.array.count; index++) {
+  for (index = 0; index < shown; index++) {
     const AbValue *kind = &kinds->as.array.items[index];
     if (index)
       REPORT_TRY(ab_buffer_literal(out, ", "));
     REPORT_TRY(ab_buffer_append(out, kind->as.text.data, kind->as.text.length));
   }
+  if (shown < kinds->as.array.count)
+    REPORT_TRY(ab_report_appendf(out, "; +%zu more (%zu total)",
+                                 kinds->as.array.count - shown,
+                                 kinds->as.array.count));
   return ARCHBIRD_OK;
 }
 
@@ -357,6 +367,13 @@ static int path_has_segment(const AbString *path, const char *literal) {
   return 0;
 }
 
+static int path_starts_with_segment(const AbString *path, const char *literal) {
+  size_t literal_length = strlen(literal);
+  return path && path->length >= literal_length &&
+         (!literal_length || !memcmp(path->data, literal, literal_length)) &&
+         (path->length == literal_length || path->data[literal_length] == '/');
+}
+
 static int path_has_segment_pair(const AbString *path, const char *first,
                                  const char *second) {
   size_t first_length = strlen(first);
@@ -405,9 +422,12 @@ static size_t leaf_stem_length(const char *leaf, size_t length) {
 
 static int path_is_test_or_fixture(const AbString *path) {
   static const char *const segments[] = {
-      "test",      "tests",    "__tests__",    "spec", "specs",
-      "fixture",   "fixtures", "__fixtures__", "mock", "mocks",
-      "__mocks__", "testdata", "test-data"};
+      "test",         "tests",       "__tests__",     "spec",
+      "specs",        "fixture",     "fixtures",      "__fixtures__",
+      "mock",         "mocks",       "__mocks__",     "testdata",
+      "test-data",    "test cases",  "manual tests",  "unittests",
+      "unit_tests",   "unit-tests",  "runtime_tests", "runtime-tests",
+      "typing_tests", "typing-tests"};
   const char *leaf;
   size_t leaf_length;
   size_t stem_length;
@@ -436,6 +456,109 @@ static int role_is_test_or_fixture(const AbString *role) {
          text_is_role_family(role, "mock") || text_is(role, "mocks");
 }
 
+static int layer_role_is_build_or_artifact(const AbString *role) {
+  return text_is_role_family(role, "artifact") ||
+         text_is_role_family(role, "build") ||
+         text_is_role_family(role, "generated") ||
+         text_is_role_family(role, "third-party") ||
+         text_is_role_family(role, "vendor") || text_is(role, "tooling");
+}
+
+static int input_role_is_build_or_artifact(const AbString *role) {
+  return text_is(role, "build") || text_is(role, "generated") ||
+         text_is(role, "generated-candidate") ||
+         text_is(role, "generated-delivery-candidate") ||
+         text_is(role, "third-party-candidate") || text_is(role, "vendor");
+}
+
+typedef struct {
+  const AbValue **rows;
+  size_t count;
+} LandmarkRoleIndex;
+
+static int map_input_path_compare(const void *left, const void *right) {
+  const AbValue *a = *(const AbValue *const *)left;
+  const AbValue *b = *(const AbValue *const *)right;
+  const AbValue *a_path = ab_value_member(a, "path");
+  const AbValue *b_path = ab_value_member(b, "path");
+  return ab_string_compare(&a_path->as.text, &b_path->as.text);
+}
+
+static ArchbirdStatus landmark_role_index_init(ArchbirdEngine *engine,
+                                               const AbValue *map,
+                                               LandmarkRoleIndex *index) {
+  const AbValue *inputs = map ? ab_value_member(map, "inputs") : NULL;
+  size_t input_index;
+  memset(index, 0, sizeof(*index));
+  if (!inputs || inputs->kind != AB_VALUE_ARRAY || !inputs->as.array.count)
+    return ARCHBIRD_OK;
+  if (inputs->as.array.count > SIZE_MAX / sizeof(*index->rows))
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "too many Map inputs for landmark roles");
+  index->rows = (const AbValue **)ab_calloc(engine, inputs->as.array.count,
+                                            sizeof(*index->rows));
+  if (!index->rows)
+    return ARCHBIRD_OUT_OF_MEMORY;
+  for (input_index = 0; input_index < inputs->as.array.count; input_index++) {
+    const AbValue *row = &inputs->as.array.items[input_index];
+    const AbValue *path = ab_value_member(row, "path");
+    const AbValue *roles = ab_value_member(row, "roles");
+    if (row->kind == AB_VALUE_OBJECT && path && path->kind == AB_VALUE_STRING &&
+        roles && roles->kind == AB_VALUE_ARRAY)
+      index->rows[index->count++] = row;
+  }
+  if (index->count > 1)
+    qsort(index->rows, index->count, sizeof(*index->rows),
+          map_input_path_compare);
+  return ARCHBIRD_OK;
+}
+
+static void landmark_role_index_free(ArchbirdEngine *engine,
+                                     LandmarkRoleIndex *index) {
+  ab_free(engine, index->rows);
+  memset(index, 0, sizeof(*index));
+}
+
+static const AbValue *landmark_input(const LandmarkRoleIndex *index,
+                                     const AbString *path) {
+  size_t low = 0;
+  size_t high = index ? index->count : 0;
+  if (!index || !path)
+    return NULL;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    const AbValue *candidate = ab_value_member(index->rows[middle], "path");
+    int order = ab_string_compare(&candidate->as.text, path);
+    if (order < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  if (low < index->count) {
+    const AbValue *candidate = ab_value_member(index->rows[low], "path");
+    if (ab_string_equal(&candidate->as.text, path))
+      return index->rows[low];
+  }
+  return NULL;
+}
+
+static int landmark_input_has_role(const LandmarkRoleIndex *index,
+                                   const AbString *path,
+                                   int (*matches)(const AbString *)) {
+  const AbValue *input = landmark_input(index, path);
+  const AbValue *roles = input ? ab_value_member(input, "roles") : NULL;
+  size_t role_index;
+  if (!roles || roles->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (role_index = 0; role_index < roles->as.array.count; role_index++) {
+    const AbValue *role = &roles->as.array.items[role_index];
+    if (role->kind == AB_VALUE_STRING && matches(&role->as.text))
+      return 1;
+  }
+  return 0;
+}
+
 static int build_action_leaf(const char *leaf, size_t leaf_length) {
   static const char *const actions[] = {
       "build", "bundle",   "codegen", "compile",    "configure", "generate",
@@ -455,11 +578,10 @@ static int build_action_leaf(const char *leaf, size_t leaf_length) {
   return 0;
 }
 
-static int path_is_build_or_artifact(const AbProjectionItem *item,
-                                     const AbString *path) {
+static int path_is_build_or_artifact(const AbString *path) {
   static const char *const segments[] = {
-      "artifact",  "artifacts",   "build",       "cmake",  "dist",
-      "generated", "third_party", "third-party", "vendor", "vendored"};
+      "artifact",  "artifacts",   "build",       "bundled", "dist",
+      "generated", "third_party", "third-party", "vendor",  "vendored"};
   static const char *const exact_leaves[] = {
       "BUILD",       "BUILD.bazel",     "CMakeLists.txt", "Dockerfile",
       "GNUmakefile", "Gruntfile.js",    "Makefile",       "SConstruct",
@@ -468,21 +590,16 @@ static int path_is_build_or_artifact(const AbProjectionItem *item,
   static const char *const tool_prefixes[] = {
       "babel.",  "esbuild.",  "gulpfile.", "jest.",   "postcss.",
       "rollup.", "tailwind.", "vite.",     "webpack."};
-  const AbString *layer_role = item_text(item, "layer_role");
   const char *leaf;
   size_t leaf_length;
   size_t index;
   if (!path)
     return 0;
-  if (text_is_role_family(layer_role, "artifact") ||
-      text_is_role_family(layer_role, "build") ||
-      text_is_role_family(layer_role, "generated") ||
-      text_is_role_family(layer_role, "vendor") ||
-      text_is(layer_role, "tooling"))
-    return 1;
   for (index = 0; index < sizeof(segments) / sizeof(segments[0]); index++)
     if (path_has_segment(path, segments[index]))
       return 1;
+  if (path_starts_with_segment(path, "cmake"))
+    return 1;
   if (path_has_segment_pair(path, "public", "wasm"))
     return 1;
   path_leaf(path, &leaf, &leaf_length);
@@ -516,12 +633,18 @@ typedef struct {
   size_t frontier_shown;
 } LandmarkReportSummary;
 
-static LandmarkCategory landmark_category(const AbProjectionItem *item) {
+static LandmarkCategory landmark_category(const LandmarkRoleIndex *roles,
+                                          const AbProjectionItem *item) {
   const AbString *path = item_text(item, "path");
-  if (path_is_test_or_fixture(path) ||
+  if (landmark_input_has_role(roles, path, input_role_is_build_or_artifact) ||
+      layer_role_is_build_or_artifact(item_text(item, "layer_role")))
+    return LANDMARK_BUILD;
+  if (landmark_input_has_role(roles, path, role_is_test_or_fixture) ||
       role_is_test_or_fixture(item_text(item, "layer_role")))
     return LANDMARK_TEST;
-  if (path_is_build_or_artifact(item, path))
+  if (path_is_test_or_fixture(path))
+    return LANDMARK_TEST;
+  if (path_is_build_or_artifact(path))
     return LANDMARK_BUILD;
   return LANDMARK_PRODUCTION;
 }
@@ -949,11 +1072,10 @@ static void allocate_landmark_slots(const size_t *totals, size_t limit,
   }
 }
 
-static ArchbirdStatus
-render_categorized_landmarks(AbBuffer *out, const AbProjectionData *data,
-                             const AbProjectionItem **items, size_t count,
-                             size_t limit, int standard_detail, size_t *omitted,
-                             LandmarkReportSummary *summary) {
+static ArchbirdStatus render_categorized_landmarks(
+    AbBuffer *out, const AbProjectionData *data, const LandmarkRoleIndex *roles,
+    const AbProjectionItem **items, size_t count, size_t limit,
+    int standard_detail, size_t *omitted, LandmarkReportSummary *summary) {
   static const char *const headings[LANDMARK_CATEGORY_COUNT] = {
       "Production and API candidates", "Tests and fixtures",
       "Build and artifact paths"};
@@ -965,7 +1087,7 @@ render_categorized_landmarks(AbBuffer *out, const AbProjectionData *data,
   ArchbirdStatus status;
   memset(summary, 0, sizeof(*summary));
   for (index = 0; index < count; index++)
-    summary->totals[landmark_category(items[index])]++;
+    summary->totals[landmark_category(roles, items[index])]++;
   allocate_landmark_slots(summary->totals, limit, summary->shown);
   status = ab_report_literal_line(out, "## File landmarks");
   if (status == ARCHBIRD_OK)
@@ -996,7 +1118,7 @@ render_categorized_landmarks(AbBuffer *out, const AbProjectionData *data,
     for (index = 0; status == ARCHBIRD_OK && index < count &&
                     emitted[category] < summary->shown[category];
          index++) {
-      if ((size_t)landmark_category(items[index]) != category)
+      if ((size_t)landmark_category(roles, items[index]) != category)
         continue;
       status = render_landmark_row(out, items[index], standard_detail);
       emitted[category]++;
@@ -1025,12 +1147,11 @@ render_categorized_landmarks(AbBuffer *out, const AbProjectionData *data,
   return status;
 }
 
-static ArchbirdStatus render_landmarks(AbBuffer *out,
-                                       const AbProjectionData *data,
-                                       const char *heading, size_t limit,
-                                       int standard_detail, int connected_only,
-                                       size_t *omitted,
-                                       LandmarkReportSummary *summary) {
+static ArchbirdStatus
+render_landmarks(AbBuffer *out, const AbProjectionData *data,
+                 const LandmarkRoleIndex *roles, const char *heading,
+                 size_t limit, int standard_detail, int connected_only,
+                 size_t *omitted, LandmarkReportSummary *summary) {
   const AbProjectionItem **items = NULL;
   size_t count = 0;
   size_t total;
@@ -1059,7 +1180,7 @@ static ArchbirdStatus render_landmarks(AbBuffer *out,
   }
   qsort(items, count, sizeof(*items), landmark_compare);
   if (!connected_only) {
-    status = render_categorized_landmarks(out, data, items, count, limit,
+    status = render_categorized_landmarks(out, data, roles, items, count, limit,
                                           standard_detail, omitted, summary);
     ab_free(out->engine, items);
     return status;
@@ -1124,6 +1245,18 @@ static ArchbirdStatus render_evidence_accounting(AbBuffer *out,
 
 enum { DIAGNOSTIC_REPRESENTATIVE_LIMIT = 3 };
 
+typedef enum {
+  TREE_SITTER_DIAGNOSTIC_NONE = 0,
+  TREE_SITTER_DIAGNOSTIC_ERROR = 1,
+  TREE_SITTER_DIAGNOSTIC_MISSING = 2
+} TreeSitterDiagnosticKind;
+
+typedef struct {
+  TreeSitterDiagnosticKind kind;
+  AbString language;
+  uint64_t nodes;
+} TreeSitterDiagnostic;
+
 typedef struct {
   const AbString *path;
   size_t occurrences;
@@ -1135,7 +1268,88 @@ typedef struct {
   size_t distinct_paths;
   DiagnosticRepresentative representatives[DIAGNOSTIC_REPRESENTATIVE_LIMIT];
   size_t representative_count;
+  size_t exact_causes;
+  TreeSitterDiagnostic tree_sitter;
+  uint64_t tree_sitter_nodes;
+  uint64_t tree_sitter_min;
+  uint64_t tree_sitter_max;
 } DiagnosticGroup;
+
+static int parse_decimal_u64(const char *data, size_t length,
+                             uint64_t *result) {
+  uint64_t value = 0;
+  size_t index;
+  if (!length || (length > 1 && data[0] == '0'))
+    return 0;
+  for (index = 0; index < length; index++) {
+    uint64_t digit;
+    if (data[index] < '0' || data[index] > '9')
+      return 0;
+    digit = (uint64_t)(data[index] - '0');
+    if (value > (UINT64_MAX - digit) / 10)
+      return 0;
+    value = value * 10 + digit;
+  }
+  *result = value;
+  return value != 0;
+}
+
+static int parse_tree_sitter_diagnostic(const AbProjectionItem *item,
+                                        TreeSitterDiagnostic *result) {
+  static const char prefix[] = "Tree-sitter ";
+  static const char error_action[] = " recovered from ";
+  static const char error_suffix[] = " ERROR node(s)";
+  static const char missing_action[] = " inserted ";
+  static const char missing_suffix[] = " MISSING node(s)";
+  const AbString *code = item_text(item, "code");
+  const AbString *message = item_text(item, "message");
+  const char *action;
+  const char *suffix;
+  size_t action_length;
+  size_t suffix_length;
+  size_t action_offset;
+  size_t number_offset;
+  size_t number_length;
+  TreeSitterDiagnosticKind kind;
+  memset(result, 0, sizeof(*result));
+  if (!message || message->length <= sizeof(prefix) - 1 ||
+      memcmp(message->data, prefix, sizeof(prefix) - 1))
+    return 0;
+  if (text_is(code, "tree-sitter-error")) {
+    kind = TREE_SITTER_DIAGNOSTIC_ERROR;
+    action = error_action;
+    action_length = sizeof(error_action) - 1;
+    suffix = error_suffix;
+    suffix_length = sizeof(error_suffix) - 1;
+  } else if (text_is(code, "tree-sitter-missing")) {
+    kind = TREE_SITTER_DIAGNOSTIC_MISSING;
+    action = missing_action;
+    action_length = sizeof(missing_action) - 1;
+    suffix = missing_suffix;
+    suffix_length = sizeof(missing_suffix) - 1;
+  } else {
+    return 0;
+  }
+  for (action_offset = sizeof(prefix) - 1;
+       action_offset + action_length <= message->length; action_offset++)
+    if (!memcmp(message->data + action_offset, action, action_length))
+      break;
+  if (action_offset == sizeof(prefix) - 1 ||
+      action_offset + action_length > message->length ||
+      message->length < action_offset + action_length + suffix_length + 1 ||
+      memcmp(message->data + message->length - suffix_length, suffix,
+             suffix_length))
+    return 0;
+  number_offset = action_offset + action_length;
+  number_length = message->length - suffix_length - number_offset;
+  if (!parse_decimal_u64(message->data + number_offset, number_length,
+                         &result->nodes))
+    return 0;
+  result->language.data = message->data + sizeof(prefix) - 1;
+  result->language.length = action_offset - (sizeof(prefix) - 1);
+  result->kind = kind;
+  return 1;
+}
 
 static int diagnostic_severity_rank(const AbString *severity) {
   if (text_is(severity, "error"))
@@ -1171,6 +1385,65 @@ static int diagnostic_cause_path_compare(const void *left, const void *right) {
   return order ? order : ab_string_compare(&a->key, &b->key);
 }
 
+static int diagnostic_review_cause_compare(const void *left,
+                                           const void *right) {
+  const AbProjectionItem *a = *(const AbProjectionItem *const *)left;
+  const AbProjectionItem *b = *(const AbProjectionItem *const *)right;
+  const AbString *a_severity = item_text(a, "severity");
+  const AbString *b_severity = item_text(b, "severity");
+  TreeSitterDiagnostic a_tree_sitter;
+  TreeSitterDiagnostic b_tree_sitter;
+  int a_structured = parse_tree_sitter_diagnostic(a, &a_tree_sitter);
+  int b_structured = parse_tree_sitter_diagnostic(b, &b_tree_sitter);
+  int a_rank = diagnostic_severity_rank(a_severity);
+  int b_rank = diagnostic_severity_rank(b_severity);
+  int order;
+  if (a_rank != b_rank)
+    return a_rank < b_rank ? -1 : 1;
+  order = nullable_string_compare(a_severity, b_severity);
+  if (order)
+    return order;
+  order = nullable_string_compare(item_text(a, "code"), item_text(b, "code"));
+  if (order)
+    return order;
+  if (a_structured != b_structured)
+    return a_structured ? -1 : 1;
+  if (a_structured) {
+    if (a_tree_sitter.kind != b_tree_sitter.kind)
+      return a_tree_sitter.kind < b_tree_sitter.kind ? -1 : 1;
+    order = ab_string_compare(&a_tree_sitter.language, &b_tree_sitter.language);
+    if (order)
+      return order;
+  }
+  order =
+      nullable_string_compare(item_text(a, "message"), item_text(b, "message"));
+  if (order)
+    return order;
+  order = nullable_string_compare(item_text(a, "path"), item_text(b, "path"));
+  return order ? order : ab_string_compare(&a->key, &b->key);
+}
+
+static int same_diagnostic_review_cause(const AbProjectionItem *left,
+                                        const AbProjectionItem *right) {
+  TreeSitterDiagnostic left_tree_sitter;
+  TreeSitterDiagnostic right_tree_sitter;
+  int left_structured = parse_tree_sitter_diagnostic(left, &left_tree_sitter);
+  int right_structured =
+      parse_tree_sitter_diagnostic(right, &right_tree_sitter);
+  if (nullable_string_compare(item_text(left, "severity"),
+                              item_text(right, "severity")) ||
+      nullable_string_compare(item_text(left, "code"),
+                              item_text(right, "code")) ||
+      left_structured != right_structured)
+    return 0;
+  if (!left_structured)
+    return !nullable_string_compare(item_text(left, "message"),
+                                    item_text(right, "message"));
+  return left_tree_sitter.kind == right_tree_sitter.kind &&
+         ab_string_equal(&left_tree_sitter.language,
+                         &right_tree_sitter.language);
+}
+
 static int diagnostic_group_compare(const void *left, const void *right) {
   const DiagnosticGroup *a = (const DiagnosticGroup *)left;
   const DiagnosticGroup *b = (const DiagnosticGroup *)right;
@@ -1192,6 +1465,12 @@ static int diagnostic_group_compare(const void *left, const void *right) {
                                   item_text(b->item, "code"));
   if (order)
     return order;
+  if (a->tree_sitter.kind && b->tree_sitter.kind) {
+    order =
+        ab_string_compare(&a->tree_sitter.language, &b->tree_sitter.language);
+    if (order)
+      return order;
+  }
   return nullable_string_compare(item_text(a->item, "message"),
                                  item_text(b->item, "message"));
 }
@@ -1325,6 +1604,7 @@ render_diagnostic_groups(AbBuffer *out, const AbProjectionData *data,
   const AbProjectionItem **items = NULL;
   DiagnosticGroup *groups = NULL;
   size_t total = 0;
+  size_t exact_cause_count = 0;
   size_t group_count = 0;
   size_t shown;
   size_t shown_records = 0;
@@ -1339,14 +1619,46 @@ render_diagnostic_groups(AbBuffer *out, const AbProjectionData *data,
     return ARCHBIRD_OUT_OF_MEMORY;
   }
   qsort(items, total, sizeof(*items), diagnostic_cause_path_compare);
+  exact_cause_count = 1;
+  for (index = 1; index < total; index++)
+    if (!same_diagnostic_cause(items[index - 1], items[index]))
+      exact_cause_count++;
+  qsort(items, total, sizeof(*items), diagnostic_review_cause_compare);
   for (index = 0; index < total;) {
     DiagnosticGroup *group = &groups[group_count++];
     size_t end = index + 1;
+    size_t member;
     size_t path_start;
     group->item = items[index];
-    while (end < total && same_diagnostic_cause(items[index], items[end]))
+    (void)parse_tree_sitter_diagnostic(group->item, &group->tree_sitter);
+    while (end < total &&
+           same_diagnostic_review_cause(items[index], items[end]))
       end++;
     group->occurrences = end - index;
+    for (member = index; member < end; member++) {
+      TreeSitterDiagnostic parsed;
+      if (member == index ||
+          !same_diagnostic_cause(items[member - 1], items[member]))
+        group->exact_causes++;
+      if (!group->tree_sitter.kind ||
+          !parse_tree_sitter_diagnostic(items[member], &parsed))
+        continue;
+      if (UINT64_MAX - group->tree_sitter_nodes < parsed.nodes) {
+        status = archbird_error_set(out->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "too many Tree-sitter recovery nodes in "
+                                    "diagnostic report");
+        break;
+      }
+      group->tree_sitter_nodes += parsed.nodes;
+      if (member == index || parsed.nodes < group->tree_sitter_min)
+        group->tree_sitter_min = parsed.nodes;
+      if (member == index || parsed.nodes > group->tree_sitter_max)
+        group->tree_sitter_max = parsed.nodes;
+    }
+    if (status != ARCHBIRD_OK)
+      break;
+    qsort(items + index, end - index, sizeof(*items), diagnostic_path_compare);
     for (path_start = index; path_start < end;) {
       const AbString *path = item_text(items[path_start], "path");
       size_t path_end = path_start + 1;
@@ -1359,12 +1671,27 @@ render_diagnostic_groups(AbBuffer *out, const AbProjectionData *data,
     }
     index = end;
   }
+  if (status != ARCHBIRD_OK) {
+    ab_free(out->engine, groups);
+    ab_free(out->engine, items);
+    return status;
+  }
   qsort(groups, group_count, sizeof(*groups), diagnostic_group_compare);
   shown = group_count < limit ? group_count : limit;
   status = ab_report_literal_line(out, "## Diagnostics");
   if (status == ARCHBIRD_OK)
     status = ab_report_blank(out);
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && group_count < exact_cause_count)
+    status = ab_report_linef(
+        out,
+        "%zu canonical record%s across %zu exact cause%s; summarized into %zu "
+        "review group%s by treating recognized Tree-sitter node counts as "
+        "metrics rather than cause identity; showing %zu. Counts summarize "
+        "canonical JSON without changing it.",
+        total, total == 1 ? "" : "s", exact_cause_count,
+        exact_cause_count == 1 ? "" : "s", group_count,
+        group_count == 1 ? "" : "s", shown);
+  else if (status == ARCHBIRD_OK)
     status = ab_report_linef(
         out,
         "%zu canonical record%s grouped into %zu exact cause%s by severity, "
@@ -1380,13 +1707,33 @@ render_diagnostic_groups(AbBuffer *out, const AbProjectionData *data,
     const DiagnosticGroup *group = &groups[index];
     const AbString *severity = item_text(group->item, "severity");
     const AbString *code = item_text(group->item, "code");
-    const AbString *message = item_text(group->item, "message");
-    status = ab_report_linef(
-        out, "- **%.*s** `%.*s` - occurrences=%zu; paths=%zu; %.*s",
-        severity ? (int)severity->length : 0, severity ? severity->data : "",
-        code ? (int)code->length : 0, code ? code->data : "",
-        group->occurrences, group->distinct_paths,
-        message ? (int)message->length : 0, message ? message->data : "");
+    if (group->tree_sitter.kind)
+      status = ab_report_linef(
+          out,
+          "- **%.*s** `%.*s` - occurrences=%zu; paths=%zu; exact-causes=%zu; "
+          "Tree-sitter %.*s %s; %s nodes=%" PRIu64 " total; per-record=%" PRIu64
+          "..%" PRIu64,
+          severity ? (int)severity->length : 0, severity ? severity->data : "",
+          code ? (int)code->length : 0, code ? code->data : "",
+          group->occurrences, group->distinct_paths, group->exact_causes,
+          (int)group->tree_sitter.language.length,
+          group->tree_sitter.language.data,
+          group->tree_sitter.kind == TREE_SITTER_DIAGNOSTIC_ERROR
+              ? "parser recovery"
+              : "parser insertion",
+          group->tree_sitter.kind == TREE_SITTER_DIAGNOSTIC_ERROR ? "ERROR"
+                                                                  : "MISSING",
+          group->tree_sitter_nodes, group->tree_sitter_min,
+          group->tree_sitter_max);
+    else {
+      const AbString *message = item_text(group->item, "message");
+      status = ab_report_linef(
+          out, "- **%.*s** `%.*s` - occurrences=%zu; paths=%zu; %.*s",
+          severity ? (int)severity->length : 0, severity ? severity->data : "",
+          code ? (int)code->length : 0, code ? code->data : "",
+          group->occurrences, group->distinct_paths,
+          message ? (int)message->length : 0, message ? message->data : "");
+    }
     if (status == ARCHBIRD_OK)
       status = render_diagnostic_representatives(out, group, standard_detail);
     shown_records += group->occurrences;
@@ -1394,7 +1741,7 @@ render_diagnostic_groups(AbBuffer *out, const AbProjectionData *data,
   if (status == ARCHBIRD_OK && shown < group_count) {
     size_t omitted_records = total - shown_records;
     status = ab_report_linef(
-        out, "- ... %zu cause group%s (%zu canonical record%s) omitted",
+        out, "- ... %zu review group%s (%zu canonical record%s) omitted",
         group_count - shown, group_count - shown == 1 ? "" : "s",
         omitted_records, omitted_records == 1 ? "" : "s");
   }
@@ -1450,8 +1797,9 @@ render_section(AbBuffer *out, const AbProjectionData *data,
 
 static ArchbirdStatus render_once(const AbProjectionPlan *plan,
                                   const AbProjectionResult *result,
-                                  size_t limit, int standard_detail,
-                                  int full_detail, AbBuffer *out) {
+                                  const LandmarkRoleIndex *roles, size_t limit,
+                                  int standard_detail, int full_detail,
+                                  AbBuffer *out) {
   const AbValue *group = ab_value_member(&plan->definition, "group_by");
   const AbValue *level = ab_value_member(&plan->definition, "level");
   const char *classification = ab_projection_data_classification(&result->data);
@@ -1501,7 +1849,7 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
       REPORT_TRY(render_evidence_accounting(out, &result->data));
     else
       REPORT_TRY(render_landmarks(
-          out, &result->data,
+          out, &result->data, roles,
           tests_only ? "Test route landmarks" : "File landmarks",
           landmark_limit, standard_detail, tests_only, &omitted, &landmarks));
     REPORT_TRY(render_inventory_groups(out, &result->data));
@@ -1567,9 +1915,11 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
 ArchbirdStatus ab_projection_report_markdown(ArchbirdEngine *engine,
                                              const AbProjectionPlan *plan,
                                              const AbProjectionResult *result,
+                                             const AbValue *map,
                                              ArchbirdReportDetail detail,
                                              size_t max_chars, AbBuffer *out) {
   AbBuffer candidate;
+  LandmarkRoleIndex roles = {0};
   size_t low = 0;
   size_t high =
       detail == ARCHBIRD_REPORT_DETAIL_COMPACT
@@ -1580,7 +1930,7 @@ ArchbirdStatus ab_projection_report_markdown(ArchbirdEngine *engine,
   int standard_detail = detail != ARCHBIRD_REPORT_DETAIL_COMPACT;
   int full_detail = detail == ARCHBIRD_REPORT_DETAIL_FULL;
   ArchbirdStatus status;
-  if (!engine || !plan || !result || !out ||
+  if (!engine || !plan || !result || !map || !out ||
       !ab_projection_value_is(ab_value_member(&plan->definition, "select"),
                               "graph") ||
       !ab_projection_value_is(
@@ -1593,16 +1943,25 @@ ArchbirdStatus ab_projection_report_markdown(ArchbirdEngine *engine,
     return archbird_error_set(
         engine, ARCHBIRD_INVALID_ARGUMENT, ARCHBIRD_NO_OFFSET,
         "projection.max_chars cannot be combined with full detail");
-  if (!max_chars)
-    return render_once(plan, result, high, standard_detail, full_detail, out);
+  status = landmark_role_index_init(engine, map, &roles);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (!max_chars) {
+    status = render_once(plan, result, &roles, high, standard_detail,
+                         full_detail, out);
+    landmark_role_index_free(engine, &roles);
+    return status;
+  }
   high = high == SIZE_MAX ? result->data.item_count : high;
   ab_buffer_init(&candidate, engine);
   while (low <= high) {
     size_t middle = low + (high - low) / 2;
     candidate.length = 0;
-    status = render_once(plan, result, middle, standard_detail, 0, &candidate);
+    status = render_once(plan, result, &roles, middle, standard_detail, 0,
+                         &candidate);
     if (status != ARCHBIRD_OK) {
       ab_buffer_free(&candidate);
+      landmark_role_index_free(engine, &roles);
       return status;
     }
     if (ab_report_codepoints(candidate.data, candidate.length) <= max_chars) {
@@ -1617,7 +1976,8 @@ ArchbirdStatus ab_projection_report_markdown(ArchbirdEngine *engine,
   }
   candidate.length = 0;
   if (found)
-    status = render_once(plan, result, best, standard_detail, 0, &candidate);
+    status =
+        render_once(plan, result, &roles, best, standard_detail, 0, &candidate);
   else
     status = archbird_error_set(
         engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
@@ -1625,6 +1985,7 @@ ArchbirdStatus ab_projection_report_markdown(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_append(out, candidate.data, candidate.length);
   ab_buffer_free(&candidate);
+  landmark_role_index_free(engine, &roles);
   return status;
 }
 
