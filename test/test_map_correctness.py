@@ -97,6 +97,82 @@ def check_package_export_lookup_index(repository: Path) -> None:
         raise AssertionError("package export lookup scans the complete fact inventory")
 
 
+def check_setup_cfg_package_map(extension: object) -> None:
+    setup_cfg = (
+        b"[metadata]\nname = fixture-dist\nversion = 2.1.0\n\n"
+        b"[options]\npackages = find:\n\n"
+        b"[options.packages.find]\nwhere = src\ninclude = fixture_pkg, fixture_pkg.*\n"
+    )
+    source = b"VALUE = 1\n"
+    files = [
+        {
+            "bytes": len(setup_cfg),
+            "path": "setup.cfg",
+            "roles": ["manifest"],
+            "sha256": hashlib.sha256(setup_cfg).hexdigest(),
+        },
+        {
+            "bytes": len(source),
+            "language": "python",
+            "layer": "python",
+            "path": "src/fixture_pkg/__init__.py",
+            "roles": ["source"],
+            "sha256": hashlib.sha256(source).hexdigest(),
+        },
+    ]
+    manifest = {
+        "artifact": "archbird-source-manifest",
+        "files": files,
+        "producer": {
+            "implementation_sha256": "6" * 64,
+            "name": "setup-cfg-map-test-host",
+            "version": "1",
+        },
+        "project": "setup-cfg-map",
+        "schema_version": 1,
+    }
+    config = {
+        "layers": [
+            {
+                "globs": ["**/*.py"],
+                "language": "python",
+                "name": "python",
+            }
+        ],
+        "packages": [
+            {
+                "kind": "python",
+                "layer": "python",
+                "name": "python-root",
+                "path": "setup.cfg",
+            }
+        ],
+        "project": "setup-cfg-map",
+    }
+    project = extension.project_create(canonical(manifest))
+    try:
+        extension.project_add_source(project, "setup.cfg", setup_cfg)
+        extension.project_add_source(
+            project, "src/fixture_pkg/__init__.py", source
+        )
+        extension.project_finalize_sources(project)
+        extension.project_set_config(project, canonical(config))
+        extension.project_finalize_providers(project)
+        mapped = json.loads(extension.project_map(project))
+    finally:
+        extension.project_close(project)
+    if len(mapped["packages"]) != 1:
+        raise AssertionError(mapped["packages"])
+    package = mapped["packages"][0]
+    if (
+        package["identity"] != "fixture-dist"
+        or package["version"] != "2.1.0"
+        or package["manifest"] != "setup.cfg"
+        or "fixture_pkg" not in package["aliases"]
+    ):
+        raise AssertionError(package)
+
+
 def check_c_test_function_candidates(extension) -> None:
     source = b"""\
 static void *test_allocate(void *opaque, unsigned long size) {
@@ -1252,6 +1328,7 @@ def main() -> int:
     repository = Path(sys.argv[2]).resolve()
     fixture = Path(sys.argv[3]).resolve()
     check_package_export_lookup_index(repository)
+    check_setup_cfg_package_map(extension)
     provider = load_module(
         "archbird_map_correctness_python_ast",
         repository / "py/archbird/providers/python_ast.py",

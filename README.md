@@ -1228,6 +1228,19 @@ candidates. `config show` exposes the request ledger, limits, provenance, and
 overlap/truncation/conflict diagnostics. Authored `project`, `layers`, and
 `packages` fields still take precedence over every inferred candidate.
 
+At the repository root, the same bounded request protocol reads at most one
+`setup.cfg` and one `CMakeLists.txt`. Literal setuptools metadata can contribute
+a source-backed Python package/import root; one literal lexical-root CMake
+`project()` call can contribute project identity. Archbird does not evaluate
+setuptools directives, interpolation, CMake variables, includes, macros, or
+conditional/function bodies. It distinguishes modules, regular packages, and
+namespace-package discovery, rejects unsupported include/exclude ambiguity,
+and rejects a CMake identity if `project` is redefined or unreachable after a
+root `return()`. Dynamic or conflicting layout evidence remains absent or
+diagnostic, and npm/PEP 621/setup.cfg/R/Autoconf identity keeps priority over
+the CMake fallback; CLI and authored project identity remain authoritative over
+all of them.
+
 <!-- archbird-minimal-project-config:start -->
 ```json
 {

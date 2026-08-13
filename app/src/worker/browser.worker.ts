@@ -55,6 +55,7 @@ interface BrowserDiscovery {
   resolution: {
     effective_config: Record<string, unknown>;
     files: Array<{ path: string }>;
+    manifest_requests?: Array<{ fulfilled: boolean; path: string }>;
   };
   resolutionJson: Uint8Array;
 }
@@ -271,14 +272,30 @@ async function loadRepository(request: HostRequest): Promise<Record<string, unkn
       : [];
     const controlByPath = new Map(controls.map((file) => [file.path, file.data]));
     const config = rootConfig(controls);
-    resolved = runtime.Project.resolveInventory(
-      inventory.map((row) => ({
-        bytes: row.bytes,
-        ...(controlByPath.has(row.path) ? { data: controlByPath.get(row.path) } : {}),
-        path: row.path,
-      })),
-      { config },
-    );
+    for (let round = 0; round < 3; round += 1) {
+      resolved = runtime.Project.resolveInventory(
+        inventory.map((row) => ({
+          bytes: row.bytes,
+          ...(controlByPath.has(row.path) ? { data: controlByPath.get(row.path) } : {}),
+          path: row.path,
+        })),
+        { config },
+      );
+      const requested = new Set(
+        (resolved.resolution.manifest_requests || [])
+          .filter((row) => !row.fulfilled && !controlByPath.has(row.path))
+          .map((row) => row.path),
+      );
+      if (!requested.size) break;
+      const manifests = await readSelectedDirectoryFiles(inventory, requested);
+      if (manifests.length !== requested.size) {
+        throw new Error("native manifest request is unavailable from directory input");
+      }
+      for (const manifest of manifests) controlByPath.set(manifest.path, manifest.data);
+    }
+    if (!resolved || (resolved.resolution.manifest_requests || []).some((row) => !row.fulfilled)) {
+      throw new Error("native manifest request remained unfulfilled");
+    }
     const selected = new Set(resolved.resolution.files.map((row) => row.path));
     files = await readSelectedDirectoryFiles(inventory, selected, (progress) => {
       emit("progress", progress as unknown as Record<string, unknown>);

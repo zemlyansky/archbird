@@ -6,6 +6,20 @@ const { mapProjectionRequest } = require("./map-view");
 const { typescriptProviderBundles } = require("./providers/typescript");
 const { createArchbirdCore } = require("./wasm");
 
+const DISCOVERY_MANIFEST_MAX_BYTES = 256 * 1024;
+const DISCOVERY_MANIFEST_LIMITS = Object.freeze({
+  cmake: 1,
+  npm: 128,
+  python: 32,
+  "setup-cfg": 1,
+});
+const DISCOVERY_MANIFEST_SOURCES = Object.freeze({
+  cmake: new Set(["cmake-root-project"]),
+  npm: new Set(["npm-workspace"]),
+  python: new Set(["python-top-level", "python-workspace"]),
+  "setup-cfg": new Set(["python-root-setup-cfg"]),
+});
+
 function utf8Compare(left, right) {
   return Buffer.compare(Buffer.from(left), Buffer.from(right));
 }
@@ -330,7 +344,14 @@ async function createBrowserArchbird(moduleOptions = {}) {
         ? []
         : normalized
           .filter((pathname) => standardIgnore(pathname) && !customSet.has(pathname));
-      const documents = ["package.json", "pyproject.toml", "DESCRIPTION", "configure.ac"]
+      const documents = [
+        "package.json",
+        "pyproject.toml",
+        "DESCRIPTION",
+        "configure.ac",
+        "setup.cfg",
+        "CMakeLists.txt",
+      ]
         .filter((pathname) => normalized.includes(pathname));
       return [...new Set([...standard, ...custom, ...documents])].sort(utf8Compare);
     }
@@ -361,9 +382,14 @@ async function createBrowserArchbird(moduleOptions = {}) {
       }
       const ignorePaths = contentPaths.filter((pathname) =>
         standardIgnore(pathname) || customIgnorePaths.has(pathname));
+      const directDocuments = new Set([
+        "package.json",
+        "pyproject.toml",
+        "DESCRIPTION",
+        "configure.ac",
+      ]);
       const documents = contentPaths
-        .filter((pathname) =>
-          ["package.json", "pyproject.toml", "DESCRIPTION", "configure.ac"].includes(pathname))
+        .filter((pathname) => directDocuments.has(pathname))
         .map((pathname) => ({
           content_hex: byPath.get(pathname).data.toString("hex"),
           path: pathname,
@@ -385,12 +411,68 @@ async function createBrowserArchbird(moduleOptions = {}) {
         ...options,
         ignoreFiles: [...customIgnorePaths],
       });
-      const resolutionJson = core.discoveryResolve(
+      let resolutionJson = core.discoveryResolve(
         config,
         request,
         Buffer.from(JSON.stringify(inventory)),
       );
-      const resolution = JSON.parse(resolutionJson.toString("utf8"));
+      let resolution = JSON.parse(resolutionJson.toString("utf8"));
+      const requestedPaths = new Set();
+      const suppliedRequestPaths = [];
+      const requestCounts = Object.fromEntries(
+        Object.keys(DISCOVERY_MANIFEST_LIMITS).map((kind) => [kind, 0]),
+      );
+      for (const requestRow of resolution.manifest_requests || []) {
+        const { kind, path, source } = requestRow;
+        if (typeof path !== "string" || requestRow.fulfilled !== false ||
+            requestRow.max_bytes !== DISCOVERY_MANIFEST_MAX_BYTES ||
+            requestedPaths.has(path) || !Object.hasOwn(DISCOVERY_MANIFEST_LIMITS, kind) ||
+            !DISCOVERY_MANIFEST_SOURCES[kind].has(source)) {
+          throw new Error("native manifest request is invalid");
+        }
+        requestCounts[kind] += 1;
+        if (requestCounts[kind] > DISCOVERY_MANIFEST_LIMITS[kind]) {
+          throw new Error("native manifest request limit was exceeded");
+        }
+        requestedPaths.add(path);
+        const row = byPath.get(path);
+        if (!row) throw new Error("native manifest request is invalid");
+        if (!row?.data) {
+          if (["cmake-root-project", "python-root-setup-cfg"].includes(
+            source,
+          )) {
+            throw new Error(`discovery content is unavailable: ${path}`);
+          }
+          continue;
+        }
+        if (row.data.length !== row.bytes || row.data.length > requestRow.max_bytes) {
+          throw new Error(`discovery content is invalid: ${path}`);
+        }
+        documents.push({
+          content_hex: row.data.toString("hex"),
+          path,
+        });
+        suppliedRequestPaths.push(path);
+      }
+      if (documents.length !== inventory.documents.length) {
+        inventory.documents = documents;
+        resolutionJson = core.discoveryResolve(
+          config,
+          request,
+          Buffer.from(JSON.stringify(inventory)),
+        );
+        resolution = JSON.parse(resolutionJson.toString("utf8"));
+        const fulfilled = new Set(
+          (resolution.manifest_requests || [])
+            .filter((row) => row.fulfilled === true)
+            .map((row) => row.path),
+        );
+        for (const path of suppliedRequestPaths) {
+          if (!fulfilled.has(path)) {
+            throw new Error(`native manifest request was not fulfilled: ${path}`);
+          }
+        }
+      }
       return {
         projectConfigurationJson: projectConfigurationForResolution(
           config,

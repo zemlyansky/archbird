@@ -11,8 +11,10 @@
 #include "evidence/config_manifest_discovery.h"
 #include "evidence/gitignore.h"
 #include "evidence/manifests/autoconf_manifest.h"
+#include "evidence/manifests/cmake_project_manifest.h"
 #include "evidence/manifests/npm_workspace_manifest.h"
 #include "evidence/manifests/pyproject_manifest.h"
+#include "evidence/manifests/setup_cfg_manifest.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,6 +84,7 @@ typedef struct ResolutionState {
   const AbValue *pruned_directories;
   int has_package_json;
   int has_pyproject;
+  int has_setup_cfg;
   int has_description;
   int has_autoconf;
   int has_compile_commands;
@@ -89,7 +92,8 @@ typedef struct ResolutionState {
   int has_cpp_translation_unit;
   int has_scip_index;
   /* 1 = package.json, 2 = pyproject.toml, 3 = DESCRIPTION, 4 = configure.ac,
-   * 5 = agreeing nested workspace manifests. */
+   * 5 = agreeing nested workspace manifests, 6 = setup.cfg,
+   * 7 = CMakeLists.txt. */
   int package_identity;
 } ResolutionState;
 
@@ -798,8 +802,10 @@ static ArchbirdStatus add_default_npm(ResolutionState *state,
   return status;
 }
 
-static ArchbirdStatus add_default_python(ResolutionState *state,
-                                         const AbPyprojectMetadata *metadata) {
+static ArchbirdStatus
+add_default_python(ResolutionState *state,
+                   const AbPythonPackageMetadata *metadata,
+                   const char *manifest, size_t manifest_length) {
   AbValue packages = {0};
   AbValue package = {0};
   AbValue aliases = {0};
@@ -824,8 +830,8 @@ static ArchbirdStatus add_default_python(ResolutionState *state,
     status =
         object_set_string(state->engine, &package, "name", "python-root", 11);
   if (status == ARCHBIRD_OK && metadata->name.length)
-    status = object_set_string(state->engine, &package, "path",
-                               "pyproject.toml", 14);
+    status = object_set_string(state->engine, &package, "path", manifest,
+                               manifest_length);
   if (status == ARCHBIRD_OK && metadata->name.length)
     status = object_set_string(state->engine, &package, "identity",
                                metadata->name.data, metadata->name.length);
@@ -1045,13 +1051,13 @@ static ArchbirdStatus add_default_autoconf(ResolutionState *state,
   return status;
 }
 
-static ArchbirdStatus decode_inventory(ResolutionState *state,
-                                       const uint8_t *json, size_t json_length,
-                                       AbNpmDiscoveryMetadata *npm,
-                                       AbPyprojectMetadata *pyproject,
-                                       AbString *r_package, AbString *r_version,
-                                       AbAutoconfMetadata *autoconf,
-                                       int *has_make) {
+static ArchbirdStatus
+decode_inventory(ResolutionState *state, const uint8_t *json,
+                 size_t json_length, AbNpmDiscoveryMetadata *npm,
+                 AbPyprojectMetadata *pyproject,
+                 AbPythonPackageMetadata *setup_cfg, AbString *r_package,
+                 AbString *r_version, AbAutoconfMetadata *autoconf,
+                 AbCmakeProjectMetadata *cmake, int *has_make) {
   static const char *const fields[] = {
       "artifact",     "documents",          "files",
       "ignore_files", "pruned_directories", "schema_version"};
@@ -1281,9 +1287,19 @@ static ArchbirdStatus decode_inventory(ResolutionState *state,
       status = inventory_error(
           state->engine,
           "manifest document bytes disagree with bounded inventory row");
-    if (status == ARCHBIRD_OK)
+    if (status == ARCHBIRD_OK &&
+        candidate->kind == AB_MANIFEST_CANDIDATE_SETUP_CFG) {
+      state->has_setup_cfg = 1;
+      candidate->supplied = 1;
+      status = ab_setup_cfg_metadata(state->engine, bytes, length, setup_cfg);
+    } else if (status == ARCHBIRD_OK &&
+               candidate->kind == AB_MANIFEST_CANDIDATE_CMAKE_PROJECT) {
+      candidate->supplied = 1;
+      status = ab_cmake_project_metadata(state->engine, bytes, length, cmake);
+    } else if (status == ARCHBIRD_OK) {
       status = ab_manifest_discovery_supply(&state->manifests, candidate, bytes,
                                             length, manifest_diagnostic, state);
+    }
     ab_free(state->engine, bytes);
   }
   if (status == ARCHBIRD_OK)
@@ -1585,7 +1601,7 @@ static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
   return ARCHBIRD_OK;
 }
 
-static int normalized_python_module(const AbPyprojectMetadata *metadata,
+static int normalized_python_module(const AbPythonPackageMetadata *metadata,
                                     char *buffer, size_t capacity,
                                     size_t *out_length) {
   if ((metadata->module_hints_present && !metadata->module_hints_supported) ||
@@ -1667,12 +1683,16 @@ static int inventory_python_source_below(ResolutionState *state,
 
 static int inventory_python_module_exists(ResolutionState *state,
                                           const char *prefix,
-                                          size_t prefix_length) {
+                                          size_t prefix_length,
+                                          AbPythonSourceShape source_shape) {
   static const char *const suffixes[] = {
       ".py", ".pyi", ".pyw", "/__init__.py", "/__init__.pyi", "/__init__.pyw"};
   size_t suffix_index;
-  for (suffix_index = 0; suffix_index < sizeof(suffixes) / sizeof(suffixes[0]);
-       suffix_index++) {
+  size_t suffix_start = source_shape == AB_PYTHON_SOURCE_PACKAGE ? 3 : 0;
+  size_t suffix_end = source_shape == AB_PYTHON_SOURCE_MODULE
+                          ? 3
+                          : sizeof(suffixes) / sizeof(suffixes[0]);
+  for (suffix_index = suffix_start; suffix_index < suffix_end; suffix_index++) {
     AbBuffer candidate;
     AbString path;
     int found;
@@ -1690,7 +1710,9 @@ static int inventory_python_module_exists(ResolutionState *state,
     if (found)
       return 1;
   }
-  return inventory_python_source_below(state, prefix, prefix_length);
+  return source_shape == AB_PYTHON_SOURCE_ANY
+             ? inventory_python_source_below(state, prefix, prefix_length)
+             : 0;
 }
 
 typedef enum PythonImportRootOutcome {
@@ -1702,7 +1724,8 @@ typedef enum PythonImportRootOutcome {
 
 static ArchbirdStatus
 python_import_root_candidate(ResolutionState *state, const AbString *manifest,
-                             const AbPyprojectMetadata *metadata, AbString *out,
+                             const AbPythonPackageMetadata *metadata,
+                             AbString *out,
                              PythonImportRootOutcome *out_outcome) {
   static const char *const conventional_roots[] = {"src", ""};
   char module[256];
@@ -1757,8 +1780,9 @@ python_import_root_candidate(ResolutionState *state, const AbString *manifest,
     else if (ab_buffer_append(&prefix, module, module_length) != ARCHBIRD_OK)
       exists = -1;
     else
-      exists = inventory_python_module_exists(state, (const char *)prefix.data,
-                                              prefix.length);
+      exists =
+          inventory_python_module_exists(state, (const char *)prefix.data,
+                                         prefix.length, metadata->source_shape);
     if (exists < 0) {
       ab_buffer_free(&prefix);
       ab_buffer_free(&root);
@@ -1988,7 +2012,7 @@ static ArchbirdStatus record_python_import_root(ResolutionState *state,
 
 static ArchbirdStatus
 add_discovered_packages(ResolutionState *state,
-                        const AbPyprojectMetadata *root_python) {
+                        const AbPythonPackageMetadata *root_python) {
   size_t index;
   AbString root_manifest = {(char *)"pyproject.toml", 14};
   AbString root_import = {0};
@@ -2024,10 +2048,10 @@ add_discovered_packages(ResolutionState *state,
     AbDiscoveredPythonPackage *package =
         &state->manifests.python_packages[index];
     PythonImportRootOutcome import_outcome;
-    const AbString *alias = package->metadata.module.length
-                                ? &package->metadata.module
-                                : &package->metadata.name;
-    if (!package->metadata.name.length) {
+    const AbString *alias = package->metadata.package.module.length
+                                ? &package->metadata.package.module
+                                : &package->metadata.package.name;
+    if (!package->metadata.package.name.length) {
       if (!strcmp(package->candidate->source, "python-workspace"))
         status =
             append_plain_diagnostic(state, "discovery-package-identity-missing",
@@ -2035,7 +2059,7 @@ add_discovered_packages(ResolutionState *state,
       continue;
     }
     status = python_import_root_candidate(
-        state, package->candidate->path, &package->metadata,
+        state, package->candidate->path, &package->metadata.package,
         &package->import_root, &import_outcome);
     if (status == ARCHBIRD_OK &&
         import_outcome != PYTHON_IMPORT_ROOT_RESOLVED) {
@@ -2051,8 +2075,29 @@ add_discovered_packages(ResolutionState *state,
     if (status == ARCHBIRD_OK)
       status = append_discovered_package(
           state, "python", "auto-python", package->candidate->path,
-          &package->metadata.name, &package->metadata.version, alias);
+          &package->metadata.package.name, &package->metadata.package.version,
+          alias);
   }
+  return status;
+}
+
+static ArchbirdStatus
+add_setup_cfg_package(ResolutionState *state,
+                      const AbPythonPackageMetadata *setup_cfg) {
+  AbString manifest = {(char *)"setup.cfg", 9};
+  AbString import_root = {0};
+  PythonImportRootOutcome outcome;
+  ArchbirdStatus status = python_import_root_candidate(
+      state, &manifest, setup_cfg, &import_root, &outcome);
+  if (status == ARCHBIRD_OK && outcome == PYTHON_IMPORT_ROOT_RESOLVED)
+    status = record_python_import_root(state, &import_root, &manifest);
+  if (status == ARCHBIRD_OK && outcome == PYTHON_IMPORT_ROOT_RESOLVED)
+    status = add_default_python(state, setup_cfg, "setup.cfg", 9);
+  if (status == ARCHBIRD_OK && setup_cfg->name.length &&
+      outcome == PYTHON_IMPORT_ROOT_UNRESOLVED)
+    status = append_plain_diagnostic(
+        state, "discovery-python-import-root-unresolved", "warning", &manifest);
+  ab_string_free(state->engine, &import_root);
   return status;
 }
 
@@ -2123,12 +2168,12 @@ static int discovered_project_identity(const ResolutionState *state,
   return 1;
 }
 
-static ArchbirdStatus
-prepare_effective(ResolutionState *state, const uint8_t *config_json,
-                  size_t config_length, const AbNpmDiscoveryMetadata *npm,
-                  const AbPyprojectMetadata *pyproject,
-                  const AbString *r_package, const AbString *r_version,
-                  const AbAutoconfMetadata *autoconf, int has_make) {
+static ArchbirdStatus prepare_effective(
+    ResolutionState *state, const uint8_t *config_json, size_t config_length,
+    const AbNpmDiscoveryMetadata *npm, const AbPyprojectMetadata *pyproject,
+    const AbPythonPackageMetadata *setup_cfg, const AbString *r_package,
+    const AbString *r_version, const AbAutoconfMetadata *autoconf,
+    const AbCmakeProjectMetadata *cmake, int has_make) {
   ArchbirdStatus status;
   size_t default_length = 0;
   const uint8_t *default_json =
@@ -2153,12 +2198,16 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
     status = prefer_cpp_headers(state);
   if (npm->name.length)
     root_identity = &npm->name;
-  else if (pyproject->name.length)
-    root_identity = &pyproject->name;
+  else if (pyproject->package.name.length)
+    root_identity = &pyproject->package.name;
+  else if (setup_cfg->name.length)
+    root_identity = &setup_cfg->name;
   else if (r_package->length)
     root_identity = r_package;
   else if (autoconf->package.length)
     root_identity = &autoconf->package;
+  else if (cmake->name.length)
+    root_identity = &cmake->name;
   if (status == ARCHBIRD_OK && !configured_map_field(state, "project") &&
       !state->request.project && root_identity) {
     const char *project_data;
@@ -2168,19 +2217,25 @@ prepare_effective(ResolutionState *state, const uint8_t *config_json,
       status = object_set_string(state->engine, &state->effective, "project",
                                  project_data, project_length);
       if (status == ARCHBIRD_OK)
-        state->package_identity = npm->name.length           ? 1
-                                  : pyproject->name.length   ? 2
-                                  : r_package->length        ? 3
-                                  : autoconf->package.length ? 4
-                                                             : 5;
+        state->package_identity = npm->name.length                 ? 1
+                                  : pyproject->package.name.length ? 2
+                                  : setup_cfg->name.length         ? 6
+                                  : r_package->length              ? 3
+                                  : autoconf->package.length       ? 4
+                                  : cmake->name.length             ? 7
+                                                                   : 5;
     }
   }
   if (status == ARCHBIRD_OK && state->has_package_json)
     status = add_default_npm(state, &npm->name, &npm->version);
   if (status == ARCHBIRD_OK && state->has_pyproject)
-    status = add_default_python(state, pyproject);
+    status =
+        add_default_python(state, &pyproject->package, "pyproject.toml", 14);
   if (status == ARCHBIRD_OK)
-    status = add_discovered_packages(state, pyproject);
+    status = add_discovered_packages(state, &pyproject->package);
+  if (status == ARCHBIRD_OK && state->has_setup_cfg &&
+      !pyproject->package.name.length && setup_cfg->name.length)
+    status = add_setup_cfg_package(state, setup_cfg);
   if (status == ARCHBIRD_OK && !configured_map_field(state, "project") &&
       !state->request.project && !state->package_identity &&
       discovered_project_identity(state, &discovered_identity)) {
@@ -2707,12 +2762,15 @@ static ArchbirdStatus render_manifest_requests(AbBuffer *buffer,
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "{\"evidence\":[");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_json_string(
-          buffer,
-          candidate->kind == AB_MANIFEST_CANDIDATE_NPM ? "package.json"
-                                                       : "pyproject.toml",
-          candidate->kind == AB_MANIFEST_CANDIDATE_NPM ? 12 : 14);
+    if (status == ARCHBIRD_OK) {
+      const char *evidence =
+          candidate->kind == AB_MANIFEST_CANDIDATE_NPM      ? "package.json"
+          : candidate->kind == AB_MANIFEST_CANDIDATE_PYTHON ? "pyproject.toml"
+          : candidate->kind == AB_MANIFEST_CANDIDATE_SETUP_CFG
+              ? "setup.cfg"
+              : "CMakeLists.txt";
+      status = ab_buffer_json_string(buffer, evidence, strlen(evidence));
+    }
     if (status == ARCHBIRD_OK && candidate->pattern) {
       status = ab_buffer_literal(buffer, ",");
       if (status == ARCHBIRD_OK)
@@ -2732,11 +2790,14 @@ static ArchbirdStatus render_manifest_requests(AbBuffer *buffer,
           ab_buffer_literal(buffer, candidate->supplied ? "true" : "false");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"kind\":");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_json_string(
-          buffer,
-          candidate->kind == AB_MANIFEST_CANDIDATE_NPM ? "npm" : "python",
-          candidate->kind == AB_MANIFEST_CANDIDATE_NPM ? 3 : 6);
+    if (status == ARCHBIRD_OK) {
+      const char *kind =
+          candidate->kind == AB_MANIFEST_CANDIDATE_NPM         ? "npm"
+          : candidate->kind == AB_MANIFEST_CANDIDATE_PYTHON    ? "python"
+          : candidate->kind == AB_MANIFEST_CANDIDATE_SETUP_CFG ? "setup-cfg"
+                                                               : "cmake";
+      status = ab_buffer_json_string(buffer, kind, strlen(kind));
+    }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"max_bytes\":");
     if (status == ARCHBIRD_OK)
@@ -2762,12 +2823,15 @@ static ArchbirdStatus render_manifest_requests(AbBuffer *buffer,
 static ArchbirdStatus
 render_manifest_request_summary(AbBuffer *buffer,
                                 const ResolutionState *state) {
-  static const char *const names[] = {"npm", "python"};
-  static const size_t limits[] = {AB_MANIFEST_DISCOVERY_NPM_LIMIT,
-                                  AB_MANIFEST_DISCOVERY_PYTHON_LIMIT};
+  static const char *const names[] = {"npm", "python", "setup-cfg", "cmake"};
+  static const size_t limits[] = {
+      AB_MANIFEST_DISCOVERY_NPM_LIMIT, AB_MANIFEST_DISCOVERY_PYTHON_LIMIT,
+      AB_MANIFEST_DISCOVERY_ROOT_LIMIT, AB_MANIFEST_DISCOVERY_ROOT_LIMIT};
   size_t kind;
   ArchbirdStatus status = ab_buffer_literal(buffer, "{");
-  for (kind = 0; status == ARCHBIRD_OK && kind < 2; kind++) {
+  for (kind = 0;
+       status == ARCHBIRD_OK && kind < AB_MANIFEST_CANDIDATE_KIND_COUNT;
+       kind++) {
     if (kind)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
@@ -3022,6 +3086,8 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
         : state->package_identity == 3           ? "DESCRIPTION"
         : state->package_identity == 4           ? "configure.ac"
         : state->package_identity == 5           ? "workspace-manifests"
+        : state->package_identity == 6           ? "setup.cfg"
+        : state->package_identity == 7           ? "CMakeLists.txt"
                                                  : "stable-literal:repository";
     status = render_origin(buffer, &first, "/project", source, evidence,
                            evidence ? strlen(evidence) : 0);
@@ -3240,7 +3306,9 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   AbString r_package = {0};
   AbString r_version = {0};
   AbPyprojectMetadata pyproject = {0};
+  AbPythonPackageMetadata setup_cfg = {0};
   AbAutoconfMetadata autoconf = {0};
+  AbCmakeProjectMetadata cmake = {0};
   AbBuffer effective_json;
   AbMapConfig validated = {0};
   int has_make = 0;
@@ -3257,12 +3325,12 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   status = decode_request(&state, request_json, request_length);
   if (status == ARCHBIRD_OK)
     status = decode_inventory(&state, inventory_json, inventory_length, &npm,
-                              &pyproject, &r_package, &r_version, &autoconf,
-                              &has_make);
+                              &pyproject, &setup_cfg, &r_package, &r_version,
+                              &autoconf, &cmake, &has_make);
   if (status == ARCHBIRD_OK)
-    status =
-        prepare_effective(&state, config_json, config_length, &npm, &pyproject,
-                          &r_package, &r_version, &autoconf, has_make);
+    status = prepare_effective(&state, config_json, config_length, &npm,
+                               &pyproject, &setup_cfg, &r_package, &r_version,
+                               &autoconf, &cmake, has_make);
   if (status == ARCHBIRD_OK)
     status = render_value(engine, &state.effective, &effective_json);
   if (status == ARCHBIRD_OK)
@@ -3284,7 +3352,9 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   ab_string_free(engine, &r_package);
   ab_string_free(engine, &r_version);
   ab_pyproject_metadata_free(engine, &pyproject);
+  ab_python_package_metadata_free(engine, &setup_cfg);
   ab_autoconf_metadata_free(engine, &autoconf);
+  ab_cmake_project_metadata_free(engine, &cmake);
   resolution_free(&state);
   return status;
 }

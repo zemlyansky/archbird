@@ -38,10 +38,17 @@ PATTERN_UNICODE = _native.PATTERN_UNICODE
 PATTERN_OPTIONS = _native.PATTERN_OPTIONS
 DEFAULT_PYTHON_PROVIDER_TIMEOUT_SECONDS = 300.0
 _DISCOVERY_MANIFEST_MAX_BYTES = 256 * 1024
-_DISCOVERY_MANIFEST_LIMITS = {"npm": 128, "python": 32}
+_DISCOVERY_MANIFEST_LIMITS = {
+    "cmake": 1,
+    "npm": 128,
+    "python": 32,
+    "setup-cfg": 1,
+}
 _DISCOVERY_MANIFEST_SOURCES = {
+    "cmake": {"cmake-root-project"},
     "npm": {"npm-workspace"},
     "python": {"python-top-level", "python-workspace"},
+    "setup-cfg": {"python-root-setup-cfg"},
 }
 
 
@@ -2978,7 +2985,9 @@ def _repository_inventory(
     if "configure.ac" in paths:
         documents.append(_encoded_input(root, "configure.ac", overlay))
     document_paths = {str(row["path"]) for row in documents}
-    manifest_counts = {"npm": 0, "python": 0}
+    manifest_counts = {
+        kind: 0 for kind in _DISCOVERY_MANIFEST_LIMITS
+    }
     for request in manifest_requests:
         if not isinstance(request, Mapping):
             raise ConfigError("native manifest request is invalid")
@@ -3035,6 +3044,8 @@ def _root_rows(
         "configure.ac",
         "package.json",
         "pyproject.toml",
+        "setup.cfg",
+        "CMakeLists.txt",
     )
     excluded = set(transient_exclude)
     return [
@@ -3103,6 +3114,8 @@ def resolve_discovery(
         "configure.ac",
         "package.json",
         "pyproject.toml",
+        "setup.cfg",
+        "CMakeLists.txt",
     }
     bootstrap_overlay = {
         path: data for path, data in overlay.items() if path in bootstrap_paths

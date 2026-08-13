@@ -42,10 +42,17 @@ const NATIVE_SYNTAX_PROVIDERS = Object.freeze([
 const NATIVE_SEMANTIC_PROVIDERS = Object.freeze(["semantic:scip"]);
 const HOST_PROVIDERS = Object.freeze(["compiler:typescript"]);
 const DISCOVERY_MANIFEST_MAX_BYTES = 256 * 1024;
-const DISCOVERY_MANIFEST_LIMITS = Object.freeze({ npm: 128, python: 32 });
+const DISCOVERY_MANIFEST_LIMITS = Object.freeze({
+  cmake: 1,
+  npm: 128,
+  python: 32,
+  "setup-cfg": 1,
+});
 const DISCOVERY_MANIFEST_SOURCES = Object.freeze({
+  cmake: new Set(["cmake-root-project"]),
   npm: new Set(["npm-workspace"]),
   python: new Set(["python-top-level", "python-workspace"]),
+  "setup-cfg": new Set(["python-root-setup-cfg"]),
 });
 
 const NATIVE_CACHE_PROVIDERS = [
@@ -1359,7 +1366,9 @@ function repositoryInventory(
     .filter((relative) => paths.has(relative))
     .map((relative) => encodedInput(root, relative, overlay));
   const documentPaths = new Set(documents.map((row) => row.path));
-  const manifestCounts = { npm: 0, python: 0 };
+  const manifestCounts = Object.fromEntries(
+    Object.keys(DISCOVERY_MANIFEST_LIMITS).map((kind) => [kind, 0]),
+  );
   for (const request of manifestRequests) {
     const relative = request?.path;
     const maxBytes = request?.max_bytes;
@@ -1404,6 +1413,8 @@ function rootRows(root) {
     "configure.ac",
     "package.json",
     "pyproject.toml",
+    "setup.cfg",
+    "CMakeLists.txt",
   ]
     .map((relative) => fileRow(root, relative))
     .filter(Boolean);
@@ -1466,6 +1477,8 @@ function resolveDiscovery(
     "configure.ac",
     "package.json",
     "pyproject.toml",
+    "setup.cfg",
+    "CMakeLists.txt",
   ]);
   const bootstrapOverlay = Object.create(null);
   for (const [relative, data] of Object.entries(overlay)) {

@@ -193,6 +193,260 @@ def check_native_manifest_protocol(native_module: object) -> None:
             f"unsafe workspace pattern policy is wrong: {unsafe_resolution!r}"
         )
 
+    setup_cfg = (
+        b"[metadata]\nname = fixture-dist\nversion = attr: fixture.version\n\n"
+        b"[options]\npackages = find:\n\n"
+        b"[options.packages.find]\nwhere = src\ninclude = fixture_pkg, fixture_pkg.*\n"
+    )
+    cmake = b"if(FALSE)\nproject(decoy)\nendif()\nproject(native-demo VERSION ${VERSION})\n"
+    root_metadata_files = [
+        {"bytes": len(cmake), "path": "CMakeLists.txt"},
+        {"bytes": len(setup_cfg), "path": "setup.cfg"},
+        {"bytes": 10, "path": "src/fixture_pkg/__init__.py"},
+    ]
+    requested = json.loads(
+        native_module.discovery_resolve(
+            b"", MAP_REQUEST, raw_inventory(root_metadata_files, [])
+        )
+    )
+    if requested["manifest_requests"] != [
+        {
+            "evidence": ["CMakeLists.txt"],
+            "fulfilled": False,
+            "kind": "cmake",
+            "max_bytes": 262144,
+            "path": "CMakeLists.txt",
+            "source": "cmake-root-project",
+        },
+        {
+            "evidence": ["setup.cfg"],
+            "fulfilled": False,
+            "kind": "setup-cfg",
+            "max_bytes": 262144,
+            "path": "setup.cfg",
+            "source": "python-root-setup-cfg",
+        },
+    ]:
+        raise AssertionError(
+            f"root metadata request policy is wrong: {requested!r}"
+        )
+    fulfilled = json.loads(
+        native_module.discovery_resolve(
+            b"",
+            MAP_REQUEST,
+            raw_inventory(
+                root_metadata_files,
+                [("CMakeLists.txt", cmake), ("setup.cfg", setup_cfg)],
+            ),
+        )
+    )
+    python_layer = next(
+        layer
+        for layer in fulfilled["effective_config"]["layers"]
+        if layer["name"] == "auto-python"
+    )
+    if (
+        fulfilled["project"] != "fixture-dist"
+        or python_layer.get("import_roots") != ["src"]
+        or fulfilled["effective_config"].get("packages") != [
+            {
+                "aliases": ["fixture_pkg"],
+                "identity": "fixture-dist",
+                "kind": "python",
+                "layer": "auto-python",
+                "name": "python-root",
+                "path": "setup.cfg",
+            }
+        ]
+        or not all(row["fulfilled"] for row in fulfilled["manifest_requests"])
+    ):
+        raise AssertionError(
+            f"literal setup.cfg metadata was not resolved conservatively: {fulfilled!r}"
+        )
+
+    hostile_cmake = [
+        b"if(TRUE)\nproject(nested)\nendif()\n",
+        b"function(build)\nproject(nested)\nendfunction()\n",
+        b"function(project)\nendfunction()\nproject(shadowed)\n",
+        b"macro(PROJECT)\nendmacro()\nproject(shadowed)\n",
+        (
+            b"function(wrapper)\nfunction(project)\nendfunction()\n"
+            b"endfunction()\nwrapper()\nproject(shadowed)\n"
+        ),
+        b"project(first)\nproject(second)\n",
+        b"project(name(with-parentheses))\n",
+        b"project(${NAME})\n",
+        b"project(\"${NAME}\")\n",
+        b"project([=[${NAME}]=])\n",
+        b"\"project(quoted-decoy)\"\n",
+        b"${project(variable-decoy)}\n",
+        b"not_a_command project(token-decoy)\n",
+        b"if(TRUE)\nproject(unclosed)\n",
+        b"return()\nproject(unreachable)\n",
+    ]
+    for document in hostile_cmake:
+        result = json.loads(
+            native_module.discovery_resolve(
+                b"",
+                MAP_REQUEST,
+                raw_inventory(
+                    [
+                        {"bytes": len(document), "path": "CMakeLists.txt"},
+                        {"bytes": 10, "path": "src/main.c"},
+                    ],
+                    [("CMakeLists.txt", document)],
+                ),
+            )
+        )
+        if result["project"] != "repository" or result[
+            "effective_config"
+        ].get("packages"):
+            raise AssertionError(
+                f"dynamic/nested CMake identity was asserted: {document!r}: {result!r}"
+            )
+
+    supported_cmake = [
+        (b"\xef\xbb\xbfproject(bom-demo)\n", "bom-demo"),
+        (
+            b"project(before-shadow)\nfunction(project)\nendfunction()\n",
+            "before-shadow",
+        ),
+    ]
+    for document, expected_project in supported_cmake:
+        result = json.loads(
+            native_module.discovery_resolve(
+                b"",
+                MAP_REQUEST,
+                raw_inventory(
+                    [
+                        {"bytes": len(document), "path": "CMakeLists.txt"},
+                        {"bytes": 10, "path": "src/main.c"},
+                    ],
+                    [("CMakeLists.txt", document)],
+                ),
+            )
+        )
+        if result["project"] != expected_project:
+            raise AssertionError(
+                f"literal lexical-root CMake identity was lost: {document!r}: {result!r}"
+            )
+
+    hostile_setup = [
+        (
+            b"[metadata]\nname = %(distribution)s\n[options]\npackages = find:\n",
+            "repository",
+        ),
+        (
+            b"[metadata]\nname = first\nname = second\n[options]\npackages = find:\n",
+            "repository",
+        ),
+        (b"[metadata]\nname = demo\n[metadata]\nname = demo\n", "repository"),
+        (
+            b"[metadata]\nname = demo\ninvalid option line\n"
+            b"[options]\npackages = find:\n",
+            "repository",
+        ),
+        (b"[metadata]\nname = demo\n[options]\npackages = first, other\n", "demo"),
+        (b"[metadata]\nname = demo\n[options]\npackage_dir = demo = src\n", "demo"),
+        (b"[metadata]\nname = demo\n[options]\npackages =\n", "demo"),
+        (b"[metadata]\nname = demo\n[options]\npy_modules =\n", "demo"),
+        (
+            b"[metadata]\nname = demo\n[options]\npackages = find:\n"
+            b"[options.packages.find]\nexclude = demo\n",
+            "demo",
+        ),
+        (
+            b"[metadata]\nname = demo\n[options]\npackages = find:\n",
+            "demo",
+        ),
+        (
+            b"[metadata]\nname = demo\n[options]\npackages = find:\n"
+            b"py_modules = demo\n[options.packages.find]\nwhere = src\n",
+            "demo",
+        ),
+        (
+            b"[metadata]\nname = demo\n[options]\npy_modules = demo\n"
+            b"packages = find:\n[options.packages.find]\nwhere = src\n",
+            "demo",
+        ),
+        (
+            b"[metadata]\nname = demo\n[options]\npackages = find:\n"
+            b"[options.packages.find]\nwhere =\n",
+            "demo",
+        ),
+    ]
+    for document, expected_project in hostile_setup:
+        result = json.loads(
+            native_module.discovery_resolve(
+                b"",
+                MAP_REQUEST,
+                raw_inventory(
+                    [
+                        {"bytes": len(document), "path": "setup.cfg"},
+                        {"bytes": 10, "path": "src/demo/__init__.py"},
+                    ],
+                    [("setup.cfg", document)],
+                ),
+            )
+        )
+        if result["project"] != expected_project or result[
+            "effective_config"
+        ].get("packages"):
+            raise AssertionError(
+                f"ambiguous setup.cfg metadata was asserted: {document!r}: {result!r}"
+            )
+
+    namespace_setup = (
+        b"[metadata]\nname = namespace-dist\n[options]\n"
+        b"packages = find_namespace:\n"
+        b"[options.packages.find]\ninclude = demo, demo.*\n"
+    )
+    namespace_result = json.loads(
+        native_module.discovery_resolve(
+            b"",
+            MAP_REQUEST,
+            raw_inventory(
+                [
+                    {"bytes": len(namespace_setup), "path": "setup.cfg"},
+                    {"bytes": 10, "path": "demo/module.py"},
+                ],
+                [("setup.cfg", namespace_setup)],
+            ),
+        )
+    )
+    if [
+        package.get("identity")
+        for package in namespace_result["effective_config"].get("packages", [])
+    ] != ["namespace-dist"]:
+        raise AssertionError(
+            "find_namespace source agreement was not retained: "
+            f"{namespace_result!r}"
+        )
+
+    module_setup = (
+        b"[metadata]\nname = module-dist\n[options]\npy_modules = demo\n"
+    )
+    module_result = json.loads(
+        native_module.discovery_resolve(
+            b"",
+            MAP_REQUEST,
+            raw_inventory(
+                [
+                    {"bytes": len(module_setup), "path": "setup.cfg"},
+                    {"bytes": 10, "path": "demo.py"},
+                ],
+                [("setup.cfg", module_setup)],
+            ),
+        )
+    )
+    if [
+        package.get("identity")
+        for package in module_result["effective_config"].get("packages", [])
+    ] != ["module-dist"]:
+        raise AssertionError(
+            f"py_modules source agreement was not retained: {module_result!r}"
+        )
+
     python_manifest = b'[project]\nname = "demo"\nversion = "1.0.0"\n'
     ambiguous_python = json.loads(
         native_module.discovery_resolve(
@@ -442,6 +696,13 @@ def check_bounded_manifest_discovery(
             raise AssertionError("Python and Node bounded-manifest artifacts differ")
         resolution = json.loads(resolution_bytes)
         if resolution["manifest_request_summary"] != {
+            "cmake": {
+                "limit": 1,
+                "matched": 0,
+                "max_bytes": 262144,
+                "oversized": 0,
+                "requested": 0,
+            },
             "npm": {
                 "limit": 128,
                 "matched": 131,
@@ -455,6 +716,13 @@ def check_bounded_manifest_discovery(
                 "max_bytes": 262144,
                 "oversized": 0,
                 "requested": 32,
+            },
+            "setup-cfg": {
+                "limit": 1,
+                "matched": 0,
+                "max_bytes": 262144,
+                "oversized": 0,
+                "requested": 0,
             },
         }:
             raise AssertionError(
@@ -498,6 +766,109 @@ def check_bounded_manifest_discovery(
             raise AssertionError(
                 f"manifest bound diagnostics are wrong: {resolution['diagnostics']!r}"
             )
+    finally:
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+def check_root_metadata_discovery(
+    resolve_discovery: object,
+    node: Path,
+    addon: Path,
+    repository: Path,
+) -> None:
+    fixture = repository / "build/tmp/config-resolution-root-metadata"
+    shutil.rmtree(fixture, ignore_errors=True)
+    (fixture / "src/fixture_pkg").mkdir(parents=True)
+    try:
+        (fixture / "src/fixture_pkg/__init__.py").write_text("VALUE = 1\n")
+        (fixture / "src/native.c").write_text("int native(void) { return 1; }\n")
+        (fixture / "setup.cfg").write_text(
+            "[metadata]\n"
+            "name = fixture-dist\n"
+            "version = attr: fixture_pkg.version\n\n"
+            "[options]\n"
+            "packages = find:\n"
+            "package_dir =\n"
+            "    = src\n\n"
+            "[options.packages.find]\n"
+            "where = src\n"
+            "include = fixture_pkg, fixture_pkg.*\n"
+        )
+        (fixture / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 3.16)\n"
+            "if(FALSE)\n"
+            "  project(decoy)\n"
+            "endif()\n"
+            "project(cmake-fallback VERSION ${VERSION} LANGUAGES C)\n"
+        )
+        python_bytes = resolve_discovery(fixture)
+        completed = subprocess.run(
+            [
+                str(node),
+                str(repository / "test/test_resolution_node.js"),
+                str(addon.resolve()),
+                str(repository),
+                str(fixture),
+                "default",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+        )
+        node_bytes = bytes.fromhex(completed.stdout.decode().strip())
+        if node_bytes != python_bytes:
+            raise AssertionError("Python and Node root-metadata artifacts differ")
+        document = json.loads(python_bytes)
+        packages = document["effective_config"].get("packages", [])
+        python_layer = next(
+            layer
+            for layer in document["effective_config"]["layers"]
+            if layer["name"] == "auto-python"
+        )
+        requests = {row["kind"]: row for row in document["manifest_requests"]}
+        if (
+            document["project"] != "fixture-dist"
+            or [row.get("identity") for row in packages] != ["fixture-dist"]
+            or packages[0].get("version") is not None
+            or packages[0].get("aliases") != ["fixture_pkg"]
+            or python_layer.get("import_roots") != ["src"]
+            or set(requests) != {"cmake", "setup-cfg"}
+            or not all(row["fulfilled"] for row in requests.values())
+            or next(
+                row for row in document["origins"] if row["pointer"] == "/project"
+            )
+            != {
+                "evidence": ["setup.cfg"],
+                "pointer": "/project",
+                "source": "manifest",
+            }
+        ):
+            raise AssertionError(
+                f"root metadata precedence/evidence is wrong: {document!r}"
+            )
+
+        (fixture / "setup.cfg").unlink()
+        cmake_only = json.loads(resolve_discovery(fixture))
+        if (
+            cmake_only["project"] != "cmake-fallback"
+            or cmake_only["effective_config"].get("packages")
+            or next(
+                row
+                for row in cmake_only["origins"]
+                if row["pointer"] == "/project"
+            )
+            != {
+                "evidence": ["CMakeLists.txt"],
+                "pointer": "/project",
+                "source": "manifest",
+            }
+        ):
+            raise AssertionError(f"CMake identity fallback is wrong: {cmake_only!r}")
+
+        authored = canonical({"project": "authored"})
+        authored_result = json.loads(resolve_discovery(fixture, config=authored))
+        cli_result = json.loads(resolve_discovery(fixture, project="cli"))
+        if authored_result["project"] != "authored" or cli_result["project"] != "cli":
+            raise AssertionError("root metadata overrode authored/CLI identity")
     finally:
         shutil.rmtree(fixture, ignore_errors=True)
 
@@ -616,6 +987,13 @@ def main() -> int:
     ):
         raise AssertionError("ignored/excluded workspace manifest was requested")
     if monorepo["manifest_request_summary"] != {
+        "cmake": {
+            "limit": 1,
+            "matched": 0,
+            "max_bytes": 262144,
+            "oversized": 0,
+            "requested": 0,
+        },
         "npm": {
             "limit": 128,
             "matched": 2,
@@ -629,6 +1007,13 @@ def main() -> int:
             "max_bytes": 262144,
             "oversized": 0,
             "requested": 3,
+        },
+        "setup-cfg": {
+            "limit": 1,
+            "matched": 0,
+            "max_bytes": 262144,
+            "oversized": 0,
+            "requested": 0,
         },
     }:
         raise AssertionError(
@@ -731,6 +1116,7 @@ def main() -> int:
     check_bounded_manifest_discovery(
         resolve_discovery, node, addon, repository
     )
+    check_root_metadata_discovery(resolve_discovery, node, addon, repository)
     r_fixture = repository / "test/fixtures/zero_config_r"
     r_resolution = resolve_discovery(r_fixture)
     r_completed = subprocess.run(
@@ -839,7 +1225,8 @@ def main() -> int:
         raise AssertionError(f"Autoconf build routes are incorrect: {routes!r}")
     print(
         "Python/Node config-resolution parity passed for bounded npm/Python "
-        "monorepos, CRAN, Autoconf, SCIP, and compile_commands"
+        "monorepos, root setup.cfg/CMake identity, CRAN, Autoconf, SCIP, "
+        "and compile_commands"
     )
     return 0
 

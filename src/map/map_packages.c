@@ -4,6 +4,7 @@
 #include "base/pattern.h"
 #include "base/utf8.h"
 #include "evidence/manifests/pyproject_manifest.h"
+#include "evidence/manifests/setup_cfg_manifest.h"
 #include "map/package_json.h"
 
 #include <ctype.h>
@@ -460,14 +461,17 @@ static ArchbirdStatus parse_toml(AbMapState *state, AbMapPackage *package,
   ArchbirdStatus status =
       ab_pyproject_metadata(state->engine, text, length, &metadata);
   if (status == ARCHBIRD_OK && !package->identity.length &&
-      metadata.name.length)
-    status = copy_string(state->engine, &package->identity, &metadata.name);
+      metadata.package.name.length)
+    status =
+        copy_string(state->engine, &package->identity, &metadata.package.name);
   if (status == ARCHBIRD_OK && !package->version.length &&
-      metadata.version.length)
-    status = copy_string(state->engine, &package->version, &metadata.version);
-  if (status == ARCHBIRD_OK && metadata.module.length)
+      metadata.package.version.length)
+    status = copy_string(state->engine, &package->version,
+                         &metadata.package.version);
+  if (status == ARCHBIRD_OK && metadata.package.module.length)
     status = append_unique_string(state->engine, &package->aliases,
-                                  metadata.module.data, metadata.module.length);
+                                  metadata.package.module.data,
+                                  metadata.package.module.length);
   ab_pyproject_metadata_free(state->engine, &metadata);
   while (status == ARCHBIRD_OK && line_start <= length) {
     size_t line_end = line_start;
@@ -581,6 +585,24 @@ static ArchbirdStatus parse_toml(AbMapState *state, AbMapPackage *package,
     line_start = line_end + 1;
   }
   ab_string_free(state->engine, &section);
+  return status;
+}
+
+static ArchbirdStatus parse_setup_cfg(AbMapState *state, AbMapPackage *package,
+                                      const uint8_t *text, size_t length) {
+  AbPythonPackageMetadata metadata;
+  ArchbirdStatus status =
+      ab_setup_cfg_metadata(state->engine, text, length, &metadata);
+  if (status == ARCHBIRD_OK && !package->identity.length &&
+      metadata.name.length)
+    status = copy_string(state->engine, &package->identity, &metadata.name);
+  if (status == ARCHBIRD_OK && !package->version.length &&
+      metadata.version.length)
+    status = copy_string(state->engine, &package->version, &metadata.version);
+  if (status == ARCHBIRD_OK && metadata.module.length)
+    status = append_unique_string(state->engine, &package->aliases,
+                                  metadata.module.data, metadata.module.length);
+  ab_python_package_metadata_free(state->engine, &metadata);
   return status;
 }
 
@@ -859,6 +881,9 @@ static ArchbirdStatus analyze_manifest(AbMapState *state,
   if (string_literal(&config->kind, "python") && config->path.length >= 8 &&
       memcmp(config->path.data + config->path.length - 8, "setup.py", 8) == 0)
     return parse_setup_py(state, package, text, file->byte_length);
+  if (string_literal(&config->kind, "python") && config->path.length >= 9 &&
+      memcmp(config->path.data + config->path.length - 9, "setup.cfg", 9) == 0)
+    return parse_setup_cfg(state, package, text, file->byte_length);
   if (string_literal(&config->kind, "r"))
     return parse_r_manifest(state, config, package, text, file->byte_length);
   return ARCHBIRD_OK;

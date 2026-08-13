@@ -397,6 +397,43 @@ function markedNames(relative, name) {
   assert.equal(virtualMap.tests[0].inventory_state, "candidate");
   assert.equal(virtualMap.tests[0].cases[0].selector, "test_main");
   virtual.dispose();
+  const virtualRootMetadata = archbird.Project.fromFiles([
+    new archbird.Source(
+      "setup.cfg",
+      Buffer.from(
+        "[metadata]\nname = browser-dist\nversion = attr: browser_pkg.version\n\n" +
+        "[options]\npackages = find:\npackage_dir =\n    = src\n\n" +
+        "[options.packages.find]\nwhere = src\ninclude = browser_pkg, browser_pkg.*\n",
+      ),
+    ),
+    new archbird.Source(
+      "CMakeLists.txt",
+      Buffer.from("project(browser-cmake VERSION ${VERSION} LANGUAGES C)\n"),
+    ),
+    new archbird.Source(
+      "src/browser_pkg/__init__.py",
+      Buffer.from("VALUE = 1\n"),
+    ),
+  ], { typescript: false });
+  const rootMetadataResolution = JSON.parse(
+    virtualRootMetadata.resolutionJson.toString("utf8"),
+  );
+  assert.equal(rootMetadataResolution.project, "browser-dist");
+  assert.deepEqual(
+    rootMetadataResolution.manifest_requests.map((row) => [row.kind, row.fulfilled]),
+    [["cmake", true], ["setup-cfg", true]],
+  );
+  assert.deepEqual(
+    rootMetadataResolution.effective_config.packages.map((row) => row.identity),
+    ["browser-dist"],
+  );
+  assert.deepEqual(
+    rootMetadataResolution.effective_config.layers.find(
+      (row) => row.name === "auto-python",
+    ).import_roots,
+    ["src"],
+  );
+  virtualRootMetadata.dispose();
   const virtualAutoconf = archbird.Project.fromFiles([
     new archbird.Source(
       "configure.ac",

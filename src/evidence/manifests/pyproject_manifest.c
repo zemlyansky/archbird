@@ -2,6 +2,7 @@
 
 #include "base/archbird_internal.h"
 #include "base/utf8.h"
+#include "evidence/manifests/python_package_metadata.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -286,35 +287,6 @@ static ArchbirdStatus parse_string_array(ArchbirdEngine *engine,
   return status;
 }
 
-static int python_identifier(const char *data, size_t length) {
-  size_t index;
-  if (!length || !((data[0] >= 'A' && data[0] <= 'Z') ||
-                   (data[0] >= 'a' && data[0] <= 'z') || data[0] == '_'))
-    return 0;
-  for (index = 1; index < length; index++)
-    if (!((data[index] >= 'A' && data[index] <= 'Z') ||
-          (data[index] >= 'a' && data[index] <= 'z') ||
-          (data[index] >= '0' && data[index] <= '9') || data[index] == '_'))
-      return 0;
-  return 1;
-}
-
-static int python_distribution_name(const AbString *value) {
-  size_t index;
-  if (!value->length)
-    return 0;
-  for (index = 0; index < value->length; index++) {
-    unsigned char byte = (unsigned char)value->data[index];
-    if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
-        (byte >= '0' && byte <= '9'))
-      continue;
-    if (!index || index + 1 == value->length ||
-        (byte != '-' && byte != '_' && byte != '.'))
-      return 0;
-  }
-  return 1;
-}
-
 static int nonblank_string(const AbString *value) {
   size_t index;
   for (index = 0; index < value->length; index++) {
@@ -325,60 +297,15 @@ static int nonblank_string(const AbString *value) {
   return 0;
 }
 
-static int module_candidate(const AbString *value, int pattern,
-                            const char **data, size_t *length) {
-  size_t end = 0;
-  size_t segment = 0;
-  size_t index;
-  while (end < value->length && value->data[end] != '.' &&
-         (!pattern || (value->data[end] != '*' && value->data[end] != '?' &&
-                       value->data[end] != '[')))
-    end++;
-  if (!end || !python_identifier(value->data, end))
-    return 0;
-  if (pattern) {
-    for (index = 0; index < value->length; index++) {
-      unsigned char byte = (unsigned char)value->data[index];
-      if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
-            (byte >= '0' && byte <= '9') || byte == '_' || byte == '.' ||
-            byte == '*' || byte == '?' || byte == '[' || byte == ']' ||
-            byte == '!' || byte == '-'))
-        return 0;
-    }
-  } else {
-    for (index = 0; index <= value->length; index++) {
-      if (index < value->length && value->data[index] != '.')
-        continue;
-      if (!python_identifier(value->data + segment, index - segment))
-        return 0;
-      segment = index + 1;
-    }
-  }
-  *data = value->data;
-  *length = end;
-  return 1;
-}
-
 static ArchbirdStatus merge_module_hint(ArchbirdEngine *engine,
                                         AbPyprojectMetadata *metadata,
                                         const char *candidate,
                                         size_t candidate_length,
                                         int supported) {
-  metadata->module_hints_present = 1;
-  if (!supported || !candidate_length || !metadata->module_hints_supported) {
-    metadata->module_hints_supported = 0;
-    ab_string_free(engine, &metadata->module);
-    return ARCHBIRD_OK;
-  }
-  if (!metadata->module.length)
-    return ab_string_copy(engine, &metadata->module, candidate,
-                          candidate_length);
-  if (metadata->module.length != candidate_length ||
-      memcmp(metadata->module.data, candidate, candidate_length)) {
-    metadata->module_hints_supported = 0;
-    ab_string_free(engine, &metadata->module);
-  }
-  return ARCHBIRD_OK;
+  return ab_python_module_hint_merge(engine, &metadata->package.module,
+                                     &metadata->package.module_hints_present,
+                                     &metadata->package.module_hints_supported,
+                                     candidate, candidate_length, supported);
 }
 
 static ArchbirdStatus merge_array_module_hint(ArchbirdEngine *engine,
@@ -393,8 +320,8 @@ static ArchbirdStatus merge_array_module_hint(ArchbirdEngine *engine,
   for (index = 0; supported && index < values->count; index++) {
     const char *current;
     size_t current_length;
-    if (!module_candidate(&values->items[index], patterns, &current,
-                          &current_length)) {
+    if (!ab_python_module_candidate(&values->items[index], patterns, &current,
+                                    &current_length)) {
       supported = 0;
       break;
     }
@@ -410,50 +337,15 @@ static ArchbirdStatus merge_array_module_hint(ArchbirdEngine *engine,
                            supported);
 }
 
-static int source_root_valid(const AbString *value) {
-  size_t segment = 0;
-  size_t index;
-  if (!value->length || value->data[0] == '/' ||
-      value->data[value->length - 1] == '/')
-    return 0;
-  if (value->length == 1 && value->data[0] == '.')
-    return 1;
-  for (index = 0; index <= value->length; index++) {
-    if (index < value->length && value->data[index] != '/') {
-      if (value->data[index] == '\\' || value->data[index] == '\0')
-        return 0;
-      continue;
-    }
-    if (index == segment ||
-        (index - segment == 1 && value->data[segment] == '.') ||
-        (index - segment == 2 && value->data[segment] == '.' &&
-         value->data[segment + 1] == '.'))
-      return 0;
-    segment = index + 1;
-  }
-  return 1;
-}
-
 static ArchbirdStatus merge_source_root(ArchbirdEngine *engine,
                                         AbPyprojectMetadata *metadata,
                                         const ParsedStringArray *values,
                                         int supported) {
   const AbString *candidate = values->count == 1 ? &values->items[0] : NULL;
-  metadata->source_root_present = 1;
-  supported = supported && candidate && source_root_valid(candidate);
-  if (!supported || !metadata->source_root_supported) {
-    metadata->source_root_supported = 0;
-    ab_string_free(engine, &metadata->source_root);
-    return ARCHBIRD_OK;
-  }
-  if (!metadata->source_root.length)
-    return ab_string_copy(engine, &metadata->source_root, candidate->data,
-                          candidate->length);
-  if (!ab_string_equal(&metadata->source_root, candidate)) {
-    metadata->source_root_supported = 0;
-    ab_string_free(engine, &metadata->source_root);
-  }
-  return ARCHBIRD_OK;
+  return ab_python_source_root_merge(engine, &metadata->package.source_root,
+                                     &metadata->package.source_root_present,
+                                     &metadata->package.source_root_supported,
+                                     candidate, supported && candidate != NULL);
 }
 
 static ArchbirdStatus
@@ -489,8 +381,7 @@ ArchbirdStatus ab_pyproject_metadata(ArchbirdEngine *engine,
   if (!engine || (!text && length) || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(out, 0, sizeof(*out));
-  out->module_hints_supported = 1;
-  out->source_root_supported = 1;
+  ab_python_package_metadata_init(&out->package);
   out->workspace_members_supported = 1;
   out->workspace_excludes_supported = 1;
   status = ab_utf8_validate(engine, text, length);
@@ -531,10 +422,10 @@ ArchbirdStatus ab_pyproject_metadata(ArchbirdEngine *engine,
           trim(text, &value_start, &value_end);
           if (section_equal(&section, "project") &&
               bytes_equal(text, key_start, key_end, "name"))
-            target = &out->name;
+            target = &out->package.name;
           else if (section_equal(&section, "project") &&
                    bytes_equal(text, key_start, key_end, "version"))
-            target = &out->version;
+            target = &out->package.version;
           else if (section_equal(&section, "tool.flit.module") &&
                    bytes_equal(text, key_start, key_end, "name"))
             module_hint = 1;
@@ -567,7 +458,8 @@ ArchbirdStatus ab_pyproject_metadata(ArchbirdEngine *engine,
             if (status == ARCHBIRD_OK)
               status = merge_module_hint(
                   engine, out, value.data, value.length,
-                  value.length && python_identifier(value.data, value.length));
+                  value.length &&
+                      ab_python_identifier_valid(value.data, value.length));
             ab_string_free(engine, &value);
           } else if (array_target) {
             ParsedStringArray values = {0};
@@ -608,12 +500,12 @@ ArchbirdStatus ab_pyproject_metadata(ArchbirdEngine *engine,
     line_start = line_end + 1;
   }
   ab_string_free(engine, &section);
-  if (status == ARCHBIRD_OK && out->name.length &&
-      !python_distribution_name(&out->name))
-    ab_string_free(engine, &out->name);
-  if (status == ARCHBIRD_OK && out->version.length &&
-      !nonblank_string(&out->version))
-    ab_string_free(engine, &out->version);
+  if (status == ARCHBIRD_OK && out->package.name.length &&
+      !ab_python_distribution_name_valid(&out->package.name))
+    ab_string_free(engine, &out->package.name);
+  if (status == ARCHBIRD_OK && out->package.version.length &&
+      !nonblank_string(&out->package.version))
+    ab_string_free(engine, &out->package.version);
   if (status != ARCHBIRD_OK)
     ab_pyproject_metadata_free(engine, out);
   return status;
@@ -624,10 +516,7 @@ void ab_pyproject_metadata_free(ArchbirdEngine *engine,
   size_t index;
   if (!metadata)
     return;
-  ab_string_free(engine, &metadata->name);
-  ab_string_free(engine, &metadata->version);
-  ab_string_free(engine, &metadata->module);
-  ab_string_free(engine, &metadata->source_root);
+  ab_python_package_metadata_free(engine, &metadata->package);
   for (index = 0; index < metadata->workspace_member_count; index++)
     ab_string_free(engine, &metadata->workspace_members[index]);
   ab_free(engine, metadata->workspace_members);

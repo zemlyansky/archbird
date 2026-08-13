@@ -270,10 +270,31 @@ async function main() {
   const url = await listen(server);
   const archive = path.join(path.dirname(screenshot), "source.zip");
   const noConfigDirectory = path.join(path.dirname(screenshot), "source-no-config");
+  const manifestRoundDirectory = path.join(
+    path.dirname(screenshot),
+    "source-manifest-rounds",
+  );
   sourceArchive(archive);
   fs.rmSync(noConfigDirectory, { force: true, recursive: true });
   fs.cpSync(sourceDirectory, noConfigDirectory, { recursive: true });
   fs.rmSync(path.join(noConfigDirectory, "archbird.json"));
+  fs.rmSync(manifestRoundDirectory, { force: true, recursive: true });
+  fs.mkdirSync(path.join(manifestRoundDirectory, "packages/member"), {
+    recursive: true,
+  });
+  fs.writeFileSync(
+    path.join(manifestRoundDirectory, "package.json"),
+    '{"name":"browser-workspace","version":"1.0.0",' +
+      '"workspaces":["packages/*"]}\n',
+  );
+  fs.writeFileSync(
+    path.join(manifestRoundDirectory, "packages/member/package.json"),
+    '{"name":"@browser/member","version":"2.0.0"}\n',
+  );
+  fs.writeFileSync(
+    path.join(manifestRoundDirectory, "packages/member/index.js"),
+    "export const member = true;\n",
+  );
   let browser;
   let context;
   let diagnostics;
@@ -516,6 +537,38 @@ async function main() {
     await activateSelected(page, "Expand symbols");
     await selectGraphResult(page, "add");
     await page.locator(".inspector h2").getByText("add", { exact: true }).waitFor();
+
+    await page.setInputFiles("input[webkitdirectory]", manifestRoundDirectory);
+    await page.waitForFunction(
+      () => document.querySelector(".artifact-meta small")?.textContent?.includes("browser-live"),
+      undefined,
+      { timeout: 60_000 },
+    );
+    await page.locator('.graph-canvas[data-layout-ready="true"]')
+      .waitFor({ timeout: 30_000 });
+    const manifestRoundMap = path.join(
+      path.dirname(screenshot),
+      "manifest-round-map.json",
+    );
+    await saveDownload(page, "Save canonical artifact", manifestRoundMap);
+    const manifestRoundDocument = JSON.parse(
+      fs.readFileSync(manifestRoundMap, "utf8"),
+    );
+    const manifestRoundPackages = manifestRoundDocument.packages
+      .map((row) => row.identity)
+      .sort();
+    if (
+      manifestRoundDocument.project !== "browser-workspace"
+      || JSON.stringify(manifestRoundPackages)
+        !== JSON.stringify(["@browser/member", "browser-workspace"])
+    ) {
+      throw new Error(
+        `browser manifest rounds lost package evidence: ${JSON.stringify({
+          packages: manifestRoundPackages,
+          project: manifestRoundDocument.project,
+        })}`,
+      );
+    }
 
     await page.setInputFiles('input[accept="application/zip,.zip"]', archive);
     await page.waitForFunction(

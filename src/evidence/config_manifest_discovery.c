@@ -138,8 +138,11 @@ static const AbString *python_source_below(const AbManifestInventoryFile *files,
 }
 
 static size_t candidate_limit(AbManifestCandidateKind kind) {
-  return kind == AB_MANIFEST_CANDIDATE_NPM ? AB_MANIFEST_DISCOVERY_NPM_LIMIT
-                                           : AB_MANIFEST_DISCOVERY_PYTHON_LIMIT;
+  if (kind == AB_MANIFEST_CANDIDATE_NPM)
+    return AB_MANIFEST_DISCOVERY_NPM_LIMIT;
+  if (kind == AB_MANIFEST_CANDIDATE_PYTHON)
+    return AB_MANIFEST_DISCOVERY_PYTHON_LIMIT;
+  return AB_MANIFEST_DISCOVERY_ROOT_LIMIT;
 }
 
 static ArchbirdStatus ensure_capacity(ArchbirdEngine *engine, void **items,
@@ -212,7 +215,9 @@ static ArchbirdStatus report_truncation(const AbManifestDiscovery *discovery,
                                         void *diagnostic_data) {
   size_t kind;
   ArchbirdStatus status = ARCHBIRD_OK;
-  for (kind = 0; status == ARCHBIRD_OK && kind < 2; kind++) {
+  for (kind = 0;
+       status == ARCHBIRD_OK && kind < AB_MANIFEST_CANDIDATE_KIND_COUNT;
+       kind++) {
     size_t eligible = discovery->matches[kind] - discovery->oversized[kind];
     size_t limit = candidate_limit((AbManifestCandidateKind)kind);
     if (eligible > limit && discovery->first_omitted[kind])
@@ -283,6 +288,19 @@ ArchbirdStatus ab_manifest_discovery_select(
     size_t matches;
     if (path_ignored(ignores, apply_ignores, file->path))
       continue;
+    if (file->path->length == 9 && !memcmp(file->path->data, "setup.cfg", 9)) {
+      status = append_candidate(
+          discovery, file, AB_MANIFEST_CANDIDATE_SETUP_CFG,
+          "python-root-setup-cfg", NULL, NULL, 1, diagnostic, diagnostic_data);
+      continue;
+    }
+    if (file->path->length == 14 &&
+        !memcmp(file->path->data, "CMakeLists.txt", 14)) {
+      status = append_candidate(
+          discovery, file, AB_MANIFEST_CANDIDATE_CMAKE_PROJECT,
+          "cmake-root-project", NULL, NULL, 1, diagnostic, diagnostic_data);
+      continue;
+    }
     if (path_leaf_is(file->path, "package.json", &parent) && parent.length) {
       matches = matching_workspace_pattern(&parent, npm->workspaces,
                                            npm->workspace_count, &pattern);

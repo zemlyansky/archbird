@@ -1,21 +1,14 @@
 #ifndef ARCHBIRD_PYPROJECT_MANIFEST_H
 #define ARCHBIRD_PYPROJECT_MANIFEST_H
 
-#include "base/model.h"
+#include "evidence/manifests/python_package_metadata.h"
 
 typedef struct AbPyprojectMetadata {
-  AbString name;
-  AbString version;
-  AbString module;
-  AbString source_root;
+  AbPythonPackageMetadata package;
   AbString *workspace_members;
   size_t workspace_member_count;
   AbString *workspace_excludes;
   size_t workspace_exclude_count;
-  int module_hints_present;
-  int module_hints_supported;
-  int source_root_present;
-  int source_root_supported;
   int workspace_members_present;
   int workspace_members_supported;
   int workspace_excludes_present;

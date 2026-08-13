@@ -12,7 +12,10 @@ typedef struct AbManifestInventoryFile {
 
 typedef enum AbManifestCandidateKind {
   AB_MANIFEST_CANDIDATE_NPM,
-  AB_MANIFEST_CANDIDATE_PYTHON
+  AB_MANIFEST_CANDIDATE_PYTHON,
+  AB_MANIFEST_CANDIDATE_SETUP_CFG,
+  AB_MANIFEST_CANDIDATE_CMAKE_PROJECT,
+  AB_MANIFEST_CANDIDATE_KIND_COUNT
 } AbManifestCandidateKind;
 
 typedef struct AbManifestCandidate {
@@ -46,10 +49,10 @@ typedef struct AbManifestDiscovery {
   AbManifestCandidate *candidates;
   size_t candidate_count;
   size_t candidate_capacity;
-  size_t matches[2];
-  size_t oversized[2];
-  size_t requested[2];
-  const AbString *first_omitted[2];
+  size_t matches[AB_MANIFEST_CANDIDATE_KIND_COUNT];
+  size_t oversized[AB_MANIFEST_CANDIDATE_KIND_COUNT];
+  size_t requested[AB_MANIFEST_CANDIDATE_KIND_COUNT];
+  const AbString *first_omitted[AB_MANIFEST_CANDIDATE_KIND_COUNT];
   AbDiscoveredNpmPackage *npm_packages;
   size_t npm_package_count;
   size_t npm_package_capacity;
@@ -61,7 +64,8 @@ typedef struct AbManifestDiscovery {
 enum {
   AB_MANIFEST_DISCOVERY_MAX_BYTES = 256 * 1024,
   AB_MANIFEST_DISCOVERY_NPM_LIMIT = 128,
-  AB_MANIFEST_DISCOVERY_PYTHON_LIMIT = 32
+  AB_MANIFEST_DISCOVERY_PYTHON_LIMIT = 32,
+  AB_MANIFEST_DISCOVERY_ROOT_LIMIT = 1
 };
 
 void ab_manifest_discovery_init(AbManifestDiscovery *discovery,
