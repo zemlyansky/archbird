@@ -221,6 +221,50 @@ int main(void) {
       "{\"bytes\":10,\"path\":\"py/demo/__init__.py\"},"
       "{\"bytes\":95,\"path\":\"py/pyproject.toml\"}],"
       "\"ignore_files\":[],\"schema_version\":1}";
+  static const char cmake_conflict_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"70726f6a656374286669727374290a70726f6a6563742873"
+      "65636f6e64290a\",\"path\":\"CMakeLists.txt\"}],\"files\":["
+      "{\"bytes\":31,\"path\":\"CMakeLists.txt\"},"
+      "{\"bytes\":10,\"path\":\"src/main.c\"}],\"ignore_files\":[],"
+      "\"schema_version\":1}";
+  static const char cmake_invalid_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"69662854525545290a70726f6a65637428756e636c6f7365"
+      "64290a\",\"path\":\"CMakeLists.txt\"}],\"files\":["
+      "{\"bytes\":27,\"path\":\"CMakeLists.txt\"},"
+      "{\"bytes\":10,\"path\":\"src/main.c\"}],\"ignore_files\":[],"
+      "\"schema_version\":1}";
+  static const char cmake_trap_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"5b70726f6a6563745d0a6e616d65203d2022747261702d70"
+      "7970726f6a656374220a70726f6a656374287265616c2d636d616b65290a\","
+      "\"path\":\"CMakeLists.txt\"}],\"files\":["
+      "{\"bytes\":54,\"path\":\"CMakeLists.txt\"},"
+      "{\"bytes\":10,\"path\":\"src/main.c\"}],\"ignore_files\":[],"
+      "\"schema_version\":1}";
+  static const char setup_dynamic_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"5b6d657461646174615d0a6e616d65203d20617474723a20"
+      "666978747572652e76657273696f6e0a\",\"path\":\"setup.cfg\"}],"
+      "\"files\":[{\"bytes\":40,\"path\":\"setup.cfg\"},"
+      "{\"bytes\":10,\"path\":\"src/demo/__init__.py\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
+  static const char setup_invalid_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"5b6d657461646174615d0a6e616d65203d2066697273740a"
+      "6e616d65203d207365636f6e640a\",\"path\":\"setup.cfg\"}],\"files\":["
+      "{\"bytes\":38,\"path\":\"setup.cfg\"},"
+      "{\"bytes\":10,\"path\":\"src/demo/__init__.py\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
+  static const char setup_trap_inventory[] =
+      "{\"artifact\":\"archbird-repository-inventory\",\"documents\":["
+      "{\"content_hex\":\"5b70726f6a6563745d0a6e616d65203d2022747261702d70"
+      "7970726f6a656374220a5b6d657461646174615d0a6e616d65203d207265616c2d"
+      "73657475700a\",\"path\":\"setup.cfg\"}],\"files\":["
+      "{\"bytes\":63,\"path\":\"setup.cfg\"},"
+      "{\"bytes\":10,\"path\":\"src/demo/__init__.py\"}],"
+      "\"ignore_files\":[],\"schema_version\":1}";
   ArchbirdEngine *engine = NULL;
   Output first = {{0}, 0};
   Output second = {{0}, 0};
@@ -239,6 +283,12 @@ int main(void) {
   Output candidate = {{0}, 0};
   Output monorepo_candidate = {{0}, 0};
   Output monorepo_final = {{0}, 0};
+  Output cmake_conflict = {{0}, 0};
+  Output cmake_invalid = {{0}, 0};
+  Output cmake_trap = {{0}, 0};
+  Output setup_dynamic = {{0}, 0};
+  Output setup_invalid = {{0}, 0};
+  Output setup_trap = {{0}, 0};
   ArchbirdDiscovery *discovery = NULL;
   int descend_temp = 1;
   int descend_src = 0;
@@ -463,6 +513,53 @@ int main(void) {
       !contains(&monorepo_final, "\"fulfilled\":true,\"kind\":\"python\"") ||
       contains(&monorepo_final, "discovery-manifest-input-missing")) {
     fprintf(stderr, "manifest-backed package/import discovery is incorrect\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, cmake_conflict_inventory,
+               &cmake_conflict) ||
+      !contains(&cmake_conflict, "\"project\":\"repository\"") ||
+      !contains(&cmake_conflict, "discovery-manifest-identity-unsupported") ||
+      !contains(&cmake_conflict, "\"path\":\"CMakeLists.txt\"") ||
+      contains(&cmake_conflict, "\"identity\":\"first\"") ||
+      contains(&cmake_conflict, "\"identity\":\"second\"")) {
+    fprintf(stderr, "duplicate CMake identity is not diagnostic\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, cmake_invalid_inventory, &cmake_invalid) ||
+      !contains(&cmake_invalid, "\"project\":\"repository\"") ||
+      !contains(&cmake_invalid, "discovery-manifest-invalid") ||
+      contains(&cmake_invalid, "\"identity\":\"unclosed\"")) {
+    fprintf(stderr, "malformed CMake identity is not diagnostic\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, cmake_trap_inventory, &cmake_trap) ||
+      !contains(&cmake_trap, "\"project\":\"repository\"") ||
+      !contains(&cmake_trap, "discovery-manifest-invalid") ||
+      contains(&cmake_trap, "trap-pyproject")) {
+    fprintf(stderr, "CMake candidate was decoded as pyproject\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, setup_dynamic_inventory, &setup_dynamic) ||
+      !contains(&setup_dynamic, "\"project\":\"repository\"") ||
+      !contains(&setup_dynamic, "discovery-manifest-identity-unsupported") ||
+      contains(&setup_dynamic, "\"identity\":\"fixture.version\"")) {
+    fprintf(stderr, "dynamic setup.cfg identity is not diagnostic\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, setup_invalid_inventory, &setup_invalid) ||
+      !contains(&setup_invalid, "\"project\":\"repository\"") ||
+      !contains(&setup_invalid, "discovery-manifest-invalid") ||
+      contains(&setup_invalid, "\"identity\":\"first\"") ||
+      contains(&setup_invalid, "\"identity\":\"second\"")) {
+    fprintf(stderr, "ambiguous setup.cfg identity is not diagnostic\n");
+    failed = 1;
+  }
+  if (!resolve(engine, "", request, setup_trap_inventory, &setup_trap) ||
+      !contains(&setup_trap, "\"project\":\"real-setup\"") ||
+      contains(&setup_trap, "trap-pyproject") ||
+      contains(&setup_trap, "discovery-manifest-invalid") ||
+      contains(&setup_trap, "discovery-manifest-identity-unsupported")) {
+    fprintf(stderr, "setup.cfg candidate was decoded as pyproject\n");
     failed = 1;
   }
   archbird_engine_destroy(engine);

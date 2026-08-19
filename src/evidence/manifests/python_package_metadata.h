@@ -23,6 +23,11 @@ typedef struct AbPythonPackageMetadata {
   int source_root_present;
   int source_root_supported;
   AbPythonSourceShape source_shape;
+  /* Malformed or ambiguous metadata. Identity is omitted. */
+  int identity_invalid;
+  /* Valid input that this reader will not evaluate: interpolation, attr:,
+   * file:, or other dynamic name evidence. Identity is omitted. */
+  int identity_unsupported;
 } AbPythonPackageMetadata;
 
 void ab_python_package_metadata_init(AbPythonPackageMetadata *metadata);

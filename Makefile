@@ -15,7 +15,7 @@ AUDITWHEEL ?= auditwheel
 TWINE ?= twine
 MANYLINUX_PLATFORM ?= manylinux_2_17_x86_64
 RELEASE_SOURCE_DATE_EPOCH ?= 946684800
-RELEASE_BASELINE_TAG ?= v0.0.2
+RELEASE_BASELINE_TAG ?= v0.0.3
 PY_VERSION := $(shell $(PYTHON) tools/check_versions.py --print python)
 JS_VERSION := $(shell $(PYTHON) tools/check_versions.py --print node)
 NATIVE_BUILD ?= build/native
@@ -414,7 +414,7 @@ release-self-check: release-source-check build-py
 		--after-freshness $(RELEASE_DIR)/self-after.freshness.json \
 		--diff $(RELEASE_DIR)/self-transition.diff.json \
 		--verification $(RELEASE_DIR)/self-after.verify.json \
-		--expected-changes test/release-0.0.3.expected.json \
+		--expected-changes test/release-0.4.0.expected.json \
 		--allow-unmapped .gitignore --allow-unmapped archbird.json \
 		--require-clean --require-tag \
 		--output $(RELEASE_DIR)/self-transition.json

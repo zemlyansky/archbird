@@ -182,8 +182,19 @@ static ArchbirdStatus parse_package_dir(SetupParser *parser,
 static ArchbirdStatus set_scalar(SetupParser *parser, AbString *target,
                                  const uint8_t *text, size_t start, size_t end,
                                  int dynamic_forbidden) {
-  if (target->length || start == end ||
-      (dynamic_forbidden && dynamic_scalar(text, start, end))) {
+  if (start == end) {
+    ab_string_free(parser->engine, target);
+    if (target == &parser->metadata->name)
+      parser->metadata_conflict = 1;
+    return ARCHBIRD_OK;
+  }
+  if (dynamic_forbidden && dynamic_scalar(text, start, end)) {
+    ab_string_free(parser->engine, target);
+    if (target == &parser->metadata->name)
+      parser->metadata->identity_unsupported = 1;
+    return ARCHBIRD_OK;
+  }
+  if (target->length) {
     ab_string_free(parser->engine, target);
     if (target == &parser->metadata->name)
       parser->metadata_conflict = 1;
@@ -394,13 +405,19 @@ ArchbirdStatus ab_setup_cfg_metadata(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK && parser.syntax_invalid) {
     ab_python_package_metadata_free(engine, out);
     ab_python_package_metadata_init(out);
+    out->identity_invalid = 1;
   } else if (status == ARCHBIRD_OK && parser.metadata_conflict) {
     ab_string_free(engine, &out->name);
     ab_string_free(engine, &out->version);
+    out->identity_invalid = 1;
+    out->identity_unsupported = 0;
   }
   if (status == ARCHBIRD_OK && out->name.length &&
-      !ab_python_distribution_name_valid(&out->name))
+      !ab_python_distribution_name_valid(&out->name)) {
     ab_string_free(engine, &out->name);
+    out->identity_invalid = 1;
+    out->identity_unsupported = 0;
+  }
   if (status == ARCHBIRD_OK && out->version.length &&
       !nonblank_scalar((const uint8_t *)out->version.data, 0,
                        out->version.length))

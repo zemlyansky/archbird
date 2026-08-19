@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(Archbird VERSION 0.0.3 LANGUAGES C)
+project(Archbird VERSION 0.4.0 LANGUAGES C)
 
 set(ARCHBIRD_SOVERSION 0)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/include/archbird/archbird.h"

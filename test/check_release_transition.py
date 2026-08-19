@@ -20,6 +20,8 @@ UNCHANGED_PUBLIC_SECTIONS = (
     "public_symbols",
 )
 
+VALID_POLICIES = ("repair", "feature")
+
 
 def _load(path: Path) -> tuple[bytes, dict[str, object]]:
     data = path.read_bytes()
@@ -225,10 +227,20 @@ def main() -> int:
 
     git_paths = _git_changed_files(repository, args.before_ref)
     expected_paths = expected_changes.get("paths")
+    policy = expected_changes.get("policy", "repair")
+    allow_public_changes = expected_changes.get("allow_public_changes", [])
     if (
         expected_changes.get("artifact") != "archbird-release-change-envelope"
         or expected_changes.get("before_ref") != args.before_ref
         or expected_changes.get("version") != args.version
+        or policy not in VALID_POLICIES
+        or not isinstance(allow_public_changes, list)
+        or allow_public_changes != sorted(set(allow_public_changes))
+        or not all(
+            isinstance(name, str) and name in UNCHANGED_PUBLIC_SECTIONS
+            for name in allow_public_changes
+        )
+        or (policy == "repair" and allow_public_changes)
         or not isinstance(expected_paths, list)
         or expected_paths != sorted(set(expected_paths))
         or not all(isinstance(path, str) and path for path in expected_paths)
@@ -261,11 +273,12 @@ def main() -> int:
             + ", ".join(sorted(unused_allowance))
         )
     files = diff["sections"]["files"]
-    if files.get("removed"):
+    if policy == "repair" and files.get("removed"):
         failures.append("repair release unexpectedly removes mapped files")
+    approved_public = set(allow_public_changes) if policy == "feature" else set()
     for name in UNCHANGED_PUBLIC_SECTIONS:
-        if _section_has_changes(diff, name):
-            failures.append(f"repair release unexpectedly changes {name}")
+        if _section_has_changes(diff, name) and name not in approved_public:
+            failures.append(f"{policy} release unexpectedly changes {name}")
 
     report = {
         "after_map": {
@@ -302,6 +315,8 @@ def main() -> int:
         ),
         "verification_sha256": hashlib.sha256(verification_data).hexdigest(),
         "version": args.version,
+        "policy": policy,
+        "allow_public_changes": list(allow_public_changes),
     }
     output = Path(args.output)
     output.write_text(

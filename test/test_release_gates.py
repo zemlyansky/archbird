@@ -614,7 +614,7 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
     tool = {
         "implementation_sha256": "9" * 64,
         "name": "archbird",
-        "version": "0.0.4",
+        "version": "0.4.0",
     }
     before_map = {
         "artifact": "map",
@@ -684,7 +684,9 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
         "artifact": "archbird-release-change-envelope",
         "before_ref": "v0.0.3",
         "paths": ["after-tag.txt"],
-        "version": "0.0.4",
+        "policy": "feature",
+        "allow_public_changes": ["public_symbols"],
+        "version": "0.4.0",
     }
     paths = {
         "before": root / "transition-before.json",
@@ -711,7 +713,7 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
         "--before-ref",
         "v0.0.3",
         "--version",
-        "0.0.4",
+        "0.4.0",
         "--before-map",
         str(paths["before"]),
         "--after-map",
@@ -757,6 +759,34 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
         cwd=root,
         success=False,
         contains="paths absent from Git transition",
+    )
+    diff["sections"]["files"]["added"].remove("not-in-git.c")
+    diff["sections"]["public_symbols"]["added"] = ["ARCHBIRD_CANCELLED"]
+    _write_json(paths["diff"], diff)
+    _run(*command, cwd=root)
+    expected_changes["allow_public_changes"] = []
+    _write_json(paths["expected"], expected_changes)
+    _run(
+        *command,
+        cwd=root,
+        success=False,
+        contains="feature release unexpectedly changes public_symbols",
+    )
+    expected_changes["policy"] = "repair"
+    _write_json(paths["expected"], expected_changes)
+    _run(
+        *command,
+        cwd=root,
+        success=False,
+        contains="repair release unexpectedly changes public_symbols",
+    )
+    expected_changes["allow_public_changes"] = ["public_symbols"]
+    _write_json(paths["expected"], expected_changes)
+    _run(
+        *command,
+        cwd=root,
+        success=False,
+        contains="reviewed release change envelope is invalid",
     )
 
 

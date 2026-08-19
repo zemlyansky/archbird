@@ -1287,20 +1287,21 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
       status = inventory_error(
           state->engine,
           "manifest document bytes disagree with bounded inventory row");
-    if (status == ARCHBIRD_OK &&
-        candidate->kind == AB_MANIFEST_CANDIDATE_SETUP_CFG) {
-      state->has_setup_cfg = 1;
-      candidate->supplied = 1;
-      status = ab_setup_cfg_metadata(state->engine, bytes, length, setup_cfg);
-    } else if (status == ARCHBIRD_OK &&
-               candidate->kind == AB_MANIFEST_CANDIDATE_CMAKE_PROJECT) {
-      candidate->supplied = 1;
-      status = ab_cmake_project_metadata(state->engine, bytes, length, cmake);
-    } else if (status == ARCHBIRD_OK) {
+    if (status == ARCHBIRD_OK)
       status = ab_manifest_discovery_supply(&state->manifests, candidate, bytes,
                                             length, manifest_diagnostic, state);
-    }
     ab_free(state->engine, bytes);
+  }
+  if (status == ARCHBIRD_OK && state->manifests.has_setup_cfg) {
+    state->has_setup_cfg = 1;
+    *setup_cfg = state->manifests.setup_cfg;
+    memset(&state->manifests.setup_cfg, 0, sizeof(state->manifests.setup_cfg));
+    state->manifests.has_setup_cfg = 0;
+  }
+  if (status == ARCHBIRD_OK && state->manifests.has_cmake) {
+    *cmake = state->manifests.cmake;
+    memset(&state->manifests.cmake, 0, sizeof(state->manifests.cmake));
+    state->manifests.has_cmake = 0;
   }
   if (status == ARCHBIRD_OK)
     status = ab_manifest_discovery_report_missing(&state->manifests,

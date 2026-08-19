@@ -2,8 +2,10 @@
 #define ARCHBIRD_CONFIG_MANIFEST_DISCOVERY_H
 
 #include "evidence/gitignore.h"
+#include "evidence/manifests/cmake_project_manifest.h"
 #include "evidence/manifests/npm_workspace_manifest.h"
 #include "evidence/manifests/pyproject_manifest.h"
+#include "evidence/manifests/setup_cfg_manifest.h"
 
 typedef struct AbManifestInventoryFile {
   const AbString *path;
@@ -59,6 +61,10 @@ typedef struct AbManifestDiscovery {
   AbDiscoveredPythonPackage *python_packages;
   size_t python_package_count;
   size_t python_package_capacity;
+  AbPythonPackageMetadata setup_cfg;
+  AbCmakeProjectMetadata cmake;
+  int has_setup_cfg;
+  int has_cmake;
 } AbManifestDiscovery;
 
 enum {
@@ -83,8 +89,9 @@ ArchbirdStatus ab_manifest_discovery_select(
 AbManifestCandidate *ab_manifest_discovery_find(AbManifestDiscovery *discovery,
                                                 const AbString *path);
 
-/* Decode one requested document. Invalid package metadata stays a fulfilled
- * request with a warning; allocation and internal failures remain fatal. */
+/* Decode one requested document according to candidate->kind. Invalid package
+ * metadata stays a fulfilled request with a warning; allocation and internal
+ * failures remain fatal. Unknown kinds fail closed. */
 ArchbirdStatus ab_manifest_discovery_supply(AbManifestDiscovery *discovery,
                                             AbManifestCandidate *candidate,
                                             const uint8_t *bytes, size_t length,

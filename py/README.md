@@ -104,9 +104,21 @@ archbird map . --view evidence --detail full
 The default Markdown is an architecture-first overview. `--view` chooses the
 subject, `--group-by` organizes entities, `--level` chooses component, file, or
 symbol nodes, and `--relations` selects graph relations. `--detail` changes
-presentation density only; canonical JSON remains exhaustive. Unsupported,
-ignored, or oversized inputs are reported separately from completeness of the
-selected graph.
+presentation density only; canonical JSON remains exhaustive. Compact and
+standard Markdown rank structural groups, aggregated dependency flows, and file
+landmarks while reporting what the presentation omitted. File landmarks use
+separate bounded production/API, test/fixture, and build/artifact shortlists,
+followed by an unresolved-import frontier. Classification consults the Map's
+file-role evidence first and then conservative repository-path conventions.
+Build outputs/tooling and third-party/generated candidates take precedence over
+test candidates, while participation metadata such as `artifact-input` does not
+by itself demote production source. Visible relation, degree, and symbol counts
+are orientation signals rather than correctness claims. Standard dependency
+rows show at most eight relation kinds and disclose the omitted and total
+counts. Diagnostics retain their exact canonical cause count; recognized
+Tree-sitter recovery and missing node messages are additionally summarized by
+language and parser action. Unsupported, ignored, or oversized inputs are
+reported separately from completeness of the selected graph.
 
 Save the complete Map when later operations must use the same repository
 evidence:
@@ -773,6 +785,30 @@ archbird config init . --output archbird.json
 ```
 
 `config init` is a review candidate, not architecture truth.
+
+For monorepos, discovery follows explicit npm/Yarn `workspaces` and uv
+`[tool.uv.workspace]` member patterns (including uv exclusions). It also probes
+a direct-child Python `pyproject.toml` only when inventoried Python source exists
+below that directory. The native resolver requests exact regular manifest files;
+each request is limited to 256 KiB, with at most 128 npm and 32 Python
+candidates. `config show` exposes the request ledger, limits, provenance, and
+overlap/truncation/conflict diagnostics. Authored `project`, `layers`, and
+`packages` fields still take precedence over every inferred candidate.
+
+At the repository root, the same bounded request protocol reads at most one
+`setup.cfg` and one `CMakeLists.txt`. Literal setuptools metadata can contribute
+a source-backed Python package/import root; one literal lexical-root CMake
+`project()` call can contribute project identity. Archbird does not evaluate
+setuptools directives, interpolation, CMake variables, includes, macros, or
+conditional/function bodies. It distinguishes modules, regular packages, and
+namespace-package discovery, rejects unsupported include/exclude ambiguity,
+and rejects a CMake identity if `project` is redefined or unreachable after a
+root `return()`. Rejected identity is omitted from the project model and
+recorded as a warning: `discovery-manifest-invalid` for malformed or ambiguous
+input, and `discovery-manifest-identity-unsupported` for valid CMake or
+setup.cfg that this reader cannot resolve statically. npm/PEP 621/setup.cfg/R/
+Autoconf identity keeps priority over the CMake fallback; CLI and authored
+project identity remain authoritative over all of them.
 
 <!-- archbird-minimal-project-config:start -->
 ```json

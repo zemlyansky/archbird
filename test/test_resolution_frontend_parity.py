@@ -47,6 +47,38 @@ def raw_inventory(
     )
 
 
+IDENTITY_INVALID = "discovery-manifest-invalid"
+IDENTITY_UNSUPPORTED = "discovery-manifest-identity-unsupported"
+
+
+def identity_codes(document: dict) -> set[str]:
+    return {
+        row["code"]
+        for row in document.get("diagnostics", [])
+        if row.get("code") in {IDENTITY_INVALID, IDENTITY_UNSUPPORTED}
+    }
+
+
+def expect_identity_diagnostic(
+    document: dict, *, project: str, code: str, path: str
+) -> None:
+    if document.get("project") != project or document.get("effective_config", {}).get(
+        "packages"
+    ):
+        raise AssertionError(
+            f"rejected identity was asserted: {document!r}"
+        )
+    matches = [
+        row
+        for row in document.get("diagnostics", [])
+        if row.get("code") == code and row.get("path") == path
+    ]
+    if len(matches) != 1:
+        raise AssertionError(
+            f"expected {code} on {path}: {document.get('diagnostics')!r}"
+        )
+
+
 def expect_native_rejection(native_module: object, inventory: bytes, text: str) -> None:
     try:
         native_module.discovery_resolve(b"", MAP_REQUEST, inventory)
@@ -259,32 +291,34 @@ def check_native_manifest_protocol(native_module: object) -> None:
             }
         ]
         or not all(row["fulfilled"] for row in fulfilled["manifest_requests"])
+        or identity_codes(fulfilled)
     ):
         raise AssertionError(
             f"literal setup.cfg metadata was not resolved conservatively: {fulfilled!r}"
         )
 
     hostile_cmake = [
-        b"if(TRUE)\nproject(nested)\nendif()\n",
-        b"function(build)\nproject(nested)\nendfunction()\n",
-        b"function(project)\nendfunction()\nproject(shadowed)\n",
-        b"macro(PROJECT)\nendmacro()\nproject(shadowed)\n",
+        (b"if(TRUE)\nproject(nested)\nendif()\n", IDENTITY_UNSUPPORTED),
+        (b"function(build)\nproject(nested)\nendfunction()\n", IDENTITY_UNSUPPORTED),
+        (b"function(project)\nendfunction()\nproject(shadowed)\n", IDENTITY_UNSUPPORTED),
+        (b"macro(PROJECT)\nendmacro()\nproject(shadowed)\n", IDENTITY_UNSUPPORTED),
         (
             b"function(wrapper)\nfunction(project)\nendfunction()\n"
-            b"endfunction()\nwrapper()\nproject(shadowed)\n"
+            b"endfunction()\nwrapper()\nproject(shadowed)\n",
+            IDENTITY_UNSUPPORTED,
         ),
-        b"project(first)\nproject(second)\n",
-        b"project(name(with-parentheses))\n",
-        b"project(${NAME})\n",
-        b"project(\"${NAME}\")\n",
-        b"project([=[${NAME}]=])\n",
-        b"\"project(quoted-decoy)\"\n",
-        b"${project(variable-decoy)}\n",
-        b"not_a_command project(token-decoy)\n",
-        b"if(TRUE)\nproject(unclosed)\n",
-        b"return()\nproject(unreachable)\n",
+        (b"project(first)\nproject(second)\n", IDENTITY_UNSUPPORTED),
+        (b"project(name(with-parentheses))\n", IDENTITY_UNSUPPORTED),
+        (b"project(${NAME})\n", IDENTITY_UNSUPPORTED),
+        (b"project(\"${NAME}\")\n", IDENTITY_UNSUPPORTED),
+        (b"project([=[${NAME}]=])\n", IDENTITY_UNSUPPORTED),
+        (b"\"project(quoted-decoy)\"\n", IDENTITY_INVALID),
+        (b"${project(variable-decoy)}\n", IDENTITY_INVALID),
+        (b"not_a_command project(token-decoy)\n", IDENTITY_INVALID),
+        (b"if(TRUE)\nproject(unclosed)\n", IDENTITY_INVALID),
+        (b"return()\nproject(unreachable)\n", IDENTITY_UNSUPPORTED),
     ]
-    for document in hostile_cmake:
+    for document, code in hostile_cmake:
         result = json.loads(
             native_module.discovery_resolve(
                 b"",
@@ -298,12 +332,9 @@ def check_native_manifest_protocol(native_module: object) -> None:
                 ),
             )
         )
-        if result["project"] != "repository" or result[
-            "effective_config"
-        ].get("packages"):
-            raise AssertionError(
-                f"dynamic/nested CMake identity was asserted: {document!r}: {result!r}"
-            )
+        expect_identity_diagnostic(
+            result, project="repository", code=code, path="CMakeLists.txt"
+        )
 
     supported_cmake = [
         (b"\xef\xbb\xbfproject(bom-demo)\n", "bom-demo"),
@@ -326,7 +357,7 @@ def check_native_manifest_protocol(native_module: object) -> None:
                 ),
             )
         )
-        if result["project"] != expected_project:
+        if result["project"] != expected_project or identity_codes(result):
             raise AssertionError(
                 f"literal lexical-root CMake identity was lost: {document!r}: {result!r}"
             )
@@ -335,47 +366,64 @@ def check_native_manifest_protocol(native_module: object) -> None:
         (
             b"[metadata]\nname = %(distribution)s\n[options]\npackages = find:\n",
             "repository",
+            IDENTITY_UNSUPPORTED,
+        ),
+        (
+            b"[metadata]\nname = attr: fixture.version\n[options]\npackages = find:\n",
+            "repository",
+            IDENTITY_UNSUPPORTED,
         ),
         (
             b"[metadata]\nname = first\nname = second\n[options]\npackages = find:\n",
             "repository",
+            IDENTITY_INVALID,
         ),
-        (b"[metadata]\nname = demo\n[metadata]\nname = demo\n", "repository"),
+        (
+            b"[metadata]\nname = demo\n[metadata]\nname = demo\n",
+            "repository",
+            IDENTITY_INVALID,
+        ),
         (
             b"[metadata]\nname = demo\ninvalid option line\n"
             b"[options]\npackages = find:\n",
             "repository",
+            IDENTITY_INVALID,
         ),
-        (b"[metadata]\nname = demo\n[options]\npackages = first, other\n", "demo"),
-        (b"[metadata]\nname = demo\n[options]\npackage_dir = demo = src\n", "demo"),
-        (b"[metadata]\nname = demo\n[options]\npackages =\n", "demo"),
-        (b"[metadata]\nname = demo\n[options]\npy_modules =\n", "demo"),
+        (b"[metadata]\nname = demo\n[options]\npackages = first, other\n", "demo", None),
+        (b"[metadata]\nname = demo\n[options]\npackage_dir = demo = src\n", "demo", None),
+        (b"[metadata]\nname = demo\n[options]\npackages =\n", "demo", None),
+        (b"[metadata]\nname = demo\n[options]\npy_modules =\n", "demo", None),
         (
             b"[metadata]\nname = demo\n[options]\npackages = find:\n"
             b"[options.packages.find]\nexclude = demo\n",
             "demo",
+            None,
         ),
         (
             b"[metadata]\nname = demo\n[options]\npackages = find:\n",
             "demo",
+            None,
         ),
         (
             b"[metadata]\nname = demo\n[options]\npackages = find:\n"
             b"py_modules = demo\n[options.packages.find]\nwhere = src\n",
             "demo",
+            None,
         ),
         (
             b"[metadata]\nname = demo\n[options]\npy_modules = demo\n"
             b"packages = find:\n[options.packages.find]\nwhere = src\n",
             "demo",
+            None,
         ),
         (
             b"[metadata]\nname = demo\n[options]\npackages = find:\n"
             b"[options.packages.find]\nwhere =\n",
             "demo",
+            None,
         ),
     ]
-    for document, expected_project in hostile_setup:
+    for document, expected_project, code in hostile_setup:
         result = json.loads(
             native_module.discovery_resolve(
                 b"",
@@ -389,9 +437,16 @@ def check_native_manifest_protocol(native_module: object) -> None:
                 ),
             )
         )
-        if result["project"] != expected_project or result[
-            "effective_config"
-        ].get("packages"):
+        if expected_project == "repository":
+            expect_identity_diagnostic(
+                result, project="repository", code=code, path="setup.cfg"
+            )
+            continue
+        if (
+            result["project"] != expected_project
+            or result["effective_config"].get("packages")
+            or identity_codes(result)
+        ):
             raise AssertionError(
                 f"ambiguous setup.cfg metadata was asserted: {document!r}: {result!r}"
             )
@@ -445,6 +500,56 @@ def check_native_manifest_protocol(native_module: object) -> None:
     ] != ["module-dist"]:
         raise AssertionError(
             f"py_modules source agreement was not retained: {module_result!r}"
+        )
+
+    cmake_trap = (
+        b"[project]\nname = \"trap-pyproject\"\nproject(real-cmake)\n"
+    )
+    cmake_trap_result = json.loads(
+        native_module.discovery_resolve(
+            b"",
+            MAP_REQUEST,
+            raw_inventory(
+                [
+                    {"bytes": len(cmake_trap), "path": "CMakeLists.txt"},
+                    {"bytes": 10, "path": "src/main.c"},
+                ],
+                [("CMakeLists.txt", cmake_trap)],
+            ),
+        )
+    )
+    expect_identity_diagnostic(
+        cmake_trap_result,
+        project="repository",
+        code=IDENTITY_INVALID,
+        path="CMakeLists.txt",
+    )
+    if cmake_trap_result["project"] == "trap-pyproject":
+        raise AssertionError(
+            f"CMake candidate was decoded as pyproject: {cmake_trap_result!r}"
+        )
+
+    setup_trap = (
+        b"[project]\nname = \"trap-pyproject\"\n[metadata]\nname = real-setup\n"
+    )
+    setup_trap_result = json.loads(
+        native_module.discovery_resolve(
+            b"",
+            MAP_REQUEST,
+            raw_inventory(
+                [
+                    {"bytes": len(setup_trap), "path": "setup.cfg"},
+                    {"bytes": 10, "path": "src/demo/__init__.py"},
+                ],
+                [("setup.cfg", setup_trap)],
+            ),
+        )
+    )
+    if setup_trap_result["project"] != "real-setup" or identity_codes(
+        setup_trap_result
+    ):
+        raise AssertionError(
+            f"setup.cfg candidate was decoded as pyproject: {setup_trap_result!r}"
         )
 
     python_manifest = b'[project]\nname = "demo"\nversion = "1.0.0"\n'
@@ -841,6 +946,7 @@ def check_root_metadata_discovery(
                 "pointer": "/project",
                 "source": "manifest",
             }
+            or identity_codes(document)
         ):
             raise AssertionError(
                 f"root metadata precedence/evidence is wrong: {document!r}"
@@ -861,6 +967,7 @@ def check_root_metadata_discovery(
                 "pointer": "/project",
                 "source": "manifest",
             }
+            or identity_codes(cmake_only)
         ):
             raise AssertionError(f"CMake identity fallback is wrong: {cmake_only!r}")
 

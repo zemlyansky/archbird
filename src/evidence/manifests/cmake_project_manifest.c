@@ -299,8 +299,9 @@ ArchbirdStatus ab_cmake_project_metadata(ArchbirdEngine *engine,
   size_t block_count = 0;
   size_t project_calls = 0;
   size_t index = 0;
-  int valid = 1;
+  int malformed = 0;
   int project_shadowed = 0;
+  int nested_project = 0;
   ArchbirdStatus status;
   if (!engine || (!text && length) || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
@@ -308,14 +309,14 @@ ArchbirdStatus ab_cmake_project_metadata(ArchbirdEngine *engine,
   status = ab_utf8_validate(engine, text, length);
   if (length >= 3 && text[0] == 0xef && text[1] == 0xbb && text[2] == 0xbf)
     index = 3;
-  while (status == ARCHBIRD_OK && valid && index < length) {
+  while (status == ARCHBIRD_OK && !malformed && index < length) {
     size_t name_start;
     size_t name_end;
     size_t open;
     size_t close;
     BlockKind block;
     if (!skip_space_comments(text, length, &index)) {
-      valid = 0;
+      malformed = 1;
       break;
     }
     if (index == length)
@@ -324,7 +325,7 @@ ArchbirdStatus ab_cmake_project_metadata(ArchbirdEngine *engine,
       /* A top-level CMake listfile consists of command invocations, comments,
        * and whitespace. Reject stray tokens instead of finding a project-like
        * substring inside malformed quoted, bracketed, or variable text. */
-      valid = 0;
+      malformed = 1;
       break;
     }
     name_start = index++;
@@ -332,54 +333,63 @@ ArchbirdStatus ab_cmake_project_metadata(ArchbirdEngine *engine,
       index++;
     name_end = index;
     if (!skip_space_comments(text, length, &index)) {
-      valid = 0;
+      malformed = 1;
       break;
     }
     if (index == length || text[index] != '(') {
-      valid = 0;
+      malformed = 1;
       break;
     }
     open = index;
     if (!invocation_end(text, length, open, &close)) {
-      valid = 0;
+      malformed = 1;
       break;
     }
     index = close + 1;
     if (closing_block(text, name_start, name_end, &block)) {
       if (!block_count || blocks[block_count - 1] != block)
-        valid = 0;
+        malformed = 1;
       else
         block_count--;
       continue;
     }
-    if (block_count == 0 &&
-        ascii_case_equal(text, name_start, name_end, "project")) {
-      project_calls++;
-      if (project_calls == 1 && !project_shadowed)
-        status = copy_project_call(engine, text, length, open, close, out);
-      else {
-        ab_string_free(engine, &out->name);
-      }
+    if (ascii_case_equal(text, name_start, name_end, "project")) {
+      if (block_count == 0) {
+        project_calls++;
+        if (project_calls == 1 && !project_shadowed)
+          status = copy_project_call(engine, text, length, open, close, out);
+        else {
+          ab_string_free(engine, &out->name);
+          out->identity_unsupported = 1;
+        }
+      } else
+        nested_project = 1;
     }
     if (block_count == 0 && !project_calls &&
         ascii_case_equal(text, name_start, name_end, "return")) {
       /* A root return ends listfile processing, so a later lexical project()
        * call is unreachable. A return after project() does not erase the
        * identity already established by CMake. */
-      valid = 0;
+      out->identity_unsupported = 1;
+      break;
     }
     if (opening_block(text, name_start, name_end, &block)) {
       if ((block == BLOCK_FUNCTION || block == BLOCK_MACRO) &&
           definition_may_shadow_project(text, length, open, close))
         project_shadowed = 1;
       if (block_count == MAX_CMAKE_BLOCK_DEPTH)
-        valid = 0;
+        malformed = 1;
       else
         blocks[block_count++] = block;
     }
   }
-  if (status == ARCHBIRD_OK && (!valid || block_count || project_calls != 1)) {
+  if (status == ARCHBIRD_OK && (malformed || block_count)) {
     ab_string_free(engine, &out->name);
+    out->identity_invalid = 1;
+    out->identity_unsupported = 0;
+  } else if (status == ARCHBIRD_OK && !out->name.length &&
+             (project_calls || nested_project || out->identity_unsupported)) {
+    out->identity_unsupported = 1;
   }
   if (status != ARCHBIRD_OK)
     ab_cmake_project_metadata_free(engine, out);

@@ -2,6 +2,7 @@
 
 #include "base/archbird_internal.h"
 #include "base/path_match.h"
+#include "evidence/manifests/python_package_metadata.h"
 
 #include <string.h>
 
@@ -354,6 +355,20 @@ AbManifestCandidate *ab_manifest_discovery_find(AbManifestDiscovery *discovery,
   return NULL;
 }
 
+static ArchbirdStatus identity_diagnostic(AbManifestCandidate *candidate,
+                                          AbManifestDiagnosticFn diagnostic,
+                                          void *diagnostic_data, int invalid,
+                                          int unsupported) {
+  if (invalid)
+    return diagnostic(diagnostic_data, "discovery-manifest-invalid", "warning",
+                      candidate->path, NULL, 0, 0);
+  if (unsupported)
+    return diagnostic(diagnostic_data,
+                      "discovery-manifest-identity-unsupported", "warning",
+                      candidate->path, NULL, 0, 0);
+  return ARCHBIRD_OK;
+}
+
 ArchbirdStatus ab_manifest_discovery_supply(AbManifestDiscovery *discovery,
                                             AbManifestCandidate *candidate,
                                             const uint8_t *bytes, size_t length,
@@ -364,7 +379,8 @@ ArchbirdStatus ab_manifest_discovery_supply(AbManifestDiscovery *discovery,
       !diagnostic || candidate->supplied)
     return ARCHBIRD_INVALID_ARGUMENT;
   candidate->supplied = 1;
-  if (candidate->kind == AB_MANIFEST_CANDIDATE_NPM) {
+  switch (candidate->kind) {
+  case AB_MANIFEST_CANDIDATE_NPM: {
     AbDiscoveredNpmPackage *package;
     status = ensure_capacity(
         discovery->engine, (void **)&discovery->npm_packages,
@@ -388,7 +404,7 @@ ArchbirdStatus ab_manifest_discovery_supply(AbManifestDiscovery *discovery,
       discovery->npm_package_count++;
     return status;
   }
-  {
+  case AB_MANIFEST_CANDIDATE_PYTHON: {
     AbDiscoveredPythonPackage *package;
     status = ensure_capacity(
         discovery->engine, (void **)&discovery->python_packages,
@@ -410,6 +426,32 @@ ArchbirdStatus ab_manifest_discovery_supply(AbManifestDiscovery *discovery,
     if (status == ARCHBIRD_OK)
       discovery->python_package_count++;
     return status;
+  }
+  case AB_MANIFEST_CANDIDATE_SETUP_CFG:
+    if (discovery->has_setup_cfg)
+      return ARCHBIRD_INVALID_ARGUMENT;
+    status = ab_setup_cfg_metadata(discovery->engine, bytes, length,
+                                   &discovery->setup_cfg);
+    if (status != ARCHBIRD_OK)
+      return status;
+    discovery->has_setup_cfg = 1;
+    return identity_diagnostic(candidate, diagnostic, diagnostic_data,
+                               discovery->setup_cfg.identity_invalid,
+                               discovery->setup_cfg.identity_unsupported);
+  case AB_MANIFEST_CANDIDATE_CMAKE_PROJECT:
+    if (discovery->has_cmake)
+      return ARCHBIRD_INVALID_ARGUMENT;
+    status = ab_cmake_project_metadata(discovery->engine, bytes, length,
+                                       &discovery->cmake);
+    if (status != ARCHBIRD_OK)
+      return status;
+    discovery->has_cmake = 1;
+    return identity_diagnostic(candidate, diagnostic, diagnostic_data,
+                               discovery->cmake.identity_invalid,
+                               discovery->cmake.identity_unsupported);
+  case AB_MANIFEST_CANDIDATE_KIND_COUNT:
+  default:
+    return ARCHBIRD_INVALID_ARGUMENT;
   }
 }
 
@@ -433,19 +475,22 @@ ab_manifest_discovery_report_missing(const AbManifestDiscovery *discovery,
 
 void ab_manifest_discovery_free(AbManifestDiscovery *discovery) {
   size_t index;
+  ArchbirdEngine *engine;
   if (!discovery || !discovery->engine)
     return;
+  engine = discovery->engine;
   for (index = 0; index < discovery->npm_package_count; index++)
-    ab_npm_discovery_metadata_free(discovery->engine,
+    ab_npm_discovery_metadata_free(engine,
                                    &discovery->npm_packages[index].metadata);
-  ab_free(discovery->engine, discovery->npm_packages);
+  ab_free(engine, discovery->npm_packages);
   for (index = 0; index < discovery->python_package_count; index++) {
-    ab_pyproject_metadata_free(discovery->engine,
+    ab_pyproject_metadata_free(engine,
                                &discovery->python_packages[index].metadata);
-    ab_string_free(discovery->engine,
-                   &discovery->python_packages[index].import_root);
+    ab_string_free(engine, &discovery->python_packages[index].import_root);
   }
-  ab_free(discovery->engine, discovery->python_packages);
-  ab_free(discovery->engine, discovery->candidates);
+  ab_free(engine, discovery->python_packages);
+  ab_python_package_metadata_free(engine, &discovery->setup_cfg);
+  ab_cmake_project_metadata_free(engine, &discovery->cmake);
+  ab_free(engine, discovery->candidates);
   memset(discovery, 0, sizeof(*discovery));
 }
