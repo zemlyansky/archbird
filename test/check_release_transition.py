@@ -229,6 +229,8 @@ def main() -> int:
     expected_paths = expected_changes.get("paths")
     policy = expected_changes.get("policy", "repair")
     allow_public_changes = expected_changes.get("allow_public_changes", [])
+    reviewed_unmapped = expected_changes.get("unmapped_paths")
+    legacy_unmapped = list(args.allow_unmapped)
     if (
         expected_changes.get("artifact") != "archbird-release-change-envelope"
         or expected_changes.get("before_ref") != args.before_ref
@@ -244,6 +246,19 @@ def main() -> int:
         or not isinstance(expected_paths, list)
         or expected_paths != sorted(set(expected_paths))
         or not all(isinstance(path, str) and path for path in expected_paths)
+        or (
+            reviewed_unmapped is not None
+            and (
+                legacy_unmapped
+                or not isinstance(reviewed_unmapped, list)
+                or reviewed_unmapped != sorted(set(reviewed_unmapped))
+                or not all(
+                    isinstance(path, str) and path
+                    for path in reviewed_unmapped
+                )
+                or not set(reviewed_unmapped).issubset(expected_paths)
+            )
+        )
     ):
         failures.append("reviewed release change envelope is invalid")
     elif git_paths != set(expected_paths):
@@ -253,7 +268,11 @@ def main() -> int:
             f"missing={sorted(set(expected_paths) - git_paths)!r}"
         )
     map_paths = _map_changed_files(diff)
-    allowed_unmapped = set(args.allow_unmapped)
+    allowed_unmapped = set(
+        reviewed_unmapped
+        if isinstance(reviewed_unmapped, list)
+        else legacy_unmapped
+    )
     unexpected_map = map_paths - git_paths
     missed_git = git_paths - map_paths - allowed_unmapped
     unused_allowance = allowed_unmapped - (git_paths - map_paths)
@@ -317,6 +336,7 @@ def main() -> int:
         "version": args.version,
         "policy": policy,
         "allow_public_changes": list(allow_public_changes),
+        "unmapped_paths": sorted(allowed_unmapped),
     }
     output = Path(args.output)
     output.write_text(

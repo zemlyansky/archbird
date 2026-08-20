@@ -415,7 +415,6 @@ release-self-check: release-source-check build-py
 		--diff $(RELEASE_DIR)/self-transition.diff.json \
 		--verification $(RELEASE_DIR)/self-after.verify.json \
 		--expected-changes test/release-0.4.0.expected.json \
-		--allow-unmapped .gitignore --allow-unmapped archbird.json \
 		--require-clean --require-tag \
 		--output $(RELEASE_DIR)/self-transition.json
 

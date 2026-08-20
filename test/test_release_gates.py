@@ -686,6 +686,7 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
         "paths": ["after-tag.txt"],
         "policy": "feature",
         "allow_public_changes": ["public_symbols"],
+        "unmapped_paths": [],
         "version": "0.4.0",
     }
     paths = {
@@ -732,6 +733,38 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
         str(paths["output"]),
     )
     _run(*command, cwd=root)
+    _run(
+        *command,
+        "--allow-unmapped",
+        "after-tag.txt",
+        cwd=root,
+        success=False,
+        contains="reviewed release change envelope is invalid",
+    )
+    diff["sections"]["files"]["added"] = []
+    expected_changes["unmapped_paths"] = ["after-tag.txt"]
+    _write_json(paths["diff"], diff)
+    _write_json(paths["expected"], expected_changes)
+    _run(*command, cwd=root)
+    expected_changes["unmapped_paths"] = []
+    _write_json(paths["expected"], expected_changes)
+    _run(
+        *command,
+        cwd=root,
+        success=False,
+        contains="paths absent from Map Diff",
+    )
+    expected_changes["unmapped_paths"] = ["not-in-git.c"]
+    _write_json(paths["expected"], expected_changes)
+    _run(
+        *command,
+        cwd=root,
+        success=False,
+        contains="reviewed release change envelope is invalid",
+    )
+    expected_changes["unmapped_paths"] = []
+    diff["sections"]["files"]["added"] = ["after-tag.txt"]
+    _write_json(paths["diff"], diff)
     expected_changes["paths"].append("not-in-git.c")
     _write_json(paths["expected"], expected_changes)
     _run(
