@@ -615,7 +615,7 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
     tool = {
         "implementation_sha256": "9" * 64,
         "name": "archbird",
-        "version": "0.4.0",
+        "version": "0.0.4",
     }
     before_map = {
         "artifact": "map",
@@ -688,7 +688,7 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
         "policy": "feature",
         "allow_public_changes": ["public_symbols"],
         "unmapped_paths": [],
-        "version": "0.4.0",
+        "version": "0.0.4",
     }
     paths = {
         "before": root / "transition-before.json",
@@ -715,7 +715,7 @@ def _test_transition_checker(repository: Path, root: Path) -> None:
         "--before-ref",
         "v0.0.3",
         "--version",
-        "0.4.0",
+        "0.0.4",
         "--before-map",
         str(paths["before"]),
         "--after-map",

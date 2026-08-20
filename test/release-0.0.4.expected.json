@@ -343,7 +343,7 @@
     "test/hash_cli.c",
     "test/lex_cli.c",
     "test/pattern_cli.c",
-    "test/release-0.4.0.expected.json",
+    "test/release-0.0.4.expected.json",
     "test/run_app_browser.js",
     "test/run_large_live_app_browser.js",
     "test/run_live_app_browser.js",
@@ -423,5 +423,5 @@
     "test/fixtures/zero_config_monorepo/python/worker/pyproject.toml",
     "test/fixtures/zero_config_monorepo/python/worker/src/fixture_worker/__init__.py"
   ],
-  "version": "0.4.0"
+  "version": "0.0.4"
 }
