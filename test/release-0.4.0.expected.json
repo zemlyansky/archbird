@@ -6,6 +6,7 @@
   "before_ref": "v0.0.3",
   "paths": [
     ".github/workflows/ci.yml",
+    ".gitignore",
     "CMakeLists.txt",
     "Makefile",
     "README.md",
@@ -392,6 +393,7 @@
   "policy": "feature",
   "unmapped_paths": [
     ".github/workflows/ci.yml",
+    ".gitignore",
     "app/src/components/GraphCanvas.vue",
     "app/src/worker/browser.worker.ts",
     "archbird.json",

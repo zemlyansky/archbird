@@ -319,6 +319,7 @@ def _initialize_repository(root: Path) -> tuple[str, str, bytes, bytes, bytes]:
     (root / "tools").mkdir(parents=True)
     (root / "py/archbird").mkdir(parents=True)
     (root / "js").mkdir()
+    shutil.copyfile(REPOSITORY / ".gitignore", root / ".gitignore")
     shutil.copyfile(
         REPOSITORY / "tools/stage_release_provenance.py",
         root / "tools/stage_release_provenance.py",
@@ -885,6 +886,8 @@ def test_release_provenance_and_attestation(root: Path) -> None:
         raise AssertionError("Python release provenance was not staged")
     _run(sys.executable, str(stage), "python", "--clean", cwd=repository)
 
+    generated_snapshot = repository / "js/csrc.snapshot.gz"
+    generated_snapshot.write_bytes(b"generated release input")
     _run(sys.executable, str(stage), "node", cwd=repository)
     staged_package = (repository / "js/package.json").read_bytes()
     if json.loads(staged_package).get("gitHead") != commit:
@@ -903,6 +906,7 @@ def test_release_provenance_and_attestation(root: Path) -> None:
     _run(sys.executable, str(stage), "node", "--clean", cwd=repository)
     if (repository / "js/package.json").read_bytes() != package_bytes:
         raise AssertionError("Node release cleanup did not restore package.json")
+    generated_snapshot.unlink()
 
     (repository / "js/package.json").write_bytes(package_bytes + b" ")
     _run(

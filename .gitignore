@@ -19,6 +19,7 @@ py/NOTICE
 py/.csrc-*/
 js/native/
 js/csrc/
+js/csrc.snapshot.gz
 js/wasm/
 js/app/
 js/src/generated/
