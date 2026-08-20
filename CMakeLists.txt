@@ -593,7 +593,24 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ArchbirdFuzzing.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ArchbirdTesting.cmake")
 
 if(ARCHBIRD_BUILD_PYTHON)
-find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}" -c
+          "import sysconfig; print(sysconfig.get_path('include'), end='')"
+  RESULT_VARIABLE ARCHBIRD_PYTHON_INCLUDE_STATUS
+  OUTPUT_VARIABLE ARCHBIRD_PYTHON_INCLUDE_DIR
+  ERROR_VARIABLE ARCHBIRD_PYTHON_INCLUDE_ERROR
+)
+if(NOT ARCHBIRD_PYTHON_INCLUDE_STATUS EQUAL 0 OR
+   NOT EXISTS "${ARCHBIRD_PYTHON_INCLUDE_DIR}/Python.h")
+  message(FATAL_ERROR
+    "The selected Python interpreter did not provide usable development "
+    "headers: ${ARCHBIRD_PYTHON_INCLUDE_ERROR}"
+  )
+endif()
+set(Python3_INCLUDE_DIR "${ARCHBIRD_PYTHON_INCLUDE_DIR}" CACHE PATH
+    "Python headers paired with Python3_EXECUTABLE" FORCE)
+find_package(Python3 REQUIRED COMPONENTS Development.Module)
 if(Python3_Development.Module_FOUND)
   Python3_add_library(archbird_python MODULE bindings/python.c WITH_SOABI)
   target_link_libraries(archbird_python PRIVATE archbird_native)

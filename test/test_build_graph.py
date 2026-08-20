@@ -8,6 +8,7 @@ import re
 import shlex
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -706,6 +707,32 @@ def main() -> int:
             raise AssertionError(
                 "static-only CTest retained a Python differential test that "
                 "requires a shared library"
+            )
+
+        python_cache = candidate / "python-cache-coherency"
+        stale_include = candidate / "stale-python-include"
+        stale_include.mkdir()
+        run(
+            "cmake",
+            "-S",
+            str(repository),
+            "-B",
+            str(python_cache),
+            "-DBUILD_TESTING=OFF",
+            "-DARCHBIRD_BUILD_PYTHON=ON",
+            "-DARCHBIRD_BUILD_NODE=OFF",
+            "-DARCHBIRD_BUILD_SHARED=OFF",
+            f"-DPython3_EXECUTABLE={sys.executable}",
+            f"-D_Python3_INCLUDE_DIR={stale_include}",
+            cwd=repository,
+        )
+        cache = (python_cache / "CMakeCache.txt").read_text(encoding="utf-8")
+        expected_include = Path(sysconfig.get_path("include")).resolve()
+        matches = re.findall(r"^Python3_INCLUDE_DIR:PATH=(.*)$", cache, re.M)
+        if len(matches) != 1 or Path(matches[0]).resolve() != expected_include:
+            raise AssertionError(
+                "CMake retained Python headers from a different interpreter: "
+                f"observed={matches}, expected={expected_include}"
             )
 
         matrix = {
