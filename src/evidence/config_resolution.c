@@ -82,6 +82,7 @@ typedef struct ResolutionState {
   size_t unsupported_count;
   size_t asset_count;
   const AbValue *pruned_directories;
+  const AbValue *nested_repositories;
   int has_package_json;
   int has_pyproject;
   int has_setup_cfg;
@@ -1059,8 +1060,9 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
                  AbString *r_version, AbAutoconfMetadata *autoconf,
                  AbCmakeProjectMetadata *cmake, int *has_make) {
   static const char *const fields[] = {
-      "artifact",     "documents",          "files",
-      "ignore_files", "pruned_directories", "schema_version"};
+      "artifact",      "documents",           "files",
+      "ignore_files",  "nested_repositories", "pruned_directories",
+      "schema_version"};
   static const char *const file_fields[] = {"bytes", "path"};
   static const char *const input_fields[] = {"content_hex", "path"};
   AbValue *root = &state->inventory_document;
@@ -1068,6 +1070,7 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
   const AbValue *files;
   const AbValue *ignores;
   const AbValue *documents;
+  const AbValue *nested_repositories;
   const AbValue *pruned;
   InventoryIgnore *ignore_inputs = NULL;
   uint64_t version;
@@ -1080,19 +1083,36 @@ decode_inventory(ResolutionState *state, const uint8_t *json,
   files = ab_value_member(root, "files");
   ignores = ab_value_member(root, "ignore_files");
   documents = ab_value_member(root, "documents");
+  nested_repositories = ab_value_member(root, "nested_repositories");
   pruned = ab_value_member(root, "pruned_directories");
-  if (!allowed_fields(root, fields, 6) ||
+  if (!allowed_fields(root, fields, 7) ||
       !ab_value_string_is(ab_value_member(root, "artifact"),
                           "archbird-repository-inventory") ||
       !ab_value_u64(schema, &version) || version != 1 || !files ||
       files->kind != AB_VALUE_ARRAY || !ignores ||
       ignores->kind != AB_VALUE_ARRAY || !documents ||
       documents->kind != AB_VALUE_ARRAY ||
+      (nested_repositories && nested_repositories->kind != AB_VALUE_ARRAY) ||
       (pruned && pruned->kind != AB_VALUE_ARRAY)) {
     status = inventory_error(state->engine, "invalid artifact or fields");
     goto done;
   }
   state->pruned_directories = pruned;
+  state->nested_repositories = nested_repositories;
+  if (nested_repositories) {
+    for (index = 0; index < nested_repositories->as.array.count; index++) {
+      const AbValue *path = &nested_repositories->as.array.items[index];
+      if (!nonblank_string(path) || !repository_path_valid(&path->as.text) ||
+          (index && ab_string_compare(
+                        &nested_repositories->as.array.items[index - 1].as.text,
+                        &path->as.text) >= 0)) {
+        status = inventory_error(
+            state->engine,
+            "nested repositories must be sorted unique repository paths");
+        goto done;
+      }
+    }
+  }
   if (pruned) {
     for (index = 0; index < pruned->as.array.count; index++) {
       const AbValue *path = &pruned->as.array.items[index];
@@ -3123,9 +3143,13 @@ render_resolution(ResolutionState *state, size_t max_file_bytes,
   AbBuffer body;
   AbBuffer canonical;
   AbBuffer final;
+  AbBuffer policy;
+  AbBuffer policy_canonical;
   ArchbirdSha256Context digest_context;
   uint8_t digest[32];
   char digest_hex[65];
+  uint8_t policy_digest[32];
+  char policy_digest_hex[65];
   size_t index;
   ArchbirdStatus status;
   if (!files || !configuration || !project || !root)
@@ -3133,9 +3157,33 @@ render_resolution(ResolutionState *state, size_t max_file_bytes,
   ab_buffer_init(&body, state->engine);
   ab_buffer_init(&canonical, state->engine);
   ab_buffer_init(&final, state->engine);
-  status = ab_buffer_literal(
-      &body,
-      "{\"artifact\":\"archbird-config-resolution\",\"configuration_sha256\":");
+  ab_buffer_init(&policy, state->engine);
+  ab_buffer_init(&policy_canonical, state->engine);
+  status = ab_buffer_literal(&policy, "{\"configuration\":");
+  if (status == ARCHBIRD_OK) {
+    if (state->configured_map_overlay.kind == AB_VALUE_OBJECT)
+      status = ab_value_render(&policy, &state->configured_map_overlay);
+    else
+      status = ab_buffer_literal(&policy, "{}");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&policy, ",\"request\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&policy, &state->request_document);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&policy, "}");
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_json_canonicalize(state->engine, policy.data, policy.length, 0,
+                                   buffer_write, &policy_canonical);
+  if (status == ARCHBIRD_OK)
+    status = archbird_sha256(policy_canonical.data, policy_canonical.length,
+                             policy_digest);
+  if (status == ARCHBIRD_OK)
+    archbird_sha256_hex(policy_digest, policy_digest_hex);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&body, "{\"artifact\":\"archbird-config-"
+                                      "resolution\",\"configuration_sha256\":");
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&body, configuration);
   if (status == ARCHBIRD_OK)
@@ -3221,9 +3269,26 @@ render_resolution(ResolutionState *state, size_t max_file_bytes,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_u64(&body, max_index_bytes);
   if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&body, ",\"nested_repositories\":");
+  if (status == ARCHBIRD_OK) {
+    if (state->nested_repositories)
+      status = ab_value_render(&body, state->nested_repositories);
+    else
+      status = ab_buffer_literal(&body, "[]");
+  }
+  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&body, ",\"origins\":");
   if (status == ARCHBIRD_OK)
     status = render_origins(&body, state);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&body, ",\"policy\":");
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_append(&body, policy_canonical.data, policy_canonical.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&body, ",\"policy_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(&body, policy_digest_hex, 64);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(
         &body, ",\"profile\":{\"implementation_sha256\":"
@@ -3270,6 +3335,8 @@ render_resolution(ResolutionState *state, size_t max_file_bytes,
   ab_buffer_free(&body);
   ab_buffer_free(&canonical);
   ab_buffer_free(&final);
+  ab_buffer_free(&policy);
+  ab_buffer_free(&policy_canonical);
   return status;
 }
 

@@ -108,13 +108,13 @@ def main() -> int:
         replace_once(
             extra_edge / TARGET_MANIFEST_PATH,
             "set(ARCHBIRD_CORE_GROUP_api_DEPENDENCIES\n"
-            "  configuration\n  foundation\n  interchange\n  model\n",
-            "set(ARCHBIRD_CORE_GROUP_api_DEPENDENCIES\n"
             "  configuration\n  foundation\n  interchange\n  mapping\n  model\n",
+            "set(ARCHBIRD_CORE_GROUP_api_DEPENDENCIES\n"
+            "  configuration\n  evidence\n  foundation\n  interchange\n  mapping\n  model\n",
         )
         expect_failure(
             lambda: validate_target_manifest(extra_edge),
-            "unexpected=api->mapping",
+            "unexpected=api->evidence",
         )
 
         later_edge = root / "later-edge"

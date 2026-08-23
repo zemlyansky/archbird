@@ -50,6 +50,10 @@ typedef struct AbManifestResolution {
   AbString profile_name;
   uint8_t profile_implementation_sha256[32];
   uint8_t sha256[32];
+  struct AbValue *policy;
+  uint8_t policy_sha256[32];
+  int has_policy;
+  struct AbValue *nested_repositories;
   AbDiscoveryCoverage coverage;
 } AbManifestResolution;
 

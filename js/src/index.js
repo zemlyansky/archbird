@@ -278,6 +278,9 @@ class Project {
     if (resolution) {
       manifest.resolution = {
         coverage: { ...resolution.coverage },
+        nested_repositories: [...(resolution.nested_repositories || [])],
+        policy: structuredClone(resolution.policy),
+        policy_sha256: resolution.policy_sha256,
         profile: { ...resolution.profile },
         sha256: resolution.sha256,
       };
@@ -851,10 +854,38 @@ class Project {
   }
 
   mapMarkdown(options = {}) {
-    return renderMapMarkdown(this.mapJson(), {
-      ...options,
-      resolutionJson: options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
-    });
+    return this.mapMarkdownWithBlocking(options).report;
+  }
+
+  mapMarkdownWithBlocking(options = {}) {
+    const request = mapProjectionRequest(options);
+    const resolution = Buffer.from(
+      options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+    );
+    if (request.definition.level === "symbol") {
+      const map = this.map();
+      return {
+        blocking: map.diagnostics.some((row) => row.severity === "error"),
+        report: native.projectionRenderMarkdown(
+          Buffer.from(JSON.stringify(map)),
+          resolution,
+          Buffer.from(JSON.stringify(request.definition)),
+          request.detail,
+          request.maxChars,
+        ),
+      };
+    }
+    // Canonical-Map cache hits leave native provider state unmaterialized.
+    // Rehydrate it from provider caches for a bounded live projection rather
+    // than decoding the potentially much larger cached Map artifact.
+    this.materialize();
+    return native.projectProjectionMarkdown(
+      this._handle,
+      resolution,
+      Buffer.from(JSON.stringify(request.definition)),
+      request.detail,
+      request.maxChars,
+    );
   }
 
   sourceMarkdown(options = {}) {
@@ -1015,6 +1046,7 @@ function inventoryState(
 ) {
   const files = [];
   const pruned = [];
+  const nestedRepositories = new Set();
   let pending = [["", root]];
   const standardIgnores = [];
   const customSet = new Set(ignoreFiles);
@@ -1032,7 +1064,11 @@ function inventoryState(
         const candidate = path.join(directory, entry.name);
         const relative = path.relative(root, candidate).split(path.sep).join("/");
         if (entry.isDirectory()) directories.push([relative, candidate]);
-        else if (entry.isFile() && !transientSet.has(relative)) {
+        else if (entry.isFile()) {
+          if (entry.name === ".git" && directoryRelative) {
+            nestedRepositories.add(directoryRelative);
+          }
+          if (transientSet.has(relative)) continue;
           files.push(relative);
         }
       }
@@ -1053,6 +1089,11 @@ function inventoryState(
       }
     }
     directories.sort((left, right) => utf8Compare(left[0], right[0]));
+    for (const [relative] of directories) {
+      if (relative.endsWith("/.git")) {
+        nestedRepositories.add(relative.slice(0, -5));
+      }
+    }
     const activeIgnores = [...standardIgnores, ...customIgnores];
     const decisions = native.discoveryDescend(
       configJson,
@@ -1069,6 +1110,7 @@ function inventoryState(
   }
   return {
     files: files.sort(utf8Compare),
+    nestedRepositories: [...nestedRepositories].sort(utf8Compare),
     pruned: pruned.sort(utf8Compare),
   };
 }
@@ -1142,6 +1184,7 @@ function fileRow(root, relative) {
 function inventoryRows(configJson, root, options = {}) {
   const state = inventoryState(configJson, root, options);
   return {
+    nestedRepositories: state.nestedRepositories,
     pruned: state.pruned,
     rows: state.files
       .map((relative) => fileRow(root, relative))
@@ -1342,6 +1385,7 @@ function repositoryInventory(
     includeStandardIgnores = true,
     ignoreFiles = [],
     prunedDirectories = [],
+    nestedRepositories = [],
     overlay = null,
     manifestRequests = [],
   } = {},
@@ -1397,6 +1441,7 @@ function repositoryInventory(
     documents,
     files: [...rows],
     ignore_files: selected.map((relative) => encodedInput(root, relative, overlay)),
+    nested_repositories: [...nestedRepositories],
     pruned_directories: [...prunedDirectories],
     schema_version: 1,
   })));
@@ -1523,6 +1568,7 @@ function resolveDiscovery(
     includeStandardIgnores: ignore,
     ignoreFiles: normalizedIgnoreFiles,
     prunedDirectories: inventoryState.pruned,
+    nestedRepositories: inventoryState.nestedRepositories,
     overlay,
   });
   const candidateResolution = JSON.parse(
@@ -1535,6 +1581,7 @@ function resolveDiscovery(
     includeStandardIgnores: ignore,
     ignoreFiles: normalizedIgnoreFiles,
     prunedDirectories: inventoryState.pruned,
+    nestedRepositories: inventoryState.nestedRepositories,
     overlay,
     manifestRequests: candidateResolution.manifest_requests,
   });

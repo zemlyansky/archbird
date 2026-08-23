@@ -134,8 +134,16 @@ archbird map . --view evidence --detail full
 derived evidence model of files, symbols, dependencies, public interfaces,
 tests, build routes, artifacts, and components. Unsupported inputs, unresolved
 relationships, provider recovery, and other unknown frontiers remain explicit.
-The default Markdown output is a readable architecture overview; use JSON when
-you want to save the canonical Map for later commands.
+The default Markdown output is a readable architecture overview evaluated
+directly from the analyzed state; it does not first serialize and decode the
+potentially much larger canonical Map. Use JSON when you want to save that
+complete Map for later commands.
+
+Discovery records nested Git repositories and submodules encountered inside
+the selected scope and reports them in the overview. Archbird does not silently
+exclude or reinterpret those files: choose the concrete child root, or add a
+reviewed exclusion, when the parent is an ecosystem aggregator rather than one
+project.
 
 ### Query focused context
 
@@ -962,6 +970,13 @@ archbird freshness . --snapshot .archbird/map.json \
   --output .archbird/freshness.json --check
 ```
 
+Freshness replays the Map's recorded discovery policy, including `--only`,
+`--exclude`, ignore behavior, and the project configuration. It rescans that
+scope and hashes selected inputs without rerunning language providers or
+rebuilding the relation graph, so new files matching a saved glob are detected
+without widening a scoped Map. Maps created before replayable policy was
+recorded must be regenerated; Archbird refuses to guess their original scope.
+
 
 ## Programmatic APIs
 
@@ -1118,7 +1133,7 @@ The complete C ABI is declared in
 | Engine and structured edits | `archbird_engine_create`, `archbird_engine_destroy`, `archbird_engine_error`, `archbird_engine_error_offset`, `archbird_engine_options_init`, `archbird_engine_options_init_for_input`, `archbird_graph_options_init`, `archbird_implementation_sha256`, `archbird_json_canonicalize`, `archbird_json_pointer_edit`, `archbird_json_pointer_edit_options_init`, `archbird_json_pointer_edit_result_init`, `archbird_json_validate`, `archbird_make_variable_token_edit`, `archbird_make_variable_token_edit_options_init`, `archbird_make_variable_token_edit_result_init`, `archbird_make_variable_token_insert`, `archbird_make_variable_token_insert_options_init`, `archbird_make_variable_token_insert_result_init`, `archbird_unified_diff_options_init` |
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
 | Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_constraints_report_with_blocking`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
-| Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
+| Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_projection_render_markdown`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
 | Map, Query, Path, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_path`, `archbird_map_path_markdown`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_path_render_markdown`, `archbird_unified_diff` |
 | Workspace | `archbird_workspace_analyze`, `archbird_workspace_plan` |
 | Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_render_markdown`, `archbird_plan_source_requirements`, `archbird_plan_validate` |

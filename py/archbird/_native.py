@@ -726,6 +726,51 @@ def project_write_map(
     )
 
 
+def project_projection_markdown(
+    project: _Project,
+    resolution: bytes,
+    projection: bytes,
+    detail: int,
+    max_chars: int,
+) -> tuple[bytes, bool]:
+    if detail not in (0, 1, 2) or max_chars < 0:
+        raise ValueError("invalid live project projection detail or max_chars")
+    function = _declare(
+        "archbird_project_projection_render_markdown",
+        [
+            _POINTER,
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_int,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int),
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    blocking = ctypes.c_int()
+    report = _render(
+        project.engine,
+        lambda write: function(
+            project.engine,
+            project.project,
+            resolution if resolution else None,
+            len(resolution),
+            projection,
+            len(projection),
+            detail,
+            max_chars,
+            ctypes.byref(blocking),
+            write,
+            None,
+        ),
+    )
+    return report, bool(blocking.value)
+
+
 def project_provider_facts(
     project: _Project, index: int, pretty: bool = False
 ) -> bytes:

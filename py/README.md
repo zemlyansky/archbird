@@ -103,8 +103,10 @@ archbird map . --view evidence --detail full
 
 The default Markdown is an architecture-first overview. `--view` chooses the
 subject, `--group-by` organizes entities, `--level` chooses component, file, or
-symbol nodes, and `--relations` selects graph relations. `--detail` changes
-presentation density only; canonical JSON remains exhaustive. Compact and
+symbol nodes, and `--relations` selects graph relations. Live Markdown is
+projected directly from the analyzed state rather than by serializing and
+decoding the complete canonical Map. `--detail` changes presentation density
+only; canonical JSON remains exhaustive. Compact and
 standard Markdown rank structural groups, aggregated dependency flows, and file
 landmarks while reporting what the presentation omitted. File landmarks use
 separate bounded production/API, test/fixture, and build/artifact shortlists,
@@ -119,6 +121,10 @@ counts. Diagnostics retain their exact canonical cause count; recognized
 Tree-sitter recovery and missing node messages are additionally summarized by
 language and parser action. Unsupported, ignored, or oversized inputs are
 reported separately from completeness of the selected graph.
+
+The overview reports nested Git repositories and submodules encountered inside
+the selected scope. They are not silently excluded; select the concrete child
+root or add a reviewed exclusion when the parent is an aggregator.
 
 Save the complete Map when later operations must use the same repository
 evidence:
@@ -584,10 +590,13 @@ archbird verify --map .archbird/map.json \
 ```
 
 Checked saved-artifact operations require a compatible current producer.
-Freshness independently compares the saved source/config evidence with a newly
-derived live Map. A saved Map contains mapped facts rather than the full
-discovery inventory, so inventory-sensitive constraints also need its matching
-configuration-resolution artifact.
+Freshness replays the Map's recorded selectors, configuration, and ignore
+policy, then hashes that exact live input scope without rerunning providers or
+rebuilding the relation graph. It detects newly matching files without widening
+a scoped Map. Maps that predate replayable discovery policy must be regenerated
+rather than audited under a guessed scope. A saved Map contains mapped facts
+rather than the full discovery inventory, so inventory-sensitive constraints
+also need its matching configuration-resolution artifact.
 
 ## Python API
 

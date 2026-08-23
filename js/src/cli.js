@@ -80,7 +80,7 @@ function usage(command = "map") {
     path: "archbird path SOURCE TARGET [--root PROJECT | --map MAP.json] [--level component|file|symbol] [--relation FAMILY] [--direction downstream|upstream|both] [--format markdown|json] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
     diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
-    freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--config PROJECT.json] [--check]",
+    freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
     verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
     plan: "archbird plan [ROOT|CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--before-map OLD.json | --git-diff REVISION] [--config archbird.json] [--objective TEXT] [--rename OLD=NEW] [--redirect FROM=TO] [--format json|markdown] [--output PLAN.json]",
@@ -760,39 +760,49 @@ function mapMain(argv) {
   const progress = new Progress(options.progress);
   const current = project(options, progress);
   progress.emit({ phase: "rendering", artifact: "canonical Map" });
-  const mapJson = current.mapJson({ pretty: options.pretty && options.format === "json" });
-  warnMapCacheStats(current.mapCacheStats, options);
-  const output = options.format === "json"
-    ? mapJson
-    : options.view === "source"
-      ? current.sourceMarkdown({
+  const projectionOptions = {
+    view: options.view,
+    detail: options.detail,
+    compact: options.compact,
+    full: options.full,
+    groupBy: options.groupBy,
+    level: options.level,
+    maxChars: options.maxChars,
+    overlays: options.overlay.length
+      ? options.overlay.flatMap((value) =>
+        value.split(",").map((part) => part.trim()).filter(Boolean))
+      : undefined,
+    relations: options.relations.length
+      ? options.relations.flatMap((value) =>
+        value.split(",").map((part) => part.trim()).filter(Boolean))
+      : undefined,
+    resolutionJson: current.resolutionJson || Buffer.alloc(0),
+  };
+  let output;
+  let blocking;
+  if (options.format === "markdown" && options.view !== "source") {
+    const result = current.mapMarkdownWithBlocking(projectionOptions);
+    output = result.report;
+    blocking = result.blocking;
+  } else {
+    const mapJson = current.mapJson({
+      pretty: options.pretty && options.format === "json",
+    });
+    output = options.format === "json"
+      ? mapJson
+      : current.sourceMarkdown({
         artifactJson: mapJson,
         detail: options.detail,
         compact: options.compact,
         full: options.full,
         maxChars: options.maxChars,
-      })
-      : current.mapMarkdown({
-      view: options.view,
-      detail: options.detail,
-      compact: options.compact,
-      full: options.full,
-      groupBy: options.groupBy,
-      level: options.level,
-      maxChars: options.maxChars,
-      overlays: options.overlay.length
-        ? options.overlay.flatMap((value) =>
-          value.split(",").map((part) => part.trim()).filter(Boolean))
-        : undefined,
-      relations: options.relations.length
-        ? options.relations.flatMap((value) =>
-          value.split(",").map((part) => part.trim()).filter(Boolean))
-        : undefined,
-      resolutionJson: current.resolutionJson || Buffer.alloc(0),
-    });
+      });
+    blocking = hasErrors(JSON.parse(mapJson));
+  }
+  warnMapCacheStats(current.mapCacheStats, options);
   progress.finish();
   write(output, options.output);
-  return options.check && hasErrors(JSON.parse(mapJson)) ? 1 : 0;
+  return options.check && blocking ? 1 : 0;
 }
 
 function selectorDefinitions() {
@@ -1730,8 +1740,13 @@ function observeMain(argv) {
 
 function freshnessMain(argv) {
   const options = parse(argv, {
-    ...DISCOVERY,
+    root: { type: "string" },
     snapshot: { type: "string" },
+    output: COMMON.output,
+    pretty: COMMON.pretty,
+    check: COMMON.check,
+    progress: { default: "auto", type: "string" },
+    help: COMMON.help,
   }, { positionals: 1 });
   if (options.help) {
     process.stdout.write(usage("freshness"));
@@ -1739,21 +1754,107 @@ function freshnessMain(argv) {
   }
   required(options, "snapshot");
   const progress = new Progress(options.progress);
-  const currentProject = project(options, progress);
-  progress.emit({ phase: "rendering", artifact: "canonical Map" });
-  const currentMap = currentProject.mapJson();
-  warnMapCacheStats(currentProject.mapCacheStats, options);
+  const positional = options._[0] ? path.resolve(options._[0]) : null;
+  const override = options.root ? path.resolve(options.root) : null;
+  if (positional && override && positional !== override) {
+    throw new Error("positional ROOT and --root select different directories");
+  }
+  const repository = positional || override || path.resolve(".");
+  const snapshot = JSON.parse(read(options.snapshot).toString("utf8"));
+  if (!snapshot || Array.isArray(snapshot) ||
+      !["map", "query"].includes(snapshot.artifact)) {
+    throw new Error("--snapshot must contain a canonical Map or Query");
+  }
+  const discovery = snapshot.discovery;
+  const policy = discovery && discovery.policy;
+  if (!policy || Array.isArray(policy) || typeof policy !== "object" ||
+      Object.keys(policy).sort().join(",") !== "configuration,request") {
+    throw new Error(
+      "saved Map/Query has no replayable discovery policy; regenerate it " +
+      "with the current Archbird",
+    );
+  }
+  const configuration = policy.configuration;
+  const request = policy.request;
+  if (!configuration || Array.isArray(configuration) ||
+      typeof configuration !== "object" || !request ||
+      Array.isArray(request) || typeof request !== "object") {
+    throw new Error("saved discovery policy is malformed");
+  }
+  if (request.artifact !== "archbird-map-request" ||
+      request.schema_version !== 1) {
+    throw new Error("saved discovery request is unsupported");
+  }
+  for (const field of ["only", "exclude", "ignore_files", "sources"]) {
+    if (!Array.isArray(request[field])) {
+      throw new Error(`saved discovery request ${field} is malformed`);
+    }
+  }
+  const sources = request.sources.map((row) => {
+    if (!row || Array.isArray(row) || typeof row !== "object" ||
+        Object.keys(row).sort().join(",") !== "glob,language" ||
+        typeof row.glob !== "string" || typeof row.language !== "string") {
+      throw new Error("saved discovery source classification is malformed");
+    }
+    return `${row.language}=${row.glob}`;
+  });
+  for (const field of ["only", "exclude", "ignore_files"]) {
+    if (!request[field].every((value) => typeof value === "string")) {
+      throw new Error(`saved discovery request ${field} is malformed`);
+    }
+  }
+  const transientExclude = [options.snapshot, options.output]
+    .filter((value) => value && value !== "-")
+    .map((value) => path.resolve(value))
+    .filter((value) => value === repository || value.startsWith(`${repository}${path.sep}`));
+  progress.emit({ phase: "discovery", state: "replay" });
+  const currentProject = archbird.Project.fromRepository(repository, {
+    config: Buffer.from(JSON.stringify(configuration)),
+    project: request.project ?? null,
+    source: sources,
+    only: request.only,
+    exclude: request.exclude,
+    ignore: request.ignore ?? true,
+    ignoreFiles: request.ignore_files,
+    defaultExcludes: request.default_excludes ?? true,
+    maxFileBytes: request.max_file_bytes ?? null,
+    maxIndexBytes: request.max_index_bytes ?? null,
+    scan: false,
+    _transientExclude: transientExclude,
+  });
+  progress.emit({ phase: "selected", files: currentProject.sources.length });
+  const resolution = JSON.parse(currentProject.resolutionJson.toString("utf8"));
+  const manifest = JSON.parse(currentProject.manifestJson.toString("utf8"));
+  const currentMap = Buffer.from(JSON.stringify({
+    artifact: "map",
+    discovery: {
+      policy: resolution.policy,
+      policy_sha256: resolution.policy_sha256,
+      sha256: resolution.sha256,
+    },
+    evidence: {
+      config_sha256: currentProject.configSha256,
+      input_sha256: currentProject.mapInputSha256,
+    },
+    files: manifest.files.map((row) => ({ path: row.path, sha256: row.sha256 })),
+    project: currentProject.project,
+    schema_version: snapshot.schema_version,
+    tool: {
+      implementation_sha256: native.IMPLEMENTATION_SHA256,
+      name: "archbird",
+      version: native.VERSION,
+    },
+  }));
   progress.emit({ phase: "rendering", artifact: "freshness audit" });
   const encoded = archbird.auditMapFreshness(
-    read(options.snapshot),
+    Buffer.from(JSON.stringify(snapshot)),
     currentMap,
     { pretty: options.pretty },
   );
   write(encoded, options.output);
   progress.finish();
   if (!options.check) return 0;
-  const current = JSON.parse(currentMap);
-  return JSON.parse(encoded).status === "current" && !hasErrors(current) ? 0 : 1;
+  return JSON.parse(encoded).status === "current" ? 0 : 1;
 }
 
 function workspaceMain(argv) {

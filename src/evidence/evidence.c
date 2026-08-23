@@ -1,5 +1,8 @@
 #include "base/json_internal.h"
 #include "base/json_number.h"
+#include "base/json_value.h"
+#include "base/render_internal.h"
+#include "base/sha256.h"
 
 #include "base/model.h"
 #include "evidence/evidence.h"
@@ -225,6 +228,34 @@ static ArchbirdStatus validate_path(ArchbirdEngine *engine, yyjson_val *value,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus validate_sorted_path_array(ArchbirdEngine *engine,
+                                                 yyjson_val *value,
+                                                 const char *context) {
+  yyjson_arr_iter iterator;
+  yyjson_val *item;
+  StringView previous = {0};
+  size_t index = 0;
+  if (!yyjson_is_arr(value))
+    return schema_error(engine, "expected an array of repository paths");
+  yyjson_arr_iter_init(value, &iterator);
+  while ((item = yyjson_arr_iter_next(&iterator)) != NULL) {
+    StringView current = {0};
+    ArchbirdStatus status = validate_path(engine, item, context, "item");
+    if (status != ARCHBIRD_OK)
+      return status;
+    current.data = yyjson_get_str(item);
+    current.length = yyjson_get_len(item);
+    if (index && bytes_compare(previous.data, previous.length, current.data,
+                               current.length) >= 0)
+      return archbird_error_set(
+          engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+          "%s must be strictly sorted with unique paths", context);
+    previous = current;
+    index++;
+  }
+  return ARCHBIRD_OK;
+}
+
 static int parse_u64(yyjson_val *value, uint64_t *out) {
   const char *raw;
   size_t length;
@@ -445,8 +476,9 @@ archbird_validate_source_manifest_root(ArchbirdEngine *engine,
                              "source-manifest", "configuration_sha256");
   }
   if (status == ARCHBIRD_OK && object_get(root, "resolution")) {
-    static const char *const resolution_allowed[] = {"coverage", "profile",
-                                                     "sha256"};
+    static const char *const resolution_allowed[] = {
+        "coverage", "nested_repositories", "policy", "policy_sha256", "profile",
+        "sha256"};
     static const char *const resolution_required[] = {"coverage", "profile",
                                                       "sha256"};
     static const char *const profile_allowed[] = {"implementation_sha256",
@@ -463,6 +495,10 @@ archbird_validate_source_manifest_root(ArchbirdEngine *engine,
     yyjson_val *resolution = object_get(root, "resolution");
     yyjson_val *profile = object_get(resolution, "profile");
     yyjson_val *coverage = object_get(resolution, "coverage");
+    yyjson_val *nested_repositories =
+        object_get(resolution, "nested_repositories");
+    yyjson_val *policy = object_get(resolution, "policy");
+    yyjson_val *policy_sha256 = object_get(resolution, "policy_sha256");
     size_t field_index;
     uint64_t ignored_value;
     status = validate_object_shape(
@@ -473,6 +509,30 @@ archbird_validate_source_manifest_root(ArchbirdEngine *engine,
     if (status == ARCHBIRD_OK)
       status = validate_sha256(engine, object_get(resolution, "sha256"),
                                "source-manifest.resolution", "sha256");
+    if (status == ARCHBIRD_OK && nested_repositories)
+      status = validate_sorted_path_array(
+          engine, nested_repositories,
+          "source-manifest.resolution.nested_repositories");
+    if (status == ARCHBIRD_OK && (!!policy != !!policy_sha256))
+      status = schema_error_field(
+          engine, "source-manifest.resolution", "policy",
+          "and policy_sha256 must either both be present or both be absent");
+    if (status == ARCHBIRD_OK && policy) {
+      static const char *const policy_fields[] = {"configuration", "request"};
+      status = validate_object_shape(
+          engine, policy, "source-manifest.resolution.policy", policy_fields,
+          sizeof(policy_fields) / sizeof(policy_fields[0]), policy_fields,
+          sizeof(policy_fields) / sizeof(policy_fields[0]));
+      if (status == ARCHBIRD_OK &&
+          (!yyjson_is_obj(object_get(policy, "configuration")) ||
+           !yyjson_is_obj(object_get(policy, "request"))))
+        status =
+            schema_error_field(engine, "source-manifest.resolution.policy",
+                               "configuration", "and request must be objects");
+      if (status == ARCHBIRD_OK)
+        status = validate_sha256(engine, policy_sha256,
+                                 "source-manifest.resolution", "policy_sha256");
+    }
     if (status == ARCHBIRD_OK)
       status = validate_object_shape(
           engine, profile, "source-manifest.resolution.profile",
@@ -1504,6 +1564,18 @@ static ArchbirdStatus decode_value(ArchbirdEngine *engine, yyjson_val *value,
                             "cannot decode unsupported evidence value");
 }
 
+static ArchbirdStatus value_sha256(ArchbirdEngine *engine, const AbValue *value,
+                                   uint8_t out[32]) {
+  AbBuffer canonical;
+  ArchbirdStatus status;
+  ab_buffer_init(&canonical, engine);
+  status = ab_value_render(&canonical, value);
+  if (status == ARCHBIRD_OK)
+    status = archbird_sha256(canonical.data, canonical.length, out);
+  ab_buffer_free(&canonical);
+  return status;
+}
+
 static ArchbirdStatus decode_attributes(ArchbirdEngine *engine,
                                         yyjson_val *value, AbFact *out) {
   yyjson_obj_iter iterator;
@@ -1600,6 +1672,49 @@ ArchbirdStatus ab_decode_source_manifest(ArchbirdEngine *engine,
     decode_sha256(object_get(profile, "implementation_sha256"),
                   out->resolution.profile_implementation_sha256);
     decode_sha256(object_get(resolution, "sha256"), out->resolution.sha256);
+    if (object_get(resolution, "policy")) {
+      uint8_t actual_policy_sha256[32];
+      out->resolution.policy =
+          (AbValue *)ab_calloc(engine, 1, sizeof(*out->resolution.policy));
+      if (!out->resolution.policy) {
+        status = archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "out of memory decoding discovery policy");
+        goto done;
+      }
+      status = decode_value(engine, object_get(resolution, "policy"),
+                            out->resolution.policy);
+      if (status == ARCHBIRD_OK)
+        status =
+            value_sha256(engine, out->resolution.policy, actual_policy_sha256);
+      if (status != ARCHBIRD_OK)
+        goto done;
+      decode_sha256(object_get(resolution, "policy_sha256"),
+                    out->resolution.policy_sha256);
+      if (memcmp(actual_policy_sha256, out->resolution.policy_sha256,
+                 sizeof(actual_policy_sha256)) != 0) {
+        status = schema_error_field(
+            engine, "source-manifest.resolution", "policy_sha256",
+            "does not match the canonical discovery policy");
+        goto done;
+      }
+      out->resolution.has_policy = 1;
+    }
+    if (object_get(resolution, "nested_repositories")) {
+      out->resolution.nested_repositories = (AbValue *)ab_calloc(
+          engine, 1, sizeof(*out->resolution.nested_repositories));
+      if (!out->resolution.nested_repositories) {
+        status = archbird_error_set(
+            engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+            "out of memory decoding nested repository roots");
+        goto done;
+      }
+      status =
+          decode_value(engine, object_get(resolution, "nested_repositories"),
+                       out->resolution.nested_repositories);
+      if (status != ARCHBIRD_OK)
+        goto done;
+    }
 #define DECODE_COVERAGE(field)                                                 \
   (void)parse_u64(object_get(coverage, #field), &out->resolution.coverage.field)
     DECODE_COVERAGE(assets);

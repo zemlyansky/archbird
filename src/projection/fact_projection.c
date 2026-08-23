@@ -465,6 +465,32 @@ static ArchbirdStatus item_add_u64_attribute(ArchbirdEngine *engine,
   return status;
 }
 
+static ArchbirdStatus item_increment_u64_attribute(ArchbirdEngine *engine,
+                                                   AbProjectionItem *item,
+                                                   const char *name,
+                                                   uint64_t increment) {
+  AbObjectField *field = item_attribute(item, name);
+  uint64_t current = 0;
+  AbValue replacement = {0};
+  ArchbirdStatus status;
+  if (!field)
+    return item_add_u64_attribute(engine, item, name, increment);
+  if (!ab_value_u64(&field->value, &current))
+    return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                              ARCHBIRD_NO_OFFSET,
+                              "projection multiplicity is invalid");
+  if (UINT64_MAX - current < increment)
+    return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "projection multiplicity exceeds uint64");
+  status = u64_value(engine, current + increment, &replacement);
+  if (status == ARCHBIRD_OK) {
+    ab_value_free(engine, &field->value);
+    field->value = replacement;
+  }
+  return status;
+}
+
 static ArchbirdStatus item_add_symbol_location(ArchbirdEngine *engine,
                                                AbProjectionItem *item,
                                                const AbString *path,
@@ -2347,9 +2373,12 @@ static int valid_symbol_relation_row(const AbValue *row) {
     return 0;
   for (index = 0; index < candidates->as.array.count; index++) {
     const AbValue *candidate = &candidates->as.array.items[index];
+    const AbValue *multiplicity = ab_value_member(candidate, "multiplicity");
+    uint64_t count;
     if (!candidate || candidate->kind != AB_VALUE_OBJECT ||
         !ab_projection_path_is_repository(ab_value_member(candidate, "path")) ||
-        !ab_projection_nonblank(ab_value_member(candidate, "symbol")))
+        !ab_projection_nonblank(ab_value_member(candidate, "symbol")) ||
+        (multiplicity && (!ab_value_u64(multiplicity, &count) || count == 0)))
       return 0;
   }
   for (index = 0; index < evidence->as.array.count; index++) {
@@ -2383,6 +2412,8 @@ static ArchbirdStatus add_symbol_relation_projection_item(
   const AbValue *source_symbol = ab_value_member(source, "symbol");
   const AbValue *name = ab_value_member(row, "name");
   const AbValue *resolution = ab_value_member(row, "resolution");
+  const AbValue *multiplicity_value =
+      candidate ? ab_value_member(candidate, "multiplicity") : NULL;
   AbString source_identity = {0};
   AbString target_identity = {0};
   AbProjectionEvidence evidence = {0};
@@ -2393,7 +2424,10 @@ static ArchbirdStatus add_symbol_relation_projection_item(
   const char *state = "current";
   const char *message = "";
   uint64_t line = symbol_relation_line(row);
+  uint64_t multiplicity = 1;
   ArchbirdStatus status;
+  if (multiplicity_value)
+    (void)ab_value_u64(multiplicity_value, &multiplicity);
   if (source_symbol)
     status = symbol_entity_key(context->engine, &source_path->as.text,
                                &source_symbol->as.text, &source_identity);
@@ -2460,6 +2494,9 @@ static ArchbirdStatus add_symbol_relation_projection_item(
     status =
         item_add_string_attribute(context->engine, item, "target_path",
                                   &ab_value_member(candidate, "path")->as.text);
+  if (status == ARCHBIRD_OK)
+    status = item_increment_u64_attribute(context->engine, item, "multiplicity",
+                                          multiplicity);
   ab_buffer_free(&detail);
   ab_projection_evidence_free(context->engine, &evidence);
   ab_string_free(context->engine, &target_identity);
@@ -2950,6 +2987,8 @@ static ArchbirdStatus extract_component_membership(AbProjectionContext *context,
     const AbValue *language = ab_value_member(file->row, "language");
     const AbValue *bytes = ab_value_member(file->row, "bytes");
     const AbValue *symbols = ab_value_member(file->row, "symbols");
+    const AbValue *declared_symbol_count =
+        ab_value_member(file->row, "symbol_count");
     const AbValue *layer_rows = ab_value_member(map, "layers");
     const AbValue *layer_role = NULL;
     const AbValue *layer_origin = NULL;
@@ -3058,6 +3097,15 @@ static ArchbirdStatus extract_component_membership(AbProjectionContext *context,
     if (status == ARCHBIRD_OK && symbols && symbols->kind == AB_VALUE_ARRAY)
       status = item_add_u64_attribute(context->engine, &item, "symbol_count",
                                       (uint64_t)symbols->as.array.count);
+    else if (status == ARCHBIRD_OK && declared_symbol_count) {
+      uint64_t symbol_count = 0;
+      if (!ab_value_u64(declared_symbol_count, &symbol_count))
+        status = invalid_map_inventory(
+            context, "Map contains an invalid file symbol count");
+      else
+        status = item_add_u64_attribute(context->engine, &item, "symbol_count",
+                                        symbol_count);
+    }
     if (status == ARCHBIRD_OK)
       status = item_add_string_attribute(context->engine, &item, "membership",
                                          membership);

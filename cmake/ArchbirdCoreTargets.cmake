@@ -103,6 +103,7 @@ set(ARCHBIRD_CORE_GROUP_api_DEPENDENCIES
   configuration
   foundation
   interchange
+  mapping
   model
   navigation
   planning

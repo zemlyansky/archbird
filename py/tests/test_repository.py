@@ -48,6 +48,7 @@ def main() -> int:
         export_graph,
         publish_okf_bundle,
         query_map_json,
+        render_map_markdown,
         render_source_markdown,
         resolve_discovery,
         write_okf_bundle,
@@ -104,6 +105,17 @@ def main() -> int:
                 "default discovery included a nested Git control marker: "
                 f"{[source.path for source in submodule_project.sources]!r}"
             )
+        submodule_resolution = json.loads(submodule_project.resolution_json)
+        if submodule_resolution["nested_repositories"] != ["vendor"]:
+            raise AssertionError(submodule_resolution)
+        submodule_map = json.loads(submodule_project.map_json())
+        if submodule_map["discovery"]["nested_repositories"] != ["vendor"]:
+            raise AssertionError(submodule_map["discovery"])
+        submodule_report = submodule_project.map_markdown(
+            view="overview", detail="standard"
+        ).decode("utf-8")
+        if "Nested repository roots encountered within discovery scope: `vendor`" not in submodule_report:
+            raise AssertionError(submodule_report)
 
     if len(_native.IMPLEMENTATION_SHA256) != 64 or any(
         character not in "0123456789abcdef"
@@ -467,6 +479,15 @@ def main() -> int:
         or streamed_warm.map_cache_stats["hits"] != 1
     ):
         raise AssertionError("streaming Python Map cache was not reusable")
+    with mock.patch.object(
+        streamed_warm,
+        "map_json",
+        side_effect=AssertionError(
+            "warm live Markdown decoded the cached canonical Map"
+        ),
+    ):
+        if not streamed_warm.map_markdown(max_chars=12_000).strip():
+            raise AssertionError("warm live Python projection is empty")
     shutil.rmtree(map_cache_root, ignore_errors=True)
     pretty_streamed = Project.from_config(
         fixture / "archbird.json", root=fixture, cache_dir=map_cache_root
@@ -1474,6 +1495,8 @@ writer.commit()
     materialized_resolution_evidence = copy.deepcopy(materialized_resolution)
     for document in (zero_resolution_evidence, materialized_resolution_evidence):
         document.pop("origins")
+        document.pop("policy")
+        document.pop("policy_sha256")
         document.pop("sha256")
     if zero_resolution_evidence != materialized_resolution_evidence:
         raise AssertionError(
@@ -1662,6 +1685,9 @@ writer.commit()
         )
     if zero_map.get("discovery") != {
         "coverage": zero_resolution["coverage"],
+        "nested_repositories": zero_resolution["nested_repositories"],
+        "policy": zero_resolution["policy"],
+        "policy_sha256": zero_resolution["policy_sha256"],
         "profile": zero_resolution["profile"],
         "sha256": zero_resolution["sha256"],
     }:
@@ -1726,6 +1752,36 @@ writer.commit()
         if first_clone_map != second_clone_map:
             raise AssertionError("checkout path changed canonical Map evidence")
     standard_map = project.map_markdown()
+    if standard_map != render_map_markdown(
+        first, resolution_json=project.resolution_json or b""
+    ):
+        raise AssertionError(
+            "live Python Map projection differs from the saved-Map projection"
+        )
+    for projection_view in ("overview", "architecture", "tests", "evidence"):
+        for projection_detail in ("compact", "standard", "full"):
+            live_report = project.map_markdown(
+                view=projection_view, detail=projection_detail
+            )
+            saved_report = render_map_markdown(
+                first,
+                view=projection_view,
+                detail=projection_detail,
+                resolution_json=project.resolution_json or b"",
+            )
+            if live_report != saved_report:
+                raise AssertionError(
+                    "live Python projection drifted from saved Map: "
+                    f"{projection_view}/{projection_detail}"
+                )
+    with mock.patch.object(
+        project,
+        "map_json",
+        side_effect=AssertionError(
+            "bounded file-level Map Markdown materialized the canonical Map"
+        ),
+    ):
+        project.map_markdown(max_chars=12_000)
     if not standard_map.startswith(b"# map-base architecture evidence\n"):
         raise AssertionError("native Python standard Map report is invalid")
     if (
@@ -2705,6 +2761,145 @@ writer.commit()
             raise AssertionError(
                 "streamed compact Map --check did not preserve error exit status"
             )
+
+        freshness_root = Path(directory) / "scoped-freshness"
+        (freshness_root / "src").mkdir(parents=True)
+        selected_source = freshness_root / "src/selected.c"
+        selected_source.write_text(
+            "int selected(void) { return 1; }\n", encoding="utf-8"
+        )
+        scoped_map = Path(directory) / "scoped-map.json"
+        status = cli_main(
+            [
+                "map",
+                str(freshness_root),
+                "--no-config",
+                "--only",
+                "src/selected.c",
+                "--no-cache",
+                "--format",
+                "json",
+                "--output",
+                str(scoped_map),
+                "--check",
+                "--progress",
+                "never",
+            ]
+        )
+        scoped_document = json.loads(scoped_map.read_bytes())
+        if (
+            status
+            or scoped_document["discovery"]["policy"]["request"]["only"]
+            != ["src/selected.c"]
+        ):
+            raise AssertionError("scoped Map omitted its replayable policy")
+        manifest_project = Project.from_repository(
+            freshness_root,
+            config=b"{}",
+            only=("src/selected.c",),
+            scan=False,
+        )
+        tampered_manifest = json.loads(manifest_project.manifest_json)
+        tampered_manifest["resolution"]["policy"]["request"]["only"] = [
+            "src/outside.c"
+        ]
+        try:
+            _native.project_create(
+                json.dumps(
+                    tampered_manifest, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            )
+        except _native.Error:
+            pass
+        else:
+            raise AssertionError("tampered discovery policy digest was accepted")
+        invalid_nested_manifest = json.loads(manifest_project.manifest_json)
+        invalid_nested_manifest["resolution"]["nested_repositories"] = [
+            "vendor/z",
+            "vendor/a",
+        ]
+        try:
+            _native.project_create(
+                json.dumps(
+                    invalid_nested_manifest,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+        except _native.Error:
+            pass
+        else:
+            raise AssertionError(
+                "unsorted nested repository roots were accepted"
+            )
+        (freshness_root / "src/outside.c").write_text(
+            "int outside(void) { return 2; }\n", encoding="utf-8"
+        )
+        freshness_output = Path(directory) / "scoped-freshness.json"
+        with mock.patch.object(
+            Project,
+            "scan",
+            side_effect=AssertionError("Freshness must not run providers"),
+        ):
+            status = cli_main(
+                [
+                    "freshness",
+                    str(freshness_root),
+                    "--snapshot",
+                    str(scoped_map),
+                    "--output",
+                    str(freshness_output),
+                    "--check",
+                    "--progress",
+                    "never",
+                ]
+            )
+        freshness_document = json.loads(freshness_output.read_bytes())
+        if status or freshness_document["status"] != "current":
+            raise AssertionError(
+                "Freshness widened a saved --only scope: "
+                f"{freshness_document!r}"
+            )
+        selected_source.write_text(
+            "int selected(void) { return 3; }\n", encoding="utf-8"
+        )
+        status = cli_main(
+            [
+                "freshness",
+                str(freshness_root),
+                "--snapshot",
+                str(scoped_map),
+                "--output",
+                str(freshness_output),
+                "--check",
+                "--progress",
+                "never",
+            ]
+        )
+        freshness_document = json.loads(freshness_output.read_bytes())
+        if status != 1 or freshness_document["status"] != "stale":
+            raise AssertionError("Freshness missed a selected source change")
+        legacy_map = copy.deepcopy(scoped_document)
+        del legacy_map["discovery"]["policy"]
+        del legacy_map["discovery"]["policy_sha256"]
+        legacy_path = Path(directory) / "legacy-map.json"
+        legacy_path.write_text(json.dumps(legacy_map), encoding="utf-8")
+        if (
+            cli_main(
+                [
+                    "freshness",
+                    str(freshness_root),
+                    "--snapshot",
+                    str(legacy_path),
+                    "--output",
+                    str(freshness_output),
+                    "--progress",
+                    "never",
+                ]
+            )
+            != 2
+        ):
+            raise AssertionError("Freshness widened a legacy Map without policy")
 
         saved_map = Path(directory) / "map.json"
         saved_map.write_bytes(first)

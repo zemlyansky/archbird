@@ -989,9 +989,18 @@ static ArchbirdStatus append_case(AbMapState *state, CaseRange **cases,
                                   size_t *count, const char *selector,
                                   size_t selector_length, size_t line,
                                   size_t start, size_t end,
-                                  const char *evidence_kind) {
-  CaseRange *resized = (CaseRange *)ab_realloc(state->engine, *cases,
-                                               (*count + 1) * sizeof(**cases));
+                                  const char *evidence_kind, int *appended) {
+  size_t selector_index;
+  CaseRange *resized;
+  *appended = 0;
+  for (selector_index = 0; selector_index < selector_length; selector_index++)
+    if (selector[selector_index] != ' ' && selector[selector_index] != '\t' &&
+        selector[selector_index] != '\r' && selector[selector_index] != '\n')
+      break;
+  if (selector_index == selector_length)
+    return ARCHBIRD_OK;
+  resized = (CaseRange *)ab_realloc(state->engine, *cases,
+                                    (*count + 1) * sizeof(**cases));
   if (!resized)
     return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
                               ARCHBIRD_NO_OFFSET,
@@ -1006,6 +1015,7 @@ static ArchbirdStatus append_case(AbMapState *state, CaseRange **cases,
   (*cases)[*count].end = end;
   (*cases)[*count].evidence_kind = evidence_kind;
   (*count)++;
+  *appended = 1;
   return ARCHBIRD_OK;
 }
 
@@ -1013,11 +1023,12 @@ static ArchbirdStatus
 append_callback_case(AbMapState *state, CaseRange **cases, size_t *count,
                      const char *selector, size_t selector_length,
                      const char *callback, size_t callback_length, size_t line,
-                     size_t start, size_t end, const char *evidence_kind) {
+                     size_t start, size_t end, const char *evidence_kind,
+                     int *appended) {
   ArchbirdStatus status =
       append_case(state, cases, count, selector, selector_length, line, start,
-                  end, evidence_kind);
-  if (status != ARCHBIRD_OK || !callback_length)
+                  end, evidence_kind, appended);
+  if (status != ARCHBIRD_OK || !*appended || !callback_length)
     return status;
   status = ab_string_copy(state->engine, &(*cases)[*count - 1].callback,
                           callback, callback_length);
@@ -1345,6 +1356,7 @@ static ArchbirdStatus c_registry_cases(AbMapState *state,
       size_t selector_length;
       const char *callback = NULL;
       size_t callback_length = 0;
+      int appended = 0;
       AbBuffer qualified;
       if (ab_token_equals(&tokens, cursor, "{")) {
         if (depth++) {
@@ -1406,9 +1418,10 @@ static ArchbirdStatus c_registry_cases(AbMapState *state,
             state, cases, case_count, (const char *)qualified.data,
             qualified.length, callback, callback_length,
             tokens.items[selector_token].line, tokens.items[cursor].start,
-            tokens.items[entry_close].end, "test_registration_candidate");
+            tokens.items[entry_close].end, "test_registration_candidate",
+            &appended);
       ab_buffer_free(&qualified);
-      if (status == ARCHBIRD_OK)
+      if (status == ARCHBIRD_OK && appended)
         (*registered)++;
       cursor = entry_close;
       depth = 0;
@@ -1513,16 +1526,17 @@ named_dispatch_cases(AbMapState *state, const AbConfigTest *spec,
           const char *selector;
           size_t selector_length;
           size_t end;
+          int appended = 0;
           if (!braces && !parentheses && !brackets &&
               tokens.items[index].kind == AB_TOKEN_STRING &&
               index + 1 < closing && ab_token_equals(&tokens, index + 1, ":")) {
             token_inner(&tokens, index, &selector, &selector_length);
             end = python_mapping_entry_end(&tokens, index + 2, closing);
-            status =
-                append_case(state, cases, case_count, selector, selector_length,
-                            tokens.items[index].line, tokens.items[index].start,
-                            tokens.items[end].end, "named_dispatch_entry");
-            if (status == ARCHBIRD_OK)
+            status = append_case(
+                state, cases, case_count, selector, selector_length,
+                tokens.items[index].line, tokens.items[index].start,
+                tokens.items[end].end, "named_dispatch_entry", &appended);
+            if (status == ARCHBIRD_OK && appended)
               (*registered)++;
           }
           if (ab_token_equals(&tokens, index, "{"))
@@ -1552,12 +1566,14 @@ named_dispatch_cases(AbMapState *state, const AbConfigTest *spec,
                                          &token_index)) {
                 const char *selector;
                 size_t selector_length;
+                int appended = 0;
                 token_inner(&tokens, token_index, &selector, &selector_length);
                 status = append_case(
                     state, cases, case_count, selector, selector_length,
                     tokens.items[token_index].line, tokens.items[index].start,
-                    tokens.items[entry_close].end, "named_dispatch_entry");
-                if (status == ARCHBIRD_OK)
+                    tokens.items[entry_close].end, "named_dispatch_entry",
+                    &appended);
+                if (status == ARCHBIRD_OK && appended)
                   (*registered)++;
               }
               if (entry_close != SIZE_MAX)
@@ -1707,6 +1723,7 @@ static ArchbirdStatus token_cases(AbMapState *state, const AbConfigTest *spec,
       size_t close, brace, end;
       size_t argument_index;
       int selector_valid = 1;
+      int appended = 0;
       AbBuffer selector;
       extractor =
           c_macro_extractor(spec, &tokens, index, &legacy, legacy_arguments);
@@ -1745,11 +1762,12 @@ static ArchbirdStatus token_cases(AbMapState *state, const AbConfigTest *spec,
         candidate_end = matching_token(&tokens, candidate_brace, "{", "}");
         if (candidate_end == SIZE_MAX)
           continue;
-        status = append_case(
-            state, cases, case_count, candidate_selector, selector_length,
-            tokens.items[index].line, tokens.items[index].start,
-            tokens.items[candidate_end].end, "test_function_candidate");
-        if (status == ARCHBIRD_OK)
+        status = append_case(state, cases, case_count, candidate_selector,
+                             selector_length, tokens.items[index].line,
+                             tokens.items[index].start,
+                             tokens.items[candidate_end].end,
+                             "test_function_candidate", &appended);
+        if (status == ARCHBIRD_OK && appended)
           (*registered)++;
         continue;
       }
@@ -1811,14 +1829,15 @@ static ArchbirdStatus token_cases(AbMapState *state, const AbConfigTest *spec,
             append_case(state, cases, case_count, (const char *)selector.data,
                         selector.length, tokens.items[index].line,
                         tokens.items[index].start, tokens.items[end].end,
-                        "test_definition");
-      if (status == ARCHBIRD_OK)
+                        "test_definition", &appended);
+      if (status == ARCHBIRD_OK && appended)
         (*registered)++;
       ab_buffer_free(&selector);
     } else {
       const char *name;
       size_t name_length;
       size_t close;
+      int appended = 0;
       int js = string_literal(&spec->language, "javascript") ||
                string_literal(&spec->language, "typescript") ||
                string_literal(&spec->language, "vue");
@@ -1835,7 +1854,6 @@ static ArchbirdStatus token_cases(AbMapState *state, const AbConfigTest *spec,
       close = matching_token(&tokens, index + 1, "(", ")");
       if (close == SIZE_MAX)
         continue;
-      (*registered)++;
       if (js) {
         const char *colon = (const char *)memchr(name, ':', name_length);
         if (colon)
@@ -1864,18 +1882,20 @@ static ArchbirdStatus token_cases(AbMapState *state, const AbConfigTest *spec,
           if (status == ARCHBIRD_OK)
             status = ab_buffer_append(&qualified, name, name_length);
           if (status == ARCHBIRD_OK)
-            status =
-                append_case(state, cases, case_count,
-                            (const char *)qualified.data, qualified.length,
-                            tokens.items[index].line, tokens.items[index].start,
-                            tokens.items[close].end, "test_definition");
+            status = append_case(
+                state, cases, case_count, (const char *)qualified.data,
+                qualified.length, tokens.items[index].line,
+                tokens.items[index].start, tokens.items[close].end,
+                "test_definition", &appended);
           ab_buffer_free(&qualified);
         } else {
-          status =
-              append_case(state, cases, case_count, name, name_length,
-                          tokens.items[index].line, tokens.items[index].start,
-                          tokens.items[close].end, "test_definition");
+          status = append_case(
+              state, cases, case_count, name, name_length,
+              tokens.items[index].line, tokens.items[index].start,
+              tokens.items[close].end, "test_definition", &appended);
         }
+        if (status == ARCHBIRD_OK && appended)
+          (*registered)++;
       }
     }
   }
@@ -1974,6 +1994,7 @@ python_cases(AbMapState *state, const TestFactIndex *index,
         prefix_bytes(leaf, leaf_length, "test_")) {
       size_t start = fact->span_start;
       size_t decorator_index;
+      int appended = 0;
       for (decorator_index = index->file_offsets[file_index];
            decorator_index < index->file_offsets[file_index + 1];
            decorator_index++) {
@@ -1990,8 +2011,9 @@ python_cases(AbMapState *state, const TestFactIndex *index,
       status = append_case(state, cases, case_count, fact->name.data,
                            fact->name.length, fact_line(fact), start,
                            python_case_end(source, source_length, start),
-                           "test_definition");
-      (*registered)++;
+                           "test_definition", &appended);
+      if (status == ARCHBIRD_OK && appended)
+        (*registered)++;
     }
     if (status == ARCHBIRD_OK && string_literal(&fact->kind, "class") &&
         prefix_bytes(fact->name.data, fact->name.length, "Test")) {

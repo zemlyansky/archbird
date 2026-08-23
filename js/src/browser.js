@@ -536,10 +536,30 @@ async function createBrowserArchbird(moduleOptions = {}) {
     }
 
     mapMarkdown(options = {}) {
+      return this.mapMarkdownWithBlocking(options).report;
+    }
+
+    mapMarkdownWithBlocking(options = {}) {
       const request = mapProjectionRequest(options);
-      return core.projectionRenderMarkdown(
-        this.mapJson(),
+      const resolution = Buffer.from(
         options.resolutionJson ?? this.resolutionJson ?? Buffer.alloc(0),
+      );
+      if (request.definition.level === "symbol") {
+        const map = this.map();
+        return {
+          blocking: map.diagnostics.some((row) => row.severity === "error"),
+          report: core.projectionRenderMarkdown(
+            Buffer.from(JSON.stringify(map)),
+            resolution,
+            Buffer.from(JSON.stringify(request.definition)),
+            request.detail,
+            request.maxChars,
+          ),
+        };
+      }
+      return core.projectProjectionMarkdown(
+        this._handle,
+        resolution,
         Buffer.from(JSON.stringify(request.definition)),
         request.detail,
         request.maxChars,

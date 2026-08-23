@@ -100,9 +100,13 @@ npx archbird map . --view evidence --detail full
 ```
 
 Map scans the configured or discovered scope and builds the reusable repository
-model. The default Markdown is an architecture-first overview. Canonical JSON
-is exhaustive; views, grouping, relation filters, and detail only change its
-presentation.
+model. The default Markdown is an architecture-first overview projected
+directly from the analyzed state rather than through a complete canonical-Map
+serialization and decode. Canonical JSON is exhaustive; views, grouping,
+relation filters, and detail only change its presentation. The overview reports
+nested Git repositories and submodules inside the selected scope without
+silently excluding them; choose a concrete child root or reviewed exclusion for
+an aggregator repository.
 
 ### Query focused context
 
@@ -626,6 +630,12 @@ saved source/config evidence as current:
 ```bash
 npx archbird freshness --root . --snapshot .archbird/map.json --check
 ```
+
+Freshness replays the saved selectors, configuration, and ignore policy and
+hashes that exact live input scope without rerunning providers or rebuilding
+the relation graph. Newly matching files are detected without widening a scoped
+Map. Regenerate Maps that predate replayable discovery policy; Archbird will not
+guess their original scope.
 
 
 ## JavaScript APIs

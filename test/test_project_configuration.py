@@ -2148,8 +2148,8 @@ def main() -> None:
     reference_map = _fixture_map(reference_root)
     subject_document = json.loads(subject_map)
     reference_document = json.loads(reference_map)
-    assert subject_document["schema_version"] == 12
-    assert reference_document["schema_version"] == 12
+    assert subject_document["schema_version"] == 13
+    assert reference_document["schema_version"] == 13
     assert {row["domain"] for row in subject_document["facts"]} == {
         "constant-values",
         "export-origins",

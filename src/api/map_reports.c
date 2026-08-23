@@ -4,6 +4,7 @@
 #include "base/json_value.h"
 #include "base/render_internal.h"
 #include "interchange/reports/map_reports.h"
+#include "map/map_internal.h"
 #include "query/query_internal.h"
 #include "verify/verification_artifact.h"
 
@@ -16,6 +17,91 @@ static ArchbirdStatus map_report_write(ArchbirdEngine *engine, AbBuffer *buffer,
     return archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
                               "map report callback failed");
   return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus
+live_projection_input(ArchbirdEngine *engine, const ArchbirdProject *project,
+                      const uint8_t *projection_json, size_t projection_length,
+                      int *out_blocking, AbBuffer *input, AbMapState *state) {
+  AbValue definition = {0};
+  const AbValue *select;
+  const AbValue *level;
+  const AbValue *relations;
+  uint32_t relation_mask = 0;
+  size_t diagnostic_index;
+  size_t relation_index;
+  ArchbirdStatus status = ab_json_value_decode(engine, projection_json,
+                                               projection_length, &definition);
+  select =
+      status == ARCHBIRD_OK ? ab_value_member(&definition, "select") : NULL;
+  level = status == ARCHBIRD_OK ? ab_value_member(&definition, "level") : NULL;
+  relations =
+      status == ARCHBIRD_OK ? ab_value_member(&definition, "relations") : NULL;
+  if (status == ARCHBIRD_OK && (!ab_value_string_is(select, "graph") ||
+                                ab_value_string_is(level, "symbol")))
+    status = archbird_error_set(
+        engine, ARCHBIRD_INVALID_ARGUMENT, ARCHBIRD_NO_OFFSET,
+        "live project projection supports file/component graph views; "
+        "materialize the canonical Map for symbol projections");
+  if (status == ARCHBIRD_OK && relations && relations->kind != AB_VALUE_ARRAY)
+    status =
+        archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+                           "live project graph relations must be an array");
+  if (status == ARCHBIRD_OK)
+    status = ab_map_state_analyze(engine, project, state);
+  for (relation_index = 0; status == ARCHBIRD_OK && relations &&
+                           relation_index < relations->as.array.count;
+       relation_index++) {
+    const AbValue *relation = &relations->as.array.items[relation_index];
+    if (ab_value_string_is(relation, "calls"))
+      relation_mask |= AB_MAP_GRAPH_SYMBOL_CALLS;
+    else if (ab_value_string_is(relation, "references"))
+      relation_mask |= AB_MAP_GRAPH_SYMBOL_REFERENCES;
+    else if (ab_value_string_is(relation, "tests"))
+      relation_mask |= AB_MAP_GRAPH_TESTS;
+  }
+  for (diagnostic_index = 0;
+       status == ARCHBIRD_OK && diagnostic_index < state->diagnostic_count;
+       diagnostic_index++) {
+    const AbString *severity = &state->diagnostics[diagnostic_index].severity;
+    if (severity->length == 5 && !memcmp(severity->data, "error", 5)) {
+      *out_blocking = 1;
+      break;
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_map_render_graph_projection_input(input, state, relation_mask);
+  ab_value_free(engine, &definition);
+  return status;
+}
+
+ArchbirdStatus archbird_project_projection_render_markdown(
+    ArchbirdEngine *engine, const ArchbirdProject *project,
+    const uint8_t *resolution_json, size_t resolution_length,
+    const uint8_t *projection_json, size_t projection_length,
+    ArchbirdReportDetail detail, size_t max_chars, int *out_blocking,
+    ArchbirdWriteFn write_fn, void *user_data) {
+  AbMapState state = {0};
+  AbBuffer input;
+  ArchbirdStatus status;
+  if (!engine || !project || (!resolution_json && resolution_length) ||
+      !projection_json || !projection_length || !out_blocking || !write_fn ||
+      detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
+      detail > ARCHBIRD_REPORT_DETAIL_FULL)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  *out_blocking = 0;
+  ab_buffer_init(&input, engine);
+  status =
+      live_projection_input(engine, project, projection_json, projection_length,
+                            out_blocking, &input, &state);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projection_render_markdown(
+        engine, input.data, input.length, resolution_json, resolution_length,
+        projection_json, projection_length, detail, max_chars, write_fn,
+        user_data);
+  ab_map_state_free(&state);
+  ab_buffer_free(&input);
+  return status;
 }
 
 ArchbirdStatus

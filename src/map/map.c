@@ -1,5 +1,6 @@
 #include "base/archbird_internal.h"
 
+#include "base/json_value.h"
 #include "base/render_internal.h"
 #include "base/sha256.h"
 #include "evidence/config.h"
@@ -3137,6 +3138,56 @@ static ArchbirdStatus add_provider_diagnostics(AbMapState *state) {
   return status;
 }
 
+ArchbirdStatus ab_map_state_analyze(ArchbirdEngine *engine,
+                                    const ArchbirdProject *project,
+                                    AbMapState *out) {
+  ArchbirdStatus status;
+  if (!engine || !project || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memset(out, 0, sizeof(*out));
+  status = ab_build_identity_validate(engine);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (!ab_project_providers_finalized(project))
+    return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+                              "provider merge must be finalized first");
+  out->engine = engine;
+  out->project = project;
+  out->manifest = ab_project_manifest(project);
+  out->config = ab_project_config(project);
+  if (!out->config)
+    return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+                              "project configuration must be supplied first");
+  status = ab_map_analyze_packages(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_analyze_builds(out);
+  if (status == ARCHBIRD_OK)
+    status = build_graph(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_add_reference_edges(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_analyze_indexes(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_analyze_artifacts(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_analyze_bridges(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_analyze_tests(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_analyze_named_entries(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_analyze_parity(out);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_run_diagnostics(out);
+  if (status == ARCHBIRD_OK)
+    status = add_provider_diagnostics(out);
+  if (status == ARCHBIRD_OK)
+    ab_map_diagnostics_sort_unique(out);
+  if (status != ARCHBIRD_OK)
+    ab_map_state_free(out);
+  return status;
+}
+
 static ArchbirdStatus flush_compact_map(ArchbirdEngine *engine,
                                         AbBuffer *buffer, uint32_t json_flags,
                                         ArchbirdWriteFn write_fn,
@@ -3207,6 +3258,222 @@ static ArchbirdStatus render_selected_inputs(AbBuffer *buffer,
   return status;
 }
 
+static ArchbirdStatus
+render_discovery_identity(AbBuffer *buffer, const AbSourceManifest *manifest) {
+  const AbDiscoveryCoverage *coverage;
+  char resolution_sha256[65];
+  char profile_sha256[65];
+  ArchbirdStatus status;
+  if (!manifest->has_resolution)
+    return ab_buffer_literal(buffer, "{}");
+  coverage = &manifest->resolution.coverage;
+  archbird_sha256_hex(manifest->resolution.sha256, resolution_sha256);
+  archbird_sha256_hex(manifest->resolution.profile_implementation_sha256,
+                      profile_sha256);
+  status = ab_buffer_literal(buffer, "{\"coverage\":{\"assets\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, coverage->assets);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"ignored\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, coverage->ignored);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"inventory_files\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, coverage->inventory_files);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"oversized\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, coverage->oversized);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"pruned_directories\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, coverage->pruned_directories);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"selected\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, coverage->selected);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"unsupported_known\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, coverage->unsupported_known);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_literal(buffer, "},\"profile\":{\"implementation_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, profile_sha256, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"name\":");
+  if (status == ARCHBIRD_OK)
+    status = json_string(buffer, &manifest->resolution.profile_name);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  if (status == ARCHBIRD_OK && manifest->resolution.nested_repositories) {
+    status = ab_buffer_literal(buffer, ",\"nested_repositories\":");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_value_render(buffer, manifest->resolution.nested_repositories);
+  }
+  if (status == ARCHBIRD_OK && manifest->resolution.has_policy) {
+    char policy_sha256[65];
+    archbird_sha256_hex(manifest->resolution.policy_sha256, policy_sha256);
+    status = ab_buffer_literal(buffer, ",\"policy\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, manifest->resolution.policy);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(buffer, ",\"policy_sha256\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_json_string(buffer, policy_sha256, 64);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, resolution_sha256, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  return status;
+}
+
+static ArchbirdStatus render_graph_projection_file(AbBuffer *buffer,
+                                                   const AbMapState *state,
+                                                   const AbManifestFile *file) {
+  char sha256[65];
+  size_t symbol_count = 0;
+  size_t role_index;
+  ArchbirdStatus status =
+      ab_file_symbol_count(state->engine, state->project, file, &symbol_count);
+  if (status != ARCHBIRD_OK)
+    return status;
+  archbird_sha256_hex(file->sha256, sha256);
+  status = ab_buffer_literal(buffer, "{\"bytes\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, (uint64_t)file->byte_length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"language\":");
+  if (status == ARCHBIRD_OK)
+    status = json_string(buffer, &file->language);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"layer\":");
+  if (status == ARCHBIRD_OK)
+    status = json_string(buffer, &file->layer);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"path\":");
+  if (status == ARCHBIRD_OK)
+    status = json_string(buffer, &file->path);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"roles\":[");
+  for (role_index = 0; status == ARCHBIRD_OK && role_index < file->roles.count;
+       role_index++) {
+    if (role_index)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = json_string(buffer, &file->roles.items[role_index]);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "],\"sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, sha256, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"symbol_count\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, (uint64_t)symbol_count);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  return status;
+}
+
+ArchbirdStatus ab_map_render_graph_projection_input(AbBuffer *buffer,
+                                                    AbMapState *state,
+                                                    uint32_t relation_mask) {
+  char input_digest[65];
+  size_t index;
+  size_t rendered_files = 0;
+  ArchbirdStatus status;
+  if (!buffer || !state || !state->engine || !state->project ||
+      !state->manifest || !state->config)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memcpy(input_digest, archbird_project_map_input_sha256(state->project), 65);
+  status = ab_buffer_literal(buffer, "{\"artifact\":\"map\",\"builds\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_map_render_builds(buffer, state);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"components\":");
+  if (status == ARCHBIRD_OK)
+    status = render_components(buffer, state->engine, state->project,
+                               state->config, state->manifest, &state->graph);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"diagnostics\":");
+  if (status == ARCHBIRD_OK)
+    status = render_diagnostics(buffer, state);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"discovery\":");
+  if (status == ARCHBIRD_OK)
+    status = render_discovery_identity(buffer, state->manifest);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"edges\":");
+  if (status == ARCHBIRD_OK)
+    status = render_edges(buffer, &state->graph);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"evidence\":{\"config_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, state->config->sha256_hex, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"input_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, input_digest, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "},\"facts\":[],\"files\":[");
+  for (index = 0; status == ARCHBIRD_OK && index < state->manifest->file_count;
+       index++) {
+    const AbManifestFile *file = &state->manifest->files[index];
+    if (!file->has_layer || !file->has_language)
+      continue;
+    if (rendered_files++)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status = render_graph_projection_file(buffer, state, file);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "],\"layers\":");
+  if (status == ARCHBIRD_OK)
+    status = render_layers(buffer, state->engine, state->project, state->config,
+                           state->manifest);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"packages\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_map_render_packages(buffer, state);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"project\":");
+  if (status == ARCHBIRD_OK)
+    status = json_string(buffer, &state->config->project);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(
+        buffer, ",\"schema_version\":" ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT
+                ",\"symbol_calls\":");
+  if (status == ARCHBIRD_OK && (relation_mask & AB_MAP_GRAPH_SYMBOL_CALLS))
+    status = ab_map_render_symbol_calls_projection(buffer, state);
+  else if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "[]");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"symbol_references\":");
+  if (status == ARCHBIRD_OK && (relation_mask & AB_MAP_GRAPH_SYMBOL_REFERENCES))
+    status = ab_map_render_symbol_references_projection(buffer, state);
+  else if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "[]");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"tests\":");
+  if (status == ARCHBIRD_OK && (relation_mask & AB_MAP_GRAPH_TESTS))
+    status = ab_map_render_tests(buffer, state);
+  else if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "[]");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(
+        buffer,
+        ",\"tool\":{\"implementation_sha256\":\"" ARCHBIRD_IMPLEMENTATION_SHA256
+        "\",\"name\":\"archbird\",\"version\":\"" ARCHBIRD_VERSION "\"}}");
+  return status;
+}
+
 ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
                                            const ArchbirdProject *project,
                                            uint32_t json_flags,
@@ -3222,36 +3489,13 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
   ArchbirdStatus status = ARCHBIRD_OK;
   if (!engine || !project || !write_fn || !ab_json_flags_valid(json_flags))
     return ARCHBIRD_INVALID_ARGUMENT;
-  status = ab_build_identity_validate(engine);
+  status = ab_map_state_analyze(engine, project, &state);
   if (status != ARCHBIRD_OK)
     return status;
-  if (!ab_project_providers_finalized(project))
-    return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-                              "provider merge must be finalized first");
-  config = ab_project_config(project);
-  if (!config)
-    return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
-                              "project configuration must be supplied first");
-  manifest = ab_project_manifest(project);
-  state.engine = engine;
-  state.project = project;
-  state.manifest = manifest;
-  state.config = config;
+  config = state.config;
+  manifest = state.manifest;
   memcpy(input_digest, archbird_project_map_input_sha256(project), 65);
   ab_buffer_init(&buffer, engine);
-  MAP_TRY(ab_map_analyze_packages(&state));
-  MAP_TRY(ab_map_analyze_builds(&state));
-  MAP_TRY(build_graph(&state));
-  MAP_TRY(ab_map_add_reference_edges(&state));
-  MAP_TRY(ab_map_analyze_indexes(&state));
-  MAP_TRY(ab_map_analyze_artifacts(&state));
-  MAP_TRY(ab_map_analyze_bridges(&state));
-  MAP_TRY(ab_map_analyze_tests(&state));
-  MAP_TRY(ab_map_analyze_named_entries(&state));
-  MAP_TRY(ab_map_analyze_parity(&state));
-  MAP_TRY(ab_map_run_diagnostics(&state));
-  MAP_TRY(add_provider_diagnostics(&state));
-  ab_map_diagnostics_sort_unique(&state);
   MAP_TRY(ab_buffer_literal(&buffer, "{\"artifact\":\"map\",\"artifacts\":"));
   MAP_TRY(ab_map_render_artifacts(&buffer, &state));
   MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
@@ -3270,35 +3514,8 @@ ArchbirdStatus archbird_project_render_map(ArchbirdEngine *engine,
   MAP_TRY(ab_buffer_literal(&buffer, ",\"diagnostics\":"));
   MAP_TRY(render_diagnostics(&buffer, &state));
   if (manifest->has_resolution) {
-    const AbDiscoveryCoverage *coverage = &manifest->resolution.coverage;
-    char resolution_sha256[65];
-    char profile_sha256[65];
-    archbird_sha256_hex(manifest->resolution.sha256, resolution_sha256);
-    archbird_sha256_hex(manifest->resolution.profile_implementation_sha256,
-                        profile_sha256);
-    MAP_TRY(ab_buffer_literal(&buffer,
-                              ",\"discovery\":{\"coverage\":{\"assets\":"));
-    MAP_TRY(ab_buffer_u64(&buffer, coverage->assets));
-    MAP_TRY(ab_buffer_literal(&buffer, ",\"ignored\":"));
-    MAP_TRY(ab_buffer_u64(&buffer, coverage->ignored));
-    MAP_TRY(ab_buffer_literal(&buffer, ",\"inventory_files\":"));
-    MAP_TRY(ab_buffer_u64(&buffer, coverage->inventory_files));
-    MAP_TRY(ab_buffer_literal(&buffer, ",\"oversized\":"));
-    MAP_TRY(ab_buffer_u64(&buffer, coverage->oversized));
-    MAP_TRY(ab_buffer_literal(&buffer, ",\"pruned_directories\":"));
-    MAP_TRY(ab_buffer_u64(&buffer, coverage->pruned_directories));
-    MAP_TRY(ab_buffer_literal(&buffer, ",\"selected\":"));
-    MAP_TRY(ab_buffer_u64(&buffer, coverage->selected));
-    MAP_TRY(ab_buffer_literal(&buffer, ",\"unsupported_known\":"));
-    MAP_TRY(ab_buffer_u64(&buffer, coverage->unsupported_known));
-    MAP_TRY(ab_buffer_literal(&buffer,
-                              "},\"profile\":{\"implementation_sha256\":"));
-    MAP_TRY(ab_buffer_json_string(&buffer, profile_sha256, 64));
-    MAP_TRY(ab_buffer_literal(&buffer, ",\"name\":"));
-    MAP_TRY(json_string(&buffer, &manifest->resolution.profile_name));
-    MAP_TRY(ab_buffer_literal(&buffer, "},\"sha256\":"));
-    MAP_TRY(ab_buffer_json_string(&buffer, resolution_sha256, 64));
-    MAP_TRY(ab_buffer_literal(&buffer, "}"));
+    MAP_TRY(ab_buffer_literal(&buffer, ",\"discovery\":"));
+    MAP_TRY(render_discovery_identity(&buffer, manifest));
   }
   MAP_TRY(flush_compact_map(engine, &buffer, json_flags, write_fn, user_data));
   MAP_TRY(ab_buffer_literal(&buffer, ",\"edges\":"));

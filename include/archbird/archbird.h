@@ -700,6 +700,18 @@ ARCHBIRD_API ArchbirdStatus archbird_projection_render_markdown(
     ArchbirdReportDetail detail, size_t max_chars, ArchbirdWriteFn write_fn,
     void *user_data);
 
+/* Analyze a live project once and render one file/component graph projection
+ * without first serializing and reparsing the complete canonical Map.  The
+ * ProjectionResult is identical to evaluating the same definition against the
+ * canonical Map. out_blocking reports whether Map diagnostics contain an
+ * error, so checked hosts do not need a second Map evaluation. */
+ARCHBIRD_API ArchbirdStatus archbird_project_projection_render_markdown(
+    ArchbirdEngine *engine, const ArchbirdProject *project,
+    const uint8_t *resolution_json, size_t resolution_length,
+    const uint8_t *projection_json, size_t projection_length,
+    ArchbirdReportDetail detail, size_t max_chars, int *out_blocking,
+    ArchbirdWriteFn write_fn, void *user_data);
+
 /*
  * Render a human projection of the canonical Map evidence for its configured
  * or discovered scope. Views choose the question being answered; detail

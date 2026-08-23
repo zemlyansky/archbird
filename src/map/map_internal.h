@@ -415,6 +415,26 @@ typedef struct AbMapState {
   size_t diagnostic_capacity;
 } AbMapState;
 
+/* Build the immutable analyzed state shared by canonical Map serialization
+ * and direct live-project projections.  The caller owns the completed state
+ * and must release it with ab_map_state_free(). */
+ArchbirdStatus ab_map_state_analyze(ArchbirdEngine *engine,
+                                    const ArchbirdProject *project,
+                                    AbMapState *out);
+
+/* Render the exact Map columns needed by file/component graph projections.
+ * This private projection input deliberately omits duplicated provider facts
+ * and symbol-level inventories; it is not a canonical Map artifact. */
+ArchbirdStatus ab_map_render_graph_projection_input(AbBuffer *buffer,
+                                                    AbMapState *state,
+                                                    uint32_t relation_mask);
+
+enum {
+  AB_MAP_GRAPH_SYMBOL_CALLS = UINT32_C(1) << 0,
+  AB_MAP_GRAPH_SYMBOL_REFERENCES = UINT32_C(1) << 1,
+  AB_MAP_GRAPH_TESTS = UINT32_C(1) << 2
+};
+
 ArchbirdStatus ab_map_add_diagnostic(AbMapState *state, const char *severity,
                                      const char *code, const char *message,
                                      const AbString *path);
@@ -491,8 +511,13 @@ ArchbirdStatus ab_map_render_named_entries(AbBuffer *buffer,
                                            const AbMapState *state);
 
 ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state);
+ArchbirdStatus ab_map_render_symbol_calls_projection(AbBuffer *buffer,
+                                                     AbMapState *state);
 ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
                                                const AbMapState *state);
+ArchbirdStatus
+ab_map_render_symbol_references_projection(AbBuffer *buffer,
+                                           const AbMapState *state);
 
 ArchbirdStatus ab_map_analyze_parity(AbMapState *state);
 ArchbirdStatus ab_map_render_parity(AbBuffer *buffer, const AbMapState *state);

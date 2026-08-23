@@ -678,6 +678,45 @@ static napi_value project_map(napi_env env, napi_callback_info info) {
   return render_project(env, info, archbird_project_render_map);
 }
 
+static napi_value project_projection_markdown(napi_env env,
+                                              napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5];
+  NodeProject *owned;
+  const uint8_t *resolution;
+  const uint8_t *projection;
+  size_t resolution_length;
+  size_t projection_length;
+  size_t detail;
+  size_t max_chars;
+  int blocking = 0;
+  NodeOutput output = {0};
+  ArchbirdStatus status;
+  napi_value report;
+  napi_value result;
+  napi_value blocked;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 5 || !(owned = get_project(env, argv[0])) ||
+      !get_buffer(env, argv[1], &resolution, &resolution_length) ||
+      !get_buffer(env, argv[2], &projection, &projection_length) ||
+      !get_optional_size(env, argc, argv, 3, 1, "detail", &detail) ||
+      !get_optional_size(env, argc, argv, 4, 0, "maxChars", &max_chars))
+    return NULL;
+  status = archbird_project_projection_render_markdown(
+      owned->engine, owned->project, resolution_length ? resolution : NULL,
+      resolution_length, projection, projection_length,
+      (ArchbirdReportDetail)detail, max_chars, &blocking, output_write,
+      &output);
+  report = render_result(env, owned->engine, status, &output);
+  if (!report)
+    return NULL;
+  NAPI_TRY(napi_create_object(env, &result));
+  NAPI_TRY(napi_set_named_property(env, result, "report", report));
+  NAPI_TRY(napi_get_boolean(env, blocking, &blocked));
+  NAPI_TRY(napi_set_named_property(env, result, "blocking", blocked));
+  return result;
+}
+
 static napi_value project_provider_facts(napi_env env,
                                          napi_callback_info info) {
   size_t argc = 3;
@@ -2556,6 +2595,8 @@ static napi_value init(napi_env env, napi_value exports) {
       {"projectMergeConflicts", NULL, project_merge_conflicts, NULL, NULL, NULL,
        napi_default, NULL},
       {"projectMap", NULL, project_map, NULL, NULL, NULL, napi_default, NULL},
+      {"projectProjectionMarkdown", NULL, project_projection_markdown, NULL,
+       NULL, NULL, napi_default, NULL},
       {"projectProviderFacts", NULL, project_provider_facts, NULL, NULL, NULL,
        napi_default, NULL},
       {"jsonCanonicalize", NULL, json_canonicalize, NULL, NULL, NULL,

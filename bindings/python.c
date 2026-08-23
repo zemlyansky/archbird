@@ -691,6 +691,59 @@ static PyObject *py_project_write_map(PyObject *self, PyObject *args,
   Py_RETURN_NONE;
 }
 
+static PyObject *py_project_projection_markdown(PyObject *self, PyObject *args,
+                                                PyObject *kwargs) {
+  static char *keywords[] = {"project", "resolution", "projection",
+                             "detail",  "max_chars",  NULL};
+  PyObject *capsule;
+  const char *resolution;
+  const char *projection;
+  Py_ssize_t resolution_length;
+  Py_ssize_t projection_length;
+  int detail;
+  Py_ssize_t max_chars;
+  PyArchbirdProject *owned;
+  PyOutput output = {0};
+  ArchbirdStatus status;
+  int blocking = 0;
+  PyObject *report;
+  PyObject *blocked;
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "Oy#y#in:project_projection_markdown", keywords,
+          &capsule, &resolution, &resolution_length, &projection,
+          &projection_length, &detail, &max_chars))
+    return NULL;
+  if (detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
+      detail > ARCHBIRD_REPORT_DETAIL_FULL || max_chars < 0) {
+    PyErr_SetString(PyExc_ValueError,
+                    "invalid live project projection detail or max_chars");
+    return NULL;
+  }
+  owned = get_project(capsule);
+  if (!owned)
+    return NULL;
+  status = archbird_project_projection_render_markdown(
+      owned->engine, owned->project,
+      resolution_length ? (const uint8_t *)resolution : NULL,
+      (size_t)resolution_length, (const uint8_t *)projection,
+      (size_t)projection_length, (ArchbirdReportDetail)detail,
+      (size_t)max_chars, &blocking, output_write, &output);
+  report = render_result(owned->engine, status, &output);
+  if (!report)
+    return NULL;
+  blocked = PyBool_FromLong(blocking);
+  if (!blocked) {
+    Py_DECREF(report);
+    return NULL;
+  }
+  result = PyTuple_Pack(2, report, blocked);
+  Py_DECREF(blocked);
+  Py_DECREF(report);
+  return result;
+}
+
 static PyObject *py_project_provider_facts(PyObject *self, PyObject *args,
                                            PyObject *kwargs) {
   static char *keywords[] = {"project", "index", "pretty", NULL};
@@ -2578,6 +2631,9 @@ static PyMethodDef archbird_methods[] = {
     {"project_write_map", (PyCFunction)py_project_write_map,
      METH_VARARGS | METH_KEYWORDS,
      "Stream the canonical native project map to a Python sink."},
+    {"project_projection_markdown", (PyCFunction)py_project_projection_markdown,
+     METH_VARARGS | METH_KEYWORDS,
+     "Render a live file/component projection without Map materialization."},
     {"project_provider_facts", (PyCFunction)py_project_provider_facts,
      METH_VARARGS | METH_KEYWORDS, "Render one accepted provider artifact."},
     {"json_canonicalize", (PyCFunction)py_json_canonicalize,

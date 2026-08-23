@@ -86,9 +86,9 @@
       "source": "schema/graph-view.schema.json"
     },
     {
-      "bytes": 3588,
+      "bytes": 3651,
       "path": "map-freshness.schema.json",
-      "sha256": "540c81a6e0ea33aba36a6043bd246fbc7a2fc8b5facdd5425c01826d7f7d8c89",
+      "sha256": "6649aa713a41fbd6c0875a29634505ca2813b37ffae3192300a3a9cad0e630b9",
       "source": "schema/map-freshness.schema.json"
     },
     {
@@ -158,9 +158,9 @@
       "source": "schema/provider-merge.schema.json"
     },
     {
-      "bytes": 3415,
+      "bytes": 4044,
       "path": "source-manifest.schema.json",
-      "sha256": "cd332cd157d20b0338053fe805067e7e4ee37c8cb119a5a4d27c3bb5cfa5a963",
+      "sha256": "f8cf9a2e218fbe0d7fc0d24d572a35a0d60afe524e1ded7061cd20911874d06e",
       "source": "schema/source-manifest.schema.json"
     },
     {

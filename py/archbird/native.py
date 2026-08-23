@@ -351,6 +351,11 @@ class Project:
         if resolution is not None:
             manifest["resolution"] = {
                 "coverage": dict(resolution["coverage"]),
+                "nested_repositories": list(
+                    resolution.get("nested_repositories", ())
+                ),
+                "policy": dict(resolution["policy"]),
+                "policy_sha256": str(resolution["policy_sha256"]),
                 "profile": dict(resolution["profile"]),
                 "sha256": str(resolution["sha256"]),
             }
@@ -1141,9 +1146,7 @@ class Project:
         overlays: Optional[Sequence[str]] = None,
     ) -> bytes:
         """Render one exhaustive graph projection of the current Map."""
-
-        return render_map_markdown(
-            self.map_json(),
+        return self.map_markdown_with_blocking(
             view=view,
             detail=detail,
             compact=compact,
@@ -1153,7 +1156,60 @@ class Project:
             level=level,
             relations=relations,
             overlays=overlays,
-            resolution_json=self.resolution_json or b"",
+        )[0]
+
+    def map_markdown_with_blocking(
+        self,
+        *,
+        view: str = "overview",
+        detail: str = "standard",
+        compact: bool = False,
+        full: bool = False,
+        max_chars: int = 0,
+        group_by: str = "",
+        level: str = "",
+        relations: Optional[Sequence[str]] = None,
+        overlays: Optional[Sequence[str]] = None,
+    ) -> tuple[bytes, bool]:
+        """Render one live graph projection and its Map diagnostic verdict."""
+        definition, selected_detail = _map_projection_request(
+            view=view,
+            detail=detail,
+            compact=compact,
+            full=full,
+            max_chars=max_chars,
+            group_by=group_by,
+            level=level,
+            relations=relations,
+            overlays=overlays,
+        )
+        if json.loads(definition).get("level") == "symbol":
+            map_json = self.map_json()
+            document = json.loads(map_json)
+            return (
+                _native.projection_render_markdown(
+                    map_json,
+                    definition,
+                    resolution_json=self.resolution_json or b"",
+                    detail=selected_detail,
+                    max_chars=max_chars,
+                ),
+                any(
+                    row.get("severity") == "error"
+                    for row in document["diagnostics"]
+                ),
+            )
+        # A canonical-Map cache hit deliberately leaves provider state
+        # unmaterialized.  File/component live projections operate on the
+        # normalized provider graph, so restore that state from per-provider
+        # caches instead of decoding the potentially much larger Map bytes.
+        self._materialize()
+        return _native.project_projection_markdown(
+            self._capsule,
+            self.resolution_json or b"",
+            definition,
+            selected_detail,
+            max_chars,
         )
 
     def source_markdown(
@@ -1667,8 +1723,7 @@ def path_map_markdown(
     )
 
 
-def render_map_markdown(
-    map_json: bytes,
+def _map_projection_request(
     *,
     view: str = "overview",
     detail: str = "standard",
@@ -1680,8 +1735,7 @@ def render_map_markdown(
     relations: Optional[Sequence[str]] = None,
     overlays: Optional[Sequence[str]] = None,
     resolution_json: bytes = b"",
-) -> bytes:
-    """Render one exhaustive graph projection of a canonical saved Map."""
+) -> tuple[bytes, int]:
 
     if max_chars < 0:
         raise ValueError("max_chars must be nonnegative")
@@ -1762,11 +1816,45 @@ def render_map_markdown(
     }
     if selected_group != "none":
         definition["group_by"] = selected_group
+    return (
+        json.dumps(definition, sort_keys=True, separators=(",", ":")).encode(),
+        details[selected_detail],
+    )
+
+
+def render_map_markdown(
+    map_json: bytes,
+    *,
+    view: str = "overview",
+    detail: str = "standard",
+    compact: bool = False,
+    full: bool = False,
+    max_chars: int = 0,
+    group_by: str = "",
+    level: str = "",
+    relations: Optional[Sequence[str]] = None,
+    overlays: Optional[Sequence[str]] = None,
+    resolution_json: bytes = b"",
+) -> bytes:
+    """Render one exhaustive graph projection of a canonical saved Map."""
+
+    definition, selected_detail = _map_projection_request(
+        view=view,
+        detail=detail,
+        compact=compact,
+        full=full,
+        max_chars=max_chars,
+        group_by=group_by,
+        level=level,
+        relations=relations,
+        overlays=overlays,
+        resolution_json=resolution_json,
+    )
     return _native.projection_render_markdown(
         map_json,
-        json.dumps(definition, sort_keys=True, separators=(",", ":")).encode(),
+        definition,
         resolution_json=resolution_json,
-        detail=details[selected_detail],
+        detail=selected_detail,
         max_chars=max_chars,
     )
 
@@ -2587,10 +2675,16 @@ def _inventory_state(
     ignore_files: Sequence[str] = (),
     collect_sizes: bool = False,
     transient_exclude: Sequence[str] = (),
-) -> tuple[Tuple[str, ...], Tuple[str, ...], Tuple[Tuple[str, int], ...]]:
+) -> tuple[
+    Tuple[str, ...],
+    Tuple[str, ...],
+    Tuple[Tuple[str, int], ...],
+    Tuple[str, ...],
+]:
     files: list[str] = []
     file_sizes: list[tuple[str, int]] = []
     pruned: list[str] = []
+    nested_repositories: set[str] = set()
     pending: list[tuple[str, Path]] = [("", root)]
     standard_ignores: list[tuple[str, bytes]] = []
     custom_paths = tuple(ignore_files)
@@ -2615,6 +2709,8 @@ def _inventory_state(
                         if entry.is_dir(follow_symlinks=False):
                             directories.append((relative, Path(entry.path)))
                         elif entry.is_file(follow_symlinks=False):
+                            if entry.name == ".git" and directory_relative:
+                                nested_repositories.add(directory_relative)
                             if relative in transient_set:
                                 continue
                             files.append(relative)
@@ -2648,6 +2744,11 @@ def _inventory_state(
                     f"cannot enumerate repository directory: {directory}: {error}"
                 ) from error
         directories.sort(key=lambda row: row[0].encode())
+        nested_repositories.update(
+            relative.rsplit("/", 1)[0]
+            for relative, _ in directories
+            if relative.endswith("/.git")
+        )
         active_ignores = [*standard_ignores, *custom_ignores]
         decisions = _native.discovery_descend(
             config_json,
@@ -2671,6 +2772,7 @@ def _inventory_state(
         tuple(sorted(files)),
         tuple(sorted(pruned)),
         tuple(sorted(file_sizes)),
+        tuple(sorted(nested_repositories)),
     )
 
 
@@ -2753,8 +2855,8 @@ def _inventory_rows(
     include_standard_ignores: bool = False,
     ignore_files: Sequence[str] = (),
     transient_exclude: Sequence[str] = (),
-) -> tuple[list[dict[str, object]], Tuple[str, ...]]:
-    _paths, pruned, file_sizes = _inventory_state(
+) -> tuple[list[dict[str, object]], Tuple[str, ...], Tuple[str, ...]]:
+    _paths, pruned, file_sizes, nested_repositories = _inventory_state(
         config_json,
         root,
         include_standard_ignores=include_standard_ignores,
@@ -2765,7 +2867,7 @@ def _inventory_rows(
     return [
         {"bytes": size, "path": path}
         for path, size in file_sizes
-    ], pruned
+    ], pruned, nested_repositories
 
 
 def _safe_relative(root: Path, value: Union[str, Path]) -> str:
@@ -2950,6 +3052,7 @@ def _repository_inventory(
     include_standard_ignores: bool,
     ignore_files: Sequence[Union[str, Path]],
     pruned_directories: Sequence[str] = (),
+    nested_repositories: Sequence[str] = (),
     overlay: Optional[Mapping[str, Optional[bytes]]] = None,
     manifest_requests: Sequence[Mapping[str, object]] = (),
 ) -> bytes:
@@ -3025,6 +3128,7 @@ def _repository_inventory(
             "ignore_files": [
                 _encoded_input(root, path, overlay) for path in selected
             ],
+            "nested_repositories": list(nested_repositories),
             "pruned_directories": list(pruned_directories),
             "schema_version": 1,
         }
@@ -3135,7 +3239,7 @@ def resolve_discovery(
         _native.discovery_resolve(config_json, request, bootstrap_inventory)
     )
     effective = _canonical(bootstrap["effective_config"])
-    rows, pruned_directories = _inventory_rows(
+    rows, pruned_directories, nested_repositories = _inventory_rows(
         effective,
         repository,
         # Disk ignore rules cannot safely prune the virtual after-state when
@@ -3159,6 +3263,7 @@ def resolve_discovery(
         include_standard_ignores=ignore,
         ignore_files=normalized_ignore_files,
         pruned_directories=pruned_directories,
+        nested_repositories=nested_repositories,
         overlay=overlay,
     )
     candidate_resolution = json.loads(
@@ -3175,6 +3280,7 @@ def resolve_discovery(
         include_standard_ignores=ignore,
         ignore_files=normalized_ignore_files,
         pruned_directories=pruned_directories,
+        nested_repositories=nested_repositories,
         overlay=overlay,
         manifest_requests=manifest_requests,
     )

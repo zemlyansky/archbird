@@ -87,6 +87,7 @@
         "input_sha256": {"$ref": "#/$defs/sha256"},
         "config_sha256": {"$ref": "#/$defs/sha256"},
         "discovery_sha256": {"$ref": "#/$defs/sha256"},
+        "discovery_policy_sha256": {"$ref": "#/$defs/sha256"},
         "tool_implementation_sha256": {"$ref": "#/$defs/sha256"}
       }
     },

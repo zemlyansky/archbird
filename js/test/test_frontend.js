@@ -1210,6 +1210,12 @@ assert.deepEqual(mapCachedWarm.mapCacheStats, {
 });
 assert.equal(mapCachedWarm.cacheStats.hits, 0);
 assert.ok(mapCachedWarm.counts.providers > 0n);
+const mapCachedWarmMapJson = mapCachedWarm.mapJson;
+mapCachedWarm.mapJson = () => {
+  throw new Error("warm live Markdown decoded the cached canonical Map");
+};
+assert.ok(mapCachedWarm.mapMarkdown({ maxChars: 12_000 }).length > 0);
+mapCachedWarm.mapJson = mapCachedWarmMapJson;
 const mapPrefixes = fs.readdirSync(path.join(mapCacheRoot, "maps-v1"));
 assert.equal(mapPrefixes.length, 1);
 const mapDirectory = path.join(mapCacheRoot, "maps-v1", mapPrefixes[0]);
@@ -1419,6 +1425,48 @@ assert.equal(recoveredCache.stats.errors, 1);
 assert.equal(recoveredCache.stats.attemptedBytes, 1);
 assert.equal(recoveredCache.stats.errorErrno, 0);
 fs.rmSync(boundedCacheRoot, { force: true, recursive: true });
+const nestedRepositoryTemporary = fs.mkdtempSync(path.join(
+  repositoryRoot,
+  "build/test-nested-repository-node-",
+));
+fs.mkdirSync(path.join(nestedRepositoryTemporary, "vendor"));
+fs.writeFileSync(
+  path.join(nestedRepositoryTemporary, "vendor", ".git"),
+  "gitdir: ../../.git/modules/vendor\n",
+);
+fs.writeFileSync(
+  path.join(nestedRepositoryTemporary, "vendor", "library.c"),
+  "int library_open(void) { return 0; }\n",
+);
+fs.writeFileSync(
+  path.join(nestedRepositoryTemporary, "archbird.json"),
+  JSON.stringify({
+    project: "nested-repository-marker",
+    layers: [{
+      globs: ["vendor/**/*.c"],
+      language: "c",
+      name: "native",
+    }],
+  }),
+);
+const nestedRepositoryProject = Project.fromConfig(
+  path.join(nestedRepositoryTemporary, "archbird.json"),
+  { cacheDir: null, mapCache: false, root: nestedRepositoryTemporary },
+);
+assert.deepEqual(
+  JSON.parse(nestedRepositoryProject.resolutionJson).nested_repositories,
+  ["vendor"],
+);
+assert.deepEqual(
+  nestedRepositoryProject.map().discovery.nested_repositories,
+  ["vendor"],
+);
+assert.match(
+  nestedRepositoryProject.mapMarkdown({ view: "overview" }).toString("utf8"),
+  /Nested repository roots encountered within discovery scope: `vendor`/,
+);
+nestedRepositoryProject.dispose();
+fs.rmSync(nestedRepositoryTemporary, { force: true, recursive: true });
 const zeroFixtureTemporary = fs.mkdtempSync(path.join(
   repositoryRoot,
   "build/test-zero-config-node-",
@@ -1470,8 +1518,12 @@ const materializedResolution = JSON.parse(
 const zeroResolutionEvidence = structuredClone(zeroResolution);
 const materializedResolutionEvidence = structuredClone(materializedResolution);
 delete zeroResolutionEvidence.origins;
+delete zeroResolutionEvidence.policy;
+delete zeroResolutionEvidence.policy_sha256;
 delete zeroResolutionEvidence.sha256;
 delete materializedResolutionEvidence.origins;
+delete materializedResolutionEvidence.policy;
+delete materializedResolutionEvidence.policy_sha256;
 delete materializedResolutionEvidence.sha256;
 assert.deepEqual(materializedResolutionEvidence, zeroResolutionEvidence);
 const boundedResolution = JSON.parse(
@@ -1618,6 +1670,9 @@ assert.deepEqual(zeroPackages.get("python-root").entrypoints, {
 });
 assert.deepEqual(zeroMap.discovery, {
   coverage: zeroResolution.coverage,
+  nested_repositories: zeroResolution.nested_repositories,
+  policy: zeroResolution.policy,
+  policy_sha256: zeroResolution.policy_sha256,
   profile: zeroResolution.profile,
   sha256: zeroResolution.sha256,
 });
@@ -1688,6 +1743,25 @@ assert.deepEqual(
     resolutionJson: repositoryProject.resolutionJson,
   }),
 );
+for (const view of ["overview", "architecture", "tests", "evidence"]) {
+  for (const detail of ["compact", "standard", "full"]) {
+    assert.deepEqual(
+      repositoryProject.mapMarkdown({ view, detail }),
+      renderMapMarkdown(repositoryMapJson, {
+        view,
+        detail,
+        resolutionJson: repositoryProject.resolutionJson,
+      }),
+      `live Node projection drifted from saved Map: ${view}/${detail}`,
+    );
+  }
+}
+const originalMapJson = repositoryProject.mapJson;
+repositoryProject.mapJson = () => {
+  throw new Error("bounded file-level Map Markdown materialized the canonical Map");
+};
+repositoryProject.mapMarkdown({ maxChars: 12_000 });
+repositoryProject.mapJson = originalMapJson;
 const reportFixture = fs.readFileSync(path.resolve(
   process.argv[3],
   "test/fixtures/report_map.json",

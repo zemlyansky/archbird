@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -30,6 +31,21 @@ def identity(digit: str) -> dict[str, str]:
         "name": "archbird",
         "version": "0.0.1",
     }
+
+
+def discovery_policy(only: str = "src/*.c") -> tuple[dict[str, object], str]:
+    policy: dict[str, object] = {
+        "configuration": {},
+        "request": {
+            "artifact": "archbird-map-request",
+            "exclude": [],
+            "ignore_files": [],
+            "only": [only],
+            "schema_version": 1,
+            "sources": [],
+        },
+    }
+    return policy, hashlib.sha256(canonical(policy)).hexdigest()
 
 
 def map_document(
@@ -113,6 +129,41 @@ def main() -> int:
         raise AssertionError(current["files"])
     if json.loads(extension.map_freshness(encoded, encoded, pretty=True)) != current:
         raise AssertionError("pretty freshness changed artifact semantics")
+
+    policy, policy_sha256 = discovery_policy()
+    scoped_before = copy.deepcopy(snapshot)
+    scoped_before["discovery"].update(
+        {"policy": policy, "policy_sha256": policy_sha256}
+    )
+    scoped_after = copy.deepcopy(scoped_before)
+    scoped_after["discovery"]["sha256"] = "9" * 64
+    scoped_current = json.loads(
+        extension.map_freshness(canonical(scoped_before), canonical(scoped_after))
+    )
+    if (
+        scoped_current["status"] != "current"
+        or scoped_current["comparisons"]["discovery"] != "current"
+    ):
+        raise AssertionError(scoped_current)
+    changed_policy, changed_policy_sha256 = discovery_policy("test/*.c")
+    scoped_after["discovery"].update(
+        {
+            "policy": changed_policy,
+            "policy_sha256": changed_policy_sha256,
+        }
+    )
+    scoped_drift = json.loads(
+        extension.map_freshness(canonical(scoped_before), canonical(scoped_after))
+    )
+    if scoped_drift["status"] != "context-drift":
+        raise AssertionError(scoped_drift)
+    tampered_policy = copy.deepcopy(scoped_before)
+    tampered_policy["discovery"]["policy"]["request"]["only"] = ["other/*.c"]
+    expect_error(
+        extension.map_freshness,
+        canonical(tampered_policy),
+        canonical(scoped_before),
+    )
 
     configured = copy.deepcopy(snapshot)
     del configured["discovery"]

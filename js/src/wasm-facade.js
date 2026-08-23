@@ -364,6 +364,30 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
       projectRender(handle, "_ab_wasm_project_merge_conflicts", pretty),
     projectMap: (handle, pretty = false) =>
       projectRender(handle, "_ab_wasm_project_map", pretty),
+    projectProjectionMarkdown(
+      handle,
+      resolution,
+      projection,
+      detail = 1,
+      maxChars = 0,
+    ) {
+      const pointer = checkedProject(handle);
+      return withInputs([resolution, projection], ([resolutionInput, projectionInput]) => {
+        const report = result(module._ab_wasm_project_projection_markdown(
+          pointer,
+          resolutionInput.pointer,
+          resolutionInput.length,
+          projectionInput.pointer,
+          projectionInput.length,
+          sizeValue(detail, "detail"),
+          sizeValue(maxChars, "maxChars"),
+        ));
+        return {
+          blocking: Boolean(module._ab_wasm_verification_blocking()),
+          report,
+        };
+      });
+    },
     projectSourceMarkdown(
       handle,
       artifact,

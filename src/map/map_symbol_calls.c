@@ -103,7 +103,8 @@ static ArchbirdStatus json_string(AbBuffer *buffer, const AbString *value) {
 
 static ArchbirdStatus render_candidate(AbBuffer *buffer, const AbString *path,
                                        const AbString *symbol,
-                                       const AbFact *fact) {
+                                       const AbFact *fact, int projection,
+                                       uint64_t multiplicity) {
   ArchbirdStatus status = ab_buffer_literal(buffer, "{\"path\":");
   const AbString *index =
       fact ? ab_map_fact_string_attribute(fact, "index") : NULL;
@@ -114,12 +115,12 @@ static ArchbirdStatus render_candidate(AbBuffer *buffer, const AbString *path,
   uint64_t line;
   if (status == ARCHBIRD_OK)
     status = json_string(buffer, path);
-  if (status == ARCHBIRD_OK && index && index->length) {
+  if (status == ARCHBIRD_OK && !projection && index && index->length) {
     status = ab_buffer_literal(buffer, ",\"index\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, index);
   }
-  if (status == ARCHBIRD_OK && fact &&
+  if (status == ARCHBIRD_OK && !projection && fact &&
       ab_map_fact_u64_attribute(fact, "line", &line)) {
     status = ab_buffer_literal(buffer, ",\"line\":");
     if (status == ARCHBIRD_OK)
@@ -128,16 +129,36 @@ static ArchbirdStatus render_candidate(AbBuffer *buffer, const AbString *path,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"symbol\":");
   if (status == ARCHBIRD_OK)
-    status = json_string(buffer, symbol);
-  if (status == ARCHBIRD_OK && syntax_recovery) {
+    status = projection ? ab_buffer_json_string(buffer, "*", 1)
+                        : json_string(buffer, symbol);
+  if (status == ARCHBIRD_OK && projection && multiplicity > 1) {
+    status = ab_buffer_literal(buffer, ",\"multiplicity\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, multiplicity);
+  }
+  if (status == ARCHBIRD_OK && !projection && syntax_recovery) {
     status = ab_buffer_literal(buffer, ",\"syntax_recovery\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, syntax_recovery);
   }
-  if (status == ARCHBIRD_OK && variant && variant->length) {
+  if (status == ARCHBIRD_OK && !projection && variant && variant->length) {
     status = ab_buffer_literal(buffer, ",\"variant\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, variant);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  return status;
+}
+
+static ArchbirdStatus render_projection_evidence(AbBuffer *buffer,
+                                                 const AbFact *fact) {
+  uint64_t line;
+  ArchbirdStatus status = ab_buffer_literal(buffer, "{");
+  if (status == ARCHBIRD_OK && ab_map_fact_u64_attribute(fact, "line", &line)) {
+    status = ab_buffer_literal(buffer, "\"line\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(buffer, line);
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "}");
@@ -204,7 +225,8 @@ static ArchbirdStatus render_evidence(AbBuffer *buffer, const AbFact *fact,
   return status;
 }
 
-ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
+static ArchbirdStatus render_symbol_calls(AbBuffer *buffer, AbMapState *state,
+                                          int projection) {
   size_t total = ab_project_merged_fact_count(state->project);
   AbSymbolCallSymbol *symbols = NULL;
   AbSymbolCallRow *rows = NULL;
@@ -354,40 +376,59 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
       status = ab_buffer_literal(buffer, "{\"candidates\":[");
     }
     if (status == ARCHBIRD_OK && row->semantic)
-      status = render_candidate(buffer, row->semantic_path,
-                                row->semantic_symbol, semantic_definition);
+      status =
+          render_candidate(buffer, row->semantic_path, row->semantic_symbol,
+                           semantic_definition, projection, 1);
     if (status == ARCHBIRD_OK && row->local_candidate)
       status = render_candidate(buffer, &row->local_candidate->file->path,
                                 &row->local_candidate->fact->name,
-                                row->local_candidate->fact);
+                                row->local_candidate->fact, projection, 1);
     if (status == ARCHBIRD_OK && !row->semantic && !row->local_candidate &&
         strcmp(row->resolution, "builtin")) {
       size_t rendered = 0;
       for (candidate = row->candidate_start;
            status == ARCHBIRD_OK && candidate < row->candidate_end;
            candidate++) {
+        size_t next = candidate + 1;
+        uint64_t multiplicity = 1;
         if (!ab_map_symbol_reference_usable(&symbols[candidate],
                                             row->source_file, 0, 0))
           continue;
+        if (projection) {
+          while (next < row->candidate_end &&
+                 ab_string_equal(&symbols[candidate].file->path,
+                                 &symbols[next].file->path)) {
+            if (ab_map_symbol_reference_usable(&symbols[next], row->source_file,
+                                               0, 0))
+              multiplicity++;
+            next++;
+          }
+        }
         if (rendered++)
           status = ab_buffer_literal(buffer, ",");
         if (status == ARCHBIRD_OK)
           status = render_candidate(buffer, &symbols[candidate].file->path,
                                     &symbols[candidate].fact->name,
-                                    symbols[candidate].fact);
+                                    symbols[candidate].fact, projection,
+                                    multiplicity);
+        if (projection)
+          candidate = next - 1;
       }
     }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "],\"evidence\":[");
-    for (candidate = index; status == ARCHBIRD_OK && candidate < group_end;
+    for (candidate = index; status == ARCHBIRD_OK && candidate < group_end &&
+                            (!projection || candidate == index);
          candidate++) {
       const AbSymbolCallRow *occurrence = &rows[candidate];
       if (candidate != index)
         status = ab_buffer_literal(buffer, ",");
-      if (status == ARCHBIRD_OK)
+      if (status == ARCHBIRD_OK && projection)
+        status = render_projection_evidence(buffer, occurrence->call);
+      else if (status == ARCHBIRD_OK)
         status =
             render_evidence(buffer, occurrence->call, occurrence->provider);
-      if (status == ARCHBIRD_OK && occurrence->semantic &&
+      if (status == ARCHBIRD_OK && !projection && occurrence->semantic &&
           occurrence->semantic_provider) {
         status = ab_buffer_literal(buffer, ",");
         if (status == ARCHBIRD_OK)
@@ -407,9 +448,9 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
       status = ab_buffer_literal(buffer, "\",\"source\":{\"path\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, &row->call->path);
-    if (status == ARCHBIRD_OK && row->source)
+    if (status == ARCHBIRD_OK && row->source && !projection)
       status = ab_buffer_literal(buffer, ",\"symbol\":");
-    if (status == ARCHBIRD_OK && row->source)
+    if (status == ARCHBIRD_OK && row->source && !projection)
       status = json_string(buffer, &row->source->name);
     if (status == ARCHBIRD_OK && !row->source)
       status = ab_buffer_literal(buffer, ",\"scope\":\"");
@@ -433,4 +474,13 @@ done:
   ab_free(state->engine, rows);
   ab_free(state->engine, symbols);
   return status;
+}
+
+ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state) {
+  return render_symbol_calls(buffer, state, 0);
+}
+
+ArchbirdStatus ab_map_render_symbol_calls_projection(AbBuffer *buffer,
+                                                     AbMapState *state) {
+  return render_symbol_calls(buffer, state, 1);
 }

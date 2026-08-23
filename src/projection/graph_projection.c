@@ -274,6 +274,51 @@ static ArchbirdStatus evaluate_select(AbProjectionContext *context,
   return status;
 }
 
+static int request_has(const AbProjectionPlan *plan, const char *field,
+                       const char *value);
+
+static ArchbirdStatus
+evaluate_symbol_relations(AbProjectionContext *context,
+                          const AbProjectionPlan *graph_plan,
+                          AbProjectionData *out) {
+  AbObjectField fields[2] = {0};
+  AbValue values[2] = {0};
+  AbValue definition = {.kind = AB_VALUE_OBJECT};
+  AbProjectionPlan plan = {0};
+  AbString plan_id = {(char *)"graph-symbol-relations", 22};
+  size_t count = 0;
+  ArchbirdStatus status;
+  if (request_has(graph_plan, "relations", "calls")) {
+    values[count].kind = AB_VALUE_STRING;
+    values[count].as.text.data = (char *)"calls";
+    values[count++].as.text.length = 5;
+  }
+  if (request_has(graph_plan, "relations", "references")) {
+    values[count].kind = AB_VALUE_STRING;
+    values[count].as.text.data = (char *)"references";
+    values[count++].as.text.length = 10;
+  }
+  fields[0].name.data = (char *)"kinds";
+  fields[0].name.length = 5;
+  fields[0].value.kind = AB_VALUE_ARRAY;
+  fields[0].value.as.array.items = values;
+  fields[0].value.as.array.count = count;
+  fields[1].name.data = (char *)"select";
+  fields[1].name.length = 6;
+  fields[1].value.kind = AB_VALUE_STRING;
+  fields[1].value.as.text.data = (char *)"symbol_relations";
+  fields[1].value.as.text.length = 16;
+  definition.as.object.fields = fields;
+  definition.as.object.count = 2;
+  status =
+      ab_projection_plan_compile(context->engine, &definition, &plan_id, &plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_extract_map(context->engine, context->map,
+                                       context->resolution, &plan, out);
+  ab_projection_plan_free(context->engine, &plan);
+  return status;
+}
+
 static void inputs_free(ArchbirdEngine *engine, AbGraphInputs *inputs) {
   ab_projection_data_free(engine, &inputs->membership);
   ab_projection_data_free(engine, &inputs->components);
@@ -328,8 +373,8 @@ static ArchbirdStatus inputs_load(AbProjectionContext *context,
   }
   if (status == ARCHBIRD_OK && (request_has(plan, "relations", "calls") ||
                                 request_has(plan, "relations", "references"))) {
-    status = evaluate_select(context, "graph-symbol-relations",
-                             "symbol_relations", &inputs->symbol_relations);
+    status =
+        evaluate_symbol_relations(context, plan, &inputs->symbol_relations);
     inputs->has_symbol_relations =
         status == ARCHBIRD_OK &&
         !string_is(&inputs->symbol_relations.state, "unknown");
@@ -843,6 +888,8 @@ static ArchbirdStatus relation_key(ArchbirdEngine *engine, const char *family,
   return status;
 }
 
+static uint64_t u64_attribute(const AbProjectionItem *item, const char *name);
+
 static ArchbirdStatus add_relation(AbProjectionContext *context,
                                    AbProjectionData *graph, const char *family,
                                    const AbString *kind, const AbString *source,
@@ -852,7 +899,10 @@ static ArchbirdStatus add_relation(AbProjectionContext *context,
   AbString relation_kind = {(char *)"relation", 8};
   AbString identity = {0};
   AbProjectionItem *item = NULL;
+  uint64_t multiplicity = u64_attribute(witness, "multiplicity");
   ArchbirdStatus status;
+  if (!multiplicity)
+    multiplicity = 1;
   if (ab_string_equal(source, target)) {
     (*collapsed)++;
     return ARCHBIRD_OK;
@@ -880,9 +930,15 @@ static ArchbirdStatus add_relation(AbProjectionContext *context,
     if (resolution && !attribute(item, "resolution"))
       status = add_attribute(context->engine, item, "resolution", resolution);
   }
+  if (status == ARCHBIRD_OK &&
+      UINT64_MAX - u64_attribute(item, "witness_count") < multiplicity)
+    status = archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "graph relation witness count exceeds uint64");
   if (status == ARCHBIRD_OK)
-    status = set_u64_attribute(context->engine, item, "witness_count",
-                               u64_attribute(item, "witness_count") + 1);
+    status =
+        set_u64_attribute(context->engine, item, "witness_count",
+                          u64_attribute(item, "witness_count") + multiplicity);
   ab_string_free(context->engine, &identity);
   return status;
 }
@@ -1824,6 +1880,11 @@ static ArchbirdStatus add_discovery_coverage(AbProjectionContext *context,
   const AbValue *profile =
       discovery ? ab_value_member(discovery, "profile") : NULL;
   const AbValue *sha = discovery ? ab_value_member(discovery, "sha256") : NULL;
+  const AbValue *nested_repositories =
+      discovery ? ab_value_member(discovery, "nested_repositories") : NULL;
+  if (!nested_repositories && context->resolution)
+    nested_repositories =
+        ab_value_member(context->resolution, "nested_repositories");
   AbProjectionItem *item = NULL;
   uint64_t oversized = 0;
   uint64_t unsupported = 0;
@@ -1861,6 +1922,14 @@ static ArchbirdStatus add_discovery_coverage(AbProjectionContext *context,
   status = add_attribute(context->engine, item, "profile", profile);
   if (status == ARCHBIRD_OK)
     status = add_attribute(context->engine, item, "sha256", sha);
+  if (status == ARCHBIRD_OK && nested_repositories) {
+    if (nested_repositories->kind != AB_VALUE_ARRAY)
+      return archbird_error_set(
+          context->engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+          "config resolution contains invalid nested repository paths");
+    status = add_attribute(context->engine, item, "nested_repositories",
+                           nested_repositories);
+  }
   if (status == ARCHBIRD_OK && (oversized || unsupported))
     status = ab_projection_item_set_state(
         context->engine, item, "unknown",

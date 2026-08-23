@@ -3,6 +3,7 @@
 #include "base/archbird_internal.h"
 #include "base/json_value.h"
 #include "base/render_internal.h"
+#include "base/sha256.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -24,8 +25,10 @@ typedef struct FreshnessIdentity {
   const AbString *config_sha256;
   const AbString *tool_implementation_sha256;
   const AbString *discovery_sha256;
+  const AbString *discovery_policy_sha256;
   int has_config;
   int has_discovery;
+  int has_discovery_policy;
   int has_tool;
   int complete_file_inventory;
 } FreshnessIdentity;
@@ -128,6 +131,30 @@ static const AbString *optional_sha256(FreshnessContext *context,
   return &value->as.text;
 }
 
+static ArchbirdStatus validate_policy_digest(FreshnessContext *context,
+                                             const AbValue *policy,
+                                             const AbString *expected) {
+  AbBuffer canonical;
+  uint8_t digest[32];
+  char digest_hex[65];
+  ArchbirdStatus status;
+  if (!policy || policy->kind != AB_VALUE_OBJECT)
+    return freshness_error(context,
+                           "freshness discovery.policy must be an object");
+  ab_buffer_init(&canonical, context->engine);
+  status = ab_value_render(&canonical, policy);
+  if (status == ARCHBIRD_OK)
+    status = archbird_sha256(canonical.data, canonical.length, digest);
+  if (status == ARCHBIRD_OK) {
+    archbird_sha256_hex(digest, digest_hex);
+    if (memcmp(digest_hex, expected->data, 64) != 0)
+      status = freshness_error(
+          context, "freshness discovery.policy_sha256 does not match policy");
+  }
+  ab_buffer_free(&canonical);
+  return status;
+}
+
 static ArchbirdStatus decode_identity(FreshnessContext *context,
                                       const AbValue *document, int current,
                                       FreshnessIdentity *out) {
@@ -190,11 +217,22 @@ static ArchbirdStatus decode_identity(FreshnessContext *context,
     out->discovery_sha256 =
         required_sha256(context, discovery, "sha256",
                         "freshness discovery.sha256 must be a SHA-256 digest");
+    out->discovery_policy_sha256 = optional_sha256(
+        context, discovery, "policy_sha256", &out->has_discovery_policy,
+        "freshness discovery.policy_sha256 must be a SHA-256 digest");
+    if (out->has_discovery_policy && out->discovery_policy_sha256) {
+      ArchbirdStatus status =
+          validate_policy_digest(context, ab_value_member(discovery, "policy"),
+                                 out->discovery_policy_sha256);
+      if (status != ARCHBIRD_OK)
+        return status;
+    }
   }
   if (!out->project || !out->input_sha256 ||
       (out->has_config && !out->config_sha256) ||
       (out->has_tool && !out->tool_implementation_sha256) ||
-      (out->has_discovery && !out->discovery_sha256))
+      (out->has_discovery && !out->discovery_sha256) ||
+      (out->has_discovery_policy && !out->discovery_policy_sha256))
     return ARCHBIRD_INVALID_SCHEMA;
   return ARCHBIRD_OK;
 }
@@ -289,6 +327,10 @@ static ArchbirdStatus render_identity(AbBuffer *buffer,
     status = ab_buffer_literal(buffer, ",\"discovery_sha256\":");
   if (status == ARCHBIRD_OK && identity->has_discovery)
     status = render_string_value(buffer, identity->discovery_sha256);
+  if (status == ARCHBIRD_OK && identity->has_discovery_policy)
+    status = ab_buffer_literal(buffer, ",\"discovery_policy_sha256\":");
+  if (status == ARCHBIRD_OK && identity->has_discovery_policy)
+    status = render_string_value(buffer, identity->discovery_policy_sha256);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"input_sha256\":");
   if (status == ARCHBIRD_OK)
@@ -416,9 +458,17 @@ static ArchbirdStatus render_freshness(FreshnessContext *context,
   FreshnessComparison config = compare_optional_digest(
       context->snapshot.config_sha256, context->snapshot.has_config,
       context->current.config_sha256, context->current.has_config);
-  FreshnessComparison discovery = compare_optional_digest(
-      context->snapshot.discovery_sha256, context->snapshot.has_discovery,
-      context->current.discovery_sha256, context->current.has_discovery);
+  FreshnessComparison discovery =
+      context->snapshot.has_discovery_policy ||
+              context->current.has_discovery_policy
+          ? compare_optional_digest(context->snapshot.discovery_policy_sha256,
+                                    context->snapshot.has_discovery_policy,
+                                    context->current.discovery_policy_sha256,
+                                    context->current.has_discovery_policy)
+          : compare_optional_digest(context->snapshot.discovery_sha256,
+                                    context->snapshot.has_discovery,
+                                    context->current.discovery_sha256,
+                                    context->current.has_discovery);
   FreshnessComparison producer = compare_optional_digest(
       context->snapshot.tool_implementation_sha256, context->snapshot.has_tool,
       context->current.tool_implementation_sha256, context->current.has_tool);

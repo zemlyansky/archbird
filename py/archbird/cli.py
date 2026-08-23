@@ -546,19 +546,13 @@ def freshness_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird freshness",
         description=(
-            "Audit a saved Map or Query snapshot against a freshly derived "
-            "live repository Map."
+            "Replay the saved Map or Query discovery scope and audit its "
+            "source identity without running evidence providers."
         ),
     )
     result.add_argument("root_path", nargs="?", help="repository root (default: .)")
-    source = result.add_mutually_exclusive_group()
-    source.add_argument("-c", "--config", help="live project configuration JSON")
-    source.add_argument("--no-config", action="store_true")
-    result.add_argument("--root", dest="root_override", help="compatibility root override")
+    result.add_argument("--root", dest="root_override", help="repository root")
     result.add_argument("--snapshot", required=True, help="saved Map or Query JSON")
-    _add_discovery_options(result)
-    _add_python_analysis_options(result)
-    _add_cache_options(result)
     _add_progress_options(result)
     result.add_argument("--pretty", action="store_true")
     result.add_argument("--check", action="store_true")
@@ -2527,17 +2521,131 @@ def _path_main(argv: Sequence[str]) -> int:
         return 2
 
 
+def _freshness_project(
+    args: argparse.Namespace, snapshot: Mapping[str, object], progress: _Progress
+) -> Project:
+    positional = Path(args.root_path).resolve() if args.root_path else None
+    override = Path(args.root_override).resolve() if args.root_override else None
+    if positional is not None and override is not None and positional != override:
+        raise ConfigError("positional ROOT and --root select different directories")
+    repository = positional or override or Path.cwd().resolve()
+    discovery = snapshot.get("discovery")
+    if not isinstance(discovery, dict):
+        raise ConfigError(
+            "saved Map/Query has no discovery identity; regenerate it with "
+            "the current Archbird"
+        )
+    policy = discovery.get("policy")
+    if not isinstance(policy, dict) or set(policy) != {"configuration", "request"}:
+        raise ConfigError(
+            "saved Map/Query has no replayable discovery policy; regenerate "
+            "it with the current Archbird"
+        )
+    configuration = policy.get("configuration")
+    request = policy.get("request")
+    if not isinstance(configuration, dict) or not isinstance(request, dict):
+        raise ConfigError("saved discovery policy is malformed")
+    if request.get("artifact") != "archbird-map-request" or request.get(
+        "schema_version"
+    ) != 1:
+        raise ConfigError("saved discovery request is unsupported")
+    source_rows = request.get("sources")
+    if not isinstance(source_rows, list):
+        raise ConfigError("saved discovery request sources are malformed")
+    sources: list[str] = []
+    for row in source_rows:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"glob", "language"}
+            or not isinstance(row.get("glob"), str)
+            or not isinstance(row.get("language"), str)
+        ):
+            raise ConfigError("saved discovery source classification is malformed")
+        sources.append(f"{row['language']}={row['glob']}")
+    for field in ("only", "exclude", "ignore_files"):
+        if not isinstance(request.get(field), list) or not all(
+            isinstance(value, str) for value in request[field]
+        ):
+            raise ConfigError(f"saved discovery request {field} is malformed")
+    transient = []
+    for value in (args.snapshot, args.output):
+        if value != "-":
+            candidate = Path(value).resolve()
+            try:
+                candidate.relative_to(repository)
+            except ValueError:
+                continue
+            transient.append(candidate)
+    progress.emit({"phase": "discovery", "state": "replay"})
+    current = Project.from_repository(
+        repository,
+        config=json.dumps(
+            configuration, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8"),
+        project=request.get("project"),
+        source=sources,
+        only=request["only"],
+        exclude=request["exclude"],
+        ignore=request.get("ignore", True),
+        ignore_files=request["ignore_files"],
+        default_excludes=request.get("default_excludes", True),
+        max_file_bytes=request.get("max_file_bytes"),
+        max_index_bytes=request.get("max_index_bytes"),
+        scan=False,
+        _transient_exclude=transient,
+    )
+    progress.emit({"phase": "selected", "files": len(current.sources)})
+    return current
+
+
+def _freshness_identity(project: Project, schema_version: int) -> bytes:
+    resolution = json.loads(project.resolution_json or b"{}")
+    manifest = json.loads(project.manifest_json)
+    return json.dumps(
+        {
+            "artifact": "map",
+            "discovery": {
+                "policy": resolution["policy"],
+                "policy_sha256": resolution["policy_sha256"],
+                "sha256": resolution["sha256"],
+            },
+            "evidence": {
+                "config_sha256": project.config_sha256,
+                "input_sha256": project.map_input_sha256,
+            },
+            "files": [
+                {"path": row["path"], "sha256": row["sha256"]}
+                for row in manifest["files"]
+            ],
+            "project": project.project,
+            "schema_version": schema_version,
+            "tool": {
+                "implementation_sha256": _native.IMPLEMENTATION_SHA256,
+                "name": "archbird",
+                "version": __version__,
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _freshness_main(argv: Sequence[str]) -> int:
     args = freshness_parser().parse_args(argv)
     progress = _Progress(args.progress)
     try:
         snapshot_json = Path(args.snapshot).read_bytes()
-        current = _project_from_args(args, progress)
-        progress.emit({"phase": "rendering", "artifact": "canonical Map"})
-        current_map_json = current.map_json()
-        _warn_map_cache_stats(
-            current.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)
-        )
+        snapshot = json.loads(snapshot_json)
+        if not isinstance(snapshot, dict) or snapshot.get("artifact") not in {
+            "map",
+            "query",
+        }:
+            raise ConfigError("--snapshot must contain a canonical Map or Query")
+        current = _freshness_project(args, snapshot, progress)
+        schema_version = snapshot.get("schema_version")
+        if not isinstance(schema_version, int):
+            raise ConfigError("saved Map/Query schema version is malformed")
+        current_map_json = _freshness_identity(current, schema_version)
         progress.emit({"phase": "rendering", "artifact": "freshness audit"})
         encoded = audit_map_freshness(
             snapshot_json, current_map_json, pretty=args.pretty
@@ -2547,10 +2655,7 @@ def _freshness_main(argv: Sequence[str]) -> int:
         progress.finish()
         if not args.check:
             return 0
-        return int(
-            document.get("status") != "current"
-            or _has_error_diagnostics(json.loads(current_map_json))
-        )
+        return int(document.get("status") != "current")
     except (ConfigError, OSError, RuntimeError, ValueError) as error:
         print(f"archbird: error: {error}", file=sys.stderr)
         return 2
@@ -3609,6 +3714,38 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             )
             progress.finish()
             return 1 if has_errors else 0
+        if args.format == "markdown" and args.view != "source":
+            encoded, blocking = project.map_markdown_with_blocking(
+                view=args.view,
+                detail="compact" if args.compact else args.detail,
+                full=args.full,
+                max_chars=args.max_chars,
+                group_by=args.group_by,
+                level=args.level,
+                relations=(
+                    tuple(
+                        part.strip()
+                        for value in args.relations
+                        for part in value.split(",")
+                        if part.strip()
+                    )
+                    if args.relations is not None
+                    else None
+                ),
+                overlays=(
+                    tuple(
+                        part.strip()
+                        for value in args.overlay
+                        for part in value.split(",")
+                        if part.strip()
+                    )
+                    if args.overlay is not None
+                    else None
+                ),
+            )
+            _write(encoded, args.output)
+            progress.finish()
+            return 1 if args.check and blocking else 0
         map_json = project.map_json(pretty=args.pretty and args.format == "json")
         _warn_map_cache_stats(
             project.map_cache_stats, _cache_dir(args), _cache_max_bytes(args)

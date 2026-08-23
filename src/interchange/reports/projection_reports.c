@@ -261,6 +261,9 @@ static ArchbirdStatus render_diagnostic(AbBuffer *out,
 
 static ArchbirdStatus render_coverage(AbBuffer *out,
                                       const AbProjectionItem *item) {
+  const AbValue *nested_repositories =
+      item_attribute(item, "nested_repositories");
+  size_t index;
   REPORT_TRY(ab_report_linef(
       out,
       "- selected=%" PRIu64 "; inventory=%" PRIu64
@@ -270,6 +273,21 @@ static ArchbirdStatus render_coverage(AbBuffer *out,
       item_u64(item, "unsupported_known"), item_u64(item, "oversized"),
       item_u64(item, "assets"), item_u64(item, "ignored"),
       item_u64(item, "pruned_directories")));
+  if (nested_repositories && nested_repositories->kind == AB_VALUE_ARRAY &&
+      nested_repositories->as.array.count) {
+    REPORT_TRY(ab_report_appendf(
+        out, "- Nested repository roots encountered within discovery scope: "));
+    for (index = 0; index < nested_repositories->as.array.count; index++) {
+      const AbValue *path = &nested_repositories->as.array.items[index];
+      if (index)
+        REPORT_TRY(ab_buffer_literal(out, ", "));
+      if (path->kind != AB_VALUE_STRING)
+        return ARCHBIRD_INVALID_SCHEMA;
+      REPORT_TRY(ab_report_appendf(out, "`%.*s`", (int)path->as.text.length,
+                                   path->as.text.data));
+    }
+    REPORT_TRY(ab_buffer_literal(out, "\n"));
+  }
   if (!text_is(&item->state, "current"))
     REPORT_TRY(ab_report_linef(out, "- Coverage frontier: **%.*s** - %.*s",
                                (int)item->state.length, item->state.data,

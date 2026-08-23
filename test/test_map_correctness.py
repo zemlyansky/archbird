@@ -2432,6 +2432,8 @@ def main() -> int:
         raise AssertionError(generated)
     for path in ("test/dispatch.c", "py/dispatch.py"):
         dispatch = tests[path]
+        if any(not case["selector"].strip() for case in dispatch["cases"]):
+            raise AssertionError(dispatch)
         if [case["selector"] for case in dispatch["cases"]] != [
             "alpha",
             "beta_2d",

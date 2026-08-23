@@ -803,6 +803,14 @@ void ab_source_manifest_free(ArchbirdEngine *engine,
   ab_string_free(engine, &manifest->project);
   ab_producer_free(engine, &manifest->producer);
   ab_string_free(engine, &manifest->resolution.profile_name);
+  if (manifest->resolution.policy) {
+    ab_value_free(engine, manifest->resolution.policy);
+    ab_free(engine, manifest->resolution.policy);
+  }
+  if (manifest->resolution.nested_repositories) {
+    ab_value_free(engine, manifest->resolution.nested_repositories);
+    ab_free(engine, manifest->resolution.nested_repositories);
+  }
   if (manifest->files)
     for (index = 0; index < manifest->file_count; index++) {
       AbManifestFile *file = &manifest->files[index];

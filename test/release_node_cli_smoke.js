@@ -136,10 +136,34 @@ assert.deepEqual(
 );
 const freshness = JSON.parse(run([
   "freshness", fixture,
-  "--config", path.join(fixture, "archbird.json"),
   "--snapshot", mapPath, "--check",
 ]));
 assert.equal(freshness.status, "current");
+const scopedRoot = path.join(work, `${engine}.scoped-freshness`);
+fs.mkdirSync(path.join(scopedRoot, "src"), { recursive: true });
+const scopedSelected = path.join(scopedRoot, "src/selected.js");
+fs.writeFileSync(scopedSelected, "export const selected = 1;\n");
+const scopedMapPath = path.join(work, `${engine}.scoped-map.json`);
+run([
+  "map", scopedRoot, "--no-config", "--only", "src/selected.js",
+  "--format", "json", "--output", scopedMapPath, "--check",
+  "--progress", "never",
+]);
+fs.writeFileSync(
+  path.join(scopedRoot, "src/outside.js"),
+  "export const outside = 2;\n",
+);
+const scopedFreshness = JSON.parse(run([
+  "freshness", scopedRoot, "--snapshot", scopedMapPath, "--check",
+  "--progress", "never",
+]));
+assert.equal(scopedFreshness.status, "current");
+assert.equal(scopedFreshness.files.unchanged, 1);
+fs.writeFileSync(scopedSelected, "export const selected = 3;\n");
+run([
+  "freshness", scopedRoot, "--snapshot", scopedMapPath, "--check",
+  "--progress", "never",
+], { expected: 1 });
 const queryJson = run([
   "query", "--map", mapPath, "--path", "py/pkg", "--depth", "0", "--format", "json",
 ]);

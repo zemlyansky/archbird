@@ -79,8 +79,28 @@
       "required": ["coverage", "profile", "sha256"],
       "properties": {
         "coverage": {"$ref": "#/$defs/discoveryCoverage"},
+        "nested_repositories": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/repositoryPath"}
+        },
+        "policy": {"$ref": "#/$defs/discoveryPolicy"},
+        "policy_sha256": {"$ref": "#/$defs/sha256"},
         "profile": {"$ref": "#/$defs/resolutionProfile"},
         "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "dependentRequired": {
+        "policy": ["policy_sha256"],
+        "policy_sha256": ["policy"]
+      }
+    },
+    "discoveryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configuration", "request"],
+      "properties": {
+        "configuration": {"type": "object"},
+        "request": {"type": "object"}
       }
     },
     "roles": {
