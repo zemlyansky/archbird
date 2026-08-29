@@ -43,6 +43,7 @@ def main() -> int:
         Source,
         Workspace,
         analyze_okf_source,
+        diff_json,
         diff_maps_json,
         evaluate_constraints_json,
         export_graph,
@@ -1819,6 +1820,10 @@ writer.commit()
     unchanged_diff = json.loads(
         diff_maps_json(duplicate_call_json, duplicate_call_json)
     )
+    if diff_json(duplicate_call_json, duplicate_call_json) != diff_maps_json(
+        duplicate_call_json, duplicate_call_json
+    ):
+        raise AssertionError("general and Map-only Diff APIs diverged")
     if any(unchanged_diff["sections"]["call_resolutions"].values()):
         raise AssertionError("native diff changed an identical grouped-call map")
     grouped_diff = json.loads(diff_maps_json(first, duplicate_call_json))

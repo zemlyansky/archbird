@@ -830,6 +830,19 @@ ARCHBIRD_API ArchbirdStatus archbird_map_diff(
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*
+ * Compare two Maps directly, or compare exhaustive projections through a
+ * reviewed correspondence request. Empty request bytes preserve Map Diff.
+ * Each optional resolution belongs only to its adjacent Map.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_diff(
+    ArchbirdEngine *engine, const uint8_t *before_json, size_t before_length,
+    const uint8_t *before_resolution_json, size_t before_resolution_length,
+    const uint8_t *after_json, size_t after_length,
+    const uint8_t *after_resolution_json, size_t after_resolution_length,
+    const uint8_t *request_json, size_t request_length, uint32_t json_flags,
+    ArchbirdWriteFn write_fn, void *user_data);
+
+/*
  * Render a deterministic git-style unified diff. Paths are canonical
  * repository-relative UTF-8 paths. A null before_path denotes file creation;
  * a null after_path denotes deletion. At least one path must be present.

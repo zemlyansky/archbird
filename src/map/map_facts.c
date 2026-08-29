@@ -25,6 +25,8 @@ static int map_fact_domain(const AbString *domain) {
          string_is(domain, "export-origins") || string_is(domain, "exports") ||
          string_is(domain, "imported-names") ||
          string_is(domain, "macro-invocations") ||
+         string_is(domain, "ordered-containers") ||
+         string_is(domain, "ordered-rows") ||
          string_is(domain, "reexport-candidates");
 }
 

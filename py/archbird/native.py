@@ -141,23 +141,30 @@ _NATIVE_CACHE_PROVIDERS = (
 )
 
 
-def _python_provider_task(task: Tuple[str, str, bytes]) -> bytes:
-    project, path, data = task
+def _python_provider_task(
+    task: Tuple[str, str, bytes, Tuple[Mapping[str, object], ...]],
+) -> bytes:
+    project, path, data, ordered_containers = task
     return python_ast_provider_facts(
         project=project,
         path=path,
         source_bytes=data,
+        ordered_containers=ordered_containers,
     )
 
 
 def _python_provider_chunk(
-    tasks: Sequence[Tuple[str, str, bytes]],
+    tasks: Sequence[
+        Tuple[str, str, bytes, Tuple[Mapping[str, object], ...]]
+    ],
 ) -> Tuple[bytes, ...]:
     return tuple(_python_provider_task(task) for task in tasks)
 
 
 def _parallel_python_providers(
-    tasks: Sequence[Tuple[str, str, bytes]],
+    tasks: Sequence[
+        Tuple[str, str, bytes, Tuple[Mapping[str, object], ...]]
+    ],
     workers: int,
     timeout_seconds: float,
 ) -> Iterable[bytes]:
@@ -218,6 +225,7 @@ def _native_cache_namespace() -> str:
 
 def _native_provider_cache_namespace(
     classifications: Sequence[Mapping[str, object]],
+    ordered_containers: Sequence[Mapping[str, object]] = (),
 ) -> str:
     """Bind reusable native facts to the source-classification context."""
 
@@ -236,6 +244,7 @@ def _native_provider_cache_namespace(
         context.update(len(roles).to_bytes(8, "big"))
         for role in roles:
             framed(role.encode("utf-8"))
+    framed(_canonical(ordered_containers))
 
     identity = hashlib.sha256()
     for value in (
@@ -248,22 +257,28 @@ def _native_provider_cache_namespace(
     return identity.hexdigest()
 
 
-def _python_ast_cache_namespace() -> str:
+def _python_ast_cache_namespace(
+    ordered_containers: Sequence[Mapping[str, object]] = (),
+) -> str:
     identity = (
         f"archbird-python-ast-cache-v1\0"
         f"{python_ast_implementation_sha256()}\0"
         f"cpython-{sys.version_info.major}.{sys.version_info.minor}."
         f"{sys.version_info.micro}"
     )
-    return hashlib.sha256(identity.encode("ascii")).hexdigest()
+    return hashlib.sha256(
+        identity.encode("ascii") + b"\0" + _canonical(ordered_containers)
+    ).hexdigest()
 
 
-def _map_cache_namespace(mode: str) -> str:
+def _map_cache_namespace(
+    mode: str, ordered_containers: Sequence[Mapping[str, object]] = ()
+) -> str:
     identity = (
         f"archbird-python-map-result-cache-v1\0"
         f"{CORE_IMPLEMENTATION_SHA256}\0"
         f"{_native_cache_namespace()}\0"
-        f"{_python_ast_cache_namespace()}\0"
+        f"{_python_ast_cache_namespace(ordered_containers)}\0"
         f"mode={mode}"
     )
     return hashlib.sha256(identity.encode("ascii")).hexdigest()
@@ -310,6 +325,7 @@ class Project:
         self._map_cache: Optional[ProviderCache] = None
         self._map_cache_parameters: Optional[dict[str, str]] = None
         self._deferred_scan: Optional[dict[str, object]] = None
+        self._ordered_containers: Tuple[Mapping[str, object], ...] = ()
         classifications = [
             {
                 "language": source.language,
@@ -319,8 +335,9 @@ class Project:
             }
             for source in ordered
         ]
-        self._native_provider_cache_namespace = (
-            _native_provider_cache_namespace(classifications)
+        self._classifications = classifications
+        self._native_provider_cache_namespace = _native_provider_cache_namespace(
+            classifications
         )
         manifest_files = []
         for source, classification in zip(ordered, classifications):
@@ -619,6 +636,13 @@ class Project:
             else config_json
         )
         _native.project_set_config(self._capsule, self._config_json)
+        configured = json.loads(self._config_json).get("ordered_containers", [])
+        self._ordered_containers = tuple(
+            dict(selection) for selection in configured
+        )
+        self._native_provider_cache_namespace = _native_provider_cache_namespace(
+            self._classifications, self._ordered_containers
+        )
 
     @property
     def verification_configured(self) -> bool:
@@ -699,7 +723,7 @@ class Project:
         if self._config_json is None:
             return None
         return {
-            "namespace": _map_cache_namespace(mode),
+            "namespace": _map_cache_namespace(mode, self._ordered_containers),
             "project": self.project,
             "manifest_sha256": self.manifest_sha256,
             "config_sha256": self.config_sha256,
@@ -900,7 +924,7 @@ class Project:
                 min(8, os.cpu_count() or 1) if len(python_sources) >= 500 else 1
             )
         missing_python_sources = []
-        ast_namespace = _python_ast_cache_namespace()
+        ast_namespace = _python_ast_cache_namespace(self._ordered_containers)
         if cache is not None:
             for source in python_sources:
                 source_sha256 = _source_sha256(source)
@@ -928,7 +952,7 @@ class Project:
         else:
             missing_python_sources.extend(python_sources)
         tasks = tuple(
-            (self.project, source.path, source.data)
+            (self.project, source.path, source.data, self._ordered_containers)
             for source in missing_python_sources
         )
         bundles: Iterable[bytes]
@@ -1961,8 +1985,29 @@ def render_source_markdown(
     )
 
 
+def diff_json(
+    before: bytes,
+    after: bytes,
+    *,
+    correspondence: bytes = b"",
+    before_resolution: bytes = b"",
+    after_resolution: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    """Diff two Maps directly or through reviewed projection correspondence."""
+
+    return _native.diff(
+        before,
+        after,
+        correspondence,
+        before_resolution=before_resolution,
+        after_resolution=after_resolution,
+        pretty=pretty,
+    )
+
+
 def diff_maps_json(before: bytes, after: bytes, *, pretty: bool = False) -> bytes:
-    return _native.map_diff(before, after, pretty=pretty)
+    return diff_json(before, after, pretty=pretty)
 
 
 def audit_map_freshness(
@@ -3369,6 +3414,7 @@ __all__ = [
     "compile_project_configuration",
     "compile_query_plan_json",
     "compile_test_observations",
+    "diff_json",
     "diff_maps_json",
     "evaluate_constraints_json",
     "evaluate_projection_json",

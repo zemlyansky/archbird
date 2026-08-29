@@ -1042,6 +1042,30 @@ AB_WASM_EXPORT int ab_wasm_map_diff(const uint8_t *before, size_t before_length,
   return stateless_end(engine, status);
 }
 
+AB_WASM_EXPORT int
+ab_wasm_diff(const uint8_t *before, size_t before_length,
+             const uint8_t *before_resolution, size_t before_resolution_length,
+             const uint8_t *after, size_t after_length,
+             const uint8_t *after_resolution, size_t after_resolution_length,
+             const uint8_t *request, size_t request_length, uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  size_t input_length = larger_input(before_length, after_length);
+  ArchbirdStatus status;
+  input_length = larger_input(input_length, before_resolution_length);
+  input_length = larger_input(input_length, after_resolution_length);
+  input_length = larger_input(input_length, request_length);
+  status = stateless_begin_saved_artifact(input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_diff(engine, before, before_length,
+                      before_resolution_length ? before_resolution : NULL,
+                      before_resolution_length, after, after_length,
+                      after_resolution_length ? after_resolution : NULL,
+                      after_resolution_length, request_length ? request : NULL,
+                      request_length, flags, output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
 AB_WASM_EXPORT int ab_wasm_map_freshness(const uint8_t *snapshot,
                                          size_t snapshot_length,
                                          const uint8_t *current,

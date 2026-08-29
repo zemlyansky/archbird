@@ -48,6 +48,7 @@ _NATIVE_EXPORTS = (
     "compile_project_configuration",
     "compile_query_plan_json",
     "compile_test_observations",
+    "diff_json",
     "diff_maps_json",
     "evaluate_constraints_json",
     "evaluate_projection_json",

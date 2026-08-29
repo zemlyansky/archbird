@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/diff-correspondence.schema.json",
+  "title": "Archbird Diff correspondence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["before", "after", "mapping"],
+  "properties": {
+    "before": {
+      "allOf": [
+        {"$ref": "archbird.schema.json#/$defs/projection"},
+        {"required": ["id"]}
+      ]
+    },
+    "after": {
+      "allOf": [
+        {"$ref": "archbird.schema.json#/$defs/projection"},
+        {"required": ["id"]}
+      ]
+    },
+    "mapping": {
+      "type": "object",
+      "propertyNames": {"minLength": 1},
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

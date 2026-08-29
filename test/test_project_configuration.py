@@ -68,6 +68,7 @@ def _assert_project_configuration_conformance() -> None:
         "inventory_paths": "set",
         "macro_members": "set",
         "mapped_paths": "set",
+        "ordered_rows": "values",
         "package_entrypoints": "relation",
         "package_exports": "relation",
         "provider_surface": "values",
@@ -97,6 +98,7 @@ def _assert_project_configuration_conformance() -> None:
         "file_metrics": "file_metrics requires metric bytes",
         "graph": "graph requires level component, file, or symbol",
         "macro_members": "macro_members requires call and selector",
+        "ordered_rows": "ordered_rows requires a container",
         "provider_surface": "provider_surface requires a name",
         "symbol_occurrences": (
             "symbol_occurrences requires exactly one non-empty symbol name"
@@ -1180,12 +1182,459 @@ def _assert_symbol_occurrence_projection() -> None:
     shutil.rmtree(root)
 
 
+def _assert_ordered_container_facts() -> None:
+    root = ROOT / "build/ordered-container-facts"
+    shutil.rmtree(root, ignore_errors=True)
+    (root / "py").mkdir(parents=True)
+    (root / "c").mkdir()
+    (root / "py/rules.py").write_text(
+        "module_rules = [(\"a\", callback_a), (\"b\", callback_b)]\n"
+        "\n"
+        "def build():\n"
+        "    function_rules = PatternMatcher([\n"
+        "        (\"x\", callback_x),\n"
+        "        (\"x\", callback_x),\n"
+        "    ])\n"
+        "    dynamic_rules = [*function_rules]\n"
+        "    comprehension_rules = [item for item in function_rules]\n"
+        "    mutated_rules = [(\"initial\", callback_x)]\n"
+        "    mutated_rules.append((\"later\", callback_x))\n"
+        "    return (function_rules, dynamic_rules, comprehension_rules, "
+        "mutated_rules)\n",
+        encoding="utf-8",
+    )
+    (root / "c/rules.c").write_text(
+        "typedef struct { int pattern; void (*callback)(void); } Rule;\n"
+        "static void callback_a(void) {}\n"
+        "static void callback_b(void) {}\n"
+        "#define EXPAND_RULES {4, callback_a}, {5, callback_b}\n"
+        "static Rule global_rules[] = {{0, callback_a}};\n"
+        "enum CallbackId { CALLBACK_A, CALLBACK_B };\n"
+        "static int callbacks[] = {CALLBACK_A, CALLBACK_B};\n"
+        "static int make_value(void) { return 1; }\n"
+        "static void runtime(void) {\n"
+        "  int values[] = {make_value()};\n"
+        "  (void)values;\n"
+        "}\n"
+        "void first(void) {\n"
+        "  Rule rules[] = {{1, callback_a}, {2, callback_b}};\n"
+        "  (void)rules;\n"
+        "}\n"
+        "void second(void) {\n"
+        "  Rule rules[] = {{3, callback_b}};\n"
+        "  (void)rules;\n"
+        "}\n"
+        "void expanded(void) {\n"
+        "  Rule rules[] = {EXPAND_RULES};\n"
+        "  (void)rules;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    configuration = {
+        "project": "ordered-fixture",
+        "layers": [
+            {"globs": ["py/**/*.py"], "language": "python", "name": "python"},
+            {"globs": ["c/**/*.c"], "language": "c", "name": "c"},
+        ],
+    }
+    unselected = Project.from_repository(
+        root,
+        config=json.dumps(configuration, separators=(",", ":")).encode(),
+        jobs=1,
+        map_cache=False,
+    )
+    assert not any(
+        row["domain"] in {"ordered-containers", "ordered-rows"}
+        for row in json.loads(unselected.map_json())["facts"]
+    )
+    configuration["ordered_containers"] = [
+        {
+            "language": "c",
+            "names": ["callbacks", "global_rules", "*/rules", "*/values"],
+            "paths": ["c/**/*.c"],
+        },
+        {
+            "language": "python",
+            "names": ["module_rules", "build/*_rules"],
+            "paths": ["py/**/*.py"],
+        },
+    ]
+    project = Project.from_repository(
+        root,
+        config=json.dumps(configuration, separators=(",", ":")).encode(),
+        jobs=1,
+        map_cache=False,
+    )
+    document = json.loads(project.map_json())
+    containers = [
+        row for row in document["facts"] if row["domain"] == "ordered-containers"
+    ]
+    assert {
+        row["attributes"]["container"]: (
+            row["attributes"]["declared_count"],
+            row["attributes"]["population_state"],
+        )
+        for row in containers
+    } == {
+        "c/rules.c:callbacks": (2, "closed"),
+        "c/rules.c:expanded/rules": (0, "dynamic"),
+        "c/rules.c:first/rules": (2, "closed"),
+        "c/rules.c:global_rules": (1, "closed"),
+        "c/rules.c:runtime/values": (1, "closed"),
+        "c/rules.c:second/rules": (1, "closed"),
+        "py/rules.py:build/function_rules": (2, "closed"),
+        "py/rules.py:build/comprehension_rules": (0, "dynamic"),
+        "py/rules.py:build/dynamic_rules": (1, "dynamic"),
+        "py/rules.py:build/mutated_rules": (1, "dynamic"),
+        "py/rules.py:module_rules": (2, "closed"),
+    }
+    rows = [row for row in document["facts"] if row["domain"] == "ordered-rows"]
+    first_rows = [
+        row
+        for row in rows
+        if row["attributes"]["container"] == "c/rules.c:first/rules"
+    ]
+    assert [row["attributes"]["ordinal"] for row in first_rows] == [0, 1]
+    function_rows = [
+        row
+        for row in rows
+        if row["attributes"]["container"]
+        == "py/rules.py:build/function_rules"
+    ]
+    assert [row["attributes"]["ordinal"] for row in function_rows] == [0, 1]
+    assert len({row["attributes"]["digest"] for row in function_rows}) == 1
+
+    definition = {
+        "container": "c/rules.c:first/rules",
+        "id": "first-rules",
+        "select": "ordered_rows",
+    }
+    projection = json.loads(evaluate_projection_json(project.map_json(), definition))
+    assert projection["fact"]["shape"] == "values"
+    assert projection["completeness"]["classification"] == "complete"
+    assert projection["completeness"]["exhaustive"] is True
+    assert sorted(
+        ordinal
+        for row in projection["fact"]["items"]
+        for ordinal in row["value"]["ordinals"]
+    ) == [0, 1]
+    duplicate_projection = json.loads(
+        evaluate_projection_json(
+            project.map_json(),
+            {
+                "container": "py/rules.py:build/function_rules",
+                "id": "duplicate-rules",
+                "select": "ordered_rows",
+            },
+        )
+    )
+    assert len(duplicate_projection["fact"]["items"]) == 1
+    assert duplicate_projection["fact"]["items"][0]["value"]["count"] == 2
+    assert duplicate_projection["fact"]["items"][0]["value"]["ordinals"] == [
+        0,
+        1,
+    ]
+
+    missing_row = json.loads(project.map_json())
+    missing_row["facts"] = [
+        row
+        for row in missing_row["facts"]
+        if not (
+            row["domain"] == "ordered-rows"
+            and row["attributes"].get("container")
+            == "c/rules.c:first/rules"
+            and row["attributes"].get("ordinal") == 1
+        )
+    ]
+    incomplete = json.loads(
+        evaluate_projection_json(
+            json.dumps(missing_row, separators=(",", ":")).encode(), definition
+        )
+    )
+    assert incomplete["completeness"]["classification"] == "incomplete"
+    assert incomplete["completeness"]["exhaustive"] is False
+
+    gapped = json.loads(project.map_json())
+    next(
+        row
+        for row in gapped["facts"]
+        if row["domain"] == "ordered-rows"
+        and row["attributes"].get("container") == "c/rules.c:first/rules"
+        and row["attributes"].get("ordinal") == 1
+    )["attributes"]["ordinal"] = 2
+    gapped_projection = json.loads(
+        evaluate_projection_json(
+            json.dumps(gapped, separators=(",", ":")).encode(), definition
+        )
+    )
+    assert gapped_projection["completeness"]["classification"] == "incomplete"
+
+    recovered = json.loads(project.map_json())
+    next(
+        row
+        for row in recovered["facts"]
+        if row["domain"] == "ordered-containers"
+        and row["attributes"].get("container") == "c/rules.c:first/rules"
+    )["attributes"]["syntax_recovery"] = "intersects"
+    recovered_projection = json.loads(
+        evaluate_projection_json(
+            json.dumps(recovered, separators=(",", ":")).encode(), definition
+        )
+    )
+    assert recovered_projection["completeness"]["classification"] == "incomplete"
+
+    dynamic = json.loads(
+        evaluate_projection_json(
+            project.map_json(),
+            {
+                "container": "py/rules.py:build/dynamic_rules",
+                "id": "dynamic-rules",
+                "select": "ordered_rows",
+            },
+        )
+    )
+    assert dynamic["completeness"]["classification"] == "incomplete"
+    assert dynamic["completeness"]["exhaustive"] is False
+    mutated = json.loads(
+        evaluate_projection_json(
+            project.map_json(),
+            {
+                "container": "py/rules.py:build/mutated_rules",
+                "id": "mutated-rules",
+                "select": "ordered_rows",
+            },
+        )
+    )
+    assert mutated["completeness"]["classification"] == "incomplete"
+    assert mutated["completeness"]["exhaustive"] is False
+    c_dynamic = json.loads(
+        evaluate_projection_json(
+            project.map_json(),
+            {
+                "container": "c/rules.c:expanded/rules",
+                "id": "expanded-rules",
+                "select": "ordered_rows",
+            },
+        )
+    )
+    assert c_dynamic["completeness"]["classification"] == "incomplete"
+    assert c_dynamic["completeness"]["exhaustive"] is False
+
+    module_projection = json.loads(
+        evaluate_projection_json(
+            project.map_json(),
+            {
+                "container": "py/rules.py:module_rules",
+                "id": "module-rules",
+                "select": "ordered_rows",
+            },
+        )
+    )
+    source_keys = [
+        row["key"]
+        for row in sorted(
+            module_projection["fact"]["items"],
+            key=lambda item: min(item["value"]["ordinals"]),
+        )
+    ]
+    target_keys = [
+        row["key"]
+        for row in sorted(
+            projection["fact"]["items"],
+            key=lambda item: min(item["value"]["ordinals"]),
+        )
+    ]
+    correspondence_config = {
+        **configuration,
+        "projections": {
+            "module-rules": {
+                "container": "py/rules.py:module_rules",
+                "select": "ordered_rows",
+            },
+            "first-rules": {
+                "container": "c/rules.c:first/rules",
+                "select": "ordered_rows",
+            },
+        },
+        "constraints": {
+            "RULE-CORRESPONDENCE": {
+                "actual": {"projection": "first-rules"},
+                "assert": "correspondence_complete",
+                "expected": {"projection": "module-rules"},
+                "mapping": {
+                    source_keys[0]: [target_keys[1]],
+                    source_keys[1]: [target_keys[0], target_keys[1]],
+                },
+                "owner": "compiler",
+                "rationale": "Every source row has reviewed target rows.",
+                "require_target_coverage": True,
+            }
+        },
+    }
+    correspondence = json.loads(
+        evaluate_constraints_json(
+            json.dumps(correspondence_config, separators=(",", ":")).encode(),
+            project.map_json(),
+        )
+    )
+    assert correspondence["constraints"][0]["status"] == "pass"
+
+    mapped_diff_request = {
+        "after": {
+            "container": "c/rules.c:first/rules",
+            "id": "first-rules",
+            "select": "ordered_rows",
+        },
+        "before": {
+            "container": "py/rules.py:module_rules",
+            "id": "module-rules",
+            "select": "ordered_rows",
+        },
+        "mapping": {
+            source_keys[0]: [target_keys[1]],
+            source_keys[1]: [target_keys[0], target_keys[1]],
+        },
+    }
+    mapped_diff = json.loads(
+        _native.diff(
+            project.map_json(),
+            project.map_json(),
+            json.dumps(mapped_diff_request, separators=(",", ":")).encode(),
+        )
+    )
+    assert mapped_diff["artifact"] == "diff"
+    assert mapped_diff["schema_version"] == 8
+    assert mapped_diff["join"] == "correspondence"
+    assert mapped_diff["comparison"]["state"] == "complete"
+    assert mapped_diff["comparison"]["counts"] == {
+        "after_unmapped": 0,
+        "before_unmapped": 0,
+        "mapping_after_missing": 0,
+        "mapping_before_missing": 0,
+        "matched": 3,
+    }
+    assert [group["state"] for group in mapped_diff["comparison"]["groups"]] == [
+        "complete",
+        "complete",
+    ]
+
+    incomplete_diff = json.loads(
+        _native.diff(
+            project.map_json(),
+            json.dumps(missing_row, separators=(",", ":")).encode(),
+            json.dumps(mapped_diff_request, separators=(",", ":")).encode(),
+        )
+    )
+    assert incomplete_diff["comparison"]["state"] == "unknown"
+    assert incomplete_diff["comparison"]["groups"] == []
+
+    reordered_map = json.loads(project.map_json())
+    reordered_rows = [
+        row
+        for row in reordered_map["facts"]
+        if row["domain"] == "ordered-rows"
+        and row["attributes"].get("container") == "c/rules.c:first/rules"
+    ]
+    reordered_rows[0]["attributes"]["ordinal"] = 1
+    reordered_rows[1]["attributes"]["ordinal"] = 0
+    source_sha256 = next(
+        row["sha256"]
+        for row in json.loads(project.map_json())["inputs"]
+        if row["path"] == "c/rules.c"
+    )
+    sequence_lock_config = {
+        **configuration,
+        "projections": {
+            "first-rules": {
+                "container": "c/rules.c:first/rules",
+                "select": "ordered_rows",
+            }
+        },
+        "constraints": {
+            "FIRST-RULES-LOCK": {
+                "actual": {"projection": "first-rules"},
+                "assert": "values_equal",
+                "expected": {
+                    "map": "reference",
+                    "projection": "first-rules",
+                    "source_lock": {"c/rules.c": source_sha256},
+                },
+                "owner": "compiler",
+                "rationale": "The reviewed rule sequence remains unchanged.",
+            }
+        },
+    }
+    reordered = json.loads(
+        evaluate_constraints_json(
+            json.dumps(sequence_lock_config, separators=(",", ":")).encode(),
+            json.dumps(reordered_map, separators=(",", ":")).encode(),
+            maps={"reference": {"map": json.loads(project.map_json())}},
+        )
+    )
+    assert reordered["constraints"][0]["status"] == "fail"
+
+    missing_source = json.loads(json.dumps(correspondence_config))
+    del missing_source["constraints"]["RULE-CORRESPONDENCE"]["mapping"][
+        source_keys[0]
+    ]
+    missing_source_result = json.loads(
+        evaluate_constraints_json(
+            json.dumps(missing_source, separators=(",", ":")).encode(),
+            project.map_json(),
+        )
+    )
+    assert missing_source_result["constraints"][0]["status"] == "fail"
+
+    missing_target = json.loads(json.dumps(correspondence_config))
+    missing_target["constraints"]["RULE-CORRESPONDENCE"]["mapping"][
+        source_keys[0]
+    ] = ["f" * 64]
+    missing_target_result = json.loads(
+        evaluate_constraints_json(
+            json.dumps(missing_target, separators=(",", ":")).encode(),
+            project.map_json(),
+        )
+    )
+    assert missing_target_result["constraints"][0]["status"] == "fail"
+
+    incomplete_correspondence = json.loads(json.dumps(correspondence_config))
+    incomplete_correspondence["projections"]["module-rules"]["container"] = (
+        "py/rules.py:build/dynamic_rules"
+    )
+    incomplete_correspondence["constraints"]["RULE-CORRESPONDENCE"][
+        "mapping"
+    ] = {}
+    incomplete_result = json.loads(
+        evaluate_constraints_json(
+            json.dumps(incomplete_correspondence, separators=(",", ":")).encode(),
+            project.map_json(),
+        )
+    )
+    assert incomplete_result["constraints"][0]["status"] == "unknown"
+
+    duplicate_target = json.loads(json.dumps(correspondence_config))
+    duplicate_target["constraints"]["RULE-CORRESPONDENCE"]["mapping"][
+        source_keys[0]
+    ] = [target_keys[0], target_keys[0]]
+    try:
+        evaluate_constraints_json(
+            json.dumps(duplicate_target, separators=(",", ":")).encode(),
+            project.map_json(),
+        )
+    except RuntimeError as error:
+        assert "correspondence mapping targets must be unique" in str(error)
+    else:
+        raise AssertionError("duplicate correspondence targets were accepted")
+    shutil.rmtree(root)
+
+
 def main() -> None:
     _assert_project_configuration_conformance()
     _assert_import_resolution_soundness()
     _assert_projection_markdown_explainability()
     _assert_partial_configuration_overlay()
     _assert_symbol_occurrence_projection()
+    _assert_ordered_container_facts()
     project_model = json.loads((ROOT / "archbird.json").read_text())
     project_model.pop("projections", None)
     project_model.pop("queries", None)
@@ -2164,6 +2613,29 @@ def main() -> None:
         "imported-names",
         "reexport-candidates",
     }
+    missing_member = json.loads(json.dumps(reference_document))
+    missing_member["facts"] = [
+        row
+        for row in missing_member["facts"]
+        if not (
+            row["domain"] == "constant-memberships"
+            and row["kind"] == "class-collection-member"
+            and row["name"] == "ADD"
+        )
+    ]
+    incomplete_membership = json.loads(
+        evaluate_projection_json(
+            json.dumps(missing_member, separators=(",", ":")).encode(),
+            {
+                "container": "GroupOp.Required",
+                "id": "missing-member",
+                "select": "constant_memberships",
+            },
+        )
+    )
+    assert incomplete_membership["completeness"]["classification"] == "incomplete"
+    assert incomplete_membership["completeness"]["exhaustive"] is False
+    assert incomplete_membership["completeness"]["counts"]["unsupported"] == 1
     malformed = json.loads(json.dumps(subject_document))
     malformed["facts"][0].pop("domain")
     _assert_invalid_projection(

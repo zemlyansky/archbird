@@ -22,6 +22,7 @@ set(ARCHBIRD_DECLARED_CORE_SOURCE_PATHS
   src/act/rename.c
   src/api/act.c
   src/api/constraints.c
+  src/api/diff.c
   src/api/map_reports.c
   src/api/plan.c
   src/api/project_configuration.c
@@ -30,6 +31,7 @@ set(ARCHBIRD_DECLARED_CORE_SOURCE_PATHS
   src/api/source_reports.c
   src/base/artifact_validation.c
   src/base/base64.c
+  src/base/comparison.c
   src/base/date.c
   src/base/engine.c
   src/base/gate.c
@@ -149,6 +151,7 @@ set(ARCHBIRD_DECLARED_CORE_SOURCE_PATHS
   src/projection/fact_projection.c
   src/projection/graph_projection.c
   src/projection/projection.c
+  src/projection/projection_comparison.c
   src/projection/projection_input.c
   src/projection/projection_model.c
   src/projection/projection_plan.c

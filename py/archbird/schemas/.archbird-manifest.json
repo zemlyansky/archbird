@@ -8,9 +8,9 @@
       "source": "schema/act.schema.json"
     },
     {
-      "bytes": 45465,
+      "bytes": 47647,
       "path": "archbird.schema.json",
-      "sha256": "709b8837e471554b6e51a8c6486ef4c9542abe98fbc06e319942b20497a11f1f",
+      "sha256": "ae5ade24dcfaed9924bb2840232dbac952513b203825c3a9df92fa3780316d0f",
       "source": "schema/archbird.schema.json"
     },
     {
@@ -24,6 +24,12 @@
       "path": "coverage-observation-request.schema.json",
       "sha256": "31b1270cf4d53efa869be5a61ccf4ccd53647e7563377f06d4de94bda733a1e9",
       "source": "schema/coverage-observation-request.schema.json"
+    },
+    {
+      "bytes": 858,
+      "path": "diff-correspondence.schema.json",
+      "sha256": "f4d555ade35cf659d2c96327f7fa1917163243a33f35077c57b49a7372a7d0c2",
+      "source": "schema/diff-correspondence.schema.json"
     },
     {
       "bytes": 8270,

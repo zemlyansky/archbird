@@ -1681,6 +1681,54 @@ static PyObject *py_map_diff(PyObject *self, PyObject *args, PyObject *kwargs) {
   return result;
 }
 
+static PyObject *py_diff(PyObject *self, PyObject *args, PyObject *kwargs) {
+  static char *keywords[] = {
+      "before",           "after",  "request", "before_resolution",
+      "after_resolution", "pretty", NULL};
+  const char *before;
+  const char *after;
+  const char *request = NULL;
+  const char *before_resolution = NULL;
+  const char *after_resolution = NULL;
+  Py_ssize_t before_length;
+  Py_ssize_t after_length;
+  Py_ssize_t request_length = 0;
+  Py_ssize_t before_resolution_length = 0;
+  Py_ssize_t after_resolution_length = 0;
+  int pretty = 0;
+  size_t input_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#|y#y#y#p:diff", keywords, &before, &before_length,
+          &after, &after_length, &request, &request_length, &before_resolution,
+          &before_resolution_length, &after_resolution,
+          &after_resolution_length, &pretty))
+    return NULL;
+  input_length = larger_input((size_t)before_length, (size_t)after_length);
+  input_length = larger_input(input_length, (size_t)request_length);
+  input_length = larger_input(input_length, (size_t)before_resolution_length);
+  input_length = larger_input(input_length, (size_t)after_resolution_length);
+  status = saved_artifact_engine(input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_diff(
+        engine, (const uint8_t *)before, (size_t)before_length,
+        before_resolution_length ? (const uint8_t *)before_resolution : NULL,
+        (size_t)before_resolution_length, (const uint8_t *)after,
+        (size_t)after_length,
+        after_resolution_length ? (const uint8_t *)after_resolution : NULL,
+        (size_t)after_resolution_length,
+        request_length ? (const uint8_t *)request : NULL,
+        (size_t)request_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
+        &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_unified_diff(PyObject *self, PyObject *args,
                                  PyObject *kwargs) {
   static char *keywords[] = {
@@ -2532,6 +2580,8 @@ static PyMethodDef archbird_methods[] = {
      "Validate and expose a workspace host-loading plan."},
     {"map_diff", (PyCFunction)py_map_diff, METH_VARARGS | METH_KEYWORDS,
      "Structurally diff two canonical saved maps."},
+    {"diff", (PyCFunction)py_diff, METH_VARARGS | METH_KEYWORDS,
+     "Diff two Maps directly or through reviewed correspondence."},
     {"unified_diff", (PyCFunction)py_unified_diff, METH_VARARGS | METH_KEYWORDS,
      "Render one deterministic git-style unified diff."},
     {"json_pointer_edit", (PyCFunction)py_json_pointer_edit,

@@ -323,6 +323,112 @@ function markedNames(relative, name) {
     ),
   );
   project.dispose();
+  const orderedBaseConfig = {
+    project: "ordered-browser",
+    layers: [{ name: "c", language: "c", globs: ["src/**/*.c"] }],
+    ordered_containers: [{
+      language: "c",
+      paths: ["src/**/*.c"],
+      names: ["source_rules", "*/rules"],
+    }],
+  };
+  const orderedProject = archbird.Project.fromFiles([
+    new archbird.Source(
+      "src/rules.c",
+      Buffer.from(
+        "typedef struct { int value; } Rule;\n" +
+        "static Rule source_rules[] = {{1}, {2}};\n" +
+        "void build(void) { Rule rules[] = {{3}, {4}}; (void)rules; }\n",
+      ),
+    ),
+  ], { config: JSON.stringify(orderedBaseConfig), typescript: false });
+  const orderedMap = orderedProject.mapJson();
+  const orderedProjection = (id, container) => JSON.parse(
+    archbird.core.projectionEvaluate(
+      orderedMap,
+      Buffer.alloc(0),
+      Buffer.from(JSON.stringify({ id, select: "ordered_rows", container })),
+      false,
+    ),
+  );
+  const orderedExpected = orderedProjection(
+    "source-rules",
+    "src/rules.c:source_rules",
+  );
+  const orderedActual = orderedProjection(
+    "target-rules",
+    "src/rules.c:build/rules",
+  );
+  assert.equal(orderedExpected.completeness.classification, "complete");
+  assert.equal(orderedActual.completeness.classification, "complete");
+  const byFirstOrdinal = (left, right) => (
+    Math.min(...left.value.ordinals) - Math.min(...right.value.ordinals)
+  );
+  const expectedKeys = [...orderedExpected.fact.items]
+    .sort(byFirstOrdinal).map((row) => row.key);
+  const actualKeys = [...orderedActual.fact.items]
+    .sort(byFirstOrdinal).map((row) => row.key);
+  const orderedConfig = Buffer.from(JSON.stringify({
+    ...orderedBaseConfig,
+    projections: {
+      "source-rules": {
+        select: "ordered_rows",
+        container: "src/rules.c:source_rules",
+      },
+      "target-rules": {
+        select: "ordered_rows",
+        container: "src/rules.c:build/rules",
+      },
+    },
+    constraints: {
+      "ORDERED-CORRESPONDENCE": {
+        assert: "correspondence_complete",
+        expected: { projection: "source-rules" },
+        actual: { projection: "target-rules" },
+        mapping: {
+          [expectedKeys[0]]: [actualKeys[1]],
+          [expectedKeys[1]]: actualKeys,
+        },
+        require_target_coverage: true,
+        owner: "compiler",
+        rationale: "Every source row has reviewed target rows.",
+      },
+    },
+  }));
+  const orderedVerification = JSON.parse(
+    archbird.core.constraintsEvaluate(
+      orderedConfig,
+      orderedMap,
+      Buffer.alloc(0),
+      Buffer.alloc(0),
+      false,
+    ),
+  );
+  assert.equal(orderedVerification.constraints[0].status, "pass");
+  const orderedDiff = JSON.parse(archbird.core.diff(
+    orderedMap,
+    orderedMap,
+    Buffer.from(JSON.stringify({
+      after: {
+        id: "target-rules",
+        select: "ordered_rows",
+        container: "src/rules.c:build/rules",
+      },
+      before: {
+        id: "source-rules",
+        select: "ordered_rows",
+        container: "src/rules.c:source_rules",
+      },
+      mapping: {
+        [expectedKeys[0]]: [actualKeys[1]],
+        [expectedKeys[1]]: actualKeys,
+      },
+    })),
+  ));
+  assert.equal(orderedDiff.join, "correspondence");
+  assert.equal(orderedDiff.comparison.state, "complete");
+  assert.equal(orderedDiff.comparison.counts.matched, 3);
+  orderedProject.dispose();
   const scipConfig = {
     project: "scip-browser",
     layers: [

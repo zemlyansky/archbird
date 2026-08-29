@@ -1,11 +1,13 @@
 #ifndef ARCHBIRD_TREE_SITTER_C_SCANNER_H
 #define ARCHBIRD_TREE_SITTER_C_SCANNER_H
 
+#include "evidence/config.h"
 #include "evidence/fact_builder.h"
 
 ArchbirdStatus ab_scan_tree_sitter_c_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
-    const AbManifestFile *file, const uint8_t *source, size_t source_length,
+    const AbMapConfig *config, const AbManifestFile *file,
+    const uint8_t *source, size_t source_length,
     const uint8_t source_manifest_sha256[32],
     const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle);
 

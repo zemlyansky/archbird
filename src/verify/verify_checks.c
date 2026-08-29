@@ -1,7 +1,9 @@
 #include "verify/verify_checks.h"
 
+#include "base/comparison.h"
 #include "base/path_match.h"
 #include "base/sha256.h"
+#include "projection/projection_comparison.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -896,6 +898,138 @@ compare_facts(ArchbirdEngine *engine, const AbValue *check,
     status = coverage_add(engine, result, &expected_item->key);
   }
   ab_free(engine, mapped);
+  if (status == ARCHBIRD_OK && result->finding_count > 1)
+    qsort(result->findings, result->finding_count, sizeof(*result->findings),
+          finding_compare_full);
+  if (status == ARCHBIRD_OK)
+    status = result_set_status(engine, result);
+  return status;
+}
+
+static ArchbirdStatus
+correspondence_finding(ArchbirdEngine *engine, const AbValue *check,
+                       const char *comparison, const AbString *key,
+                       const char *message, const AbProjectionItem *item,
+                       AbVerifyCheckResult *result) {
+  AbVerifyFinding finding = {0};
+  size_t index;
+  ArchbirdStatus status = finding_init_literal(
+      engine, &finding, check, comparison, key, message, "current");
+  for (index = 0; status == ARCHBIRD_OK && item && index < item->evidence_count;
+       index++)
+    status = finding_add_evidence(engine, &finding, &item->evidence[index]);
+  if (status == ARCHBIRD_OK)
+    status = result_add_finding(engine, result, &finding);
+  finding_free(engine, &finding);
+  return status;
+}
+
+static int correspondence_shape(const AbProjectionData *fact) {
+  return string_literal(&fact->shape, "set") ||
+         string_literal(&fact->shape, "values");
+}
+
+static ArchbirdStatus correspondence_complete_check(
+    ArchbirdEngine *engine, const AbValue *check,
+    const AbProjectionData *expected, const AbProjectionData *actual,
+    const AbValue *mapping, AbVerifyCheckResult *result) {
+  const AbValue *aliases =
+      mapping ? ab_value_member(mapping, "expected_to_actual") : NULL;
+  const AbValue *require_target =
+      ab_value_member(check, "require_target_coverage");
+  AbProjectionComparisonInput input;
+  AbComparisonPlan plan;
+  AbComparisonResult comparison = {0};
+  size_t index;
+  ArchbirdStatus status = result_init(engine, result, check, expected, actual);
+  if (status != ARCHBIRD_OK)
+    return status;
+  {
+    const AbProjectionData *facts[2] = {expected, actual};
+    for (index = 0; status == ARCHBIRD_OK && index < 2; index++) {
+      AbVerifyFinding finding = {0};
+      int unavailable = 0;
+      status = unavailable_finding(engine, check, facts[index], &finding,
+                                   &unavailable);
+      if (status == ARCHBIRD_OK && unavailable)
+        status = result_add_finding(engine, result, &finding);
+      finding_free(engine, &finding);
+    }
+    if (status != ARCHBIRD_OK || result->finding_count) {
+      if (status == ARCHBIRD_OK)
+        status = result_set_status(engine, result);
+      return status;
+    }
+  }
+  if (!correspondence_shape(expected) || !correspondence_shape(actual)) {
+    AbVerifyFinding finding = {0};
+    status =
+        shape_finding(engine, check, "incompatible fact shapes: ", expected,
+                      actual, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_add_finding(engine, result, &finding);
+    finding_free(engine, &finding);
+    if (status == ARCHBIRD_OK)
+      status = result_set_status(engine, result);
+    return status;
+  }
+  if (!aliases || aliases->kind != AB_VALUE_OBJECT ||
+      (require_target && require_target->kind != AB_VALUE_BOOL))
+    return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                              ARCHBIRD_NO_OFFSET,
+                              "correspondence mapping is invalid");
+  status = ab_projection_comparison_prepare(
+      engine, expected, actual, aliases, 1,
+      require_target && require_target->as.boolean, &input, &plan);
+  if (status == ARCHBIRD_OK) {
+    status = ab_comparison_run(engine, &plan, &comparison);
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < comparison.count; index++) {
+    const AbComparisonRecord *record = &comparison.records[index];
+    const AbProjectionItem *left =
+        record->left ? (const AbProjectionItem *)record->left->subject : NULL;
+    const AbProjectionItem *right =
+        record->right ? (const AbProjectionItem *)record->right->subject : NULL;
+    switch (record->kind) {
+    case AB_COMPARISON_MATCHED:
+      status = coverage_add(engine, result, record->right_key);
+      break;
+    case AB_COMPARISON_MAPPING_LEFT_MISSING:
+      status = correspondence_finding(
+          engine, check, "extra", record->left_key,
+          "correspondence source is absent from the expected population", NULL,
+          result);
+      break;
+    case AB_COMPARISON_MAPPING_RIGHT_MISSING:
+      status = correspondence_finding(
+          engine, check, "missing", record->right_key,
+          "correspondence target is absent from the actual population", left,
+          result);
+      break;
+    case AB_COMPARISON_LEFT_UNMAPPED:
+      status = correspondence_finding(
+          engine, check, "missing", record->left_key,
+          "expected fact has no reviewed correspondence", left, result);
+      break;
+    case AB_COMPARISON_RIGHT_UNMAPPED:
+      status = correspondence_finding(
+          engine, check, "missing", record->right_key,
+          "actual fact has no reviewed correspondence", right, result);
+      break;
+    default:
+      status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "unexpected correspondence result");
+      break;
+    }
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < comparison.group_count;
+       index++)
+    if (comparison.groups[index].left)
+      status =
+          coverage_add(engine, result, comparison.groups[index].group->left);
+  ab_comparison_result_free(engine, &comparison);
+  ab_projection_comparison_free(engine, &input);
   if (status == ARCHBIRD_OK && result->finding_count > 1)
     qsort(result->findings, result->finding_count, sizeof(*result->findings),
           finding_compare_full);
@@ -2740,6 +2874,9 @@ ArchbirdStatus ab_verify_evaluate_check(AbVerificationContext *context,
       ab_value_string_is(assertion, "mapped_values_equal"))
     return compare_facts(context->engine, check, expected, actual, mapping, 1,
                          0, 0, result);
+  if (ab_value_string_is(assertion, "correspondence_complete"))
+    return correspondence_complete_check(context->engine, check, expected,
+                                         actual, mapping, result);
   if (ab_value_string_is(assertion, "subset"))
     return compare_facts(context->engine, check, expected, actual, mapping, 0,
                          1, 0, result);
@@ -2939,6 +3076,13 @@ ArchbirdStatus ab_verify_check_render(AbBuffer *buffer,
   CHECK_RENDER_TRY(render_value_or(buffer, check, "min", "null"));
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"reference_route\":"));
   CHECK_RENDER_TRY(render_value_or(buffer, check, "reference_route", "\"\""));
+  if (ab_projection_value_is(ab_value_member(check, "assert"),
+                             "correspondence_complete")) {
+    CHECK_RENDER_TRY(
+        ab_buffer_literal(buffer, ",\"require_target_coverage\":"));
+    CHECK_RENDER_TRY(
+        render_value_or(buffer, check, "require_target_coverage", "false"));
+  }
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, ",\"required_routes\":"));
   CHECK_RENDER_TRY(render_value_or(buffer, check, "required_routes", "[]"));
   CHECK_RENDER_TRY(ab_buffer_literal(buffer, "},\"owner\":"));

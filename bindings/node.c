@@ -1613,6 +1613,53 @@ static napi_value map_diff(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value diff(napi_env env, napi_callback_info info) {
+  size_t argc = 6;
+  napi_value argv[6];
+  const uint8_t *before;
+  const uint8_t *after;
+  const uint8_t *request;
+  const uint8_t *before_resolution;
+  const uint8_t *after_resolution;
+  size_t before_length;
+  size_t after_length;
+  size_t request_length;
+  size_t before_resolution_length;
+  size_t after_resolution_length;
+  size_t input_length;
+  int pretty;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 5 || !get_buffer(env, argv[0], &before, &before_length) ||
+      !get_buffer(env, argv[1], &after, &after_length) ||
+      !get_buffer(env, argv[2], &request, &request_length) ||
+      !get_buffer(env, argv[3], &before_resolution,
+                  &before_resolution_length) ||
+      !get_buffer(env, argv[4], &after_resolution, &after_resolution_length) ||
+      !get_optional_bool(env, argc, argv, 5, 0, &pretty))
+    return NULL;
+  input_length = larger_input(before_length, after_length);
+  input_length = larger_input(input_length, request_length);
+  input_length = larger_input(input_length, before_resolution_length);
+  input_length = larger_input(input_length, after_resolution_length);
+  status = saved_artifact_engine(input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_diff(engine, before, before_length,
+                      before_resolution_length ? before_resolution : NULL,
+                      before_resolution_length, after, after_length,
+                      after_resolution_length ? after_resolution : NULL,
+                      after_resolution_length, request_length ? request : NULL,
+                      request_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
+                      output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value unified_diff(napi_env env, napi_callback_info info) {
   size_t argc = 7;
   napi_value argv[7];
@@ -2520,6 +2567,7 @@ static napi_value init(napi_env env, napi_value exports) {
       {"workspacePlan", NULL, workspace_plan, NULL, NULL, NULL, napi_default,
        NULL},
       {"mapDiff", NULL, map_diff, NULL, NULL, NULL, napi_default, NULL},
+      {"diff", NULL, diff, NULL, NULL, NULL, napi_default, NULL},
       {"unifiedDiff", NULL, unified_diff, NULL, NULL, NULL, napi_default, NULL},
       {"jsonPointerEdit", NULL, json_pointer_edit, NULL, NULL, NULL,
        napi_default, NULL},

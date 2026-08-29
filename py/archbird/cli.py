@@ -35,7 +35,7 @@ from .native import (
     Workspace,
     audit_map_freshness,
     compile_test_observations,
-    diff_maps_json,
+    diff_json,
     _evaluate_constraints_report_with_blocking,
     evaluate_constraints_json,
     export_graph,
@@ -818,10 +818,21 @@ def mcp_parser() -> argparse.ArgumentParser:
 def diff_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="archbird diff",
-        description="Compare two canonical Map JSON artifacts structurally.",
+        description=(
+            "Compare two repository roots or canonical Maps structurally, "
+            "with optional reviewed cross-program correspondence."
+        ),
     )
-    result.add_argument("--before", required=True)
-    result.add_argument("--after", required=True)
+    result.add_argument("operands", nargs="*", metavar="ROOT_OR_MAP")
+    result.add_argument("--before")
+    result.add_argument("--after")
+    result.add_argument(
+        "--correspondence",
+        help="projection definitions and reviewed before-to-after mapping JSON",
+    )
+    _add_python_analysis_options(result)
+    _add_cache_options(result)
+    _add_progress_options(result)
     result.add_argument("--format", choices=("json",), default="json")
     result.add_argument("--pretty", action="store_true")
     result.add_argument(
@@ -2688,6 +2699,8 @@ _DIFF_RISK_POLICIES = {
     ),
 }
 
+_DIFF_DEFAULT_CHECK = "public-api,bridges,parity,tests,architecture"
+
 
 def _diff_has_risk(document: object, raw_categories: str) -> bool:
     if not isinstance(document, dict) or not isinstance(
@@ -2729,18 +2742,111 @@ def _diff_has_risk(document: object, raw_categories: str) -> bool:
 
 def _diff_main(argv: Sequence[str]) -> int:
     args = diff_parser().parse_args(argv)
+    progress = _Progress(args.progress)
     try:
-        encoded = diff_maps_json(
-            Path(args.before).read_bytes(),
-            Path(args.after).read_bytes(),
+        if args.operands and (args.before is not None or args.after is not None):
+            raise ValueError(
+                "use either two positional operands or --before/--after"
+            )
+        if args.operands:
+            if len(args.operands) != 2:
+                raise ValueError("diff requires exactly two operands")
+            before_operand, after_operand = args.operands
+        else:
+            if args.before is None or args.after is None:
+                raise ValueError("diff requires --before and --after together")
+            before_operand, after_operand = args.before, args.after
+        if before_operand == "-" and after_operand == "-":
+            raise ValueError("at most one Diff operand may read stdin")
+
+        stdin = sys.stdin.buffer.read() if "-" in {before_operand, after_operand} else b""
+
+        def load_operand(value: str, label: str) -> tuple[bytes, bytes]:
+            if value == "-":
+                encoded_map = stdin
+                resolution = b""
+            else:
+                path = Path(value).expanduser()
+                if path.is_dir():
+                    progress.emit(
+                        {"phase": "discovery", "state": "start", "side": label}
+                    )
+                    project = Project.from_repository(
+                        path,
+                        jobs=args.jobs,
+                        scan=False,
+                    )
+                    project.scan(
+                        jobs=args.jobs,
+                        python_provider_timeout=_python_provider_timeout(args),
+                        cache_dir=_cache_dir(args),
+                        cache_max_bytes=_cache_max_bytes(args),
+                        progress=progress.emit,
+                    )
+                    encoded_map = project.map_json()
+                    resolution = project.resolution_json
+                    _warn_cache_stats(
+                        project.cache_stats,
+                        _cache_dir(args),
+                        _cache_max_bytes(args),
+                    )
+                elif path.is_file():
+                    encoded_map = path.read_bytes()
+                    resolution = b""
+                else:
+                    raise ValueError(f"{label} Diff operand does not exist: {value}")
+            try:
+                document = json.loads(encoded_map)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError(f"{label} Diff operand is not JSON: {value}") from error
+            if not isinstance(document, dict) or document.get("artifact") != "map":
+                if isinstance(document, dict) and (
+                    "project" in document or "layers" in document
+                ):
+                    raise ValueError(
+                        f"{label} Diff operand is project configuration; "
+                        "pass its repository directory"
+                    )
+                raise ValueError(f"{label} Diff operand is not an Archbird Map")
+            return encoded_map, resolution
+
+        before, before_resolution = load_operand(before_operand, "before")
+        after, after_resolution = load_operand(after_operand, "after")
+        correspondence = (
+            Path(args.correspondence).read_bytes() if args.correspondence else b""
+        )
+        if correspondence and args.check not in {None, _DIFF_DEFAULT_CHECK}:
+            raise ValueError(
+                "Diff risk categories do not apply to correspondence; "
+                "use bare --check"
+            )
+        encoded = diff_json(
+            before,
+            after,
+            correspondence=correspondence,
+            before_resolution=before_resolution,
+            after_resolution=after_resolution,
             pretty=args.pretty,
         )
         document = json.loads(encoded)
         _write(encoded, args.output)
-        return int(
-            args.check is not None and _diff_has_risk(document, args.check)
-        )
+        progress.finish()
+        if args.check is None:
+            return 0
+        if document.get("join") == "correspondence":
+            comparison = document.get("comparison")
+            if not isinstance(comparison, dict):
+                raise ValueError("native correspondence Diff is invalid")
+            counts = comparison.get("counts")
+            if not isinstance(counts, dict):
+                raise ValueError("native correspondence Diff counts are invalid")
+            return int(
+                comparison.get("state") != "complete"
+                or any(value for key, value in counts.items() if key != "matched")
+            )
+        return int(_diff_has_risk(document, args.check))
     except (ConfigError, OSError, RuntimeError, ValueError) as error:
+        progress.clear()
         print(f"archbird: error: {error}", file=sys.stderr)
         return 2
 

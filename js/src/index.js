@@ -128,7 +128,7 @@ function nativeCacheNamespace() {
   );
 }
 
-function nativeProviderCacheNamespace(classifications) {
+function nativeProviderCacheNamespace(classifications, orderedContainers = []) {
   const context = crypto.createHash("sha256");
   const frame = (hash, value) => {
     const length = Buffer.alloc(8);
@@ -151,6 +151,10 @@ function nativeProviderCacheNamespace(classifications) {
       frame(context, Buffer.from(role, "utf8"));
     }
   }
+  frame(
+    context,
+    Buffer.from(JSON.stringify(canonicalForDigest(orderedContainers)), "utf8"),
+  );
   const identity = crypto.createHash("sha256");
   for (const value of [
     Buffer.from("archbird-native-provider-cache-context-v1"),
@@ -247,6 +251,8 @@ class Project {
       path: source.path,
       roles: source.roles,
     }));
+    this._classifications = classifications;
+    this._orderedContainers = [];
     this._nativeProviderCacheNamespace = nativeProviderCacheNamespace(
       classifications,
     );
@@ -517,6 +523,12 @@ class Project {
     this._configJson = Buffer.from(configJson);
     this._projectConfigurationJson = Buffer.from(projectConfigurationJson);
     native.projectSetConfig(this._handle, this._configJson);
+    const configured = JSON.parse(this._configJson.toString("utf8"));
+    this._orderedContainers = configured.ordered_containers || [];
+    this._nativeProviderCacheNamespace = nativeProviderCacheNamespace(
+      this._classifications,
+      this._orderedContainers,
+    );
   }
 
   get verificationConfigured() {
@@ -1844,8 +1856,28 @@ function renderSourceMarkdown(project, artifactJson, options = {}) {
   );
 }
 
+function diff(
+  before,
+  after,
+  {
+    correspondence = Buffer.alloc(0),
+    beforeResolution = Buffer.alloc(0),
+    afterResolution = Buffer.alloc(0),
+    pretty = false,
+  } = {},
+) {
+  return native.diff(
+    Buffer.from(before),
+    Buffer.from(after),
+    Buffer.from(correspondence),
+    Buffer.from(beforeResolution),
+    Buffer.from(afterResolution),
+    pretty,
+  );
+}
+
 function diffMaps(before, after, { pretty = false } = {}) {
-  return native.mapDiff(Buffer.from(before), Buffer.from(after), pretty);
+  return diff(before, after, { pretty });
 }
 
 function auditMapFreshness(snapshot, current, { pretty = false } = {}) {
@@ -2184,6 +2216,7 @@ module.exports = {
   discoveryPlan,
   resolveDiscovery,
   diffMaps,
+  diff,
   evaluateConstraints,
   evaluateProjection,
   exportGraph,

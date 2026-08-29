@@ -6,7 +6,8 @@ const TSLanguage *tree_sitter_javascript(void);
 
 ArchbirdStatus ab_scan_tree_sitter_javascript_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
-    const AbManifestFile *file, const uint8_t *source, size_t source_length,
+    const AbMapConfig *config, const AbManifestFile *file,
+    const uint8_t *source, size_t source_length,
     const uint8_t source_manifest_sha256[32],
     const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle) {
   static const AbTreeSitterCapabilitySpec capabilities[] = {
@@ -36,6 +37,6 @@ ArchbirdStatus ab_scan_tree_sitter_javascript_file(
       NULL,
       NULL};
   return ab_scan_tree_sitter_ecmascript_file(
-      engine, manifest, file, source, source_length, source_manifest_sha256,
-      implementation_sha256, &descriptor, out_bundle);
+      engine, manifest, config, file, source, source_length,
+      source_manifest_sha256, implementation_sha256, &descriptor, out_bundle);
 }

@@ -332,6 +332,103 @@ requires current endpoints and relations, nonempty relation evidence, and
 `unique`, `builtin`, or not-applicable resolution; the renderer never trusts an
 `outcome` label by itself.
 
+### Compare revisions or implementations
+
+`diff` accepts repository directories, canonical Map files, or one of each:
+
+<!-- archbird-example: illustrative core-diff -->
+```bash
+archbird diff ../project-old ../project-new
+archbird diff old-map.json new-map.json
+archbird diff ../reference-project ../subject-project \
+  --correspondence matcher-rows.json
+```
+
+Directory operands are mapped independently with their own `archbird.json`.
+Map operands are validated by content, not filename. `--before` and `--after`
+remain equivalent named forms for scripts.
+
+Without correspondence, Diff joins stable Map identities and reports added,
+removed, and changed architecture. A correspondence file instead supplies one
+exhaustive projection per side plus reviewed one-to-many mappings:
+
+<!-- archbird-example: illustrative core-diff-correspondence -->
+```json
+{
+  "before": {
+    "id": "reference-rows",
+    "select": "ordered_rows",
+    "container": "compiler/patterns.py:lowering_rules"
+  },
+  "after": {
+    "id": "subject-rows",
+    "select": "ordered_rows",
+    "container": "src/codegen.c:poly_match/rules"
+  },
+  "mapping": {
+    "REFERENCE_ROW_KEY": ["SUBJECT_ROW_KEY", "SECOND_SUBJECT_ROW_KEY"]
+  }
+}
+```
+
+An empty mapping produces complete `before_unmapped` and `after_unmapped`
+inventories for review. `--check` then requires complete projections, every
+before item mapped, every named target present, and no unaccounted after item.
+Cross-language values and ordering are not equated; each implementation keeps
+its own sequence-lock constraint. Incomplete extraction makes the Diff
+`unknown`, never successful.
+
+Correspondence works with exhaustive set or value projections. For ordered
+matcher/table migrations, opt in only the required Python or C containers:
+
+```json
+{
+  "ordered_containers": [
+    {"language": "python", "paths": ["reference/**/*.py"], "names": ["pm_*"]},
+    {"language": "c", "paths": ["src/**/*.c"], "names": ["*/rules"]}
+  ]
+}
+```
+
+Python identities include lexical scope. C function-local arrays use identities
+such as `src/codegen.c:compile_rules/rules`, so repeated local names do not
+collide. Dynamic, mutated, macro-expanded, or recovered populations remain
+incomplete. `--check=CATEGORIES` applies only to identity Diff; correspondence
+uses bare `--check` because its closure conditions are not Map risk categories.
+
+For a durable CI gate, reuse the same projections and mapping in a constraint:
+
+<!-- archbird-example: template core-correspondence-constraint -->
+```json
+{
+  "projections": {
+    "reference-rows": {
+      "select": "ordered_rows",
+      "container": "compiler/patterns.py:lowering_rules"
+    },
+    "subject-rows": {
+      "select": "ordered_rows",
+      "container": "src/codegen.c:poly_match/rules"
+    }
+  },
+  "constraints": {
+    "MATCHER-COVERAGE": {
+      "assert": "correspondence_complete",
+      "expected": {"map": "reference", "projection": "reference-rows"},
+      "actual": {"projection": "subject-rows"},
+      "mapping": {"REFERENCE_ROW_KEY": ["SUBJECT_ROW_KEY"]},
+      "require_target_coverage": true,
+      "owner": "compiler",
+      "rationale": "Every reviewed reference row has an implementation."
+    }
+  }
+}
+```
+
+Run it with `archbird verify --map-input reference=reference-map.json
+--check`. Missing rows, targets, or mappings fail; incomplete projections are
+unknown.
+
 ### Verify architecture
 
 Reviewed architecture policy belongs in the `constraints` collection of the
@@ -1083,7 +1180,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Python area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map, Query, and Path | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `path_map_json`, `path_map_markdown`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_path_markdown`, `render_source_markdown`, `resolve_discovery` |
+| Map, Query, Path, and Diff | `analyze_workspace_json`, `audit_map_freshness`, `diff_json`, `diff_maps_json`, `export_graph`, `path_map_json`, `path_map_markdown`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_path_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
 | Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `render_plan_markdown`, `run_act_gates`, `validate_act`, `validate_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
@@ -1094,7 +1191,7 @@ cache, OKF, observation, and runtime inspection helpers intentionally differ.
 | Node area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map, Query, and Path | `analyzeWorkspace`, `auditMapFreshness`, `diffMaps`, `exportGraph`, `pathMap`, `pathMapMarkdown`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderPathMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
+| Map, Query, Path, and Diff | `analyzeWorkspace`, `auditMapFreshness`, `diff`, `diffMaps`, `exportGraph`, `pathMap`, `pathMapMarkdown`, `queryMap`, `queryMapMarkdown`, `renderMapMarkdown`, `renderPathMarkdown`, `renderSourceMarkdown`, `resolveDiscovery` |
 | Projection and policy | `compileProjectConfiguration`, `compileQueryPlan`, `evaluateConstraints`, `evaluateProjection`, `freezeConstraints`, `reportConstraints` |
 | Plan and Act | `acceptAct`, `actOverlay`, `actSourceRequirements`, `applyAcceptedAct`, `compilePlan`, `materializeAct`, `observeActSources`, `observePlanSources`, `planSourceRequirements`, `preflightActApply`, `renderAct`, `renderPlanMarkdown`, `runActGates`, `validateAct`, `validatePlan` |
 | Observations and OKF | `analyzeOkfSource`, `compileTestObservations`, `publishOkfBundle` |
@@ -1134,7 +1231,7 @@ The complete C ABI is declared in
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
 | Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_constraints_report_with_blocking`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_projection_render_markdown`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
-| Map, Query, Path, interchange | `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_path`, `archbird_map_path_markdown`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_path_render_markdown`, `archbird_unified_diff` |
+| Map, Query, Path, interchange | `archbird_diff`, `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_path`, `archbird_map_path_markdown`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_path_render_markdown`, `archbird_unified_diff` |
 | Workspace | `archbird_workspace_analyze`, `archbird_workspace_plan` |
 | Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_render_markdown`, `archbird_plan_source_requirements`, `archbird_plan_validate` |
 <!-- archbird-c-api:end -->
@@ -1331,7 +1428,7 @@ vocabulary is:
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
 | `tests` | static cases, reviewed case routes, and generated-source relations |
-| `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
+| `named_entries`, `ordered_containers`, `parity` | configured entrypoint protocols, ordered syntax inventories, and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
 | `gates` | reviewed build or test commands that must pass in Act's isolated after-state |

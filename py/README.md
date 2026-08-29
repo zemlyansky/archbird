@@ -217,6 +217,32 @@ does not turn it into proof.
 Add `--check` when automation specifically requires a proven `found` result.
 Repository-dependent examples omit it because an honest `unknown` is valid.
 
+### Compare revisions or implementations
+
+`diff` accepts repository directories, canonical Map files, or one of each:
+
+<!-- archbird-example: illustrative python-diff -->
+```bash
+archbird diff ../project-old ../project-new
+archbird diff old-map.json new-map.json
+archbird diff ../reference-project ../subject-project \
+  --correspondence matcher-rows.json
+```
+
+Directory operands are mapped independently with their own configuration.
+Default Diff joins stable Map identities. `--correspondence` instead evaluates
+one exhaustive projection per side and joins their item keys through reviewed
+one-to-many mappings. Start with an empty `mapping` object to obtain complete
+`before_unmapped` and `after_unmapped` inventories; add `--check` after review.
+Incomplete extraction returns `unknown`. Cross-language values and order are
+not inferred as equivalent. `ordered_rows` currently extracts configured
+Python assignments and C initializer arrays; Python scope and C enclosing
+functions are part of container identity. Dynamic or recovered populations are
+incomplete. Use bare `--check` for correspondence; category checks apply only
+to identity Diff. For persistent policy, use the same projections and mapping
+in a `correspondence_complete` constraint and supply the reference Map with
+`archbird verify --map-input ID=PATH --check`.
+
 ### Verify architecture
 
 Reviewed architecture policy belongs in the `constraints` collection of the
@@ -713,7 +739,7 @@ remain shared with Node and C.
 | Area | Public names |
 | --- | --- |
 | Repository model | `Project`, `Source`, `Workspace` |
-| Map, Query, and Path | `analyze_workspace_json`, `audit_map_freshness`, `diff_maps_json`, `export_graph`, `path_map_json`, `path_map_markdown`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_path_markdown`, `render_source_markdown`, `resolve_discovery` |
+| Map, Query, Path, and Diff | `analyze_workspace_json`, `audit_map_freshness`, `diff_json`, `diff_maps_json`, `export_graph`, `path_map_json`, `path_map_markdown`, `query_map_json`, `query_map_markdown`, `render_map_markdown`, `render_path_markdown`, `render_source_markdown`, `resolve_discovery` |
 | Projection and policy | `compile_project_configuration`, `compile_query_plan_json`, `evaluate_constraints_json`, `evaluate_projection_json`, `freeze_constraints_json` |
 | Plan and Act | `accept_act_json`, `act_overlay`, `act_source_requirements`, `apply_accepted_act`, `compile_plan_json`, `inspect_ast_grep_executable`, `materialize_act_json`, `materialize_ast_grep_operations`, `observe_act_sources`, `observe_plan_sources`, `plan_source_requirements`, `preflight_act_apply`, `render_act`, `render_plan_markdown`, `run_act_gates`, `validate_act`, `validate_plan` |
 | Observations and OKF | `analyze_okf_source`, `compile_test_observations`, `export_okf_bundle`, `publish_okf_bundle`, `validate_test_symbol_observations`, `write_okf_bundle` |
@@ -891,7 +917,7 @@ inventory is:
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
 | `tests` | static cases, reviewed case routes, and generated-source relations |
-| `named_entries`, `parity` | configured entrypoint protocols and reviewed surface relationships |
+| `named_entries`, `ordered_containers`, `parity` | configured entrypoint protocols, ordered syntax inventories, and reviewed surface relationships |
 | `indexes` | one or more SCIP indexes with prefixes, position encoding, and build variants |
 | `projections`, `queries`, `constraints` | reusable derivations, saved Query plans, and reviewed architecture policy |
 | `gates` | reviewed build or test commands that must pass in Act's isolated after-state |

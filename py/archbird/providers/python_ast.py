@@ -14,6 +14,7 @@ import codecs
 from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
+import fnmatch
 import hashlib
 import io
 import json
@@ -42,12 +43,14 @@ _DOMAINS = (
     "module-bindings",
     "module-reexports",
     "name-uses",
+    "ordered-containers",
+    "ordered-rows",
     "reexport-candidates",
     "symbol-references",
     "symbols",
 )
 _CONFIGURATION_BYTES = (
-    b'{"contract":"archbird-python-ast-v4",'
+    b'{"contract":"archbird-python-ast-v5",'
     b'"provider":"archbird-python-ast","schema_version":1}'
 )
 _STDLIB = set(getattr(sys, "stdlib_module_names", ())) | {
@@ -90,6 +93,31 @@ def python_ast_implementation_sha256() -> str:
 def _framed(digest: "hashlib._Hash", value: bytes) -> None:
     digest.update(struct.pack(">Q", len(value)))
     digest.update(value)
+
+
+def _collection_match(value: str, pattern: str) -> bool:
+    """Match segment-aware project selectors; ** crosses slash boundaries."""
+
+    value_parts = value.split("/") if value else []
+    pattern_parts = pattern.removeprefix("./").split("/") if pattern else []
+
+    @lru_cache(maxsize=None)
+    def match(pattern_index: int, value_index: int) -> bool:
+        if pattern_index == len(pattern_parts):
+            return value_index == len(value_parts)
+        part = pattern_parts[pattern_index]
+        if part == "**":
+            return match(pattern_index + 1, value_index) or (
+                value_index < len(value_parts)
+                and match(pattern_index, value_index + 1)
+            )
+        return bool(
+            value_index < len(value_parts)
+            and fnmatch.fnmatchcase(value_parts[value_index], part)
+            and match(pattern_index + 1, value_index + 1)
+        )
+
+    return match(0, 0)
 
 
 def _fact_id(
@@ -562,6 +590,7 @@ def _constant_members(
 class _ReceiverScope:
     classes: frozenset[str]
     origins: Mapping[str, _ReceiverOrigin]
+    unstable: frozenset[str]
     written: frozenset[str]
 
 
@@ -603,7 +632,15 @@ class _ScopeBindingCollector(_ScopeImportCollector):
         super().__init__()
         self.starts = starts
         self.class_writes: set[str] = set()
+        self.mutations: set[str] = set()
         self.writes: Dict[str, List[Optional[_ReceiverOrigin]]] = {}
+
+    @staticmethod
+    def _root_name(node: ast.AST) -> str | None:
+        current = node
+        while isinstance(current, (ast.Attribute, ast.Subscript)):
+            current = current.value
+        return current.id if isinstance(current, ast.Name) else None
 
     def _write(self, name: str, origin: Optional[_ReceiverOrigin] = None) -> None:
         self.writes.setdefault(name, []).append(origin)
@@ -625,6 +662,10 @@ class _ScopeBindingCollector(_ScopeImportCollector):
         self, target: ast.expr, origin: Optional[_ReceiverOrigin] = None
     ) -> None:
         self._write_target(target, origin)
+        if isinstance(target, (ast.Attribute, ast.Subscript)):
+            root = self._root_name(target)
+            if root is not None:
+                self.mutations.add(root)
         # Attribute/subscript targets may contain assignment expressions in
         # their evaluated receiver/index even though they bind no name
         # themselves. Plain Name/List/Tuple traversal is inert here.
@@ -785,6 +826,22 @@ class _ScopeBindingCollector(_ScopeImportCollector):
         for keyword in node.keywords:
             self.visit(keyword.value)
 
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {
+            "append",
+            "clear",
+            "extend",
+            "insert",
+            "pop",
+            "remove",
+            "reverse",
+            "sort",
+        }:
+            root = self._root_name(node.func.value)
+            if root is not None:
+                self.mutations.add(root)
+        self.generic_visit(node)
+
     def visit_Lambda(self, node: ast.Lambda) -> None:
         for default in (*node.args.defaults, *node.args.kw_defaults):
             if default is not None:
@@ -840,6 +897,10 @@ class _ScopeBindingCollector(_ScopeImportCollector):
         return _ReceiverScope(
             classes=classes,
             origins=origins,
+            unstable=frozenset(
+                self.mutations
+                | {name for name, rows in self.writes.items() if len(rows) != 1}
+            ),
             written=frozenset(self.writes),
         )
 
@@ -880,6 +941,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         tokens: _SourcePositions,
         table: symtable.SymbolTable,
         tree: ast.Module,
+        ordered_containers: Sequence[Mapping[str, object]],
     ) -> None:
         self.facts = facts
         self.starts = starts
@@ -899,6 +961,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             symtable.SymbolTable,
             Dict[Tuple[str, str, int], deque[symtable.SymbolTable]],
         ] = {}
+        self.ordered_containers = tuple(ordered_containers)
 
     def _child_table(
         self, kind: str, name: str, line: int
@@ -1344,13 +1407,124 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             },
         )
 
+    @staticmethod
+    def _ordered_sequence(
+        expression: ast.expr,
+    ) -> Tuple[ast.expr, Sequence[ast.expr], bool] | None:
+        if isinstance(expression, (ast.List, ast.Tuple)):
+            return expression, expression.elts, any(
+                isinstance(item, ast.Starred) for item in expression.elts
+            )
+        if isinstance(
+            expression, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+        ):
+            return expression, (), True
+        if not isinstance(expression, ast.Call):
+            return None
+        candidates = [
+            value
+            for value in [*expression.args, *(item.value for item in expression.keywords)]
+            if isinstance(
+                value,
+                (
+                    ast.List,
+                    ast.Tuple,
+                    ast.ListComp,
+                    ast.SetComp,
+                    ast.DictComp,
+                    ast.GeneratorExp,
+                ),
+            )
+        ]
+        return (
+            _PythonProviderVisitor._ordered_sequence(candidates[0])
+            if len(candidates) == 1
+            else None
+        )
+
+    def _ordered_container_id(self, name: str) -> str:
+        owner = "/".join(item[0] for item in self.scope)
+        suffix = f"{owner}/{name}" if owner else name
+        return f"{self.facts.path}:{suffix}"
+
+    def _ordered_container_selected(self, name: str) -> bool:
+        owner = "/".join(item[0] for item in self.scope)
+        qualified = f"{owner}/{name}" if owner else name
+        return any(
+            selection.get("language") == "python"
+            and any(
+                _collection_match(self.facts.path, str(pattern))
+                for pattern in selection.get("paths", ())
+            )
+            and any(
+                _collection_match(qualified, str(pattern))
+                for pattern in selection.get("names", ())
+            )
+            for selection in self.ordered_containers
+        )
+
+    def _record_ordered_container(
+        self, target: ast.expr, expression: ast.expr | None
+    ) -> None:
+        if not isinstance(target, ast.Name) or expression is None:
+            return
+        if not self._ordered_container_selected(target.id):
+            return
+        sequence_info = self._ordered_sequence(expression)
+        if sequence_info is None:
+            return
+        sequence, elements, dynamic = sequence_info
+        dynamic = dynamic or target.id in self.receivers[-1].unstable
+        container = self._ordered_container_id(target.id)
+        state = "unknown" if dynamic else "current"
+        sequence_span = _absolute_span(sequence, self.starts)
+        common = {
+            "container": container,
+            "normalization": "python-ast-expression-v1",
+            "state": state,
+        }
+        self.facts.add(
+            "ordered-containers",
+            "sequence",
+            sequence_span,
+            container,
+            target.id,
+            {
+                **common,
+                "declared_count": len(elements),
+                "line": getattr(sequence, "lineno"),
+                "population_state": "dynamic" if dynamic else "closed",
+            },
+        )
+        for ordinal, row in enumerate(elements):
+            if isinstance(row, ast.Starred):
+                continue
+            row_span = _absolute_span(row, self.starts)
+            normalized = ast.dump(row, annotate_fields=True, include_attributes=False)
+            digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            self.facts.add(
+                "ordered-rows",
+                "row",
+                row_span,
+                f"{container}:{digest}",
+                target.id,
+                {
+                    **common,
+                    "digest": digest,
+                    "line": getattr(row, "lineno"),
+                    "ordinal": ordinal,
+                },
+            )
+
     def visit_Assign(self, node: ast.Assign) -> None:
         for target in node.targets:
             self._record_module_variable(target, node.value)
+            self._record_ordered_container(target, node.value)
         self.visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         self._record_module_variable(node.target, node.value)
+        self._record_ordered_container(node.target, node.value)
         self.visit(node.annotation)
         if node.value is not None:
             self.visit(node.value)
@@ -1852,7 +2026,9 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 self.visit(default)
         self.tables.append(self._child_table("function", "lambda", node.lineno))
         self.imports.append({})
-        self.receivers.append(_ReceiverScope(frozenset(), {}, frozenset()))
+        self.receivers.append(
+            _ReceiverScope(frozenset(), {}, frozenset(), frozenset())
+        )
         self.local_classes.append({})
         self.method_receivers.append({})
         self.visit(node.body)
@@ -1870,7 +2046,9 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             self.visit(generators[0].iter)
         self.tables.append(self._child_table("function", name, node.lineno))
         self.imports.append({})
-        self.receivers.append(_ReceiverScope(frozenset(), {}, frozenset()))
+        self.receivers.append(
+            _ReceiverScope(frozenset(), {}, frozenset(), frozenset())
+        )
         self.local_classes.append({})
         self.method_receivers.append({})
         for index, generator in enumerate(generators):
@@ -2130,6 +2308,7 @@ def python_ast_provider_facts(
     text: str | None = None,
     source_bytes: bytes | None = None,
     source_manifest_sha256: str | None = None,
+    ordered_containers: Sequence[Mapping[str, object]] = (),
 ) -> bytes:
     """Return compact canonical provider facts bound to one Python source.
 
@@ -2208,7 +2387,12 @@ def python_ast_provider_facts(
                 table = symtable.symtable(text, path, "exec")
             source_tokens = _SourcePositions(text, raw, starts)
             visitor = _PythonProviderVisitor(
-                facts, starts, source_tokens, table, tree
+                facts,
+                starts,
+                source_tokens,
+                table,
+                tree,
+                ordered_containers,
             )
             visitor.visit(tree)
             selected, origins, origin_names, export_spans, imported = (
@@ -2298,11 +2482,19 @@ def python_ast_provider_facts(
         "producer": {
             "configuration_sha256": hashlib.sha256(
                 _CONFIGURATION_BYTES
+                + b"\0"
+                + json.dumps(
+                    ordered_containers,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                    allow_nan=False,
+                ).encode("utf-8")
             ).hexdigest(),
             "implementation_sha256": _implementation_sha256(),
             "name": "archbird-python-ast",
             "runtime": f"cpython-{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "version": "4",
+            "version": "5",
         },
         "provenance": "derived",
         "resolutions": [],

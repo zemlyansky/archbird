@@ -756,6 +756,33 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
       ),
     mapDiff: (before, after, pretty = false) =>
       twoInputs(before, after, "_ab_wasm_map_diff", boolFlags(pretty)),
+    diff(
+      before,
+      after,
+      request = Buffer.alloc(0),
+      beforeResolution = Buffer.alloc(0),
+      afterResolution = Buffer.alloc(0),
+      pretty = false,
+    ) {
+      return withInputs(
+        [before, beforeResolution, after, afterResolution, request],
+        ([beforeInput, beforeResolutionInput, afterInput,
+          afterResolutionInput, requestInput]) =>
+          result(module._ab_wasm_diff(
+            beforeInput.pointer,
+            beforeInput.length,
+            beforeResolutionInput.pointer,
+            beforeResolutionInput.length,
+            afterInput.pointer,
+            afterInput.length,
+            afterResolutionInput.pointer,
+            afterResolutionInput.length,
+            requestInput.pointer,
+            requestInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
     mapFreshness: (snapshot, current, pretty = false) =>
       twoInputs(
         snapshot,

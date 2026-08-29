@@ -296,6 +296,62 @@ static int strings_value(const AbValue *value, int nonempty) {
   return 1;
 }
 
+static int strings_unique(const AbValue *value) {
+  size_t left;
+  size_t right;
+  if (!strings_value(value, 0))
+    return 0;
+  for (left = 0; left < value->as.array.count; left++)
+    for (right = left + 1; right < value->as.array.count; right++)
+      if (ab_value_equal(&value->as.array.items[left],
+                         &value->as.array.items[right]))
+        return 0;
+  return 1;
+}
+
+static ArchbirdStatus validate_ordered_containers(ArchbirdEngine *engine,
+                                                  const AbValue *selections) {
+  static const char *const fields[] = {"language", "names", "paths"};
+  size_t selection_index;
+  if (!selections)
+    return ARCHBIRD_OK;
+  if (selections->kind != AB_VALUE_ARRAY)
+    return invalid(engine, "ordered_containers must be an array");
+  for (selection_index = 0; selection_index < selections->as.array.count;
+       selection_index++) {
+    const AbValue *selection = &selections->as.array.items[selection_index];
+    const AbValue *language;
+    const AbValue *paths;
+    const AbValue *names;
+    size_t index;
+    if (selection->kind != AB_VALUE_OBJECT)
+      return invalid(engine, "ordered_containers entries must be objects");
+    for (index = 0; index < selection->as.object.count; index++)
+      if (!name_in(&selection->as.object.fields[index].name, fields, 3))
+        return invalid(engine, "ordered_containers entry has an unknown field");
+    language = ab_value_member(selection, "language");
+    paths = ab_value_member(selection, "paths");
+    names = ab_value_member(selection, "names");
+    if (!language || language->kind != AB_VALUE_STRING ||
+        !(string_equal(&language->as.text, "c") ||
+          string_equal(&language->as.text, "python")))
+      return invalid(engine, "ordered_containers language is unsupported");
+    if (!strings_value(paths, 1) || !strings_value(names, 1))
+      return invalid(
+          engine,
+          "ordered_containers paths and names must be non-empty string arrays");
+    for (index = 0; index < paths->as.array.count; index++)
+      if (!repository_path(&paths->as.array.items[index].as.text))
+        return invalid(engine,
+                       "ordered_containers paths must be repository-relative");
+    for (index = 0; index < names->as.array.count; index++)
+      if (!repository_path(&names->as.array.items[index].as.text))
+        return invalid(engine,
+                       "ordered_containers names must be lexical patterns");
+  }
+  return ARCHBIRD_OK;
+}
+
 static int string_or_strings_value(const AbValue *value) {
   return nonblank(value) || strings_value(value, 0);
 }
@@ -649,6 +705,8 @@ static int constraint_fields_allowed(const AbValue *definition,
   static const char *const actual_expected[] = {"actual", "expected"};
   static const char *const cardinality[] = {"actual", "exact", "max", "min"};
   static const char *const mapped[] = {"actual", "expected", "mapping"};
+  static const char *const correspondence[] = {"actual", "expected", "mapping",
+                                               "require_target_coverage"};
   static const char *const minimum_routes[] = {"actual", "min",
                                                "required_routes"};
   static const char *const numeric[] = {"actual", "allow_empty", "exact", "max",
@@ -703,6 +761,8 @@ static int constraint_fields_allowed(const AbValue *definition,
     USE_FIELDS(actual);
   else if (value_string_is(discriminator, "cardinality"))
     USE_FIELDS(cardinality);
+  else if (value_string_is(discriminator, "correspondence_complete"))
+    USE_FIELDS(correspondence);
   else if (value_string_is(discriminator, "mapped_set_equal") ||
            value_string_is(discriminator, "mapped_values_equal") ||
            value_string_is(discriminator, "required_subset") ||
@@ -752,6 +812,7 @@ validate_constraint_definitions(ArchbirdEngine *engine,
   static const char *const assertions[] = {"acyclic",
                                            "allowed_edges",
                                            "cardinality",
+                                           "correspondence_complete",
                                            "disjoint",
                                            "forbidden_edges",
                                            "mapped_set_equal",
@@ -771,9 +832,9 @@ validate_constraint_definitions(ArchbirdEngine *engine,
       "selectors", "symbols",       "tags",    "target_paths",
       "to_paths"};
   static const char *const booleans[] = {
-      "allow_empty",          "configured_only",   "forbid_ambiguous",
-      "forbid_unregistered",  "forbid_unresolved", "public_only",
-      "require_all_providers"};
+      "allow_empty",           "configured_only",        "forbid_ambiguous",
+      "forbid_unregistered",   "forbid_unresolved",      "public_only",
+      "require_all_providers", "require_target_coverage"};
   size_t index;
   for (index = 0; index < constraints->as.object.count; index++) {
     const AbObjectField *constraint = &constraints->as.object.fields[index];
@@ -810,6 +871,32 @@ validate_constraint_definitions(ArchbirdEngine *engine,
     if (value && value->kind != AB_VALUE_OBJECT)
       return collection_error(engine, "constraints", &constraint->name,
                               "mapping must be an object");
+    if (value_string_is(assertion, "correspondence_complete")) {
+      size_t mapping_index;
+      if (!value)
+        return collection_error(engine, "constraints", &constraint->name,
+                                "correspondence_complete requires mapping");
+      for (mapping_index = 0; mapping_index < value->as.object.count;
+           mapping_index++) {
+        const AbObjectField *entry = &value->as.object.fields[mapping_index];
+        if (!entry->name.length || !strings_value(&entry->value, 1))
+          return collection_error(
+              engine, "constraints", &constraint->name,
+              "correspondence mapping values must be non-empty string arrays");
+        if (!strings_unique(&entry->value))
+          return collection_error(
+              engine, "constraints", &constraint->name,
+              "correspondence mapping targets must be unique");
+      }
+    } else if (value) {
+      size_t mapping_index;
+      for (mapping_index = 0; mapping_index < value->as.object.count;
+           mapping_index++)
+        if (value->as.object.fields[mapping_index].value.kind !=
+            AB_VALUE_STRING)
+          return collection_error(engine, "constraints", &constraint->name,
+                                  "mapped comparison values must be strings");
+    }
     {
       ArchbirdStatus waiver_status = validate_constraint_waivers(
           engine, &constraint->name,
@@ -1022,9 +1109,10 @@ static ArchbirdStatus normalize_map_overlay(ArchbirdEngine *engine,
                                             const AbValue *source,
                                             AbValue *out) {
   static const char *const map_fields[] = {
-      "artifacts",     "bridges",  "builds",  "components", "description",
-      "discovery",     "exclude",  "indexes", "layers",     "limits",
-      "named_entries", "packages", "parity",  "project",    "tests"};
+      "artifacts",   "bridges",   "builds",        "components",
+      "description", "discovery", "exclude",       "indexes",
+      "layers",      "limits",    "named_entries", "ordered_containers",
+      "packages",    "parity",    "project",       "tests"};
   size_t index;
   size_t count = 0;
   size_t output = 0;
@@ -1081,12 +1169,16 @@ ArchbirdStatus ab_project_configuration_decode(ArchbirdEngine *engine,
                                                const uint8_t *json,
                                                size_t json_length,
                                                AbProjectConfiguration *out) {
-  static const char *const fields[] = {
-      "artifacts",     "bridges",     "builds",    "components",
-      "constraints",   "description", "discovery", "exclude",
-      "gates",         "indexes",     "layers",    "limits",
-      "named_entries", "packages",    "parity",    "project",
-      "projections",   "queries",     "tests"};
+  static const char *const fields[] = {"artifacts",     "bridges",
+                                       "builds",        "components",
+                                       "constraints",   "description",
+                                       "discovery",     "exclude",
+                                       "gates",         "indexes",
+                                       "layers",        "limits",
+                                       "named_entries", "ordered_containers",
+                                       "packages",      "parity",
+                                       "project",       "projections",
+                                       "queries",       "tests"};
   AbValue document = {0};
   size_t index;
   ArchbirdStatus status;
@@ -1122,6 +1214,10 @@ ArchbirdStatus ab_project_configuration_decode(ArchbirdEngine *engine,
       goto done;
     }
   }
+  status = validate_ordered_containers(
+      engine, ab_value_member(&document, "ordered_containers"));
+  if (status != ARCHBIRD_OK)
+    goto done;
   status =
       normalize_collection(engine, ab_value_member(&document, "projections"),
                            "projections", &out->projections);

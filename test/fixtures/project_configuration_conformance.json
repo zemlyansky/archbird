@@ -48,6 +48,27 @@
         "project": "conformance",
         "layers": [
           {"name": "c", "language": "c", "globs": ["src/**/*.c"]}
+        ],
+        "ordered_containers": [
+          {"language": "c", "paths": ["src/**/*.c"], "names": ["**/rules"]}
+        ]
+      }
+    },
+    {
+      "id": "ordered-container-language",
+      "valid": false,
+      "configuration": {
+        "ordered_containers": [
+          {"language": "javascript", "paths": ["src/**/*.js"], "names": ["rules"]}
+        ]
+      }
+    },
+    {
+      "id": "ordered-container-parent-path",
+      "valid": false,
+      "configuration": {
+        "ordered_containers": [
+          {"language": "python", "paths": ["../src/**"], "names": ["rules"]}
         ]
       }
     },
@@ -124,6 +145,7 @@
           "inventory-paths": {"select": "inventory_paths", "exclude": ["vendor/**"]},
           "macro-members": {"select": "macro_members", "call": "REGISTER", "selector": "public", "paths": ["src/**"], "selector_argument": 0, "values_from_argument": 1, "strip_prefix": "OP_"},
           "mapped-paths": {"select": "mapped_paths", "paths": ["src/**"], "strip_prefix": "src/"},
+          "ordered-rows": {"select": "ordered_rows", "container": "src/file.c:build/rules"},
           "package-entrypoints": {"select": "package_entrypoints", "packages": ["core"], "routes": ["main"], "target_paths": ["src/**"]},
           "package-exports": {"select": "package_exports", "packages": ["core"], "name_patterns": ["open*"]},
           "provider-surface": {"select": "provider_surface", "name": "public", "include": ["open*"]},
@@ -211,6 +233,7 @@
           "ACYCLIC": {"assert": "acyclic", "actual": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
           "ALLOWED-EDGES": {"assert": "allowed_edges", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
           "CARDINALITY": {"assert": "cardinality", "actual": {"literal": []}, "exact": 0, "owner": "architecture", "rationale": "Exercise the primitive contract."},
+          "CORRESPONDENCE-COMPLETE": {"assert": "correspondence_complete", "actual": {"literal": ["target"]}, "expected": {"literal": ["source"]}, "mapping": {"source": ["target"]}, "require_target_coverage": true, "owner": "architecture", "rationale": "Exercise the primitive contract."},
           "DISJOINT": {"assert": "disjoint", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
           "FORBIDDEN-EDGES": {"assert": "forbidden_edges", "actual": {"literal": []}, "expected": {"literal": []}, "owner": "architecture", "rationale": "Exercise the primitive contract."},
           "MAPPED-SET-EQUAL": {"assert": "mapped_set_equal", "actual": {"literal": []}, "expected": {"literal": []}, "mapping": {}, "owner": "architecture", "rationale": "Exercise the primitive contract."},

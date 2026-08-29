@@ -197,21 +197,22 @@ static int discovery_c_header(const AbManifestFile *file) {
 
 static ArchbirdStatus scan_discovered_c_header(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
-    const AbManifestFile *file, const uint8_t *source, size_t source_length,
+    const AbMapConfig *config, const AbManifestFile *file,
+    const uint8_t *source, size_t source_length,
     const uint8_t manifest_digest[32], const uint8_t c_digest[32],
     AbProviderBundle *out_bundle) {
   AbProviderBundle c_bundle = {0};
   AbProviderBundle cpp_bundle = {0};
   uint8_t cpp_digest[32];
-  ArchbirdStatus status =
-      ab_scan_tree_sitter_c_file(engine, manifest, file, source, source_length,
-                                 manifest_digest, c_digest, &c_bundle);
+  ArchbirdStatus status = ab_scan_tree_sitter_c_file(
+      engine, manifest, config, file, source, source_length, manifest_digest,
+      c_digest, &c_bundle);
   implementation_digest(ARCHBIRD_TREE_SITTER_CPP_IMPLEMENTATION_SHA256,
                         cpp_digest);
   if (status == ARCHBIRD_OK)
-    status = ab_scan_tree_sitter_cpp_file(engine, manifest, file, source,
-                                          source_length, manifest_digest,
-                                          cpp_digest, &cpp_bundle);
+    status = ab_scan_tree_sitter_cpp_file(
+        engine, manifest, config, file, source, source_length, manifest_digest,
+        cpp_digest, &cpp_bundle);
   if (status == ARCHBIRD_OK && recovery_better(syntax_recovery(&cpp_bundle),
                                                syntax_recovery(&c_bundle))) {
     *out_bundle = cpp_bundle;
@@ -249,6 +250,7 @@ scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
           const AbSyntaxProvider *provider, const uint8_t manifest_digest[32],
           AbProviderBundle *out_bundle) {
   const AbManifestFile *file = &manifest->files[file_index];
+  const AbMapConfig *config = ab_project_config(project);
   const uint8_t *source = ab_project_source_bytes(project, file_index);
   uint8_t provider_digest[32];
   (void)file;
@@ -261,47 +263,47 @@ scan_file(ArchbirdEngine *engine, ArchbirdProject *project,
   case AB_SYNTAX_C:
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_CPP
     if (discovery_c_header(file))
-      return scan_discovered_c_header(engine, manifest, file, source,
+      return scan_discovered_c_header(engine, manifest, config, file, source,
                                       file->byte_length, manifest_digest,
                                       provider_digest, out_bundle);
 #endif
-    return ab_scan_tree_sitter_c_file(engine, manifest, file, source,
+    return ab_scan_tree_sitter_c_file(engine, manifest, config, file, source,
                                       file->byte_length, manifest_digest,
                                       provider_digest, out_bundle);
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_CPP
   case AB_SYNTAX_CPP:
-    return ab_scan_tree_sitter_cpp_file(engine, manifest, file, source,
+    return ab_scan_tree_sitter_cpp_file(engine, manifest, config, file, source,
                                         file->byte_length, manifest_digest,
                                         provider_digest, out_bundle);
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_PYTHON
   case AB_SYNTAX_PYTHON:
-    return ab_scan_tree_sitter_python_file(engine, manifest, file, source,
-                                           file->byte_length, manifest_digest,
-                                           provider_digest, out_bundle);
+    return ab_scan_tree_sitter_python_file(
+        engine, manifest, config, file, source, file->byte_length,
+        manifest_digest, provider_digest, out_bundle);
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_JAVASCRIPT
   case AB_SYNTAX_JAVASCRIPT:
     return ab_scan_tree_sitter_javascript_file(
-        engine, manifest, file, source, file->byte_length, manifest_digest,
-        provider_digest, out_bundle);
+        engine, manifest, config, file, source, file->byte_length,
+        manifest_digest, provider_digest, out_bundle);
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TYPESCRIPT
   case AB_SYNTAX_TYPESCRIPT:
     return ab_scan_tree_sitter_typescript_file(
-        engine, manifest, file, source, file->byte_length, manifest_digest,
-        provider_digest, 0, out_bundle);
+        engine, manifest, config, file, source, file->byte_length,
+        manifest_digest, provider_digest, 0, out_bundle);
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TSX
   case AB_SYNTAX_TSX:
     return ab_scan_tree_sitter_typescript_file(
-        engine, manifest, file, source, file->byte_length, manifest_digest,
-        provider_digest, 1, out_bundle);
+        engine, manifest, config, file, source, file->byte_length,
+        manifest_digest, provider_digest, 1, out_bundle);
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_R
   case AB_SYNTAX_R:
-    return ab_scan_tree_sitter_r_file(engine, manifest, file, source,
+    return ab_scan_tree_sitter_r_file(engine, manifest, config, file, source,
                                       file->byte_length, manifest_digest,
                                       provider_digest, out_bundle);
 #endif

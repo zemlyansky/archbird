@@ -79,7 +79,7 @@ function usage(command = "map") {
     impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
     path: "archbird path SOURCE TARGET [--root PROJECT | --map MAP.json] [--level component|file|symbol] [--relation FAMILY] [--direction downstream|upstream|both] [--format markdown|json] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
-    diff: "archbird diff --before OLD.json --after NEW.json [--check[=CATEGORIES]]",
+    diff: "archbird diff OLD_ROOT_OR_MAP NEW_ROOT_OR_MAP [--correspondence FILE] [--check[=CATEGORIES]]",
     freshness: "archbird freshness [ROOT] --snapshot MAP_OR_QUERY.json [--check]",
     workspace: "archbird workspace --config WORKSPACE.json [--check]",
     verify: "archbird verify [CONSTRAINT ...] [--root PROJECT | --map MAP.json] [--config archbird.json] [--baseline FILE | --freeze FILE] [--format markdown|json|sarif|junit] [--check]",
@@ -1702,15 +1702,119 @@ function diffRisk(document, raw) {
 function diffMain(argv) {
   const options = parse(argv, {
     before: { type: "string" }, after: { type: "string" },
+    correspondence: { type: "string" },
+    cacheDir: COMMON.cacheDir,
+    cacheMaxBytes: COMMON.cacheMaxBytes,
+    noCache: COMMON.noCache,
+    noTypescript: COMMON.noTypescript,
+    progress: { default: "auto", type: "string" },
     output: COMMON.output, pretty: COMMON.pretty,
     check: { const: "public-api,bridges,parity,tests,architecture", type: "optional" },
     help: COMMON.help,
-  });
+  }, { positionals: 2 });
   if (options.help) { process.stdout.write(usage("diff")); return 0; }
-  required(options, "before", "after");
-  const encoded = archbird.diffMaps(read(options.before), read(options.after), { pretty: options.pretty });
+  if (options._.length && (options.before !== undefined || options.after !== undefined)) {
+    throw new Error("use either two positional operands or --before/--after");
+  }
+  let beforeOperand;
+  let afterOperand;
+  if (options._.length) {
+    if (options._.length !== 2) throw new Error("diff requires exactly two operands");
+    [beforeOperand, afterOperand] = options._;
+  } else {
+    required(options, "before", "after");
+    beforeOperand = options.before;
+    afterOperand = options.after;
+  }
+  if (beforeOperand === "-" && afterOperand === "-") {
+    throw new Error("at most one Diff operand may read stdin");
+  }
+  const progress = new Progress(options.progress);
+  const stdin = [beforeOperand, afterOperand].includes("-")
+    ? fs.readFileSync(0)
+    : Buffer.alloc(0);
+  const loadOperand = (value, label) => {
+    let map;
+    let resolution = Buffer.alloc(0);
+    if (value === "-") map = stdin;
+    else {
+      const operand = path.resolve(value);
+      if (!fs.existsSync(operand)) {
+        throw new Error(`${label} Diff operand does not exist: ${value}`);
+      }
+      if (fs.statSync(operand).isDirectory()) {
+        progress.emit({ phase: "discovery", state: "start", side: label });
+        const current = archbird.Project.fromRepository(operand, {
+          typescript: !options.noTypescript,
+          cacheDir: options.noCache
+            ? null
+            : (options.cacheDir || archbird.defaultProviderCacheDir()),
+          cacheMaxBytes: cacheMaxBytes(options),
+          scan: false,
+        });
+        current.scan("primary", {
+          typescript: !options.noTypescript,
+          cacheDir: options.noCache
+            ? null
+            : (options.cacheDir || archbird.defaultProviderCacheDir()),
+          cacheMaxBytes: cacheMaxBytes(options),
+          progress: (event) => progress.emit(event),
+        });
+        map = current.mapJson();
+        resolution = current.resolutionJson;
+        warnCacheStats(current.cacheStats, options);
+      } else if (fs.statSync(operand).isFile()) map = fs.readFileSync(operand);
+      else throw new Error(`${label} Diff operand is not a file or directory`);
+    }
+    let document;
+    try {
+      document = JSON.parse(map.toString("utf8"));
+    } catch (error) {
+      throw new Error(`${label} Diff operand is not JSON: ${value}`);
+    }
+    if (!document || Array.isArray(document) || document.artifact !== "map") {
+      if (document && !Array.isArray(document) &&
+          (Object.hasOwn(document, "project") || Object.hasOwn(document, "layers"))) {
+        throw new Error(
+          `${label} Diff operand is project configuration; pass its repository directory`,
+        );
+      }
+      throw new Error(`${label} Diff operand is not an Archbird Map`);
+    }
+    return { map, resolution };
+  };
+  const before = loadOperand(beforeOperand, "before");
+  const after = loadOperand(afterOperand, "after");
+  const correspondence = options.correspondence
+    ? read(options.correspondence)
+    : Buffer.alloc(0);
+  if (correspondence.length && options.check &&
+      options.check !== "public-api,bridges,parity,tests,architecture") {
+    throw new Error(
+      "Diff risk categories do not apply to correspondence; use bare --check",
+    );
+  }
+  const encoded = archbird.diff(before.map, after.map, {
+    correspondence,
+    beforeResolution: before.resolution,
+    afterResolution: after.resolution,
+    pretty: options.pretty,
+  });
   write(encoded, options.output);
-  return options.check && diffRisk(JSON.parse(encoded), options.check) ? 1 : 0;
+  progress.finish();
+  if (!options.check) return 0;
+  const document = JSON.parse(encoded);
+  if (document.join === "correspondence") {
+    const comparison = document.comparison;
+    if (!comparison || typeof comparison !== "object" ||
+        !comparison.counts || typeof comparison.counts !== "object") {
+      throw new Error("native correspondence Diff is invalid");
+    }
+    return comparison.state !== "complete" ||
+      Object.entries(comparison.counts)
+        .some(([key, value]) => key !== "matched" && value) ? 1 : 0;
+  }
+  return diffRisk(document, options.check) ? 1 : 0;
 }
 
 function observeMain(argv) {

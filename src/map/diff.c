@@ -1,8 +1,10 @@
 #include <archbird/archbird.h>
 
 #include "base/archbird_internal.h"
+#include "base/comparison.h"
 #include "base/json_value.h"
 #include "base/render_internal.h"
+#include "map/diff_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -24,9 +26,7 @@ typedef struct DiffSection {
   DiffIndex after;
 } DiffSection;
 
-typedef struct DiffContext {
-  ArchbirdEngine *engine;
-} DiffContext;
+typedef AbDiffContext DiffContext;
 
 static ArchbirdStatus diff_error(DiffContext *context, const char *message) {
   return archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
@@ -1523,79 +1523,106 @@ static ArchbirdStatus build_indexes(DiffContext *context, const AbValue *map,
   return status;
 }
 
-static int pair_key_order(const DiffPair *left, const DiffPair *right) {
-  return ab_string_compare(&left->key, &right->key);
+static int diff_value_equal(const void *left, const void *right) {
+  return ab_string_equal((const AbString *)left, (const AbString *)right);
 }
 
-static ArchbirdStatus render_added_removed(AbBuffer *buffer,
-                                           const DiffIndex *primary,
-                                           const DiffIndex *other) {
-  size_t primary_index = 0;
-  size_t other_index = 0;
+static ArchbirdStatus comparison_items(DiffContext *context,
+                                       const DiffIndex *index,
+                                       AbComparisonItem **out) {
+  size_t item;
+  *out = NULL;
+  if (!index->count)
+    return ARCHBIRD_OK;
+  if (index->count > SIZE_MAX / sizeof(**out))
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  *out = (AbComparisonItem *)ab_calloc(context->engine, index->count,
+                                       sizeof(**out));
+  if (!*out)
+    return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory comparing map sections");
+  for (item = 0; item < index->count; item++) {
+    (*out)[item].key = &index->items[item].key;
+    (*out)[item].value = &index->items[item].value;
+    (*out)[item].subject = &index->items[item];
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus compare_section(DiffContext *context,
+                                      const DiffSection *section,
+                                      AbComparisonItem **before,
+                                      AbComparisonItem **after,
+                                      AbComparisonResult *out) {
+  AbComparisonPlan plan = {0};
+  ArchbirdStatus status = comparison_items(context, &section->before, before);
+  if (status == ARCHBIRD_OK)
+    status = comparison_items(context, &section->after, after);
+  if (status == ARCHBIRD_OK) {
+    plan.join = AB_COMPARISON_IDENTITY;
+    plan.left = (AbComparisonPopulation){*before, section->before.count, 1};
+    plan.right = (AbComparisonPopulation){*after, section->after.count, 1};
+    plan.compare_values = 1;
+    plan.value_equal = diff_value_equal;
+    status = ab_comparison_run(context->engine, &plan, out);
+  }
+  return status;
+}
+
+static ArchbirdStatus render_record_keys(AbBuffer *buffer,
+                                         const AbComparisonResult *comparison,
+                                         AbComparisonKind kind) {
+  size_t index;
   int first = 1;
   ArchbirdStatus status = ab_buffer_literal(buffer, "[");
-  while (status == ARCHBIRD_OK && primary_index < primary->count) {
-    int compared;
-    while (other_index < other->count &&
-           pair_key_order(&other->items[other_index],
-                          &primary->items[primary_index]) < 0)
-      other_index++;
-    compared = other_index < other->count
-                   ? pair_key_order(&primary->items[primary_index],
-                                    &other->items[other_index])
-                   : -1;
-    if (compared != 0) {
+  for (index = 0; status == ARCHBIRD_OK && index < comparison->count; index++) {
+    const AbComparisonRecord *record = &comparison->records[index];
+    const AbString *key;
+    if (record->kind != kind)
+      continue;
+    key =
+        kind == AB_COMPARISON_LEFT_ONLY ? record->left_key : record->right_key;
+    if (key) {
       if (!first)
         status = ab_buffer_literal(buffer, ",");
       if (status == ARCHBIRD_OK)
-        status = ab_buffer_json_string(
-            buffer, primary->items[primary_index].key.data,
-            primary->items[primary_index].key.length);
+        status = ab_buffer_json_string(buffer, key->data, key->length);
       first = 0;
     }
-    primary_index++;
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "]");
   return status;
 }
 
-static ArchbirdStatus render_changed(AbBuffer *buffer, const DiffIndex *before,
-                                     const DiffIndex *after) {
-  size_t before_index = 0;
-  size_t after_index = 0;
+static ArchbirdStatus render_changed(AbBuffer *buffer,
+                                     const AbComparisonResult *comparison) {
+  size_t index;
   int first = 1;
   ArchbirdStatus status = ab_buffer_literal(buffer, "[");
-  while (status == ARCHBIRD_OK && before_index < before->count &&
-         after_index < after->count) {
-    int compared = pair_key_order(&before->items[before_index],
-                                  &after->items[after_index]);
-    if (compared < 0) {
-      before_index++;
+  for (index = 0; status == ARCHBIRD_OK && index < comparison->count; index++) {
+    const AbComparisonRecord *record = &comparison->records[index];
+    const DiffPair *before;
+    const DiffPair *after;
+    if (record->kind != AB_COMPARISON_CHANGED)
       continue;
-    }
-    if (compared > 0) {
-      after_index++;
-      continue;
-    }
-    if (!ab_string_equal(&before->items[before_index].value,
-                         &after->items[after_index].value)) {
+    before = (const DiffPair *)record->left->subject;
+    after = (const DiffPair *)record->right->subject;
+    if (before && after) {
       AbBuffer message;
       ab_buffer_init(&message, buffer->engine);
-      status = ab_buffer_append(&message, before->items[before_index].key.data,
-                                before->items[before_index].key.length);
+      status = ab_buffer_append(&message, before->key.data, before->key.length);
       if (status == ARCHBIRD_OK)
         status = ab_buffer_literal(&message, ": ");
       if (status == ARCHBIRD_OK)
-        status =
-            ab_buffer_append(&message, before->items[before_index].value.data,
-                             before->items[before_index].value.length);
+        status = ab_buffer_append(&message, before->value.data,
+                                  before->value.length);
       if (status == ARCHBIRD_OK)
         status = ab_buffer_literal(&message, " -> ");
       if (status == ARCHBIRD_OK)
         status =
-            ab_buffer_append(&message, after->items[after_index].value.data,
-                             after->items[after_index].value.length);
+            ab_buffer_append(&message, after->value.data, after->value.length);
       if (status == ARCHBIRD_OK && !first)
         status = ab_buffer_literal(buffer, ",");
       if (status == ARCHBIRD_OK)
@@ -1604,8 +1631,6 @@ static ArchbirdStatus render_changed(AbBuffer *buffer, const DiffIndex *before,
       ab_buffer_free(&message);
       first = 0;
     }
-    before_index++;
-    after_index++;
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "]");
@@ -1619,7 +1644,12 @@ render_sections(AbBuffer *buffer,
   ArchbirdStatus status = ab_buffer_literal(buffer, "{");
   for (index = 0; status == ARCHBIRD_OK && index < DIFF_SECTION_COUNT;
        index++) {
-    if (index)
+    AbComparisonResult comparison = {0};
+    AbComparisonItem *before_items = NULL;
+    AbComparisonItem *after_items = NULL;
+    status = compare_section(&(DiffContext){buffer->engine}, &sections[index],
+                             &before_items, &after_items, &comparison);
+    if (status == ARCHBIRD_OK && index)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_json_string(buffer, sections[index].name,
@@ -1627,27 +1657,28 @@ render_sections(AbBuffer *buffer,
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ":{\"added\":");
     if (status == ARCHBIRD_OK)
-      status = render_added_removed(buffer, &sections[index].after,
-                                    &sections[index].before);
+      status =
+          render_record_keys(buffer, &comparison, AB_COMPARISON_RIGHT_ONLY);
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"changed\":");
     if (status == ARCHBIRD_OK)
-      status = render_changed(buffer, &sections[index].before,
-                              &sections[index].after);
+      status = render_changed(buffer, &comparison);
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"removed\":");
     if (status == ARCHBIRD_OK)
-      status = render_added_removed(buffer, &sections[index].before,
-                                    &sections[index].after);
+      status = render_record_keys(buffer, &comparison, AB_COMPARISON_LEFT_ONLY);
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "}");
+    ab_comparison_result_free(buffer->engine, &comparison);
+    ab_free(buffer->engine, after_items);
+    ab_free(buffer->engine, before_items);
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "}");
   return status;
 }
 
-static ArchbirdStatus validate_map(DiffContext *context, const AbValue *map) {
+ArchbirdStatus ab_diff_map_validate(DiffContext *context, const AbValue *map) {
   const AbValue *artifact;
   const AbValue *schema;
   uint64_t version;
@@ -1668,8 +1699,9 @@ static ArchbirdStatus validate_map(DiffContext *context, const AbValue *map) {
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus render_identity(DiffContext *context, AbBuffer *buffer,
-                                      const AbValue *map) {
+ArchbirdStatus ab_diff_map_identity_render(DiffContext *context,
+                                           AbBuffer *buffer,
+                                           const AbValue *map) {
   const AbValue *project = ab_value_member(map, "project");
   const AbValue *evidence = ab_value_member(map, "evidence");
   const AbValue *input = ab_value_member(evidence, "input_sha256");
@@ -1725,9 +1757,9 @@ ArchbirdStatus archbird_map_diff(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = ab_json_value_decode(engine, after_json, after_length, &after);
   if (status == ARCHBIRD_OK)
-    status = validate_map(&context, &before);
+    status = ab_diff_map_validate(&context, &before);
   if (status == ARCHBIRD_OK)
-    status = validate_map(&context, &after);
+    status = ab_diff_map_validate(&context, &after);
   if (status == ARCHBIRD_OK)
     status = build_indexes(&context, &before, sections, 0);
   if (status == ARCHBIRD_OK)
@@ -1735,11 +1767,11 @@ ArchbirdStatus archbird_map_diff(ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, "{\"after\":");
   if (status == ARCHBIRD_OK)
-    status = render_identity(&context, &buffer, &after);
+    status = ab_diff_map_identity_render(&context, &buffer, &after);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, ",\"artifact\":\"diff\",\"before\":");
   if (status == ARCHBIRD_OK)
-    status = render_identity(&context, &buffer, &before);
+    status = ab_diff_map_identity_render(&context, &buffer, &before);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, ",\"schema_version\":7,\"sections\":");
   if (status == ARCHBIRD_OK)

@@ -148,6 +148,12 @@ typedef struct AbConfigNamedEntry {
   AbStringArray globs;
 } AbConfigNamedEntry;
 
+typedef struct AbConfigOrderedContainer {
+  AbString language;
+  AbStringArray paths;
+  AbStringArray names;
+} AbConfigOrderedContainer;
+
 typedef struct AbConfigParityMember {
   AbString label;
   AbString source;
@@ -200,6 +206,8 @@ typedef struct AbMapConfig {
   size_t test_count;
   AbConfigNamedEntry *named_entries;
   size_t named_entry_count;
+  AbConfigOrderedContainer *ordered_containers;
+  size_t ordered_container_count;
   AbConfigParity *parity;
   size_t parity_count;
   size_t max_file_bytes;
@@ -218,5 +226,10 @@ void ab_map_config_free(ArchbirdEngine *engine, AbMapConfig *config);
 
 const AbConfigLayer *ab_map_config_layer(const AbMapConfig *config,
                                          const AbString *name);
+
+int ab_map_config_ordered_container_selected(const AbMapConfig *config,
+                                             const AbString *language,
+                                             const AbString *path,
+                                             const AbString *name);
 
 #endif

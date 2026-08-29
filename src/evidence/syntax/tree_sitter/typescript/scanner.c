@@ -12,7 +12,8 @@ const TSLanguage *tree_sitter_tsx(void);
 
 ArchbirdStatus ab_scan_tree_sitter_typescript_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
-    const AbManifestFile *file, const uint8_t *source, size_t source_length,
+    const AbMapConfig *config, const AbManifestFile *file,
+    const uint8_t *source, size_t source_length,
     const uint8_t source_manifest_sha256[32],
     const uint8_t implementation_sha256[32], int tsx,
     AbProviderBundle *out_bundle) {
@@ -61,15 +62,16 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TSX
   if (tsx)
     return ab_scan_tree_sitter_ecmascript_file(
-        engine, manifest, file, source, source_length, source_manifest_sha256,
-        implementation_sha256, &typescript_react, out_bundle);
+        engine, manifest, config, file, source, source_length,
+        source_manifest_sha256, implementation_sha256, &typescript_react,
+        out_bundle);
 #else
   (void)tsx;
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TYPESCRIPT
   return ab_scan_tree_sitter_ecmascript_file(
-      engine, manifest, file, source, source_length, source_manifest_sha256,
-      implementation_sha256, &typescript, out_bundle);
+      engine, manifest, config, file, source, source_length,
+      source_manifest_sha256, implementation_sha256, &typescript, out_bundle);
 #else
   return archbird_error_set(engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
                             "TypeScript syntax pack is unavailable");

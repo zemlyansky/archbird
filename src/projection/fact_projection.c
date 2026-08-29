@@ -42,6 +42,7 @@ static const char *fact_shape(const AbValue *kind) {
       ab_projection_value_is(kind, "c_designated_initializer") ||
       ab_projection_value_is(kind, "constant_values") ||
       ab_projection_value_is(kind, "file_metrics") ||
+      ab_projection_value_is(kind, "ordered_rows") ||
       ab_projection_value_is(kind, "component_membership") ||
       ab_projection_value_is(kind, "provider_surface") ||
       ab_projection_value_is(kind, "literal_values"))
@@ -5932,6 +5933,8 @@ static ArchbirdStatus extract_constant_memberships(AbProjectionContext *context,
   uint64_t selected = 0;
   uint64_t excluded = 0;
   uint64_t unsupported = 0;
+  uint64_t declared_count = 0;
+  uint64_t sentinel_count = 0;
   int container_seen = 0;
   size_t index;
   ArchbirdStatus status;
@@ -5962,8 +5965,30 @@ static ArchbirdStatus extract_constant_memberships(AbProjectionContext *context,
         !path_matches(&path->as.text, paths))
       continue;
     container_seen = 1;
-    if (ab_projection_value_is(kind, "class-collection"))
+    if (ab_projection_value_is(kind, "class-collection")) {
+      const AbValue *member_count = map_fact_attribute(row, "member_count");
+      uint64_t count;
+      state = map_fact_attribute(row, "state");
+      if (!ab_value_u64(member_count, &count) ||
+          (!ab_projection_value_is(state, "current") &&
+           !ab_projection_value_is(state, "unknown"))) {
+        status = archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "constant collection sentinel is invalid");
+        break;
+      }
+      if (declared_count > UINT64_MAX - count) {
+        status = archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "constant collection is too large");
+        break;
+      }
+      declared_count += count;
+      sentinel_count++;
+      if (ab_projection_value_is(state, "unknown"))
+        unsupported++;
       continue;
+    }
     universe++;
     state = map_fact_attribute(row, "state");
     if (!ab_projection_value_is(state, "current") &&
@@ -5993,12 +6018,311 @@ static ArchbirdStatus extract_constant_memberships(AbProjectionContext *context,
         context->engine, fact, &plan->id, &project->as.text, "set",
         "constant collection is absent from Map facts");
   }
+  if (status == ARCHBIRD_OK && !sentinel_count)
+    unsupported++;
+  if (status == ARCHBIRD_OK && declared_count != universe) {
+    uint64_t difference = declared_count > universe ? declared_count - universe
+                                                    : universe - declared_count;
+    if (unsupported > UINT64_MAX - difference)
+      status = archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "constant collection is too large");
+    else
+      unsupported += difference;
+  }
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_completeness_exact(
         context->engine, fact, "constant_member", universe, selected, excluded,
         unsupported, 0);
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(context->engine, fact);
+  if (status != ARCHBIRD_OK)
+    ab_projection_data_free(context->engine, fact);
+  return status;
+}
+
+typedef struct OrderedProjectionRow {
+  const AbValue *row;
+  const AbValue *digest;
+  const AbValue *normalization;
+  const AbValue *state;
+  uint64_t ordinal;
+} OrderedProjectionRow;
+
+static int ordered_projection_row_compare(const void *left_raw,
+                                          const void *right_raw) {
+  const OrderedProjectionRow *left = (const OrderedProjectionRow *)left_raw;
+  const OrderedProjectionRow *right = (const OrderedProjectionRow *)right_raw;
+  const AbValue *left_id;
+  const AbValue *right_id;
+  if (left->ordinal != right->ordinal)
+    return left->ordinal < right->ordinal ? -1 : 1;
+  left_id = ab_value_member(left->row, "id");
+  right_id = ab_value_member(right->row, "id");
+  return ab_string_compare(&left_id->as.text, &right_id->as.text);
+}
+
+static int ordered_projection_digest_compare(const void *left_raw,
+                                             const void *right_raw) {
+  const OrderedProjectionRow *left = (const OrderedProjectionRow *)left_raw;
+  const OrderedProjectionRow *right = (const OrderedProjectionRow *)right_raw;
+  int compared =
+      ab_string_compare(&left->digest->as.text, &right->digest->as.text);
+  if (!compared && left->ordinal != right->ordinal)
+    compared = left->ordinal < right->ordinal ? -1 : 1;
+  return compared;
+}
+
+static ArchbirdStatus ordered_group_value(ArchbirdEngine *engine,
+                                          const OrderedProjectionRow *rows,
+                                          size_t count, AbValue *out) {
+  size_t index;
+  ArchbirdStatus status;
+  out->kind = AB_VALUE_OBJECT;
+  out->as.object.count = 3;
+  out->as.object.fields =
+      (AbObjectField *)ab_calloc(engine, 3, sizeof(*out->as.object.fields));
+  if (!out->as.object.fields)
+    return archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory storing ordered row values");
+  status = copy_literal(engine, &out->as.object.fields[0].name, "count");
+  if (status == ARCHBIRD_OK)
+    status =
+        u64_value(engine, (uint64_t)count, &out->as.object.fields[0].value);
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(engine, &out->as.object.fields[1].name, "ordinals");
+  if (status == ARCHBIRD_OK) {
+    out->as.object.fields[1].value.kind = AB_VALUE_ARRAY;
+    out->as.object.fields[1].value.as.array.count = count;
+    if (count >
+        SIZE_MAX / sizeof(*out->as.object.fields[1].value.as.array.items))
+      status = archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "too many ordered row ordinals");
+    else if (count) {
+      out->as.object.fields[1].value.as.array.items = (AbValue *)ab_calloc(
+          engine, count,
+          sizeof(*out->as.object.fields[1].value.as.array.items));
+      if (!out->as.object.fields[1].value.as.array.items)
+        status = archbird_error_set(
+            engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+            "out of memory storing ordered row ordinals");
+    }
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < count; index++)
+    status = u64_value(engine, rows[index].ordinal,
+                       &out->as.object.fields[1].value.as.array.items[index]);
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(engine, &out->as.object.fields[2].name, "row_digest");
+  if (status == ARCHBIRD_OK) {
+    out->as.object.fields[2].value.kind = AB_VALUE_STRING;
+    status = ab_string_copy(engine, &out->as.object.fields[2].value.as.text,
+                            rows[0].digest->as.text.data,
+                            rows[0].digest->as.text.length);
+  }
+  return status;
+}
+
+static ArchbirdStatus add_ordered_projection_group(
+    AbProjectionContext *context, AbProjectionData *fact, const AbValue *map,
+    const OrderedProjectionRow *rows, size_t count, const AbString *container,
+    const AbString *normalization, int exact) {
+  const AbValue *project = ab_value_member(map, "project");
+  AbProjectionItem item = {0};
+  size_t index;
+  ArchbirdStatus status =
+      ab_string_copy(context->engine, &item.key, rows[0].digest->as.text.data,
+                     rows[0].digest->as.text.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_string_copy(context->engine, &item.label,
+                            rows[0].digest->as.text.data,
+                            rows[0].digest->as.text.length);
+  if (status == ARCHBIRD_OK)
+    status = ordered_group_value(context->engine, rows, count, &item.value);
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(context->engine, &item.state,
+                          exact ? "current" : "unknown");
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(
+        context->engine, &item.message,
+        exact ? "" : "ordered row population or identity is incomplete");
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, &item, "container",
+                                       container);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, &item, "normalization",
+                                       normalization);
+  for (index = 0; status == ARCHBIRD_OK && index < count; index++) {
+    AbProjectionEvidence evidence = {0};
+    status = map_fact_evidence(context, &project->as.text, rows[index].row,
+                               &evidence);
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_projection_item_add_evidence(context->engine, &item, &evidence);
+    ab_projection_evidence_free(context->engine, &evidence);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_add_item(context->engine, fact, &item);
+  ab_projection_item_free(context->engine, &item);
+  return status;
+}
+
+static ArchbirdStatus extract_ordered_rows(AbProjectionContext *context,
+                                           const AbProjectionPlan *plan,
+                                           AbProjectionData *fact) {
+  const AbValue *spec = &plan->definition;
+  const AbValue *map = context->map;
+  const AbValue *project = map ? ab_value_member(map, "project") : NULL;
+  const AbValue *facts = map ? ab_value_member(map, "facts") : NULL;
+  const AbValue *container = ab_value_member(spec, "container");
+  const AbValue *sentinel_normalization = NULL;
+  OrderedProjectionRow *rows = NULL;
+  uint64_t declared_count = 0;
+  uint64_t unsupported = 0;
+  size_t sentinel_count = 0;
+  size_t row_count = 0;
+  size_t index;
+  size_t group_count = 0;
+  int container_seen = 0;
+  int sentinel_exact = 0;
+  ArchbirdStatus status;
+  if (!project || !ab_projection_nonblank(container))
+    return archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
+                              ARCHBIRD_NO_OFFSET,
+                              "ordered_rows requires a container");
+  if (!facts || facts->kind != AB_VALUE_ARRAY)
+    return ab_projection_data_unknown(context->engine, fact, &plan->id,
+                                      &project->as.text, "values",
+                                      "Map has no canonical source facts");
+  if (facts->as.array.count > SIZE_MAX / sizeof(*rows))
+    return archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET, "too many ordered row facts");
+  rows = (OrderedProjectionRow *)ab_calloc(
+      context->engine, facts->as.array.count, sizeof(*rows));
+  if (facts->as.array.count && !rows)
+    return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory collecting ordered rows");
+  status = ab_projection_data_init(context->engine, fact, &plan->id, "values",
+                                   "derived", &project->as.text);
+  for (index = 0; status == ARCHBIRD_OK && index < facts->as.array.count;
+       index++) {
+    const AbValue *row = &facts->as.array.items[index];
+    const AbValue *domain = ab_value_member(row, "domain");
+    const AbValue *ordinal;
+    status = validate_map_fact_row(context, row);
+    if (status != ARCHBIRD_OK)
+      break;
+    if ((!ab_projection_value_is(domain, "ordered-containers") &&
+         !ab_projection_value_is(domain, "ordered-rows")) ||
+        !fact_container_matches(row, container))
+      continue;
+    container_seen = 1;
+    if (ab_projection_value_is(domain, "ordered-containers")) {
+      const AbValue *count = map_fact_attribute(row, "declared_count");
+      const AbValue *normalization = map_fact_attribute(row, "normalization");
+      const AbValue *population = map_fact_attribute(row, "population_state");
+      const AbValue *state = map_fact_attribute(row, "state");
+      const AbValue *recovery = map_fact_attribute(row, "syntax_recovery");
+      uint64_t decoded_count;
+      if (!ab_value_u64(count, &decoded_count) ||
+          !ab_projection_nonblank(normalization) ||
+          (!ab_projection_value_is(population, "closed") &&
+           !ab_projection_value_is(population, "dynamic") &&
+           !ab_projection_value_is(population, "limited") &&
+           !ab_projection_value_is(population, "recovered")) ||
+          (!ab_projection_value_is(state, "current") &&
+           !ab_projection_value_is(state, "unknown"))) {
+        status = archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "ordered container sentinel is invalid");
+        break;
+      }
+      sentinel_count++;
+      if (sentinel_count == 1) {
+        declared_count = decoded_count;
+        sentinel_normalization = normalization;
+        sentinel_exact = ab_projection_value_is(population, "closed") &&
+                         ab_projection_value_is(state, "current") && !recovery;
+        if (!sentinel_exact)
+          unsupported++;
+      } else {
+        unsupported++;
+      }
+      continue;
+    }
+    ordinal = map_fact_attribute(row, "ordinal");
+    rows[row_count].digest = map_fact_attribute(row, "digest");
+    rows[row_count].normalization = map_fact_attribute(row, "normalization");
+    rows[row_count].state = map_fact_attribute(row, "state");
+    if (!ab_value_u64(ordinal, &rows[row_count].ordinal) ||
+        !lowercase_sha256_value(rows[row_count].digest) ||
+        !ab_projection_nonblank(rows[row_count].normalization) ||
+        (!ab_projection_value_is(rows[row_count].state, "current") &&
+         !ab_projection_value_is(rows[row_count].state, "unknown"))) {
+      status = archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "ordered row attributes are invalid");
+      break;
+    }
+    rows[row_count++].row = row;
+  }
+  if (status == ARCHBIRD_OK && !container_seen) {
+    ab_free(context->engine, rows);
+    ab_projection_data_free(context->engine, fact);
+    return ab_projection_data_unknown(
+        context->engine, fact, &plan->id, &project->as.text, "values",
+        "ordered container is absent from Map facts");
+  }
+  if (status == ARCHBIRD_OK && !sentinel_count)
+    unsupported++;
+  if (status == ARCHBIRD_OK && row_count > 1)
+    qsort(rows, row_count, sizeof(*rows), ordered_projection_row_compare);
+  for (index = 0; status == ARCHBIRD_OK && index < row_count; index++) {
+    if (rows[index].ordinal != index || !sentinel_normalization ||
+        !ab_string_equal(&rows[index].normalization->as.text,
+                         &sentinel_normalization->as.text) ||
+        !ab_projection_value_is(rows[index].state, "current") ||
+        map_fact_attribute(rows[index].row, "syntax_recovery"))
+      unsupported++;
+  }
+  if (status == ARCHBIRD_OK && declared_count != row_count) {
+    uint64_t difference = declared_count > row_count
+                              ? declared_count - (uint64_t)row_count
+                              : (uint64_t)row_count - declared_count;
+    if (unsupported > UINT64_MAX - difference)
+      status = archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "ordered row population is too large");
+    else
+      unsupported += difference;
+  }
+  if (status == ARCHBIRD_OK && row_count > 1)
+    qsort(rows, row_count, sizeof(*rows), ordered_projection_digest_compare);
+  for (index = 0; status == ARCHBIRD_OK && index < row_count;) {
+    size_t end = index + 1;
+    int exact = sentinel_count == 1 && sentinel_exact &&
+                declared_count == row_count && unsupported == 0;
+    while (end < row_count && ab_string_equal(&rows[index].digest->as.text,
+                                              &rows[end].digest->as.text))
+      end++;
+    status = add_ordered_projection_group(
+        context, fact, map, &rows[index], end - index, &container->as.text,
+        sentinel_normalization ? &sentinel_normalization->as.text
+                               : &rows[index].normalization->as.text,
+        exact);
+    if (status == ARCHBIRD_OK)
+      group_count++;
+    index = end;
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_completeness_exact(
+        context->engine, fact, "ordered_row_group", (uint64_t)group_count,
+        (uint64_t)group_count, 0, unsupported, 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_finish(context->engine, fact);
+  ab_free(context->engine, rows);
   if (status != ARCHBIRD_OK)
     ab_projection_data_free(context->engine, fact);
   return status;
@@ -6247,6 +6571,9 @@ static const AbProjectionDescriptor projection_descriptors[] = {
     {AB_PROJECTION_KIND_MAPPED_PATHS, "mapped_paths", "set",
      AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_PATHS, 0, NULL,
      extract_mapped_paths},
+    {AB_PROJECTION_KIND_ORDERED_ROWS, "ordered_rows", "values",
+     AB_PROJECTION_FIELD_CONTAINER, AB_PROJECTION_FIELD_CONTAINER,
+     "ordered_rows requires a container", extract_ordered_rows},
     {AB_PROJECTION_KIND_PACKAGE_ENTRYPOINTS, "package_entrypoints", "relation",
      AB_PROJECTION_FIELD_PACKAGES | AB_PROJECTION_FIELD_ROUTES |
          AB_PROJECTION_FIELD_TARGET_PATHS,

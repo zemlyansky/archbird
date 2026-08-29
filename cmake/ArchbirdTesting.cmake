@@ -46,6 +46,11 @@ if(BUILD_TESTING)
   archbird_add_native_test_program(archbird_native_sha256_test test/test_sha256.c)
   target_include_directories(archbird_native_sha256_test PRIVATE ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
 
+  archbird_add_native_test_program(archbird_native_comparison_test
+                                   test/test_comparison.c)
+  target_include_directories(archbird_native_comparison_test PRIVATE
+    src ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
+
   archbird_add_native_test_program(archbird_native_hash test/hash_cli.c)
   target_include_directories(archbird_native_hash PRIVATE ${ARCHBIRD_INTERNAL_INCLUDE_DIRS})
 
@@ -139,6 +144,7 @@ if(BUILD_TESTING)
   add_test(NAME archbird_native_make_variable_token_edit
            COMMAND archbird_native_make_variable_token_edit_test)
   add_test(NAME archbird_native_sha256 COMMAND archbird_native_sha256_test)
+  add_test(NAME archbird_native_comparison COMMAND archbird_native_comparison_test)
   add_test(NAME archbird_native_project COMMAND archbird_native_project_test)
   add_test(NAME archbird_native_scip COMMAND archbird_native_scip_test)
   add_test(NAME archbird_native_lex COMMAND archbird_native_lex_test)

@@ -12,6 +12,7 @@ import sys
 import tempfile
 
 from archbird import _native, cli as python_cli
+from archbird.native import Project, evaluate_projection_json
 
 
 def encode(document: object) -> bytes:
@@ -186,6 +187,157 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(dir=temporary_root) as raw:
         root = Path(raw)
+        positional_before, positional_after = write_case(
+            root, "positional", before, position_only
+        )
+        positional_results = {
+            host: run_host(
+                host,
+                ["diff", str(positional_before), str(positional_after)],
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            for host in ("python", "node")
+        }
+        for host, result in positional_results.items():
+            if result.returncode:
+                raise AssertionError(
+                    f"positional saved Diff failed for {host}: "
+                    f"{result.stderr.decode(errors='replace')}"
+                )
+        if positional_results["python"].stdout != positional_results["node"].stdout:
+            raise AssertionError("positional saved Diff diverged across hosts")
+
+        config_path = root / "archbird.json"
+        config_path.write_text('{"project":"not-a-map"}\n', encoding="utf-8")
+        rejected = run_host(
+            "python",
+            ["diff", str(config_path), str(positional_after)],
+            repository=repository,
+            node=node,
+            addon=addon,
+        )
+        if rejected.returncode != 2 or b"project configuration" not in rejected.stderr:
+            raise AssertionError("Diff did not reject project configuration clearly")
+
+        ordered_root = root / "ordered"
+        (ordered_root / "py").mkdir(parents=True)
+        (ordered_root / "c").mkdir()
+        (ordered_root / "py/rules.py").write_text(
+            "rules = [('first', 1), ('second', 2)]\n",
+            encoding="utf-8",
+        )
+        (ordered_root / "c/rules.c").write_text(
+            "typedef struct { int value; } Rule;\n"
+            "static Rule rules[] = {{1}, {2}};\n",
+            encoding="utf-8",
+        )
+        ordered_config = {
+            "layers": [
+                {"globs": ["py/**/*.py"], "language": "python", "name": "py"},
+                {"globs": ["c/**/*.c"], "language": "c", "name": "c"},
+            ],
+            "ordered_containers": [
+                {"language": "python", "names": ["rules"], "paths": ["py/**"]},
+                {"language": "c", "names": ["rules"], "paths": ["c/**"]},
+            ],
+            "project": "ordered-diff",
+        }
+        ordered_project = Project.from_repository(
+            ordered_root,
+            config=encode(ordered_config),
+            jobs=1,
+            map_cache=False,
+        )
+        ordered_map = ordered_project.map_json()
+        before_definition = {
+            "container": "py/rules.py:rules",
+            "id": "before-rules",
+            "select": "ordered_rows",
+        }
+        after_definition = {
+            "container": "c/rules.c:rules",
+            "id": "after-rules",
+            "select": "ordered_rows",
+        }
+        before_projection = json.loads(
+            evaluate_projection_json(ordered_map, before_definition)
+        )
+        after_projection = json.loads(
+            evaluate_projection_json(ordered_map, after_definition)
+        )
+        before_keys = sorted(
+            (row["key"] for row in before_projection["fact"]["items"]),
+            key=lambda key: key,
+        )
+        after_keys = sorted(
+            (row["key"] for row in after_projection["fact"]["items"]),
+            key=lambda key: key,
+        )
+        if len(before_keys) != 2 or len(after_keys) != 2:
+            raise AssertionError("ordered Diff fixture did not expose two row groups")
+        correspondence = {
+            "after": after_definition,
+            "before": before_definition,
+            "mapping": {
+                before_keys[0]: [after_keys[0], after_keys[1]],
+                before_keys[1]: [after_keys[1]],
+            },
+        }
+        ordered_map_path = root / "ordered-map.json"
+        correspondence_path = root / "correspondence.json"
+        ordered_map_path.write_bytes(ordered_map)
+        correspondence_path.write_bytes(encode(correspondence))
+        mapped_results = {
+            host: run_host(
+                host,
+                [
+                    "diff",
+                    str(ordered_map_path),
+                    str(ordered_map_path),
+                    "--correspondence",
+                    str(correspondence_path),
+                    "--check",
+                ],
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            for host in ("python", "node")
+        }
+        for host, result in mapped_results.items():
+            if result.returncode:
+                raise AssertionError(
+                    f"mapped Diff failed for {host}: "
+                    f"{result.stderr.decode(errors='replace')}"
+                )
+        if mapped_results["python"].stdout != mapped_results["node"].stdout:
+            raise AssertionError("mapped Diff diverged across hosts")
+        mapped = json.loads(mapped_results["python"].stdout)
+        if mapped["comparison"]["counts"]["matched"] != 3:
+            raise AssertionError("mapped Diff lost one-to-many correspondence")
+        for host in ("python", "node"):
+            categorized = run_host(
+                host,
+                [
+                    "diff",
+                    str(ordered_map_path),
+                    str(ordered_map_path),
+                    "--correspondence",
+                    str(correspondence_path),
+                    "--check=public-api",
+                ],
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            if categorized.returncode != 2 or b"risk categories" not in categorized.stderr:
+                raise AssertionError(
+                    f"mapped Diff accepted risk categories for {host}: "
+                    f"{categorized.stderr.decode(errors='replace')}"
+                )
+
         assert_case(
             root,
             "position-only-calls",
@@ -239,6 +391,54 @@ def main() -> int:
                     f"{result.stderr.decode(errors='replace')}"
                 )
             generated_maps.append(json.loads(output.read_text(encoding="utf-8")))
+        live_results = {
+            host: run_host(
+                host,
+                [
+                    "diff",
+                    str(comment_root),
+                    str(comment_root),
+                    "--no-cache",
+                    "--progress",
+                    "never",
+                ],
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            for host in ("python", "node")
+        }
+        for host, result in live_results.items():
+            if result.returncode:
+                raise AssertionError(
+                    f"live root Diff failed for {host}: "
+                    f"{result.stderr.decode(errors='replace')}"
+                )
+            if any(
+                any(values for values in section.values())
+                for section in json.loads(result.stdout)["sections"].values()
+            ):
+                raise AssertionError(f"live root self-Diff changed for {host}")
+        saved_comment_map = root / "comment-saved.json"
+        saved_comment_map.write_bytes(encode(generated_maps[1]))
+        mixed = run_host(
+            "python",
+            [
+                "diff",
+                str(comment_root),
+                str(saved_comment_map),
+                "--no-cache",
+                "--progress",
+                "never",
+            ],
+            repository=repository,
+            node=node,
+            addon=addon,
+        )
+        if mixed.returncode:
+            raise AssertionError(
+                f"mixed live/saved Diff failed: {mixed.stderr.decode(errors='replace')}"
+            )
         assert_case(
             root,
             "generated-comment-only-calls",

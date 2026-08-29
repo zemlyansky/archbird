@@ -1,6 +1,7 @@
 #include "evidence/syntax/tree_sitter/scanner.h"
 
 #include "base/sha256.h"
+#include "evidence/config.h"
 #include "evidence/syntax/tree_sitter/tree_sitter_allocator.h"
 
 #include <stdint.h>
@@ -11,6 +12,57 @@
 typedef struct AbTreeSitterParse {
   AbTreeSitterScan *scan;
 } AbTreeSitterParse;
+
+static ArchbirdStatus
+configuration_digest_string(ArchbirdSha256Context *context, const char *bytes,
+                            size_t length) {
+  uint8_t encoded[8];
+  uint64_t value = (uint64_t)length;
+  size_t index;
+  for (index = 0; index < sizeof(encoded); index++)
+    encoded[sizeof(encoded) - index - 1] = (uint8_t)(value >> (index * 8));
+  if (archbird_sha256_update(context, encoded, sizeof(encoded)) != ARCHBIRD_OK)
+    return ARCHBIRD_LIMIT_EXCEEDED;
+  return archbird_sha256_update(context, (const uint8_t *)bytes, length);
+}
+
+static ArchbirdStatus
+tree_sitter_configuration_digest(const AbTreeSitterDescriptor *descriptor,
+                                 const AbMapConfig *config, uint8_t out[32]) {
+  ArchbirdSha256Context context;
+  size_t selection_index;
+  ArchbirdStatus status;
+  archbird_sha256_init(&context);
+  status =
+      configuration_digest_string(&context, descriptor->configuration_identity,
+                                  strlen(descriptor->configuration_identity));
+  for (selection_index = 0; status == ARCHBIRD_OK && config &&
+                            selection_index < config->ordered_container_count;
+       selection_index++) {
+    const AbConfigOrderedContainer *selection =
+        &config->ordered_containers[selection_index];
+    size_t index;
+    if (selection->language.length != strlen(descriptor->language_name) ||
+        memcmp(selection->language.data, descriptor->language_name,
+               selection->language.length) != 0)
+      continue;
+    status = configuration_digest_string(&context, selection->language.data,
+                                         selection->language.length);
+    for (index = 0; status == ARCHBIRD_OK && index < selection->paths.count;
+         index++)
+      status = configuration_digest_string(
+          &context, selection->paths.items[index].data,
+          selection->paths.items[index].length);
+    for (index = 0; status == ARCHBIRD_OK && index < selection->names.count;
+         index++)
+      status = configuration_digest_string(
+          &context, selection->names.items[index].data,
+          selection->names.items[index].length);
+  }
+  if (status == ARCHBIRD_OK)
+    archbird_sha256_final(&context, out);
+  return status;
+}
 
 static ArchbirdStatus invalid_extraction_node(AbTreeSitterScan *scan,
                                               TSNode node,
@@ -796,7 +848,8 @@ static ArchbirdStatus finish_inapplicable_bundle(AbTreeSitterScan *scan,
 
 ArchbirdStatus ab_tree_sitter_scan_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
-    const AbManifestFile *file, const uint8_t *source, size_t source_length,
+    const AbMapConfig *config, const AbManifestFile *file,
+    const uint8_t *source, size_t source_length,
     const uint8_t source_manifest_sha256[32],
     const uint8_t implementation_sha256[32],
     const AbTreeSitterDescriptor *descriptor, AbProviderBundle *out_bundle) {
@@ -821,9 +874,8 @@ ArchbirdStatus ab_tree_sitter_scan_file(
   memset(&builder, 0, sizeof(builder));
   memset(&scan, 0, sizeof(scan));
   memset(out_bundle, 0, sizeof(*out_bundle));
-  status = archbird_sha256((const uint8_t *)descriptor->configuration_identity,
-                           strlen(descriptor->configuration_identity),
-                           configuration_sha256);
+  status = tree_sitter_configuration_digest(descriptor, config,
+                                            configuration_sha256);
   if (status != ARCHBIRD_OK)
     return status;
   status = ab_bundle_builder_init_file(
@@ -843,6 +895,7 @@ ArchbirdStatus ab_tree_sitter_scan_file(
   scan.builder = &builder;
   scan.descriptor = descriptor;
   scan.file = file;
+  scan.config = config;
   scan.source = source;
   scan.source_length = source_length;
   parse.scan = &scan;

@@ -5,6 +5,7 @@
 #include "tree_sitter/api.h"
 
 typedef struct AbTreeSitterScan AbTreeSitterScan;
+typedef struct AbMapConfig AbMapConfig;
 
 typedef struct AbTreeSitterRecovery {
   size_t start;
@@ -60,6 +61,7 @@ struct AbTreeSitterScan {
   AbBundleBuilder *builder;
   const AbTreeSitterDescriptor *descriptor;
   const AbManifestFile *file;
+  const AbMapConfig *config;
   const uint8_t *source;
   size_t source_length;
   void *language_data;
@@ -121,7 +123,8 @@ ArchbirdStatus ab_tree_sitter_add_symbol_extent(AbTreeSitterScan *scan,
 
 ArchbirdStatus ab_tree_sitter_scan_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
-    const AbManifestFile *file, const uint8_t *source, size_t source_length,
+    const AbMapConfig *config, const AbManifestFile *file,
+    const uint8_t *source, size_t source_length,
     const uint8_t source_manifest_sha256[32],
     const uint8_t implementation_sha256[32],
     const AbTreeSitterDescriptor *descriptor, AbProviderBundle *out_bundle);

@@ -1647,6 +1647,30 @@ def map_diff(before: bytes, after: bytes, pretty=False) -> bytes:
     )
 
 
+def diff(
+    before: bytes,
+    after: bytes,
+    request: bytes = b"",
+    *,
+    before_resolution: bytes = b"",
+    after_resolution: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    return _simple_render(
+        "archbird_diff",
+        [
+            _bytes(before),
+            _bytes(before_resolution),
+            _bytes(after),
+            _bytes(after_resolution),
+            _bytes(request),
+        ],
+        flags=_json_flags(pretty),
+        nullable_empty_indices=(1, 3, 4),
+        saved_artifact=True,
+    )
+
+
 def unified_diff(
     before: bytes,
     after: bytes,

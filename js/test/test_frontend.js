@@ -22,6 +22,7 @@ const {
   analyzeOkfSource,
   compileProjectConfiguration,
   compileQueryPlan,
+  diff,
   evaluateConstraints,
   evaluateProjection,
   exportGraph,
@@ -326,6 +327,106 @@ const frozenConstraints = JSON.parse(freezeConstraints(constraintConfig, metricM
 }));
 assert.equal(frozenConstraints.artifact, "constraint-baseline");
 metricProject.dispose();
+
+const orderedProject = new Project("ordered-node", [
+  new Source(
+    "src/rules.c",
+    Buffer.from(
+      "typedef struct { int value; } Rule;\n" +
+      "static Rule source_rules[] = {{1}, {2}};\n" +
+      "void build(void) { Rule rules[] = {{3}, {4}}; (void)rules; }\n",
+    ),
+    { language: "c", layer: "c" },
+  ),
+]);
+const orderedBaseConfig = {
+  project: "ordered-node",
+  layers: [{ name: "c", language: "c", globs: ["src/**/*.c"] }],
+  ordered_containers: [{
+    language: "c",
+    paths: ["src/**/*.c"],
+    names: ["source_rules", "*/rules"],
+  }],
+};
+orderedProject.setConfig(JSON.stringify(orderedBaseConfig));
+orderedProject.scan();
+const orderedMap = orderedProject.mapJson();
+const orderedProjection = (id, container) => JSON.parse(evaluateProjection(
+  orderedMap,
+  Buffer.from(JSON.stringify({ id, select: "ordered_rows", container })),
+));
+const orderedExpected = orderedProjection(
+  "source-rules",
+  "src/rules.c:source_rules",
+);
+const orderedActual = orderedProjection(
+  "target-rules",
+  "src/rules.c:build/rules",
+);
+assert.equal(orderedExpected.completeness.classification, "complete");
+assert.equal(orderedActual.completeness.classification, "complete");
+const byFirstOrdinal = (left, right) => (
+  Math.min(...left.value.ordinals) - Math.min(...right.value.ordinals)
+);
+const orderedExpectedKeys = [...orderedExpected.fact.items]
+  .sort(byFirstOrdinal).map((row) => row.key);
+const orderedActualKeys = [...orderedActual.fact.items]
+  .sort(byFirstOrdinal).map((row) => row.key);
+const orderedConstraintConfig = Buffer.from(JSON.stringify({
+  ...orderedBaseConfig,
+  projections: {
+    "source-rules": {
+      select: "ordered_rows",
+      container: "src/rules.c:source_rules",
+    },
+    "target-rules": {
+      select: "ordered_rows",
+      container: "src/rules.c:build/rules",
+    },
+  },
+  constraints: {
+    "ORDERED-CORRESPONDENCE": {
+      assert: "correspondence_complete",
+      expected: { projection: "source-rules" },
+      actual: { projection: "target-rules" },
+      mapping: {
+        [orderedExpectedKeys[0]]: [orderedActualKeys[1]],
+        [orderedExpectedKeys[1]]: orderedActualKeys,
+      },
+      require_target_coverage: true,
+      owner: "compiler",
+      rationale: "Every source row has reviewed target rows.",
+    },
+  },
+}));
+const orderedVerification = JSON.parse(evaluateConstraints(
+  orderedConstraintConfig,
+  orderedMap,
+));
+assert.equal(orderedVerification.constraints[0].status, "pass");
+const orderedDiffRequest = Buffer.from(JSON.stringify({
+  after: {
+    id: "target-rules",
+    select: "ordered_rows",
+    container: "src/rules.c:build/rules",
+  },
+  before: {
+    id: "source-rules",
+    select: "ordered_rows",
+    container: "src/rules.c:source_rules",
+  },
+  mapping: {
+    [orderedExpectedKeys[0]]: [orderedActualKeys[1]],
+    [orderedExpectedKeys[1]]: orderedActualKeys,
+  },
+}));
+const orderedDiff = JSON.parse(diff(orderedMap, orderedMap, {
+  correspondence: orderedDiffRequest,
+}));
+assert.equal(orderedDiff.join, "correspondence");
+assert.equal(orderedDiff.comparison.state, "complete");
+assert.equal(orderedDiff.comparison.counts.matched, 3);
+orderedProject.dispose();
 
 const constraintCli = path.resolve(process.argv[3], "js/src/cli.js");
 const cliFailure = spawnSync(process.execPath, [

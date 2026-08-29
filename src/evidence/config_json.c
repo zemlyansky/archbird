@@ -3,6 +3,7 @@
 #include "configuration/project_configuration.h"
 
 #include "base/json_internal.h"
+#include "base/path_match.h"
 #include "base/pattern.h"
 #include "base/sha256.h"
 
@@ -672,6 +673,14 @@ static void named_entry_free(ArchbirdEngine *engine,
   memset(entry, 0, sizeof(*entry));
 }
 
+static void ordered_container_free(ArchbirdEngine *engine,
+                                   AbConfigOrderedContainer *selection) {
+  ab_string_free(engine, &selection->language);
+  string_array_free(engine, &selection->paths);
+  string_array_free(engine, &selection->names);
+  memset(selection, 0, sizeof(*selection));
+}
+
 static void parity_free(ArchbirdEngine *engine, AbConfigParity *parity) {
   size_t index;
   ab_string_free(engine, &parity->name);
@@ -736,6 +745,11 @@ void ab_map_config_free(ArchbirdEngine *engine, AbMapConfig *config) {
        index++)
     named_entry_free(engine, &config->named_entries[index]);
   ab_free(engine, config->named_entries);
+  for (index = 0;
+       config->ordered_containers && index < config->ordered_container_count;
+       index++)
+    ordered_container_free(engine, &config->ordered_containers[index]);
+  ab_free(engine, config->ordered_containers);
   for (index = 0; config->parity && index < config->parity_count; index++)
     parity_free(engine, &config->parity[index]);
   ab_free(engine, config->parity);
@@ -1429,6 +1443,31 @@ static ArchbirdStatus parse_named_entry(ArchbirdEngine *engine,
   return status;
 }
 
+static ArchbirdStatus parse_ordered_container(ArchbirdEngine *engine,
+                                              yyjson_val *value,
+                                              void *out_raw) {
+  static const char *const fields[] = {"language", "names", "paths"};
+  static const char *const required[] = {"language", "names", "paths"};
+  static const char *const languages[] = {"c", "python"};
+  AbConfigOrderedContainer *out = (AbConfigOrderedContainer *)out_raw;
+  ArchbirdStatus status = object_shape(engine, value, "ordered_containers[]",
+                                       fields, 3, required, 3);
+  if (status == ARCHBIRD_OK)
+    status = copy_string(engine, member(value, "language"),
+                         "ordered_containers[].language", 0, &out->language);
+  if (status == ARCHBIRD_OK && !string_one_of(&out->language, languages, 2))
+    status =
+        config_error(engine, "ordered_containers[].language is unsupported");
+  if (status == ARCHBIRD_OK)
+    status =
+        copy_repository_paths(engine, member(value, "paths"),
+                              "ordered_containers[].paths", 1, 1, &out->paths);
+  if (status == ARCHBIRD_OK)
+    status = copy_strings(engine, member(value, "names"),
+                          "ordered_containers[].names", 1, &out->names);
+  return status;
+}
+
 static ArchbirdStatus parse_parity_member(ArchbirdEngine *engine,
                                           yyjson_val *value, void *out_raw) {
   static const char *const fields[] = {"bridge",  "exclude", "include",
@@ -1809,11 +1848,25 @@ ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
   if (!engine || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
   {
-    static const char *const fields[] = {
-        "artifacts",   "bridges",       "builds",   "components", "constraints",
-        "description", "discovery",     "exclude",  "indexes",    "layers",
-        "limits",      "named_entries", "packages", "parity",     "project",
-        "projections", "queries",       "tests"};
+    static const char *const fields[] = {"artifacts",
+                                         "bridges",
+                                         "builds",
+                                         "components",
+                                         "constraints",
+                                         "description",
+                                         "discovery",
+                                         "exclude",
+                                         "indexes",
+                                         "layers",
+                                         "limits",
+                                         "named_entries",
+                                         "ordered_containers",
+                                         "packages",
+                                         "parity",
+                                         "project",
+                                         "projections",
+                                         "queries",
+                                         "tests"};
     static const char *const required[] = {"layers", "project"};
     yyjson_doc *document = NULL;
     yyjson_val *root;
@@ -1834,7 +1887,7 @@ ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
     if (status != ARCHBIRD_OK)
       goto done;
     root = yyjson_doc_get_root(document);
-    status = object_shape(engine, root, "project configuration", fields, 18,
+    status = object_shape(engine, root, "project configuration", fields, 19,
                           required, 2);
     if (status == ARCHBIRD_OK)
       status = validate_optional_sections(engine, root);
@@ -1920,6 +1973,11 @@ ArchbirdStatus ab_decode_map_config(ArchbirdEngine *engine, const uint8_t *json,
                                 parse_named_entry, (void **)&out->named_entries,
                                 &out->named_entry_count);
     if (status == ARCHBIRD_OK)
+      status = parse_item_array(
+          engine, member(root, "ordered_containers"), "ordered_containers",
+          sizeof(*out->ordered_containers), parse_ordered_container,
+          (void **)&out->ordered_containers, &out->ordered_container_count);
+    if (status == ARCHBIRD_OK)
       status = parse_item_array(engine, member(root, "parity"), "parity",
                                 sizeof(*out->parity), parse_parity,
                                 (void **)&out->parity, &out->parity_count);
@@ -1964,4 +2022,33 @@ const AbConfigLayer *ab_map_config_layer(const AbMapConfig *config,
       return &config->layers[index];
   }
   return NULL;
+}
+
+int ab_map_config_ordered_container_selected(const AbMapConfig *config,
+                                             const AbString *language,
+                                             const AbString *path,
+                                             const AbString *name) {
+  size_t selection_index;
+  if (!config || !language || !path || !name)
+    return 0;
+  for (selection_index = 0; selection_index < config->ordered_container_count;
+       selection_index++) {
+    const AbConfigOrderedContainer *selection =
+        &config->ordered_containers[selection_index];
+    size_t index;
+    int path_matched = 0;
+    if (!ab_string_equal(language, &selection->language))
+      continue;
+    for (index = 0; index < selection->paths.count; index++)
+      if (ab_map_collection_match(path, &selection->paths.items[index])) {
+        path_matched = 1;
+        break;
+      }
+    if (!path_matched)
+      continue;
+    for (index = 0; index < selection->names.count; index++)
+      if (ab_map_collection_match(name, &selection->names.items[index]))
+        return 1;
+  }
+  return 0;
 }

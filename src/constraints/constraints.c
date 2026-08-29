@@ -1019,7 +1019,7 @@ static ArchbirdStatus compile_typed(ConstraintExecution *execution,
 }
 
 static ArchbirdStatus add_mapping(ConstraintExecution *execution,
-                                  const AbValue *mapping,
+                                  const AbValue *mapping, const char *direction,
                                   const AbString **name) {
   AbValue normalized = {0};
   AbString generated = {0};
@@ -1027,8 +1027,8 @@ static ArchbirdStatus add_mapping(ConstraintExecution *execution,
   const AbObjectField *previous;
   ArchbirdStatus status = object_init(execution->engine, &normalized, 1);
   if (status == ARCHBIRD_OK)
-    status = object_add_copy(execution->engine, &normalized,
-                             "actual_to_expected", mapping);
+    status =
+        object_add_copy(execution->engine, &normalized, direction, mapping);
   if (status == ARCHBIRD_OK)
     status = named_digest(execution->engine, "m.", &normalized, &generated);
   if (status != ARCHBIRD_OK)
@@ -1090,9 +1090,18 @@ static ArchbirdStatus compile_primitive(ConstraintExecution *execution,
   if (status == ARCHBIRD_OK && expected)
     status = add_fact_name(execution, check, "expected", expected);
   if (status == ARCHBIRD_OK && mapping)
-    status = add_mapping(execution, mapping, &mapping_name);
+    status = add_mapping(execution, mapping,
+                         value_string_is(assertion, "correspondence_complete")
+                             ? "expected_to_actual"
+                             : "actual_to_expected",
+                         &mapping_name);
   if (status == ARCHBIRD_OK && mapping_name)
     status = add_fact_name(execution, check, "mapping", mapping_name);
+  if (status == ARCHBIRD_OK &&
+      ab_value_member(definition, "require_target_coverage"))
+    status =
+        object_add_copy(execution->engine, check, "require_target_coverage",
+                        ab_value_member(definition, "require_target_coverage"));
   if (status == ARCHBIRD_OK)
     status = copy_numeric_options(execution, definition, check);
   return status;
