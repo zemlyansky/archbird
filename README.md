@@ -553,9 +553,11 @@ separate required CLI stage. One-off primitive operands stay inline:
 
 Metrics use the same projection contract. Archbird currently defines
 `source.extent_lines` as the physical lines covered by one exact declaration
-extent and `graph.out_neighbors` as distinct directed targets across the
-projected relations. These are measurements, not quality scores; projects own
-their thresholds:
+extent. Graph projections expose distinct outgoing and incoming neighbors,
+strongly connected component size, and cycle membership through
+`graph.out_neighbors`, `graph.in_neighbors`, `graph.scc_size`, and
+`graph.cyclic`. Relation selection is part of each graph metric's identity.
+These are measurements, not quality scores; projects own their thresholds:
 
 ```json
 {

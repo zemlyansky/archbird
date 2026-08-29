@@ -1879,10 +1879,22 @@ static int metric_extent_compare(const void *left, const void *right) {
 static int metric_neighbors_compare(const void *left, const void *right) {
   const AbProjectionItem *a = *(const AbProjectionItem *const *)left;
   const AbProjectionItem *b = *(const AbProjectionItem *const *)right;
+  uint64_t a_cyclic = item_u64(a, "metric.graph.cyclic");
+  uint64_t b_cyclic = item_u64(b, "metric.graph.cyclic");
+  uint64_t a_scc = item_u64(a, "metric.graph.scc_size");
+  uint64_t b_scc = item_u64(b, "metric.graph.scc_size");
   uint64_t a_value = item_u64(a, "metric.graph.out_neighbors");
   uint64_t b_value = item_u64(b, "metric.graph.out_neighbors");
+  uint64_t a_in = item_u64(a, "metric.graph.in_neighbors");
+  uint64_t b_in = item_u64(b, "metric.graph.in_neighbors");
+  if (a_cyclic != b_cyclic)
+    return a_cyclic > b_cyclic ? -1 : 1;
+  if (a_scc != b_scc)
+    return a_scc > b_scc ? -1 : 1;
   if (a_value != b_value)
     return a_value > b_value ? -1 : 1;
+  if (a_in != b_in)
+    return a_in > b_in ? -1 : 1;
   return ab_string_compare(&a->key, &b->key);
 }
 
@@ -1920,9 +1932,8 @@ static ArchbirdStatus render_metric_nodes(AbBuffer *out,
     qsort(items, total, sizeof(*items), metric_neighbors_compare);
   }
   shown = total < limit ? total : limit;
-  METRIC_REPORT_TRY(ab_report_linef(out, "## %s",
-                                    source_extent ? "Declaration extent"
-                                                  : "Directed connectivity"));
+  METRIC_REPORT_TRY(ab_report_linef(
+      out, "## %s", source_extent ? "Declaration extent" : "Graph structure"));
   METRIC_REPORT_TRY(ab_report_blank(out));
   if (!total)
     METRIC_REPORT_TRY(ab_report_literal_line(out, "No applicable entities."));
@@ -1944,8 +1955,14 @@ static ArchbirdStatus render_metric_nodes(AbBuffer *out,
           symbol ? symbol->data : "", symbol ? "`)" : "", current, unknown));
     } else {
       METRIC_REPORT_TRY(ab_report_linef(
-          out, "- `%.*s`: out-neighbors=%" PRIu64, id ? (int)id->length : 0,
-          id ? id->data : "", item_u64(item, "metric.graph.out_neighbors")));
+          out,
+          "- `%.*s`: out-neighbors=%" PRIu64 "; in-neighbors=%" PRIu64
+          "; scc-size=%" PRIu64 "; cyclic=%s",
+          id ? (int)id->length : 0, id ? id->data : "",
+          item_u64(item, "metric.graph.out_neighbors"),
+          item_u64(item, "metric.graph.in_neighbors"),
+          item_u64(item, "metric.graph.scc_size"),
+          item_u64(item, "metric.graph.cyclic") ? "yes" : "no"));
     }
   }
   if (shown < total) {
@@ -2019,6 +2036,19 @@ static ArchbirdStatus render_metrics_once(const AbProjectionPlan *plan,
                                  relation->as.text.data));
   }
   REPORT_TRY(ab_buffer_literal(out, ".\n\n"));
+  REPORT_TRY(ab_report_literal_line(
+      out, "- `graph.in_neighbors` (`graph.directed-in-neighbors-v1`, unit "
+           "`neighbor`): distinct directed sources across the same projected "
+           "relations."));
+  REPORT_TRY(ab_report_literal_line(
+      out, "- `graph.scc_size` "
+           "(`graph.strongly-connected-component-size-v1`, unit `node`): nodes "
+           "in the entity's strongly connected component."));
+  REPORT_TRY(ab_report_literal_line(
+      out,
+      "- `graph.cyclic` (`graph.cycle-membership-v1`, unit `boolean`): one "
+      "when the entity belongs to a multi-node cycle or has a self-loop."));
+  REPORT_TRY(ab_report_blank(out));
   REPORT_TRY(render_metric_nodes(out, &result->data, limit, 1, &omitted));
   REPORT_TRY(render_metric_nodes(out, &result->data, limit, 0, &omitted));
   REPORT_TRY(render_section(out, &result->data, "coverage",

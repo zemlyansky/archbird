@@ -176,6 +176,19 @@
       }
     },
     {
+      "id": "graph-metric-catalog",
+      "valid": true,
+      "configuration": {
+        "project": "graph-metrics",
+        "projections": {
+          "outgoing": {"select": "metrics", "metric": "graph.out_neighbors", "level": "file", "relations": ["imports"]},
+          "incoming": {"select": "metrics", "metric": "graph.in_neighbors", "level": "file", "relations": ["imports"]},
+          "components": {"select": "metrics", "metric": "graph.scc_size", "level": "file", "relations": ["imports"]},
+          "cycles": {"select": "metrics", "metric": "graph.cyclic", "level": "file", "relations": ["imports"]}
+        }
+      }
+    },
+    {
       "id": "literal-operands",
       "valid": true,
       "configuration": {

@@ -149,6 +149,7 @@ set(ARCHBIRD_DECLARED_CORE_SOURCE_PATHS
   src/plan/plan_report.c
   src/projection/component_membership.c
   src/projection/fact_projection.c
+  src/projection/graph_metrics.c
   src/projection/graph_projection.c
   src/projection/projection.c
   src/projection/projection_comparison.c

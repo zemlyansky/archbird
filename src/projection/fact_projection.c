@@ -6824,18 +6824,47 @@ static ArchbirdStatus metric_graph_plan(AbProjectionContext *context,
   return status;
 }
 
-static ArchbirdStatus
-extract_graph_neighbor_metrics(AbProjectionContext *context,
-                               const AbProjectionPlan *plan,
-                               AbProjectionData *fact) {
+static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
+                                            const AbProjectionPlan *plan,
+                                            AbProjectionData *fact) {
   const AbValue *project = ab_value_member(context->map, "project");
   const AbValue *level = ab_value_member(&plan->definition, "level");
+  const AbValue *metric = ab_value_member(&plan->definition, "metric");
+  const char *metric_name = NULL;
+  const char *attribute = NULL;
+  const char *definition = NULL;
+  const char *unit = NULL;
   AbProjectionPlan graph_plan = {0};
   AbProjectionData graph = {0};
   size_t node_count = 0;
   size_t item_index;
   int complete;
-  ArchbirdStatus status = metric_graph_plan(context, plan, &graph_plan);
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (ab_projection_value_is(metric, "graph.out_neighbors")) {
+    metric_name = "graph.out_neighbors";
+    attribute = "metric.graph.out_neighbors";
+    definition = "graph.directed-neighbors-v1";
+    unit = "neighbor";
+  } else if (ab_projection_value_is(metric, "graph.in_neighbors")) {
+    metric_name = "graph.in_neighbors";
+    attribute = "metric.graph.in_neighbors";
+    definition = "graph.directed-in-neighbors-v1";
+    unit = "neighbor";
+  } else if (ab_projection_value_is(metric, "graph.scc_size")) {
+    metric_name = "graph.scc_size";
+    attribute = "metric.graph.scc_size";
+    definition = "graph.strongly-connected-component-size-v1";
+    unit = "node";
+  } else if (ab_projection_value_is(metric, "graph.cyclic")) {
+    metric_name = "graph.cyclic";
+    attribute = "metric.graph.cyclic";
+    definition = "graph.cycle-membership-v1";
+    unit = "boolean";
+  } else {
+    status = ARCHBIRD_INVALID_SCHEMA;
+  }
+  if (status == ARCHBIRD_OK)
+    status = metric_graph_plan(context, plan, &graph_plan);
   if (status == ARCHBIRD_OK)
     status = ab_projection_extract_graph(context, &graph_plan, &graph);
   for (item_index = 0; status == ARCHBIRD_OK && item_index < graph.item_count;
@@ -6861,8 +6890,7 @@ extract_graph_neighbor_metrics(AbProjectionContext *context,
     const AbValue *neighbor_value;
     if (!ab_projection_value_is(record, "node"))
       continue;
-    neighbor_value =
-        projection_item_attribute(node, "metric.graph.out_neighbors");
+    neighbor_value = projection_item_attribute(node, attribute);
     if (!neighbor_value || !ab_value_u64(neighbor_value, &neighbors)) {
       status = ARCHBIRD_INVALID_SCHEMA;
       break;
@@ -6873,9 +6901,8 @@ extract_graph_neighbor_metrics(AbProjectionContext *context,
       status = ab_projection_item_init(context->engine, &item, &id->as.text,
                                        &node->label, complete ? &value : NULL);
     if (status == ARCHBIRD_OK)
-      status = metric_add_common_attributes(
-          context, &item, "graph.out_neighbors", "graph.directed-neighbors-v1",
-          "neighbor", level);
+      status = metric_add_common_attributes(context, &item, metric_name,
+                                            definition, unit, level);
     if (status == ARCHBIRD_OK)
       status = item_add_string_attribute(context->engine, &item, "node",
                                          &id->as.text);
@@ -6890,7 +6917,7 @@ extract_graph_neighbor_metrics(AbProjectionContext *context,
     if (status == ARCHBIRD_OK && !complete)
       status = ab_projection_item_set_state(
           context->engine, &item, "unknown",
-          "graph evidence is incomplete; the exact neighbor count is unknown");
+          "graph evidence is incomplete; the exact metric value is unknown");
     if (status == ARCHBIRD_OK)
       status = ab_projection_data_add_item(context->engine, fact, &item);
     ab_value_free(context->engine, &value);
@@ -6916,7 +6943,7 @@ static ArchbirdStatus extract_metrics(AbProjectionContext *context,
   const AbValue *metric = ab_value_member(&plan->definition, "metric");
   if (ab_projection_value_is(metric, "source.extent_lines"))
     return extract_source_extent_metrics(context, plan, fact);
-  return extract_graph_neighbor_metrics(context, plan, fact);
+  return extract_graph_metrics(context, plan, fact);
 }
 
 static const AbProjectionDescriptor projection_descriptors[] = {

@@ -180,6 +180,29 @@ def _check_metric_graph_scaling(document: dict[str, object]) -> None:
             f"50000={elapsed[50_000]:.3f}s "
             f"100000={elapsed[100_000]:.3f}s"
         )
+    encoded = _metric_graph_map(document, 100_000, 1_000)
+    for metric, expected in (
+        ("graph.in_neighbors", 0),
+        ("graph.scc_size", 1),
+        ("graph.cyclic", 0),
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                encoded,
+                {
+                    **plan,
+                    "id": f"metric-graph-scaling-{metric}",
+                    "metric": metric,
+                },
+            )
+        )
+        source = next(
+            item
+            for item in result["fact"]["items"]
+            if item["attributes"]["node"] == "file:src/core.c"
+        )
+        if source["value"] != expected:
+            raise AssertionError(f"{metric} produced an incorrect graph value")
     print(
         "graph metric scaling passed "
         f"(50000={elapsed[50_000]:.3f}s, "

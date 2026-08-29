@@ -8,6 +8,18 @@ static ArchbirdStatus invalid(ArchbirdEngine *engine, const char *message) {
                             "projection plan: %s", message);
 }
 
+static ArchbirdStatus invalid_metric(ArchbirdEngine *engine,
+                                     const AbValue *metric,
+                                     const char *message) {
+  return archbird_error_set(
+      engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+      "projection plan: %.*s %s",
+      metric && metric->kind == AB_VALUE_STRING ? (int)metric->as.text.length
+                                                : 0,
+      metric && metric->kind == AB_VALUE_STRING ? metric->as.text.data : "",
+      message);
+}
+
 static int string_is(const AbString *value, const char *literal) {
   size_t length = strlen(literal);
   return value && value->length == length &&
@@ -199,19 +211,20 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
       if (relations)
         return invalid(engine,
                        "source.extent_lines does not accept graph relations");
-    } else if (ab_value_string_is(metric, "graph.out_neighbors")) {
+    } else if (ab_value_string_is(metric, "graph.out_neighbors") ||
+               ab_value_string_is(metric, "graph.in_neighbors") ||
+               ab_value_string_is(metric, "graph.scc_size") ||
+               ab_value_string_is(metric, "graph.cyclic")) {
       if (!ab_value_string_is(level, "component") &&
           !ab_value_string_is(level, "file") &&
           !ab_value_string_is(level, "symbol"))
-        return invalid(engine,
-                       "graph.out_neighbors requires level component, file, "
-                       "or symbol");
+        return invalid_metric(engine, metric,
+                              "requires level component, file, or symbol");
       if (!relations || !relations->as.array.count ||
           !string_array_unique(relations))
-        return invalid(engine, "graph.out_neighbors requires unique relations");
+        return invalid_metric(engine, metric, "requires unique relations");
       if (paths)
-        return invalid(engine,
-                       "graph.out_neighbors does not accept path filters");
+        return invalid_metric(engine, metric, "does not accept path filters");
       for (item = 0; item < relations->as.array.count; item++) {
         const AbValue *value = &relations->as.array.items[item];
         if (!ab_value_string_is(value, "builds") &&
@@ -222,8 +235,8 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
             !ab_value_string_is(value, "packages") &&
             !ab_value_string_is(value, "references") &&
             !ab_value_string_is(value, "tests"))
-          return invalid(engine, "graph.out_neighbors relations contains an "
-                                 "unsupported kind");
+          return invalid_metric(engine, metric,
+                                "relations contains an unsupported kind");
         if (ab_value_string_is(level, "symbol") &&
             !ab_value_string_is(value, "calls") &&
             !ab_value_string_is(value, "references"))

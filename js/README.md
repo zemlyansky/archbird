@@ -372,9 +372,11 @@ selection. One-off primitive operands stay inline:
 ```
 
 Metrics are ordinary projections. `source.extent_lines` counts physical lines
-inside one exact declaration extent; `graph.out_neighbors` counts distinct
-directed targets across projected relations. They are measurements, not quality
-scores. Project-owned limits use the existing predicates:
+inside one exact declaration extent. `graph.out_neighbors` and
+`graph.in_neighbors` count distinct directed neighbors; `graph.scc_size` and
+`graph.cyclic` expose strongly connected component size and cycle membership.
+The selected relations define the measured graph. These are measurements, not
+quality scores. Project-owned limits use the existing predicates:
 
 ```json
 {

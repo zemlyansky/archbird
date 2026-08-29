@@ -8,9 +8,9 @@
       "source": "schema/act.schema.json"
     },
     {
-      "bytes": 49089,
+      "bytes": 49259,
       "path": "archbird.schema.json",
-      "sha256": "77ac690dd99681ea4c28f0a1e919dec4d61cb9caf2dd754878556c0286df199d",
+      "sha256": "15fb80b41e293e253f1fdaf90424dcc5b0d47a426ca06928c1542e92af4acda2",
       "source": "schema/archbird.schema.json"
     },
     {

@@ -218,6 +218,18 @@ def _assert_metrics_projection() -> None:
             },
             "symbol graph metrics support calls and references",
         ),
+        (
+            {"metric": "graph.in_neighbors", "level": "file"},
+            "graph.in_neighbors requires unique relations",
+        ),
+        (
+            {
+                "metric": "graph.scc_size",
+                "level": "symbol",
+                "relations": ["imports"],
+            },
+            "symbol graph metrics support calls and references",
+        ),
     ]
     for definition, message in invalid_metrics:
         configuration = {
@@ -384,6 +396,125 @@ def _assert_metrics_projection() -> None:
         for item in neighbors["fact"]["items"]
     )
 
+    incoming = json.loads(
+        evaluate_projection_json(
+            report_map,
+            {
+                "id": "file-in-neighbors",
+                "select": "metrics",
+                "metric": "graph.in_neighbors",
+                "level": "file",
+                "relations": ["imports"],
+            },
+        )
+    )
+    assert incoming["completeness"]["classification"] == "complete"
+    assert {
+        item["attributes"]["node"]: item["value"]
+        for item in incoming["fact"]["items"]
+    } == {
+        item["attributes"]["id"]: len(
+            {
+                relation["attributes"]["source"]
+                for relation in graph["fact"]["items"]
+                if relation["attributes"].get("record_kind") == "relation"
+                and relation["attributes"]["target"]
+                == item["attributes"]["id"]
+            }
+        )
+        for item in graph["fact"]["items"]
+        if item["attributes"].get("record_kind") == "node"
+    }
+    assert all(
+        item["attributes"]["definition"]
+        == "graph.directed-in-neighbors-v1"
+        and item["attributes"]["unit"] == "neighbor"
+        for item in incoming["fact"]["items"]
+    )
+
+    cyclic_map = json.loads(report_map)
+    cyclic_map["edges"].extend(
+        [
+            {
+                "kind": "import",
+                "names": ["./index.js"],
+                "source": "js/runtime.js",
+                "target": "js/index.js",
+            },
+            {
+                "kind": "import",
+                "names": ["./worker.js"],
+                "source": "js/worker.js",
+                "target": "js/worker.js",
+            },
+        ]
+    )
+    encoded_cyclic_map = json.dumps(
+        cyclic_map, separators=(",", ":"), sort_keys=True
+    ).encode()
+    expected_cycles = {
+        "file:js/index.js": (2, 1),
+        "file:js/runtime.js": (2, 1),
+        "file:js/worker.js": (1, 1),
+    }
+    for metric, expected_definition, expected_unit, expected_index in (
+        ("graph.scc_size", "graph.strongly-connected-component-size-v1", "node", 0),
+        ("graph.cyclic", "graph.cycle-membership-v1", "boolean", 1),
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                encoded_cyclic_map,
+                {
+                    "id": metric.replace(".", "-"),
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "file",
+                    "relations": ["imports"],
+                },
+            )
+        )
+        values = {
+            item["attributes"]["node"]: item["value"]
+            for item in result["fact"]["items"]
+        }
+        assert all(
+            values[node] == expected[expected_index]
+            for node, expected in expected_cycles.items()
+        )
+        assert values["file:js/main.js"] == (1 if expected_index == 0 else 0)
+        assert all(
+            item["attributes"]["definition"] == expected_definition
+            and item["attributes"]["unit"] == expected_unit
+            for item in result["fact"]["items"]
+        )
+    cycle_policy = {
+        "project": "sample",
+        "projections": {
+            "import-cycles": {
+                "select": "metrics",
+                "metric": "graph.cyclic",
+                "level": "file",
+                "relations": ["imports"],
+            }
+        },
+        "constraints": {
+            "NO-IMPORT-CYCLES": {
+                "assert": "numeric_bounds",
+                "actual": {"projection": "import-cycles"},
+                "max": 0,
+                "owner": "architecture",
+                "rationale": "Exercise cycle membership as a Verify operand.",
+            }
+        },
+    }
+    cycle_verification = json.loads(
+        evaluate_constraints_json(
+            json.dumps(cycle_policy, separators=(",", ":")).encode(),
+            encoded_cyclic_map,
+        )
+    )
+    assert cycle_verification["constraints"][0]["status"] == "fail"
+
     # Relation kinds and duplicate witnesses do not multiply one neighbor.
     duplicate_map = json.loads(report_map)
     duplicate_map["edges"].append(
@@ -427,12 +558,34 @@ def _assert_metrics_projection() -> None:
     assert incomplete["completeness"]["classification"] == "incomplete"
     assert all(item["state"] == "unknown" for item in incomplete["fact"]["items"])
     assert all(item["value"] is None for item in incomplete["fact"]["items"])
+    for metric in ("graph.in_neighbors", "graph.scc_size", "graph.cyclic"):
+        incomplete_metric = json.loads(
+            evaluate_projection_json(
+                report_map,
+                {
+                    "id": f"incomplete-{metric}",
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "file",
+                    "relations": ["calls"],
+                },
+            )
+        )
+        assert incomplete_metric["completeness"]["classification"] == "incomplete"
+        assert all(
+            item["state"] == "unknown"
+            for item in incomplete_metric["fact"]["items"]
+        )
+        assert all(item["value"] is None for item in incomplete_metric["fact"]["items"])
 
     report = render_map_markdown(report_map, view="metrics", detail="standard")
     assert report.startswith(b"# sample code metrics\n")
     assert b"## Metric definitions\n" in report
     assert b"source.extent_lines" in report
     assert b"graph.out_neighbors" in report
+    assert b"graph.in_neighbors" in report
+    assert b"graph.scc_size" in report
+    assert b"graph.cyclic" in report
     assert b"Source extent metrics are unavailable" in report
     assert b"Evidence: metrics=incomplete" in report
     assert report == _native.map_markdown_view(report_map, 4, 1, max_chars=0)
