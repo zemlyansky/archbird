@@ -71,6 +71,8 @@ void ab_graph_metrics_free(ArchbirdEngine *engine,
     return;
   ab_free(engine, result->cyclic);
   ab_free(engine, result->scc_size);
+  ab_free(engine, result->in_relations);
+  ab_free(engine, result->out_relations);
   ab_free(engine, result->in_neighbors);
   ab_free(engine, result->out_neighbors);
   memset(result, 0, sizeof(*result));
@@ -104,28 +106,38 @@ ArchbirdStatus ab_graph_metrics_evaluate(ArchbirdEngine *engine,
         (uint64_t *)ab_calloc(engine, node_count, sizeof(*out->out_neighbors));
     out->in_neighbors =
         (uint64_t *)ab_calloc(engine, node_count, sizeof(*out->in_neighbors));
+    out->out_relations =
+        (uint64_t *)ab_calloc(engine, node_count, sizeof(*out->out_relations));
+    out->in_relations =
+        (uint64_t *)ab_calloc(engine, node_count, sizeof(*out->in_relations));
     out->scc_size =
         (uint64_t *)ab_calloc(engine, node_count, sizeof(*out->scc_size));
     out->cyclic = (unsigned char *)ab_calloc(engine, node_count, 1);
-    if (!out->out_neighbors || !out->in_neighbors || !out->scc_size ||
-        !out->cyclic) {
+    if (!out->out_neighbors || !out->in_neighbors || !out->out_relations ||
+        !out->in_relations || !out->scc_size || !out->cyclic) {
       ab_graph_metrics_free(engine, out);
       return ARCHBIRD_OUT_OF_MEMORY;
     }
   }
   for (index = 0; index < edge_count; index++) {
     if (edges[index].source >= node_count ||
-        edges[index].target >= node_count) {
+        edges[index].target >= node_count || !edges[index].multiplicity) {
       status = ARCHBIRD_INVALID_SCHEMA;
       goto cleanup;
     }
     if (out->out_neighbors[edges[index].source] == UINT64_MAX ||
-        out->in_neighbors[edges[index].target] == UINT64_MAX) {
+        out->in_neighbors[edges[index].target] == UINT64_MAX ||
+        UINT64_MAX - out->out_relations[edges[index].source] <
+            edges[index].multiplicity ||
+        UINT64_MAX - out->in_relations[edges[index].target] <
+            edges[index].multiplicity) {
       status = ARCHBIRD_LIMIT_EXCEEDED;
       goto cleanup;
     }
     out->out_neighbors[edges[index].source]++;
     out->in_neighbors[edges[index].target]++;
+    out->out_relations[edges[index].source] += edges[index].multiplicity;
+    out->in_relations[edges[index].target] += edges[index].multiplicity;
   }
   status = graph_csr(engine, edges, edge_count, node_count, 0, &forward_offsets,
                      &forward);

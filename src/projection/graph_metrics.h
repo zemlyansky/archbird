@@ -6,17 +6,20 @@
 typedef struct AbGraphMetricsEdge {
   size_t source;
   size_t target;
+  uint64_t multiplicity;
 } AbGraphMetricsEdge;
 
 typedef struct AbGraphMetricsResult {
   uint64_t *out_neighbors;
   uint64_t *in_neighbors;
+  uint64_t *out_relations;
+  uint64_t *in_relations;
   uint64_t *scc_size;
   unsigned char *cyclic;
   size_t node_count;
 } AbGraphMetricsResult;
 
-/* Edges are unique directed identity pairs over [0, node_count). */
+/* Edges are unique directed identity pairs with positive multiplicity. */
 ArchbirdStatus ab_graph_metrics_evaluate(ArchbirdEngine *engine,
                                          size_t node_count,
                                          const AbGraphMetricsEdge *edges,

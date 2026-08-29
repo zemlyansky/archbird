@@ -183,6 +183,8 @@ def _check_metric_graph_scaling(document: dict[str, object]) -> None:
     encoded = _metric_graph_map(document, 100_000, 1_000)
     for metric, expected in (
         ("graph.in_neighbors", 0),
+        ("graph.out_relations", 100_000),
+        ("graph.in_relations", 0),
         ("graph.scc_size", 1),
         ("graph.cyclic", 0),
     ):
@@ -203,6 +205,24 @@ def _check_metric_graph_scaling(document: dict[str, object]) -> None:
         )
         if source["value"] != expected:
             raise AssertionError(f"{metric} produced an incorrect graph value")
+    boundary = json.loads(
+        evaluate_projection_json(
+            encoded,
+            {
+                **plan,
+                "group_by": "layer",
+                "id": "metric-graph-scaling-internal-relations",
+                "metric": "graph.internal_relations",
+            },
+        )
+    )
+    core = next(
+        item
+        for item in boundary["fact"]["items"]
+        if item["attributes"]["group"] == "layer:core"
+    )
+    if core["value"] != 100_000:
+        raise AssertionError("group boundary metric lost relation multiplicity")
     print(
         "graph metric scaling passed "
         f"(50000={elapsed[50_000]:.3f}s, "

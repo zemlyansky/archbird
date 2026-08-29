@@ -3492,6 +3492,10 @@ static ArchbirdStatus add_projected_edge_relation(
                                                names);
   if (status == ARCHBIRD_OK && item)
     status = item_append_edge_sites_attribute(context->engine, item, sites);
+  if (status == ARCHBIRD_OK && item)
+    status =
+        item_increment_u64_attribute(context->engine, item, "multiplicity",
+                                     site_count ? (uint64_t)site_count : 1);
   return status;
 }
 
@@ -6770,27 +6774,30 @@ static ArchbirdStatus metric_graph_plan(AbProjectionContext *context,
                                         AbProjectionPlan *graph_plan) {
   const AbValue *level = ab_value_member(&plan->definition, "level");
   const AbValue *relations = ab_value_member(&plan->definition, "relations");
+  const AbValue *group_by = ab_value_member(&plan->definition, "group_by");
   AbValue definition = {.kind = AB_VALUE_OBJECT};
   AbString id = {(char *)"metric-graph", 12};
   size_t field = 0;
   ArchbirdStatus status;
-  definition.as.object.count = 4;
-  definition.as.object.fields = (AbObjectField *)ab_calloc(
-      context->engine, 4, sizeof(*definition.as.object.fields));
+  definition.as.object.count = group_by ? 5 : 4;
+  definition.as.object.fields =
+      (AbObjectField *)ab_calloc(context->engine, definition.as.object.count,
+                                 sizeof(*definition.as.object.fields));
   if (!definition.as.object.fields)
     return ARCHBIRD_OUT_OF_MEMORY;
-  status = copy_literal(context->engine,
-                        &definition.as.object.fields[field].name, "level");
+  status = ARCHBIRD_OK;
+  if (group_by)
+    status = copy_literal(context->engine,
+                          &definition.as.object.fields[field].name, "group_by");
+  if (status == ARCHBIRD_OK && group_by)
+    status = ab_value_copy(
+        context->engine, &definition.as.object.fields[field++].value, group_by);
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(context->engine,
+                          &definition.as.object.fields[field].name, "level");
   if (status == ARCHBIRD_OK)
     status = ab_value_copy(context->engine,
                            &definition.as.object.fields[field++].value, level);
-  if (status == ARCHBIRD_OK)
-    status = copy_literal(
-        context->engine, &definition.as.object.fields[field].name, "relations");
-  if (status == ARCHBIRD_OK)
-    status =
-        ab_value_copy(context->engine,
-                      &definition.as.object.fields[field++].value, relations);
   if (status == ARCHBIRD_OK)
     status = copy_literal(context->engine,
                           &definition.as.object.fields[field].name, "overlays");
@@ -6808,6 +6815,13 @@ static ArchbirdStatus metric_graph_plan(AbProjectionContext *context,
     }
     field++;
   }
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(
+        context->engine, &definition.as.object.fields[field].name, "relations");
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_value_copy(context->engine,
+                      &definition.as.object.fields[field++].value, relations);
   if (status == ARCHBIRD_OK)
     status = copy_literal(context->engine,
                           &definition.as.object.fields[field].name, "select");
@@ -6830,6 +6844,8 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
   const AbValue *project = ab_value_member(context->map, "project");
   const AbValue *level = ab_value_member(&plan->definition, "level");
   const AbValue *metric = ab_value_member(&plan->definition, "metric");
+  const AbValue *wanted_group_by =
+      ab_value_member(&plan->definition, "group_by");
   const char *metric_name = NULL;
   const char *attribute = NULL;
   const char *definition = NULL;
@@ -6850,6 +6866,31 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
     attribute = "metric.graph.in_neighbors";
     definition = "graph.directed-in-neighbors-v1";
     unit = "neighbor";
+  } else if (ab_projection_value_is(metric, "graph.out_relations")) {
+    metric_name = "graph.out_relations";
+    attribute = "metric.graph.out_relations";
+    definition = "graph.directed-out-relations-v1";
+    unit = "relation";
+  } else if (ab_projection_value_is(metric, "graph.in_relations")) {
+    metric_name = "graph.in_relations";
+    attribute = "metric.graph.in_relations";
+    definition = "graph.directed-in-relations-v1";
+    unit = "relation";
+  } else if (ab_projection_value_is(metric, "graph.internal_relations")) {
+    metric_name = "graph.internal_relations";
+    attribute = "metric.graph.internal_relations";
+    definition = "graph.group-internal-relations-v1";
+    unit = "relation";
+  } else if (ab_projection_value_is(metric, "graph.inbound_relations")) {
+    metric_name = "graph.inbound_relations";
+    attribute = "metric.graph.inbound_relations";
+    definition = "graph.group-inbound-relations-v1";
+    unit = "relation";
+  } else if (ab_projection_value_is(metric, "graph.outbound_relations")) {
+    metric_name = "graph.outbound_relations";
+    attribute = "metric.graph.outbound_relations";
+    definition = "graph.group-outbound-relations-v1";
+    unit = "relation";
   } else if (ab_projection_value_is(metric, "graph.scc_size")) {
     metric_name = "graph.scc_size";
     attribute = "metric.graph.scc_size";
@@ -6871,7 +6912,12 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
        item_index++) {
     const AbValue *record =
         projection_item_attribute(&graph.items[item_index], "record_kind");
-    if (ab_projection_value_is(record, "node"))
+    const AbValue *group_by =
+        projection_item_attribute(&graph.items[item_index], "group_by");
+    if (ab_projection_value_is(record, wanted_group_by ? "group" : "node") &&
+        (!wanted_group_by ||
+         (group_by && group_by->kind == AB_VALUE_STRING &&
+          ab_string_equal(&group_by->as.text, &wanted_group_by->as.text))))
       node_count++;
   }
   complete = !strcmp(ab_projection_data_classification(&graph), "complete");
@@ -6884,11 +6930,15 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
     const AbValue *record = projection_item_attribute(node, "record_kind");
     const AbValue *id = projection_item_attribute(node, "id");
     const AbValue *kind = projection_item_attribute(node, "entity_kind");
+    const AbValue *group_by = projection_item_attribute(node, "group_by");
     AbProjectionItem item = {0};
     AbValue value = {0};
     uint64_t neighbors = 0;
     const AbValue *neighbor_value;
-    if (!ab_projection_value_is(record, "node"))
+    if (!ab_projection_value_is(record, wanted_group_by ? "group" : "node") ||
+        (wanted_group_by &&
+         (!group_by || group_by->kind != AB_VALUE_STRING ||
+          !ab_string_equal(&group_by->as.text, &wanted_group_by->as.text))))
       continue;
     neighbor_value = projection_item_attribute(node, attribute);
     if (!neighbor_value || !ab_value_u64(neighbor_value, &neighbors)) {
@@ -6903,10 +6953,16 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
     if (status == ARCHBIRD_OK)
       status = metric_add_common_attributes(context, &item, metric_name,
                                             definition, unit, level);
-    if (status == ARCHBIRD_OK)
+    if (status == ARCHBIRD_OK && group_by)
+      status = item_add_string_attribute(context->engine, &item, "group",
+                                         &id->as.text);
+    if (status == ARCHBIRD_OK && group_by)
+      status = item_add_string_attribute(context->engine, &item, "group_by",
+                                         &group_by->as.text);
+    if (status == ARCHBIRD_OK && !group_by)
       status = item_add_string_attribute(context->engine, &item, "node",
                                          &id->as.text);
-    if (status == ARCHBIRD_OK)
+    if (status == ARCHBIRD_OK && !group_by)
       status = item_add_string_attribute(context->engine, &item, "entity_kind",
                                          &kind->as.text);
     if (status == ARCHBIRD_OK)
@@ -6926,8 +6982,322 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
   }
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_completeness_exact(
-        context->engine, fact, "graph_node", (uint64_t)node_count,
-        (uint64_t)node_count, 0, 0, 0);
+        context->engine, fact, wanted_group_by ? "graph_group" : "graph_node",
+        (uint64_t)node_count, (uint64_t)node_count, 0, 0, 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_finish(context->engine, fact);
+  ab_projection_data_free(context->engine, &graph);
+  ab_projection_plan_free(context->engine, &graph_plan);
+  if (status != ARCHBIRD_OK)
+    ab_projection_data_free(context->engine, fact);
+  return status;
+}
+
+static int test_case_has_observation(const AbValue *test_case, int *valid) {
+  const AbValue *rows = ab_value_member(test_case, "route_evidence");
+  size_t index;
+  int observed = 0;
+  *valid = 1;
+  if (!rows)
+    return 0;
+  if (rows->kind != AB_VALUE_ARRAY) {
+    *valid = 0;
+    return 0;
+  }
+  for (index = 0; index < rows->as.array.count; index++) {
+    const AbValue *row = &rows->as.array.items[index];
+    const AbValue *provenance;
+    const AbValue *relation;
+    const AbValue *scope;
+    if (!row || row->kind != AB_VALUE_OBJECT) {
+      *valid = 0;
+      return 0;
+    }
+    provenance = ab_value_member(row, "provenance");
+    relation = ab_value_member(row, "relation");
+    scope = ab_value_member(row, "scope");
+    if ((provenance && provenance->kind != AB_VALUE_STRING) ||
+        (relation && relation->kind != AB_VALUE_STRING) ||
+        (scope && scope->kind != AB_VALUE_STRING)) {
+      *valid = 0;
+      return 0;
+    }
+    if (ab_projection_value_is(provenance, "observed") &&
+        ab_projection_value_is(relation, "observed-symbol-hit") &&
+        ab_projection_value_is(scope, "case"))
+      observed = 1;
+  }
+  return observed;
+}
+
+static ArchbirdStatus
+metric_add_map_value(AbProjectionContext *context, AbProjectionData *fact,
+                     const AbValue *project, const AbValue *level,
+                     const char *metric, const char *definition,
+                     const char *unit, uint64_t value, uint64_t denominator,
+                     const char *denominator_unit, const char *input_sha,
+                     const char *state, const char *message) {
+  AbProjectionItem item = {0};
+  AbProjectionEvidence evidence = {0};
+  AbString key = {(char *)"map", 3};
+  AbString path = {0};
+  AbString denominator_text = {(char *)denominator_unit,
+                               strlen(denominator_unit)};
+  AbValue numeric = {0};
+  AbBuffer detail;
+  ArchbirdStatus status = u64_value(context->engine, value, &numeric);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_item_init(context->engine, &item, &key,
+                                     &project->as.text, &numeric);
+  if (status == ARCHBIRD_OK)
+    status = metric_add_common_attributes(context, &item, metric, definition,
+                                          unit, level);
+  if (status == ARCHBIRD_OK)
+    status = item_add_u64_attribute(context->engine, &item, "denominator",
+                                    denominator);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, &item,
+                                       "denominator_unit", &denominator_text);
+  if (status == ARCHBIRD_OK && strcmp(state, "current"))
+    status =
+        ab_projection_item_set_state(context->engine, &item, state, message);
+  ab_buffer_init(&detail, context->engine);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, "Map metric ");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, metric);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_evidence_init(
+        context->engine, &evidence, "derived", &project->as.text, &path, 0,
+        input_sha, (const char *)detail.data, detail.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_item_add_evidence(context->engine, &item, &evidence);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_add_item(context->engine, fact, &item);
+  ab_buffer_free(&detail);
+  ab_projection_evidence_free(context->engine, &evidence);
+  ab_value_free(context->engine, &numeric);
+  if (status != ARCHBIRD_OK)
+    ab_projection_item_free(context->engine, &item);
+  return status;
+}
+
+static ArchbirdStatus extract_test_metrics(AbProjectionContext *context,
+                                           const AbProjectionPlan *plan,
+                                           AbProjectionData *fact) {
+  const AbValue *project = ab_value_member(context->map, "project");
+  const AbValue *tests = ab_value_member(context->map, "tests");
+  const AbValue *map_evidence = ab_value_member(context->map, "evidence");
+  const AbValue *input_sha =
+      map_evidence ? ab_value_member(map_evidence, "input_sha256") : NULL;
+  const AbValue *metric = ab_value_member(&plan->definition, "metric");
+  const AbValue *level = ab_value_member(&plan->definition, "level");
+  const char *metric_name = NULL;
+  const char *definition = NULL;
+  const char *unit = NULL;
+  const char *denominator_unit = NULL;
+  uint64_t static_occurrences = 0;
+  uint64_t candidate_occurrences = 0;
+  uint64_t cases = 0;
+  uint64_t routed_cases = 0;
+  uint64_t observed_cases = 0;
+  uint64_t value = 0;
+  uint64_t denominator = 0;
+  size_t test_index;
+  ArchbirdStatus status;
+  if (!tests || tests->kind != AB_VALUE_ARRAY || !input_sha ||
+      input_sha->kind != AB_VALUE_STRING) {
+    status = ab_projection_data_unknown(
+        context->engine, fact, &plan->id, &project->as.text, "values",
+        "project Map has no complete test inventory");
+    return status;
+  }
+  for (test_index = 0; test_index < tests->as.array.count; test_index++) {
+    const AbValue *test = &tests->as.array.items[test_index];
+    const AbValue *count = ab_value_member(test, "count");
+    const AbValue *inventory_state = ab_value_member(test, "inventory_state");
+    const AbValue *test_cases = ab_value_member(test, "cases");
+    uint64_t occurrences = 0;
+    size_t case_index;
+    if (!valid_test_row(test) || !ab_value_u64(count, &occurrences) ||
+        (inventory_state &&
+         !ab_projection_value_is(inventory_state, "candidate")))
+      return invalid_map_inventory(context,
+                                   "Map contains an invalid test metric row");
+    if (UINT64_MAX - static_occurrences < occurrences ||
+        (inventory_state && UINT64_MAX - candidate_occurrences < occurrences) ||
+        UINT64_MAX - cases < test_cases->as.array.count)
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    static_occurrences += occurrences;
+    if (inventory_state)
+      candidate_occurrences += occurrences;
+    cases += (uint64_t)test_cases->as.array.count;
+    for (case_index = 0; case_index < test_cases->as.array.count;
+         case_index++) {
+      const AbValue *test_case = &test_cases->as.array.items[case_index];
+      const AbValue *routes = ab_value_member(test_case, "routes");
+      const AbValue *configured =
+          ab_value_member(test_case, "configured_routes");
+      int valid_observation = 0;
+      int observed = test_case_has_observation(test_case, &valid_observation);
+      if (!valid_observation)
+        return invalid_map_inventory(
+            context, "Map contains invalid observed test route evidence");
+      if (((routes && routes->as.object.count) ||
+           (configured && configured->as.array.count)) &&
+          routed_cases == UINT64_MAX)
+        return ARCHBIRD_LIMIT_EXCEEDED;
+      if (observed && observed_cases == UINT64_MAX)
+        return ARCHBIRD_LIMIT_EXCEEDED;
+      if ((routes && routes->as.object.count) ||
+          (configured && configured->as.array.count))
+        routed_cases++;
+      if (observed)
+        observed_cases++;
+    }
+  }
+  if (ab_projection_value_is(metric, "tests.static_case_occurrences")) {
+    metric_name = "tests.static_case_occurrences";
+    definition = "tests.static-case-occurrences-v1";
+    unit = "static_case_occurrence";
+    denominator_unit = unit;
+    value = static_occurrences;
+    denominator = static_occurrences;
+  } else if (ab_projection_value_is(metric,
+                                    "tests.candidate_case_occurrences")) {
+    metric_name = "tests.candidate_case_occurrences";
+    definition = "tests.candidate-case-occurrences-v1";
+    unit = "static_case_occurrence";
+    denominator_unit = unit;
+    value = candidate_occurrences;
+    denominator = static_occurrences;
+  } else if (ab_projection_value_is(metric, "tests.routed_cases")) {
+    metric_name = "tests.routed_cases";
+    definition = "tests.routed-cases-v1";
+    unit = "test_case";
+    denominator_unit = unit;
+    value = routed_cases;
+    denominator = cases;
+  } else if (ab_projection_value_is(metric, "tests.observed_cases")) {
+    metric_name = "tests.observed_cases";
+    definition = "tests.observed-cases-v1";
+    unit = "test_case";
+    denominator_unit = unit;
+    value = observed_cases;
+    denominator = cases;
+  } else {
+    return ARCHBIRD_INVALID_SCHEMA;
+  }
+  status = ab_projection_data_init(context->engine, fact, &plan->id, "values",
+                                   "derived", &project->as.text);
+  if (status == ARCHBIRD_OK)
+    status = metric_add_map_value(
+        context, fact, project, level, metric_name, definition, unit, value,
+        denominator, denominator_unit, input_sha->as.text.data, "current", "");
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_completeness_exact(
+        context->engine, fact, "test_inventory", 1, 1, 0, 0, 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_finish(context->engine, fact);
+  if (status != ARCHBIRD_OK)
+    ab_projection_data_free(context->engine, fact);
+  return status;
+}
+
+static ArchbirdStatus extract_evidence_metrics(AbProjectionContext *context,
+                                               const AbProjectionPlan *plan,
+                                               AbProjectionData *fact) {
+  const AbValue *project = ab_value_member(context->map, "project");
+  const AbValue *map_evidence = ab_value_member(context->map, "evidence");
+  const AbValue *input_sha =
+      map_evidence ? ab_value_member(map_evidence, "input_sha256") : NULL;
+  const AbValue *metric = ab_value_member(&plan->definition, "metric");
+  const AbValue *level = ab_value_member(&plan->definition, "level");
+  const char *metric_name = NULL;
+  const char *wanted_state = NULL;
+  AbProjectionPlan graph_plan = {0};
+  AbProjectionData graph = {0};
+  uint64_t denominator = 0;
+  uint64_t value = 0;
+  size_t index;
+  ArchbirdStatus status;
+  if (!input_sha || input_sha->kind != AB_VALUE_STRING)
+    return ab_projection_data_unknown(
+        context->engine, fact, &plan->id, &project->as.text, "values",
+        "project Map has no input identity for evidence metrics");
+  if (ab_projection_value_is(metric, "evidence.current_relations")) {
+    metric_name = "evidence.current_relations";
+    wanted_state = "current";
+  } else if (ab_projection_value_is(metric, "evidence.unknown_relations")) {
+    metric_name = "evidence.unknown_relations";
+    wanted_state = "unknown";
+  } else if (ab_projection_value_is(metric, "evidence.stale_relations")) {
+    metric_name = "evidence.stale_relations";
+    wanted_state = "stale";
+  } else {
+    return ARCHBIRD_INVALID_SCHEMA;
+  }
+  status = metric_graph_plan(context, plan, &graph_plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_extract_graph(context, &graph_plan, &graph);
+  for (index = 0; status == ARCHBIRD_OK && index < graph.item_count; index++) {
+    const AbProjectionItem *item = &graph.items[index];
+    const AbValue *record = projection_item_attribute(item, "record_kind");
+    if (ab_projection_value_is(record, "relation") ||
+        ab_projection_value_is(record, "node")) {
+      static const char *const states[] = {"current", "unknown", "stale"};
+      size_t state_index;
+      for (state_index = 0; state_index < sizeof(states) / sizeof(states[0]);
+           state_index++) {
+        char attribute[64];
+        const AbValue *count;
+        uint64_t number = 0;
+        int written = snprintf(attribute, sizeof(attribute),
+                               "metric.evidence.%s_relation_records",
+                               states[state_index]);
+        if (written < 0 || (size_t)written >= sizeof(attribute)) {
+          status = ARCHBIRD_LIMIT_EXCEEDED;
+          break;
+        }
+        count = projection_item_attribute(item, attribute);
+        if (count && !ab_value_u64(count, &number)) {
+          status = invalid_map_inventory(
+              context, "graph contains an invalid relation evidence count");
+          break;
+        }
+        if (UINT64_MAX - denominator < number) {
+          status = ARCHBIRD_LIMIT_EXCEEDED;
+          break;
+        }
+        denominator += number;
+        if (!strcmp(states[state_index], wanted_state)) {
+          if (UINT64_MAX - value < number) {
+            status = ARCHBIRD_LIMIT_EXCEEDED;
+            break;
+          }
+          value += number;
+        }
+      }
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_init(context->engine, fact, &plan->id, "values",
+                                     "derived", &project->as.text);
+  if (status == ARCHBIRD_OK) {
+    const char *classification = ab_projection_data_classification(&graph);
+    status = metric_add_map_value(
+        context, fact, project, level, metric_name,
+        "evidence.graph-source-relation-state-v1", "source_relation_record",
+        value, denominator, "source_relation_record", input_sha->as.text.data,
+        !strcmp(classification, "complete") ? "current" : "unknown",
+        !strcmp(classification, "complete")
+            ? ""
+            : "selected graph evidence is incomplete; counts describe only "
+              "materialized source relation records");
+  }
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_projection_data_completeness_copy(context->engine, fact, &graph);
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(context->engine, fact);
   ab_projection_data_free(context->engine, &graph);
@@ -6943,6 +7313,12 @@ static ArchbirdStatus extract_metrics(AbProjectionContext *context,
   const AbValue *metric = ab_value_member(&plan->definition, "metric");
   if (ab_projection_value_is(metric, "source.extent_lines"))
     return extract_source_extent_metrics(context, plan, fact);
+  if (metric && metric->kind == AB_VALUE_STRING && metric->as.text.length > 6 &&
+      !memcmp(metric->as.text.data, "tests.", 6))
+    return extract_test_metrics(context, plan, fact);
+  if (metric && metric->kind == AB_VALUE_STRING && metric->as.text.length > 9 &&
+      !memcmp(metric->as.text.data, "evidence.", 9))
+    return extract_evidence_metrics(context, plan, fact);
   return extract_graph_metrics(context, plan, fact);
 }
 
@@ -6998,8 +7374,9 @@ static const AbProjectionDescriptor projection_descriptors[] = {
      AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_PATHS, 0, NULL,
      extract_mapped_paths},
     {AB_PROJECTION_KIND_METRICS, "metrics", "values",
-     AB_PROJECTION_FIELD_LEVEL | AB_PROJECTION_FIELD_METRIC |
-         AB_PROJECTION_FIELD_PATHS | AB_PROJECTION_FIELD_RELATIONS,
+     AB_PROJECTION_FIELD_GROUP_BY | AB_PROJECTION_FIELD_LEVEL |
+         AB_PROJECTION_FIELD_METRIC | AB_PROJECTION_FIELD_PATHS |
+         AB_PROJECTION_FIELD_RELATIONS,
      AB_PROJECTION_FIELD_LEVEL | AB_PROJECTION_FIELD_METRIC,
      "metrics requires a metric and level", extract_metrics},
     {AB_PROJECTION_KIND_ORDERED_ROWS, "ordered_rows", "values",

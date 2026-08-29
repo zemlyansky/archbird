@@ -224,6 +224,31 @@ def _assert_metrics_projection() -> None:
         ),
         (
             {
+                "metric": "graph.internal_relations",
+                "level": "file",
+                "relations": ["imports"],
+            },
+            "graph.internal_relations requires group_by component or layer",
+        ),
+        (
+            {
+                "metric": "graph.inbound_relations",
+                "level": "file",
+                "group_by": "directory",
+                "relations": ["imports"],
+            },
+            "graph.inbound_relations requires group_by component or layer",
+        ),
+        (
+            {"metric": "tests.observed_cases", "level": "file"},
+            "tests.observed_cases requires level map",
+        ),
+        (
+            {"metric": "evidence.current_relations", "level": "file"},
+            "evidence.current_relations requires unique relations",
+        ),
+        (
+            {
                 "metric": "graph.scc_size",
                 "level": "symbol",
                 "relations": ["imports"],
@@ -432,6 +457,135 @@ def _assert_metrics_projection() -> None:
         for item in incoming["fact"]["items"]
     )
 
+    for metric, direction, expected_definition in (
+        ("graph.out_relations", "source", "graph.directed-out-relations-v1"),
+        ("graph.in_relations", "target", "graph.directed-in-relations-v1"),
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                report_map,
+                {
+                    "id": metric.replace(".", "-"),
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "file",
+                    "relations": ["imports"],
+                },
+            )
+        )
+        expected_relations = {
+            node["attributes"]["id"]: sum(
+                relation["attributes"]["witness_count"]
+                for relation in graph["fact"]["items"]
+                if relation["attributes"].get("record_kind") == "relation"
+                and relation["attributes"][direction]
+                == node["attributes"]["id"]
+            )
+            for node in graph["fact"]["items"]
+            if node["attributes"].get("record_kind") == "node"
+        }
+        assert {
+            item["attributes"]["node"]: item["value"]
+            for item in result["fact"]["items"]
+        } == expected_relations
+        assert all(
+            item["attributes"]["definition"] == expected_definition
+            and item["attributes"]["unit"] == "relation"
+            for item in result["fact"]["items"]
+        )
+
+    grouped_graph_definition = {
+        "id": "layer-file-graph",
+        "select": "graph",
+        "group_by": "layer",
+        "level": "file",
+        "relations": ["bridges", "declarations", "imports"],
+        "overlays": ["metrics"],
+    }
+    grouped_graph = json.loads(
+        evaluate_projection_json(report_map, grouped_graph_definition)
+    )
+    memberships: dict[str, set[str]] = {}
+    group_kinds = {
+        row["attributes"]["id"]: row["attributes"]["group_by"]
+        for row in grouped_graph["fact"]["items"]
+        if row["attributes"].get("record_kind") == "group"
+    }
+    for row in grouped_graph["fact"]["items"]:
+        if row["attributes"].get("record_kind") == "membership":
+            memberships.setdefault(row["attributes"]["node"], set()).add(
+                row["attributes"]["group"]
+            )
+    expected_boundaries: dict[str, dict[str, int]] = {}
+    for row in grouped_graph["fact"]["items"]:
+        if row["attributes"].get("record_kind") != "relation":
+            continue
+        attributes = row["attributes"]
+        count = attributes["witness_count"]
+        for source_group in memberships[attributes["source"]]:
+            for target_group in memberships[attributes["target"]]:
+                if group_kinds[source_group] != group_kinds[target_group]:
+                    continue
+                source_counts = expected_boundaries.setdefault(
+                    source_group, {"internal": 0, "inbound": 0, "outbound": 0}
+                )
+                target_counts = expected_boundaries.setdefault(
+                    target_group, {"internal": 0, "inbound": 0, "outbound": 0}
+                )
+                if source_group == target_group:
+                    source_counts["internal"] += count
+                else:
+                    source_counts["outbound"] += count
+                    target_counts["inbound"] += count
+    for metric, key, expected_definition in (
+        (
+            "graph.internal_relations",
+            "internal",
+            "graph.group-internal-relations-v1",
+        ),
+        (
+            "graph.inbound_relations",
+            "inbound",
+            "graph.group-inbound-relations-v1",
+        ),
+        (
+            "graph.outbound_relations",
+            "outbound",
+            "graph.group-outbound-relations-v1",
+        ),
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                report_map,
+                {
+                    "id": metric.replace(".", "-"),
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "file",
+                    "group_by": "layer",
+                    "relations": ["bridges", "declarations", "imports"],
+                },
+            )
+        )
+        assert {
+            item["attributes"]["group"]: item["value"]
+            for item in result["fact"]["items"]
+        } == {
+            row["attributes"]["id"]: expected_boundaries.get(
+                row["attributes"]["id"],
+                {"internal": 0, "inbound": 0, "outbound": 0},
+            )[key]
+            for row in grouped_graph["fact"]["items"]
+            if row["attributes"].get("record_kind") == "group"
+            and row["attributes"].get("group_by") == "layer"
+        }
+        assert all(
+            item["attributes"]["definition"] == expected_definition
+            and item["attributes"]["unit"] == "relation"
+            and item["attributes"]["group_by"] == "layer"
+            for item in result["fact"]["items"]
+        )
+
     cyclic_map = json.loads(report_map)
     cyclic_map["edges"].extend(
         [
@@ -487,6 +641,24 @@ def _assert_metrics_projection() -> None:
             and item["attributes"]["unit"] == expected_unit
             for item in result["fact"]["items"]
         )
+    for metric in ("graph.out_relations", "graph.in_relations"):
+        result = json.loads(
+            evaluate_projection_json(
+                encoded_cyclic_map,
+                {
+                    "id": f"self-loop-{metric}",
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "file",
+                    "relations": ["imports"],
+                },
+            )
+        )
+        values = {
+            item["attributes"]["node"]: item["value"]
+            for item in result["fact"]["items"]
+        }
+        assert values["file:js/worker.js"] == 1
     cycle_policy = {
         "project": "sample",
         "projections": {
@@ -542,6 +714,248 @@ def _assert_metrics_projection() -> None:
         for item in duplicate_neighbors["fact"]["items"]
     }
     assert duplicate_values["file:js/index.js"] == 1
+    duplicate_relations = json.loads(
+        evaluate_projection_json(
+            json.dumps(duplicate_map, separators=(",", ":")).encode(),
+            {
+                "id": "multiplicity-file-relations",
+                "select": "metrics",
+                "metric": "graph.out_relations",
+                "level": "file",
+                "relations": ["imports", "declarations"],
+            },
+        )
+    )
+    duplicate_relation_values = {
+        item["attributes"]["node"]: item["value"]
+        for item in duplicate_relations["fact"]["items"]
+    }
+    assert duplicate_relation_values["file:js/index.js"] == 2
+
+    test_metric_map = json.loads(report_map)
+    test_metric_map["tests"][0]["inventory_source"] = "discovery"
+    test_metric_map["tests"][0]["inventory_state"] = "candidate"
+    test_metric_map["tests"][0]["cases"][0]["route_evidence"] = [
+        {
+            "claim": "symbol-hit",
+            "enclosing": "",
+            "fact_id": "",
+            "hits": 2,
+            "line": 0,
+            "name": "ops.add",
+            "observation_sha256": "a" * 64,
+            "provenance": "observed",
+            "provider": "fixture-runner",
+            "relation": "observed-symbol-hit",
+            "scope": "case",
+            "span": {"end": 0, "start": 0},
+            "target": "js/runtime.js",
+            "target_symbol": "ops.add",
+        }
+    ]
+    # A valid observation must not conceal a malformed later evidence row.
+    invalid_observation_map = json.loads(json.dumps(test_metric_map))
+    invalid_observation_map["tests"][0]["cases"][0]["route_evidence"].append(
+        {"provenance": 1}
+    )
+    try:
+        evaluate_projection_json(
+            json.dumps(
+                invalid_observation_map, separators=(",", ":"), sort_keys=True
+            ).encode(),
+            {
+                "id": "invalid-observed-tests",
+                "select": "metrics",
+                "metric": "tests.observed_cases",
+                "level": "map",
+            },
+        )
+    except RuntimeError as error:
+        assert "invalid observed test route evidence" in str(error)
+    else:
+        raise AssertionError("malformed evidence after an observation was accepted")
+    test_metric_map["tests"].append(
+        {
+            "cases": [
+                {
+                    "configured_routes": [],
+                    "line": 1,
+                    "route_evidence": [],
+                    "routes": {},
+                    "selector": "unit:first",
+                },
+                {
+                    "configured_routes": [],
+                    "line": 2,
+                    "route_evidence": [],
+                    "routes": {},
+                    "selector": "unit:second",
+                },
+            ],
+            "count": 2,
+            "framework": "fixture",
+            "group": "unit",
+            "language": "javascript",
+            "path": "test/test_unit.js",
+            "route_evidence": [],
+            "routes": {},
+            "selectors": ["unit:first", "unit:second"],
+        }
+    )
+    encoded_test_metric_map = json.dumps(
+        test_metric_map, separators=(",", ":"), sort_keys=True
+    ).encode()
+    for metric, expected, denominator, denominator_unit in (
+        ("tests.static_case_occurrences", 3, 3, "static_case_occurrence"),
+        ("tests.candidate_case_occurrences", 1, 3, "static_case_occurrence"),
+        ("tests.routed_cases", 1, 3, "test_case"),
+        ("tests.observed_cases", 1, 3, "test_case"),
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                encoded_test_metric_map,
+                {
+                    "id": metric.replace(".", "-"),
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "map",
+                },
+            )
+        )
+        assert result["completeness"]["classification"] == "complete"
+        assert len(result["fact"]["items"]) == 1
+        item = result["fact"]["items"][0]
+        assert item["value"] == expected
+        assert item["attributes"]["denominator"] == denominator
+        assert item["attributes"]["denominator_unit"] == denominator_unit
+        assert item["attributes"]["metric"] == metric
+
+    evidence_metric_map = json.loads(report_map)
+    evidence_metric_map["edges"] = [
+        {
+            "kind": "import",
+            "names": ["current"],
+            "source": "js/index.js",
+            "target": "js/runtime.js",
+        },
+        {
+            "evidence": [
+                {"basis": "heuristic", "provider": "fixture", "state": "unknown"}
+            ],
+            "kind": "import",
+            "names": ["unknown"],
+            "source": "js/main.js",
+            "target": "js/worker.js",
+        },
+        {
+            "evidence": [
+                {"basis": "snapshot", "provider": "fixture", "state": "stale"}
+            ],
+            "kind": "import",
+            "names": ["stale"],
+            "source": "js/worker.js",
+            "target": "js/index.js",
+        },
+        {
+            "kind": "import",
+            "names": ["current-self"],
+            "source": "js/index.js",
+            "target": "js/index.js",
+        },
+    ]
+    encoded_evidence_metric_map = json.dumps(
+        evidence_metric_map, separators=(",", ":"), sort_keys=True
+    ).encode()
+    for metric, expected in (
+        ("evidence.current_relations", 2),
+        ("evidence.unknown_relations", 1),
+        ("evidence.stale_relations", 1),
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                encoded_evidence_metric_map,
+                {
+                    "id": metric.replace(".", "-"),
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "file",
+                    "relations": ["imports"],
+                },
+            )
+        )
+        assert result["completeness"]["classification"] == "incomplete"
+        item = result["fact"]["items"][0]
+        assert item["value"] == expected
+        assert item["attributes"]["denominator"] == 4
+        assert item["attributes"]["unit"] == "source_relation_record"
+        assert item["attributes"]["denominator_unit"] == "source_relation_record"
+    component_evidence_map = json.loads(report_map)
+    component_evidence_map["components"] = [
+        {
+            "description": "",
+            "files": ["js/index.js", "js/main.js"],
+            "name": "frontend-a",
+            "outgoing": {},
+            "symbol_count": 0,
+        },
+        {
+            "description": "",
+            "files": ["js/runtime.js", "js/worker.js"],
+            "name": "frontend-b",
+            "outgoing": {},
+            "symbol_count": 0,
+        },
+    ]
+    component_evidence_map["edges"] = evidence_metric_map["edges"][:2]
+    encoded_component_evidence_map = json.dumps(
+        component_evidence_map, separators=(",", ":"), sort_keys=True
+    ).encode()
+    for metric, expected in (
+        ("evidence.current_relations", 1),
+        ("evidence.unknown_relations", 1),
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                encoded_component_evidence_map,
+                {
+                    "id": f"component-{metric.replace('.', '-')}",
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "component",
+                    "relations": ["imports"],
+                },
+            )
+        )
+        item = result["fact"]["items"][0]
+        assert item["value"] == expected
+        assert item["attributes"]["denominator"] == 2
+    evidence_policy = {
+        "project": "sample",
+        "projections": {
+            "unknown-imports": {
+                "select": "metrics",
+                "metric": "evidence.unknown_relations",
+                "level": "file",
+                "relations": ["imports"],
+            }
+        },
+        "constraints": {
+            "NO-UNKNOWN-IMPORTS": {
+                "assert": "numeric_bounds",
+                "actual": {"projection": "unknown-imports"},
+                "max": 0,
+                "owner": "architecture",
+                "rationale": "Exercise incomplete evidence accounting.",
+            }
+        },
+    }
+    evidence_verification = json.loads(
+        evaluate_constraints_json(
+            json.dumps(evidence_policy, separators=(",", ":")).encode(),
+            encoded_evidence_metric_map,
+        )
+    )
+    assert evidence_verification["constraints"][0]["status"] == "unknown"
 
     incomplete = json.loads(
         evaluate_projection_json(
@@ -558,7 +972,13 @@ def _assert_metrics_projection() -> None:
     assert incomplete["completeness"]["classification"] == "incomplete"
     assert all(item["state"] == "unknown" for item in incomplete["fact"]["items"])
     assert all(item["value"] is None for item in incomplete["fact"]["items"])
-    for metric in ("graph.in_neighbors", "graph.scc_size", "graph.cyclic"):
+    for metric in (
+        "graph.in_neighbors",
+        "graph.out_relations",
+        "graph.in_relations",
+        "graph.scc_size",
+        "graph.cyclic",
+    ):
         incomplete_metric = json.loads(
             evaluate_projection_json(
                 report_map,
@@ -584,6 +1004,11 @@ def _assert_metrics_projection() -> None:
     assert b"source.extent_lines" in report
     assert b"graph.out_neighbors" in report
     assert b"graph.in_neighbors" in report
+    assert b"graph.out_relations" in report
+    assert b"graph.in_relations" in report
+    assert b"graph.internal_relations" in report
+    assert b"graph.inbound_relations" in report
+    assert b"graph.outbound_relations" in report
     assert b"graph.scc_size" in report
     assert b"graph.cyclic" in report
     assert b"Source extent metrics are unavailable" in report

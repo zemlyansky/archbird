@@ -553,11 +553,31 @@ separate required CLI stage. One-off primitive operands stay inline:
 
 Metrics use the same projection contract. Archbird currently defines
 `source.extent_lines` as the physical lines covered by one exact declaration
-extent. Graph projections expose distinct outgoing and incoming neighbors,
-strongly connected component size, and cycle membership through
-`graph.out_neighbors`, `graph.in_neighbors`, `graph.scc_size`, and
-`graph.cyclic`. Relation selection is part of each graph metric's identity.
-These are measurements, not quality scores; projects own their thresholds:
+extent. Graph metrics operate on the selected directed graph:
+
+- `graph.out_neighbors` and `graph.in_neighbors` count distinct adjacent
+  identities;
+- `graph.out_relations` and `graph.in_relations` count relation witnesses,
+  including self-relations;
+- `graph.internal_relations`, `graph.inbound_relations`, and
+  `graph.outbound_relations` classify those witnesses for a selected component
+  or layer grouping;
+- `graph.scc_size` and `graph.cyclic` expose strongly connected components
+  without enumerating simple cycles.
+
+When groups overlap, one source relation contributes to every applicable group
+pair; group totals therefore need not sum to the repository total.
+
+Map-level `tests.static_case_occurrences`,
+`tests.candidate_case_occurrences`, `tests.routed_cases`, and
+`tests.observed_cases` distinguish static inventory, routed cases, and cases
+with project-owned observed symbol hits. `evidence.current_relations`,
+`evidence.unknown_relations`, and `evidence.stale_relations` count source
+relation records contributing to the selected graph, including self-relations
+collapsed in graph presentation.
+Every count includes its denominator; incomplete graph evidence makes the
+projection incomplete even when known counts are displayed. These are
+measurements, not quality scores; projects own their thresholds:
 
 ```json
 {

@@ -183,8 +183,34 @@
         "projections": {
           "outgoing": {"select": "metrics", "metric": "graph.out_neighbors", "level": "file", "relations": ["imports"]},
           "incoming": {"select": "metrics", "metric": "graph.in_neighbors", "level": "file", "relations": ["imports"]},
+          "outgoing-relations": {"select": "metrics", "metric": "graph.out_relations", "level": "file", "relations": ["imports"]},
+          "incoming-relations": {"select": "metrics", "metric": "graph.in_relations", "level": "file", "relations": ["imports"]},
+          "internal-relations": {"select": "metrics", "metric": "graph.internal_relations", "level": "file", "group_by": "component", "relations": ["imports"]},
+          "inbound-relations": {"select": "metrics", "metric": "graph.inbound_relations", "level": "file", "group_by": "layer", "relations": ["imports"]},
+          "outbound-relations": {"select": "metrics", "metric": "graph.outbound_relations", "level": "file", "group_by": "component", "relations": ["imports"]},
           "components": {"select": "metrics", "metric": "graph.scc_size", "level": "file", "relations": ["imports"]},
-          "cycles": {"select": "metrics", "metric": "graph.cyclic", "level": "file", "relations": ["imports"]}
+          "cycles": {"select": "metrics", "metric": "graph.cyclic", "level": "file", "relations": ["imports"]},
+          "static-tests": {"select": "metrics", "metric": "tests.static_case_occurrences", "level": "map"},
+          "candidate-tests": {"select": "metrics", "metric": "tests.candidate_case_occurrences", "level": "map"},
+          "routed-tests": {"select": "metrics", "metric": "tests.routed_cases", "level": "map"},
+          "observed-tests": {"select": "metrics", "metric": "tests.observed_cases", "level": "map"},
+          "current-evidence": {"select": "metrics", "metric": "evidence.current_relations", "level": "file", "relations": ["imports"]},
+          "unknown-evidence": {"select": "metrics", "metric": "evidence.unknown_relations", "level": "component", "relations": ["imports"]},
+          "stale-evidence": {"select": "metrics", "metric": "evidence.stale_relations", "level": "symbol", "relations": ["calls"]}
+        }
+      }
+    },
+    {
+      "id": "source-metric-rejects-grouping",
+      "valid": false,
+      "configuration": {
+        "projections": {
+          "invalid-source-metric": {
+            "select": "metrics",
+            "metric": "source.extent_lines",
+            "level": "symbol",
+            "group_by": "layer"
+          }
         }
       }
     },

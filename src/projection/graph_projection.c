@@ -38,12 +38,18 @@ typedef struct AbGraphMembershipRef {
 typedef struct AbGraphMetricPair {
   const AbString *source;
   const AbString *target;
+  uint64_t multiplicity;
 } AbGraphMetricPair;
 
 typedef struct AbGraphMetricNode {
   const AbString *id;
   AbProjectionItem *item;
 } AbGraphMetricNode;
+
+typedef struct AbGraphMetricGroup {
+  const AbString *id;
+  AbProjectionItem *item;
+} AbGraphMetricGroup;
 
 static int string_is(const AbString *value, const char *literal) {
   size_t length = strlen(literal);
@@ -910,12 +916,23 @@ add_relation(AbProjectionContext *context, const AbProjectionPlan *plan,
   AbString identity = {0};
   AbProjectionItem *item = NULL;
   uint64_t multiplicity = u64_attribute(witness, "multiplicity");
+  int metrics = request_has(plan, "overlays", "metrics");
+  const char *state_attribute =
+      string_is(&witness->state, "current")
+          ? "metric.evidence.current_relation_records"
+          : (string_is(&witness->state, "unknown")
+                 ? "metric.evidence.unknown_relation_records"
+                 : (string_is(&witness->state, "stale")
+                        ? "metric.evidence.stale_relation_records"
+                        : NULL));
   ArchbirdStatus status;
   if (!multiplicity)
     multiplicity = 1;
+  if (metrics && !state_attribute)
+    return ARCHBIRD_INVALID_SCHEMA;
   if (ab_string_equal(source, target)) {
     (*collapsed)++;
-    if (request_has(plan, "overlays", "metrics")) {
+    if (metrics) {
       const char *colon = memchr(source->data, ':', source->length);
       AbString node_kind;
       AbString node_key = {0};
@@ -931,11 +948,28 @@ add_relation(AbProjectionContext *context, const AbProjectionPlan *plan,
                                               &node);
       if (status == ARCHBIRD_OK && !node)
         status = ARCHBIRD_INVALID_SCHEMA;
+      if (status == ARCHBIRD_OK &&
+          UINT64_MAX - u64_attribute(node, "metric.graph.self_relations") <
+              multiplicity)
+        status = archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                    ARCHBIRD_NO_OFFSET,
+                                    "graph self-relation count exceeds uint64");
       if (status == ARCHBIRD_OK)
-        status = set_u64_attribute(context->engine, node,
-                                   "metric.graph.self_loop", 1);
+        status = set_u64_attribute(
+            context->engine, node, "metric.graph.self_relations",
+            u64_attribute(node, "metric.graph.self_relations") + multiplicity);
+      if (status == ARCHBIRD_OK &&
+          u64_attribute(node, state_attribute) == UINT64_MAX)
+        status = archbird_error_set(
+            context->engine, ARCHBIRD_LIMIT_EXCEEDED, ARCHBIRD_NO_OFFSET,
+            "graph relation evidence count exceeds uint64");
+      if (status == ARCHBIRD_OK)
+        status = set_u64_attribute(context->engine, node, state_attribute,
+                                   u64_attribute(node, state_attribute) + 1);
       if (status == ARCHBIRD_OK)
         status = copy_evidence(context->engine, node, witness);
+      if (status == ARCHBIRD_OK)
+        status = preserve_weaker_state(context->engine, node, witness);
       ab_string_free(context->engine, &node_key);
       if (status != ARCHBIRD_OK)
         return status;
@@ -974,6 +1008,14 @@ add_relation(AbProjectionContext *context, const AbProjectionPlan *plan,
     status =
         set_u64_attribute(context->engine, item, "witness_count",
                           u64_attribute(item, "witness_count") + multiplicity);
+  if (status == ARCHBIRD_OK && metrics &&
+      u64_attribute(item, state_attribute) == UINT64_MAX)
+    status = archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "graph relation evidence count exceeds uint64");
+  if (status == ARCHBIRD_OK && metrics)
+    status = set_u64_attribute(context->engine, item, state_attribute,
+                               u64_attribute(item, state_attribute) + 1);
   ab_string_free(context->engine, &identity);
   return status;
 }
@@ -1193,6 +1235,262 @@ static size_t graph_metric_node_index(const AbGraphMetricNode *nodes,
   return low < count && ab_string_equal(nodes[low].id, id) ? low : SIZE_MAX;
 }
 
+static int graph_metric_group_compare(const void *left_raw,
+                                      const void *right_raw) {
+  const AbGraphMetricGroup *left = (const AbGraphMetricGroup *)left_raw;
+  const AbGraphMetricGroup *right = (const AbGraphMetricGroup *)right_raw;
+  return ab_string_compare(left->id, right->id);
+}
+
+static AbProjectionItem *
+graph_metric_group_find(const AbGraphMetricGroup *groups, size_t count,
+                        const AbString *id) {
+  size_t low = 0;
+  size_t high = count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    int order = ab_string_compare(groups[middle].id, id);
+    if (order < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  return low < count && ab_string_equal(groups[low].id, id) ? groups[low].item
+                                                            : NULL;
+}
+
+static ArchbirdStatus graph_metric_increment(AbProjectionContext *context,
+                                             AbProjectionItem *item,
+                                             const char *name,
+                                             uint64_t increment) {
+  uint64_t current = u64_attribute(item, name);
+  if (UINT64_MAX - current < increment)
+    return archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "graph boundary count exceeds uint64");
+  return set_u64_attribute(context->engine, item, name, current + increment);
+}
+
+static ArchbirdStatus
+graph_metric_group_attributes(AbProjectionContext *context,
+                              AbProjectionItem *item) {
+  static const struct {
+    const char *name;
+    const char *definition;
+  } metrics[] = {
+      {"graph.internal_relations", "graph.group-internal-relations-v1"},
+      {"graph.inbound_relations", "graph.group-inbound-relations-v1"},
+      {"graph.outbound_relations", "graph.group-outbound-relations-v1"},
+  };
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0;
+       status == ARCHBIRD_OK && index < sizeof(metrics) / sizeof(metrics[0]);
+       index++) {
+    char field[96];
+    int written =
+        snprintf(field, sizeof(field), "metric.%s", metrics[index].name);
+    if (written < 0 || (size_t)written >= sizeof(field))
+      status = ARCHBIRD_LIMIT_EXCEEDED;
+    if (status == ARCHBIRD_OK)
+      status = add_u64_attribute(context->engine, item, field, 0);
+    written = snprintf(field, sizeof(field), "metric.%s.definition",
+                       metrics[index].name);
+    if (status == ARCHBIRD_OK &&
+        (written < 0 || (size_t)written >= sizeof(field)))
+      status = ARCHBIRD_LIMIT_EXCEEDED;
+    if (status == ARCHBIRD_OK)
+      status = add_literal_attribute(context->engine, item, field,
+                                     metrics[index].definition);
+    written =
+        snprintf(field, sizeof(field), "metric.%s.unit", metrics[index].name);
+    if (status == ARCHBIRD_OK &&
+        (written < 0 || (size_t)written >= sizeof(field)))
+      status = ARCHBIRD_LIMIT_EXCEEDED;
+    if (status == ARCHBIRD_OK)
+      status = add_literal_attribute(context->engine, item, field, "relation");
+  }
+  return status;
+}
+
+/* Classify selected relation multiplicity across explicit group memberships. */
+static ArchbirdStatus annotate_group_metrics(AbProjectionContext *context,
+                                             AbProjectionData *graph) {
+  AbGraphMetricGroup *groups = NULL;
+  AbGraphMembershipRef *memberships = NULL;
+  size_t group_count = 0;
+  size_t membership_count = 0;
+  size_t group_write = 0;
+  size_t membership_write = 0;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0; index < graph->item_count; index++) {
+    const AbValue *record = attribute(&graph->items[index], "record_kind");
+    if (ab_projection_value_is(record, "group"))
+      group_count++;
+    else if (ab_projection_value_is(record, "membership"))
+      membership_count++;
+  }
+  if (!group_count)
+    return ARCHBIRD_OK;
+  groups = (AbGraphMetricGroup *)ab_calloc(context->engine, group_count,
+                                           sizeof(*groups));
+  if (membership_count)
+    memberships = (AbGraphMembershipRef *)ab_calloc(
+        context->engine, membership_count, sizeof(*memberships));
+  if (!groups || (membership_count && !memberships))
+    status = ARCHBIRD_OUT_OF_MEMORY;
+  for (index = 0; status == ARCHBIRD_OK && index < graph->item_count; index++) {
+    AbProjectionItem *item = &graph->items[index];
+    const AbValue *record = attribute(item, "record_kind");
+    if (ab_projection_value_is(record, "group")) {
+      const AbValue *id = attribute(item, "id");
+      if (!id || id->kind != AB_VALUE_STRING) {
+        status = ARCHBIRD_INVALID_SCHEMA;
+        break;
+      }
+      status = graph_metric_group_attributes(context, item);
+      if (status == ARCHBIRD_OK) {
+        id = attribute(item, "id");
+        groups[group_write].id = &id->as.text;
+        groups[group_write].item = item;
+        group_write++;
+      }
+    } else if (ab_projection_value_is(record, "membership")) {
+      const AbValue *group = attribute(item, "group");
+      const AbValue *node = attribute(item, "node");
+      if (!group || group->kind != AB_VALUE_STRING || !node ||
+          node->kind != AB_VALUE_STRING) {
+        status = ARCHBIRD_INVALID_SCHEMA;
+        break;
+      }
+      memberships[membership_write].group = &group->as.text;
+      memberships[membership_write].node = &node->as.text;
+      membership_write++;
+    }
+  }
+  if (status == ARCHBIRD_OK &&
+      (group_write != group_count || membership_write != membership_count))
+    status = ARCHBIRD_INVALID_SCHEMA;
+  if (status == ARCHBIRD_OK && group_count > 1)
+    qsort(groups, group_count, sizeof(*groups), graph_metric_group_compare);
+  if (status == ARCHBIRD_OK && membership_count > 1)
+    qsort(memberships, membership_count, sizeof(*memberships),
+          membership_ref_compare);
+  for (index = 0; status == ARCHBIRD_OK && index < graph->item_count; index++) {
+    const AbProjectionItem *relation = &graph->items[index];
+    const AbValue *record = attribute(relation, "record_kind");
+    const AbValue *source;
+    const AbValue *target;
+    size_t source_start;
+    size_t source_end;
+    size_t target_start;
+    size_t target_end;
+    size_t source_index;
+    size_t target_index;
+    uint64_t multiplicity;
+    if (!ab_projection_value_is(record, "relation"))
+      continue;
+    source = attribute(relation, "source");
+    target = attribute(relation, "target");
+    multiplicity = u64_attribute(relation, "witness_count");
+    if (!source || source->kind != AB_VALUE_STRING || !target ||
+        target->kind != AB_VALUE_STRING || !multiplicity) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    source_start = membership_ref_lower_bound(memberships, membership_count,
+                                              &source->as.text);
+    source_end = source_start;
+    while (source_end < membership_count &&
+           ab_string_equal(memberships[source_end].node, &source->as.text))
+      source_end++;
+    target_start = membership_ref_lower_bound(memberships, membership_count,
+                                              &target->as.text);
+    target_end = target_start;
+    while (target_end < membership_count &&
+           ab_string_equal(memberships[target_end].node, &target->as.text))
+      target_end++;
+    if (source_start == source_end || target_start == target_end) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    for (source_index = source_start;
+         status == ARCHBIRD_OK && source_index < source_end; source_index++) {
+      AbProjectionItem *source_group = graph_metric_group_find(
+          groups, group_count, memberships[source_index].group);
+      if (!source_group) {
+        status = ARCHBIRD_INVALID_SCHEMA;
+        break;
+      }
+      for (target_index = target_start;
+           status == ARCHBIRD_OK && target_index < target_end; target_index++) {
+        AbProjectionItem *target_group = graph_metric_group_find(
+            groups, group_count, memberships[target_index].group);
+        if (!target_group) {
+          status = ARCHBIRD_INVALID_SCHEMA;
+          break;
+        }
+        if (ab_string_equal(memberships[source_index].group,
+                            memberships[target_index].group))
+          status = graph_metric_increment(context, source_group,
+                                          "metric.graph.internal_relations",
+                                          multiplicity);
+        else {
+          status = graph_metric_increment(context, source_group,
+                                          "metric.graph.outbound_relations",
+                                          multiplicity);
+          if (status == ARCHBIRD_OK)
+            status = graph_metric_increment(context, target_group,
+                                            "metric.graph.inbound_relations",
+                                            multiplicity);
+        }
+      }
+    }
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < graph->item_count; index++) {
+    const AbProjectionItem *node = &graph->items[index];
+    const AbValue *record = attribute(node, "record_kind");
+    const AbValue *id;
+    uint64_t multiplicity;
+    size_t start;
+    size_t end;
+    size_t member;
+    if (!ab_projection_value_is(record, "node"))
+      continue;
+    multiplicity = u64_attribute(node, "metric.graph.self_relations");
+    if (!multiplicity)
+      continue;
+    id = attribute(node, "id");
+    if (!id || id->kind != AB_VALUE_STRING) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    start =
+        membership_ref_lower_bound(memberships, membership_count, &id->as.text);
+    end = start;
+    while (end < membership_count &&
+           ab_string_equal(memberships[end].node, &id->as.text))
+      end++;
+    if (start == end) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    for (member = start; status == ARCHBIRD_OK && member < end; member++) {
+      AbProjectionItem *group = graph_metric_group_find(
+          groups, group_count, memberships[member].group);
+      if (!group)
+        status = ARCHBIRD_INVALID_SCHEMA;
+      else
+        status = graph_metric_increment(
+            context, group, "metric.graph.internal_relations", multiplicity);
+    }
+  }
+  ab_free(context->engine, memberships);
+  ab_free(context->engine, groups);
+  return status;
+}
+
 static ArchbirdStatus graph_metric_node_attributes(AbProjectionContext *context,
                                                    AbProjectionItem *item) {
   static const struct {
@@ -1202,6 +1500,8 @@ static ArchbirdStatus graph_metric_node_attributes(AbProjectionContext *context,
   } metrics[] = {
       {"graph.out_neighbors", "graph.directed-neighbors-v1", "neighbor"},
       {"graph.in_neighbors", "graph.directed-in-neighbors-v1", "neighbor"},
+      {"graph.out_relations", "graph.directed-out-relations-v1", "relation"},
+      {"graph.in_relations", "graph.directed-in-relations-v1", "relation"},
       {"graph.scc_size", "graph.strongly-connected-component-size-v1", "node"},
       {"graph.cyclic", "graph.cycle-membership-v1", "boolean"},
   };
@@ -1280,6 +1580,11 @@ static ArchbirdStatus annotate_metrics(AbProjectionContext *context,
       }
       pairs[pair_write].source = &source->as.text;
       pairs[pair_write].target = &target->as.text;
+      pairs[pair_write].multiplicity = u64_attribute(item, "witness_count");
+      if (!pairs[pair_write].multiplicity) {
+        status = ARCHBIRD_INVALID_SCHEMA;
+        break;
+      }
       pair_write++;
     } else if (ab_projection_value_is(record, "node")) {
       const AbValue *id = attribute(item, "id");
@@ -1309,7 +1614,7 @@ static ArchbirdStatus annotate_metrics(AbProjectionContext *context,
   if (status == ARCHBIRD_OK && node_count > 1)
     qsort(nodes, node_count, sizeof(*nodes), graph_metric_node_compare);
   for (index = 0; status == ARCHBIRD_OK && index < node_count; index++)
-    if (u64_attribute(nodes[index].item, "metric.graph.self_loop"))
+    if (u64_attribute(nodes[index].item, "metric.graph.self_relations"))
       self_loop_count++;
   if (status == ARCHBIRD_OK && SIZE_MAX - pair_count < self_loop_count)
     status = ARCHBIRD_LIMIT_EXCEEDED;
@@ -1319,14 +1624,17 @@ static ArchbirdStatus annotate_metrics(AbProjectionContext *context,
   if (status == ARCHBIRD_OK && pair_count + self_loop_count && !edges)
     status = ARCHBIRD_OUT_OF_MEMORY;
   for (index = 0; status == ARCHBIRD_OK && index < node_count; index++)
-    if (u64_attribute(nodes[index].item, "metric.graph.self_loop")) {
+    if (u64_attribute(nodes[index].item, "metric.graph.self_relations")) {
       edges[edge_count].source = index;
       edges[edge_count].target = index;
+      edges[edge_count].multiplicity =
+          u64_attribute(nodes[index].item, "metric.graph.self_relations");
       edge_count++;
     }
   for (index = 0; status == ARCHBIRD_OK && index < pair_count; index++) {
     size_t source;
     size_t target;
+    uint64_t multiplicity = pairs[index].multiplicity;
     source = graph_metric_node_index(nodes, node_count, pairs[index].source);
     target = graph_metric_node_index(nodes, node_count, pairs[index].target);
     if (source == SIZE_MAX || target == SIZE_MAX) {
@@ -1337,8 +1645,20 @@ static ArchbirdStatus annotate_metrics(AbProjectionContext *context,
         ab_string_equal(pairs[index - 1].source, pairs[index].source) &&
         ab_string_equal(pairs[index - 1].target, pairs[index].target))
       continue;
+    while (index + 1 < pair_count &&
+           ab_string_equal(pairs[index + 1].source, pairs[index].source) &&
+           ab_string_equal(pairs[index + 1].target, pairs[index].target)) {
+      if (UINT64_MAX - multiplicity < pairs[index + 1].multiplicity) {
+        status = ARCHBIRD_LIMIT_EXCEEDED;
+        break;
+      }
+      multiplicity += pairs[++index].multiplicity;
+    }
+    if (status != ARCHBIRD_OK)
+      break;
     edges[edge_count].source = source;
     edges[edge_count].target = target;
+    edges[edge_count].multiplicity = multiplicity;
     edge_count++;
   }
   if (status == ARCHBIRD_OK)
@@ -1353,6 +1673,14 @@ static ArchbirdStatus annotate_metrics(AbProjectionContext *context,
                                  "metric.graph.in_neighbors",
                                  metrics.in_neighbors[index]);
     if (status == ARCHBIRD_OK)
+      status = set_u64_attribute(context->engine, nodes[index].item,
+                                 "metric.graph.out_relations",
+                                 metrics.out_relations[index]);
+    if (status == ARCHBIRD_OK)
+      status = set_u64_attribute(context->engine, nodes[index].item,
+                                 "metric.graph.in_relations",
+                                 metrics.in_relations[index]);
+    if (status == ARCHBIRD_OK)
       status =
           set_u64_attribute(context->engine, nodes[index].item,
                             "metric.graph.scc_size", metrics.scc_size[index]);
@@ -1361,6 +1689,8 @@ static ArchbirdStatus annotate_metrics(AbProjectionContext *context,
                                  "metric.graph.cyclic",
                                  (uint64_t)metrics.cyclic[index]);
   }
+  if (status == ARCHBIRD_OK)
+    status = annotate_group_metrics(context, graph);
   ab_graph_metrics_free(context->engine, &metrics);
   ab_free(context->engine, edges);
   ab_free(context->engine, nodes);

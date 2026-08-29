@@ -995,6 +995,7 @@ assert.deepEqual(
   repositoryEdges.fact.items[0].attributes,
   {
     kind: "import",
+    multiplicity: 1,
     names: [".api"],
     sites: [
       {

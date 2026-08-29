@@ -204,6 +204,7 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
     const AbValue *level = ab_value_member(definition, "level");
     const AbValue *relations = ab_value_member(definition, "relations");
     const AbValue *paths = ab_value_member(definition, "paths");
+    const AbValue *group_by = ab_value_member(definition, "group_by");
     size_t item;
     if (ab_value_string_is(metric, "source.extent_lines")) {
       if (!ab_value_string_is(level, "symbol"))
@@ -211,10 +212,61 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
       if (relations)
         return invalid(engine,
                        "source.extent_lines does not accept graph relations");
+      if (group_by)
+        return invalid(engine, "source.extent_lines does not accept group_by");
+    } else if (ab_value_string_is(metric, "tests.static_case_occurrences") ||
+               ab_value_string_is(metric, "tests.candidate_case_occurrences") ||
+               ab_value_string_is(metric, "tests.routed_cases") ||
+               ab_value_string_is(metric, "tests.observed_cases")) {
+      if (!ab_value_string_is(level, "map"))
+        return invalid_metric(engine, metric, "requires level map");
+      if (relations || paths || group_by)
+        return invalid_metric(engine, metric,
+                              "does not accept relations, paths, or group_by");
+    } else if (ab_value_string_is(metric, "evidence.current_relations") ||
+               ab_value_string_is(metric, "evidence.unknown_relations") ||
+               ab_value_string_is(metric, "evidence.stale_relations")) {
+      if (!ab_value_string_is(level, "component") &&
+          !ab_value_string_is(level, "file") &&
+          !ab_value_string_is(level, "symbol"))
+        return invalid_metric(engine, metric,
+                              "requires level component, file, or symbol");
+      if (!relations || !relations->as.array.count ||
+          !string_array_unique(relations))
+        return invalid_metric(engine, metric, "requires unique relations");
+      if (paths || group_by)
+        return invalid_metric(engine, metric,
+                              "does not accept paths or group_by");
+      for (item = 0; item < relations->as.array.count; item++) {
+        const AbValue *value = &relations->as.array.items[item];
+        if (!ab_value_string_is(value, "builds") &&
+            !ab_value_string_is(value, "bridges") &&
+            !ab_value_string_is(value, "calls") &&
+            !ab_value_string_is(value, "declarations") &&
+            !ab_value_string_is(value, "imports") &&
+            !ab_value_string_is(value, "packages") &&
+            !ab_value_string_is(value, "references") &&
+            !ab_value_string_is(value, "tests"))
+          return invalid_metric(engine, metric,
+                                "relations contains an unsupported kind");
+        if (ab_value_string_is(level, "symbol") &&
+            !ab_value_string_is(value, "calls") &&
+            !ab_value_string_is(value, "references"))
+          return invalid(
+              engine, "symbol evidence metrics support calls and references");
+      }
     } else if (ab_value_string_is(metric, "graph.out_neighbors") ||
                ab_value_string_is(metric, "graph.in_neighbors") ||
+               ab_value_string_is(metric, "graph.out_relations") ||
+               ab_value_string_is(metric, "graph.in_relations") ||
+               ab_value_string_is(metric, "graph.internal_relations") ||
+               ab_value_string_is(metric, "graph.inbound_relations") ||
+               ab_value_string_is(metric, "graph.outbound_relations") ||
                ab_value_string_is(metric, "graph.scc_size") ||
                ab_value_string_is(metric, "graph.cyclic")) {
+      int boundary = ab_value_string_is(metric, "graph.internal_relations") ||
+                     ab_value_string_is(metric, "graph.inbound_relations") ||
+                     ab_value_string_is(metric, "graph.outbound_relations");
       if (!ab_value_string_is(level, "component") &&
           !ab_value_string_is(level, "file") &&
           !ab_value_string_is(level, "symbol"))
@@ -225,6 +277,14 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
         return invalid_metric(engine, metric, "requires unique relations");
       if (paths)
         return invalid_metric(engine, metric, "does not accept path filters");
+      if (boundary && !ab_value_string_is(group_by, "component") &&
+          !ab_value_string_is(group_by, "layer"))
+        return invalid_metric(engine, metric,
+                              "requires group_by component or layer");
+      if (boundary && ab_value_string_is(level, "component"))
+        return invalid_metric(engine, metric, "requires level file or symbol");
+      if (!boundary && group_by)
+        return invalid_metric(engine, metric, "does not accept group_by");
       for (item = 0; item < relations->as.array.count; item++) {
         const AbValue *value = &relations->as.array.items[item];
         if (!ab_value_string_is(value, "builds") &&

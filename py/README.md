@@ -364,11 +364,26 @@ selection. One-off primitive operands stay inline:
 ```
 
 Metrics are ordinary projections. `source.extent_lines` counts physical lines
-inside one exact declaration extent. `graph.out_neighbors` and
-`graph.in_neighbors` count distinct directed neighbors; `graph.scc_size` and
-`graph.cyclic` expose strongly connected component size and cycle membership.
-The selected relations define the measured graph. These are measurements, not
-quality scores. Project-owned limits use the existing predicates:
+inside one exact declaration extent. On a selected directed graph,
+`graph.*_neighbors` counts distinct adjacent identities, `graph.*_relations`
+counts relation witnesses, group boundary metrics classify internal, inbound,
+and outbound witnesses, and `graph.scc_size`/`graph.cyclic` expose strongly
+connected components. Self-relations count in both directions and as internal
+group relations.
+
+When groups overlap, one source relation contributes to every applicable group
+pair; group totals therefore need not sum to the repository total.
+
+Map-level `tests.static_case_occurrences`,
+`tests.candidate_case_occurrences`, `tests.routed_cases`, and
+`tests.observed_cases` distinguish static inventory, routed cases, and cases
+with project-owned observed symbol hits. `evidence.current_relations`,
+`evidence.unknown_relations`, and `evidence.stale_relations` count source
+relation records contributing to the selected graph, including self-relations
+collapsed in graph presentation, and retain graph completeness. Every
+aggregate includes its denominator. These are measurements, not quality
+scores. Project-owned limits use the existing
+predicates:
 
 ```json
 {
