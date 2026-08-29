@@ -155,6 +155,7 @@ const mapViews: readonly MapView[] = [
   "architecture",
   "tests",
   "evidence",
+  "metrics",
 ];
 function graphPresentationKey(
   view: MapView = mapView.value,

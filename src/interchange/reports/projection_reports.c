@@ -1813,6 +1813,246 @@ render_section(AbBuffer *out, const AbProjectionData *data,
   return status == ARCHBIRD_OK ? ab_report_blank(out) : status;
 }
 
+static void source_metric_summary(const AbProjectionItem *item,
+                                  uint64_t *current, uint64_t *unknown,
+                                  uint64_t *maximum) {
+  const AbValue *metrics = item_attribute(item, "source_metrics");
+  const AbValue *extent = metrics && metrics->kind == AB_VALUE_OBJECT
+                              ? ab_value_member(metrics, "source.extent_lines")
+                              : NULL;
+  *current = 0;
+  *unknown = 0;
+  *maximum = 0;
+  if (item_attribute(item, "metric.source.extent_lines.current") ||
+      item_attribute(item, "metric.source.extent_lines.unknown") ||
+      item_attribute(item, "metric.source.extent_lines.max")) {
+    *current = item_u64(item, "metric.source.extent_lines.current");
+    *unknown = item_u64(item, "metric.source.extent_lines.unknown");
+    *maximum = item_u64(item, "metric.source.extent_lines.max");
+    return;
+  }
+  if (!extent || extent->kind != AB_VALUE_OBJECT)
+    return;
+  (void)ab_value_u64(ab_value_member(extent, "current"), current);
+  (void)ab_value_u64(ab_value_member(extent, "unknown"), unknown);
+  (void)ab_value_u64(ab_value_member(extent, "max"), maximum);
+}
+
+static int source_metric_available(const AbProjectionItem *item) {
+  const AbValue *metrics = item_attribute(item, "source_metrics");
+  return item_attribute(item, "metric.source.extent_lines.current") ||
+         item_attribute(item, "metric.source.extent_lines.unknown") ||
+         item_attribute(item, "metric.source.extent_lines.max") ||
+         (metrics && metrics->kind == AB_VALUE_OBJECT &&
+          ab_value_member(metrics, "source.extent_lines"));
+}
+
+static const AbString *source_metric_witness(const AbProjectionItem *item) {
+  const AbValue *metrics = item_attribute(item, "source_metrics");
+  const AbValue *extent = metrics && metrics->kind == AB_VALUE_OBJECT
+                              ? ab_value_member(metrics, "source.extent_lines")
+                              : NULL;
+  const AbValue *symbol = extent && extent->kind == AB_VALUE_OBJECT
+                              ? ab_value_member(extent, "max_symbol")
+                              : NULL;
+  return symbol && symbol->kind == AB_VALUE_STRING ? &symbol->as.text : NULL;
+}
+
+static int metric_extent_compare(const void *left, const void *right) {
+  const AbProjectionItem *a = *(const AbProjectionItem *const *)left;
+  const AbProjectionItem *b = *(const AbProjectionItem *const *)right;
+  uint64_t a_current;
+  uint64_t a_unknown;
+  uint64_t a_maximum;
+  uint64_t b_current;
+  uint64_t b_unknown;
+  uint64_t b_maximum;
+  source_metric_summary(a, &a_current, &a_unknown, &a_maximum);
+  source_metric_summary(b, &b_current, &b_unknown, &b_maximum);
+  if (a_maximum != b_maximum)
+    return a_maximum > b_maximum ? -1 : 1;
+  if (a_unknown != b_unknown)
+    return a_unknown > b_unknown ? -1 : 1;
+  return ab_string_compare(&a->key, &b->key);
+}
+
+static int metric_neighbors_compare(const void *left, const void *right) {
+  const AbProjectionItem *a = *(const AbProjectionItem *const *)left;
+  const AbProjectionItem *b = *(const AbProjectionItem *const *)right;
+  uint64_t a_value = item_u64(a, "metric.graph.out_neighbors");
+  uint64_t b_value = item_u64(b, "metric.graph.out_neighbors");
+  if (a_value != b_value)
+    return a_value > b_value ? -1 : 1;
+  return ab_string_compare(&a->key, &b->key);
+}
+
+static ArchbirdStatus render_metric_nodes(AbBuffer *out,
+                                          const AbProjectionData *data,
+                                          size_t limit, int source_extent,
+                                          size_t *omitted) {
+  const AbProjectionItem **items = NULL;
+  size_t total = 0;
+  size_t shown;
+  size_t index;
+  ArchbirdStatus status =
+      collect_items(out, data, "node", NULL, &items, &total);
+#define METRIC_REPORT_TRY(expression)                                          \
+  do {                                                                         \
+    status = (expression);                                                     \
+    if (status != ARCHBIRD_OK)                                                 \
+      goto cleanup;                                                            \
+  } while (0)
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (source_extent) {
+    size_t write = 0;
+    for (index = 0; index < total; index++) {
+      uint64_t current;
+      uint64_t unknown;
+      uint64_t maximum;
+      source_metric_summary(items[index], &current, &unknown, &maximum);
+      if (current || unknown)
+        items[write++] = items[index];
+    }
+    total = write;
+    qsort(items, total, sizeof(*items), metric_extent_compare);
+  } else {
+    qsort(items, total, sizeof(*items), metric_neighbors_compare);
+  }
+  shown = total < limit ? total : limit;
+  METRIC_REPORT_TRY(ab_report_linef(out, "## %s",
+                                    source_extent ? "Declaration extent"
+                                                  : "Directed connectivity"));
+  METRIC_REPORT_TRY(ab_report_blank(out));
+  if (!total)
+    METRIC_REPORT_TRY(ab_report_literal_line(out, "No applicable entities."));
+  for (index = 0; index < shown; index++) {
+    const AbProjectionItem *item = items[index];
+    const AbString *id = item_text(item, "id");
+    if (source_extent) {
+      const AbString *symbol = source_metric_witness(item);
+      uint64_t current;
+      uint64_t unknown;
+      uint64_t maximum;
+      source_metric_summary(item, &current, &unknown, &maximum);
+      METRIC_REPORT_TRY(ab_report_linef(
+          out,
+          "- `%.*s`: max=%" PRIu64 " lines%s%.*s%s; measured=%" PRIu64
+          "; unknown=%" PRIu64,
+          id ? (int)id->length : 0, id ? id->data : "", maximum,
+          symbol ? " (`" : "", symbol ? (int)symbol->length : 0,
+          symbol ? symbol->data : "", symbol ? "`)" : "", current, unknown));
+    } else {
+      METRIC_REPORT_TRY(ab_report_linef(
+          out, "- `%.*s`: out-neighbors=%" PRIu64, id ? (int)id->length : 0,
+          id ? id->data : "", item_u64(item, "metric.graph.out_neighbors")));
+    }
+  }
+  if (shown < total) {
+    *omitted += total - shown;
+    METRIC_REPORT_TRY(
+        ab_report_linef(out, "- ... %zu metric rows omitted", total - shown));
+  }
+  status = ab_report_blank(out);
+cleanup:
+  ab_free(out->engine, items);
+#undef METRIC_REPORT_TRY
+  return status;
+}
+
+static ArchbirdStatus render_metrics_once(const AbProjectionPlan *plan,
+                                          const AbProjectionResult *result,
+                                          size_t limit, int standard_detail,
+                                          int full_detail, AbBuffer *out) {
+  const AbValue *level = ab_value_member(&plan->definition, "level");
+  const AbValue *relations = ab_value_member(&plan->definition, "relations");
+  const char *classification = ab_projection_data_classification(&result->data);
+  const char *metrics_classification;
+  GraphReportSummary summary;
+  int source_available = 0;
+  size_t omitted = 0;
+  uint64_t unknown;
+  size_t index;
+  REPORT_TRY(graph_report_summary(out, &result->data, &summary));
+  for (index = 0; index < result->data.item_count; index++)
+    if (item_is(&result->data.items[index], "node") &&
+        source_metric_available(&result->data.items[index])) {
+      source_available = 1;
+      break;
+    }
+  metrics_classification =
+      summary.files && !source_available ? "incomplete" : classification;
+  unknown =
+      result->data.selection.has_unknown ? result->data.selection.unknown : 0;
+  if (summary.files && !source_available)
+    unknown++;
+  REPORT_TRY(ab_report_linef(out, "# %.*s code metrics",
+                             (int)result->data.project.length,
+                             result->data.project.data));
+  REPORT_TRY(ab_report_blank(out));
+  REPORT_TRY(ab_report_linef(
+      out, "Projection `%.*s` · level `%.*s` · graph %s", (int)plan->id.length,
+      plan->id.data,
+      level && level->kind == AB_VALUE_STRING ? (int)level->as.text.length : 0,
+      level && level->kind == AB_VALUE_STRING ? level->as.text.data : "",
+      classification));
+  REPORT_TRY(ab_report_blank(out));
+  REPORT_TRY(ab_report_literal_line(out, "## Metric definitions"));
+  REPORT_TRY(ab_report_blank(out));
+  REPORT_TRY(ab_report_literal_line(
+      out, "- `source.extent_lines` (`source.extent-lines-v1`, unit `line`): "
+           "physical lines covered by an exact declaration extent; file rows "
+           "report the maximum and completeness counts."));
+  if (summary.files && !source_available)
+    REPORT_TRY(ab_report_literal_line(
+        out,
+        "- Source extent metrics are unavailable in this Map; regenerate it "
+        "with the current implementation."));
+  REPORT_TRY(ab_buffer_literal(
+      out,
+      "- `graph.out_neighbors` (`graph.directed-neighbors-v1`, unit "
+      "`neighbor`): distinct directed targets across projected relations "));
+  for (index = 0; relations && index < relations->as.array.count; index++) {
+    const AbValue *relation = &relations->as.array.items[index];
+    REPORT_TRY(ab_report_appendf(out, "%s`%.*s`", index ? ", " : "",
+                                 (int)relation->as.text.length,
+                                 relation->as.text.data));
+  }
+  REPORT_TRY(ab_buffer_literal(out, ".\n\n"));
+  REPORT_TRY(render_metric_nodes(out, &result->data, limit, 1, &omitted));
+  REPORT_TRY(render_metric_nodes(out, &result->data, limit, 0, &omitted));
+  REPORT_TRY(render_section(out, &result->data, "coverage",
+                            "Repository coverage", limit, standard_detail,
+                            full_detail, &omitted));
+  if (full_detail)
+    REPORT_TRY(render_section(out, &result->data, "diagnostic", "Diagnostics",
+                              limit, standard_detail, 1, &omitted));
+  else
+    REPORT_TRY(render_diagnostic_groups(out, &result->data, limit,
+                                        standard_detail, &omitted));
+  REPORT_TRY(render_ledgers(out, &result->data));
+  REPORT_TRY(ab_report_literal_line(out, "## Metric completeness"));
+  REPORT_TRY(ab_report_blank(out));
+  REPORT_TRY(ab_report_linef(
+      out,
+      "Result: files=%zu; indexed-symbols=%" PRIu64
+      "; entities=%zu; relations=%zu; diagnostics=%zu (errors=%zu "
+      "warnings=%zu).",
+      summary.files, summary.symbols, summary.entities, summary.relations,
+      summary.diagnostics, summary.errors, summary.warnings));
+  REPORT_TRY(ab_report_linef(
+      out,
+      "Evidence: metrics=%s; exhaustive=%s; unknown=%" PRIu64
+      "; unsupported=%" PRIu64 "; presentation-omitted=%zu; projection=`%s`.",
+      metrics_classification,
+      !strcmp(metrics_classification, "complete") ? "yes" : "no", unknown,
+      result->data.selection.has_unsupported
+          ? result->data.selection.unsupported
+          : 0,
+      omitted, result->result_sha256));
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus render_once(const AbProjectionPlan *plan,
                                   const AbProjectionResult *result,
                                   const LandmarkRoleIndex *roles, size_t limit,
@@ -1829,6 +2069,9 @@ static ArchbirdStatus render_once(const AbProjectionPlan *plan,
   LandmarkReportSummary landmarks = {0};
   size_t omitted = 0;
   size_t landmark_limit = limit < 12 ? limit : 12;
+  if (plan_has(plan, "overlays", "metrics"))
+    return render_metrics_once(plan, result, limit, standard_detail,
+                               full_detail, out);
   REPORT_TRY(graph_report_summary(out, &result->data, &summary));
   REPORT_TRY(ab_report_linef(out, "# %.*s architecture evidence",
                              (int)result->data.project.length,

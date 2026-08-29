@@ -34,6 +34,11 @@ typedef struct AbGraphMembershipRef {
   const AbString *node;
 } AbGraphMembershipRef;
 
+typedef struct AbGraphMetricPair {
+  const AbString *source;
+  const AbString *target;
+} AbGraphMetricPair;
+
 static int string_is(const AbString *value, const char *literal) {
   size_t length = strlen(literal);
   return value && value->length == length &&
@@ -1128,6 +1133,109 @@ annotate_node_connectivity(AbProjectionContext *context,
   return ARCHBIRD_OK;
 }
 
+static int graph_metric_pair_compare(const void *left_raw,
+                                     const void *right_raw) {
+  const AbGraphMetricPair *left = (const AbGraphMetricPair *)left_raw;
+  const AbGraphMetricPair *right = (const AbGraphMetricPair *)right_raw;
+  int order = ab_string_compare(left->source, right->source);
+  return order ? order : ab_string_compare(left->target, right->target);
+}
+
+static ArchbirdStatus graph_node_by_id(AbProjectionContext *context,
+                                       AbProjectionData *graph,
+                                       const AbString *id,
+                                       AbProjectionItem **out) {
+  const char *colon = memchr(id->data, ':', id->length);
+  AbString kind;
+  AbString key = {0};
+  ArchbirdStatus status;
+  if (!colon)
+    return ARCHBIRD_INVALID_SCHEMA;
+  kind.data = id->data;
+  kind.length = (size_t)(colon - id->data);
+  status = buffer_identity(context->engine, "node", &kind, id, &key);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_find_item(context->engine, graph, &key, out);
+  if (status == ARCHBIRD_OK && !*out)
+    status = ARCHBIRD_INVALID_SCHEMA;
+  ab_string_free(context->engine, &key);
+  return status;
+}
+
+/* Metrics annotate the exhaustive graph without changing its selection. */
+static ArchbirdStatus annotate_metrics(AbProjectionContext *context,
+                                       AbProjectionData *graph) {
+  AbGraphMetricPair *pairs = NULL;
+  size_t pair_count = 0;
+  size_t write = 0;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0; index < graph->item_count; index++) {
+    AbProjectionItem *item = &graph->items[index];
+    const AbValue *record = attribute(item, "record_kind");
+    if (ab_projection_value_is(record, "relation"))
+      pair_count++;
+    else if (ab_projection_value_is(record, "node")) {
+      status = add_u64_attribute(context->engine, item,
+                                 "metric.graph.out_neighbors", 0);
+      if (status == ARCHBIRD_OK)
+        status = add_literal_attribute(context->engine, item,
+                                       "metric.graph.out_neighbors.definition",
+                                       "graph.directed-neighbors-v1");
+      if (status == ARCHBIRD_OK)
+        status = add_literal_attribute(context->engine, item,
+                                       "metric.graph.out_neighbors.unit",
+                                       "neighbor");
+      if (status != ARCHBIRD_OK)
+        return status;
+    }
+  }
+  if (pair_count)
+    pairs = (AbGraphMetricPair *)ab_calloc(context->engine, pair_count,
+                                           sizeof(*pairs));
+  if (pair_count && !pairs)
+    return ARCHBIRD_OUT_OF_MEMORY;
+  for (index = 0; index < graph->item_count; index++) {
+    const AbProjectionItem *item = &graph->items[index];
+    const AbValue *record = attribute(item, "record_kind");
+    const AbValue *source;
+    const AbValue *target;
+    if (!ab_projection_value_is(record, "relation"))
+      continue;
+    source = attribute(item, "source");
+    target = attribute(item, "target");
+    if (!source || source->kind != AB_VALUE_STRING || !target ||
+        target->kind != AB_VALUE_STRING) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    pairs[write].source = &source->as.text;
+    pairs[write].target = &target->as.text;
+    write++;
+  }
+  if (status == ARCHBIRD_OK && pair_count > 1)
+    qsort(pairs, pair_count, sizeof(*pairs), graph_metric_pair_compare);
+  for (index = 0; status == ARCHBIRD_OK && index < pair_count; index++) {
+    AbProjectionItem *node = NULL;
+    uint64_t count;
+    if (index &&
+        ab_string_equal(pairs[index - 1].source, pairs[index].source) &&
+        ab_string_equal(pairs[index - 1].target, pairs[index].target))
+      continue;
+    status = graph_node_by_id(context, graph, pairs[index].source, &node);
+    count = status == ARCHBIRD_OK
+                ? u64_attribute(node, "metric.graph.out_neighbors")
+                : 0;
+    if (status == ARCHBIRD_OK && count == UINT64_MAX)
+      status = ARCHBIRD_LIMIT_EXCEEDED;
+    if (status == ARCHBIRD_OK)
+      status = set_u64_attribute(context->engine, node,
+                                 "metric.graph.out_neighbors", count + 1);
+  }
+  ab_free(context->engine, pairs);
+  return status;
+}
+
 static AbValue *mutable_attribute(AbProjectionItem *item, const char *name) {
   size_t index;
   for (index = 0; index < item->attribute_count; index++)
@@ -2127,6 +2235,8 @@ ArchbirdStatus ab_projection_extract_graph(AbProjectionContext *context,
     status = add_discovery_coverage(context, out);
   if (status == ARCHBIRD_OK && request_has(plan, "overlays", "diagnostics"))
     status = add_diagnostics(context, out);
+  if (status == ARCHBIRD_OK && request_has(plan, "overlays", "metrics"))
+    status = annotate_metrics(context, out);
   if (status == ARCHBIRD_OK &&
       request_has(plan, "overlays", "evidence-quality"))
     status = annotate_evidence_quality(context, out);

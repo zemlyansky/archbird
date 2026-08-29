@@ -109,6 +109,84 @@ def _check_graph_aggregation(document: dict[str, object]) -> None:
     )
 
 
+def _metric_graph_map(
+    document: dict[str, object], edge_count: int, target_count: int
+) -> bytes:
+    source_template = next(
+        row for row in document["files"] if row["path"] == "src/core.c"
+    )
+    target_template = next(
+        row for row in document["files"] if row["path"] == "src/core.h"
+    )
+    source_path = source_template["path"]
+    files = list(document["files"])
+    for index in range(target_count):
+        target = dict(target_template)
+        target["path"] = f"metrics/target-{index:04d}.h"
+        target["symbols"] = []
+        files.append(target)
+    scaled = dict(document)
+    scaled["files"] = files
+    scaled["edges"] = [
+        {
+            "kind": "import",
+            "names": [f"route-{index:06d}"],
+            "source": source_path,
+            "target": f"metrics/target-{index % target_count:04d}.h",
+        }
+        for index in range(edge_count)
+    ]
+    return json.dumps(
+        scaled, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode()
+
+
+def _check_metric_graph_scaling(document: dict[str, object]) -> None:
+    plan = {
+        "id": "metric-graph-scaling",
+        "select": "metrics",
+        "metric": "graph.out_neighbors",
+        "level": "file",
+        "relations": ["imports"],
+    }
+    elapsed: dict[int, float] = {}
+    outputs: dict[int, bytes] = {}
+    for edge_count in (50_000, 100_000):
+        encoded = _metric_graph_map(document, edge_count, 1_000)
+        started = perf_counter()
+        output = evaluate_projection_json(encoded, plan)
+        elapsed[edge_count] = perf_counter() - started
+        outputs[edge_count] = output
+        result = json.loads(output)
+        source = next(
+            item
+            for item in result["fact"]["items"]
+            if item["attributes"]["node"] == "file:src/core.c"
+        )
+        if (
+            source["value"] != 1_000
+            or source["attributes"]["known_lower_bound"] != 1_000
+            or result["completeness"]["classification"] != "complete"
+        ):
+            raise AssertionError("graph metric did not deduplicate directed targets")
+    repeated = evaluate_projection_json(
+        _metric_graph_map(document, 100_000, 1_000), plan
+    )
+    if repeated != outputs[100_000]:
+        raise AssertionError("graph metric projection is not repeatable")
+    if elapsed[100_000] > elapsed[50_000] * 3.0 + 0.25:
+        raise AssertionError(
+            "graph metric no longer scales near-linearly: "
+            f"50000={elapsed[50_000]:.3f}s "
+            f"100000={elapsed[100_000]:.3f}s"
+        )
+    print(
+        "graph metric scaling passed "
+        f"(50000={elapsed[50_000]:.3f}s, "
+        f"100000={elapsed[100_000]:.3f}s, targets=1000)"
+    )
+
+
 def _edge_site_map(document: dict[str, object], count: int) -> bytes:
     source_template = next(
         row for row in document["files"] if row["path"] == "src/core.c"
@@ -478,6 +556,7 @@ def main() -> int:
         raise AssertionError("Map Markdown did not aggregate resolution names")
     print("high-cardinality Map report aggregation passed")
     _check_graph_aggregation(document)
+    _check_metric_graph_scaling(document)
     _check_edge_site_scaling(document)
     _check_empty_summary()
     print("empty Map report summary passed")

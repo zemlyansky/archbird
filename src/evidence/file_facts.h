@@ -21,4 +21,10 @@ ArchbirdStatus ab_file_symbol_count(ArchbirdEngine *engine,
                                     const AbManifestFile *file,
                                     size_t *out_count);
 
+/* Render exact declaration-span coverage used by source metrics. */
+ArchbirdStatus ab_render_file_source_metrics(AbBuffer *buffer,
+                                             ArchbirdEngine *engine,
+                                             const ArchbirdProject *project,
+                                             const AbManifestFile *file);
+
 #endif

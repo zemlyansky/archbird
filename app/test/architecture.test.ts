@@ -620,6 +620,7 @@ test("Map view presets and grouping compile to one graph ProjectionPlan", () => 
     "architecture",
     "tests",
     "evidence",
+    "metrics",
   ] as const) {
     for (const grouping of ["component", "directory", "language", "layer"] as const) {
       const { id: _appId, ...appPlan } =

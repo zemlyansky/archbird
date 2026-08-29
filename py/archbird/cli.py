@@ -215,7 +215,14 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--view",
-        choices=("overview", "architecture", "tests", "evidence", "source"),
+        choices=(
+            "overview",
+            "architecture",
+            "tests",
+            "evidence",
+            "metrics",
+            "source",
+        ),
         default="overview",
         help="human Markdown projection (default: overview)",
     )

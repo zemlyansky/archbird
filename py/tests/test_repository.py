@@ -1759,7 +1759,13 @@ writer.commit()
         raise AssertionError(
             "live Python Map projection differs from the saved-Map projection"
         )
-    for projection_view in ("overview", "architecture", "tests", "evidence"):
+    for projection_view in (
+        "overview",
+        "architecture",
+        "tests",
+        "evidence",
+        "metrics",
+    ):
         for projection_detail in ("compact", "standard", "full"):
             live_report = project.map_markdown(
                 view=projection_view, detail=projection_detail

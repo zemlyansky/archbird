@@ -229,6 +229,7 @@ archbird map --view overview --detail compact
 archbird map --view architecture \
   --group-by component --level file --relations imports,calls
 archbird map --view tests --group-by directory
+archbird map --view metrics
 archbird map --view evidence --detail full
 archbird query --symbol runtime_start --view source
 archbird query --symbol runtime_start --dump
@@ -236,8 +237,9 @@ archbird query --symbol runtime_start --dump
 
 `--view` selects a question-oriented preset. `overview` includes project
 landmarks and broad package/build/test connections; `architecture` emphasizes
-code dependencies; `tests` isolates test routes; and `evidence` exposes
-coverage, diagnostics, and completeness. `--group-by` reorganizes the same
+code dependencies; `tests` isolates test routes; `metrics` ranks measured
+source extents and graph connectivity; and `evidence` exposes coverage,
+diagnostics, and completeness. `--group-by` reorganizes the same
 selected entities by directory, configured component, layer, or language.
 `--level` chooses component, file, or symbol nodes. `--relations` overrides the
 preset's relation families and accepts comma-separated values or repeated
@@ -548,6 +550,36 @@ separate required CLI stage. One-off primitive operands stay inline:
   }
 }
 ```
+
+Metrics use the same projection contract. Archbird currently defines
+`source.extent_lines` as the physical lines covered by one exact declaration
+extent and `graph.out_neighbors` as distinct directed targets across the
+projected relations. These are measurements, not quality scores; projects own
+their thresholds:
+
+```json
+{
+  "constraints": {
+    "DECLARATION-EXTENT": {
+      "assert": "numeric_bounds",
+      "actual": {
+        "projection": {
+          "select": "metrics",
+          "metric": "source.extent_lines",
+          "level": "symbol",
+          "paths": ["src/**"]
+        }
+      },
+      "max": 120,
+      "owner": "core",
+      "rationale": "Keep reviewed declarations within the project limit."
+    }
+  }
+}
+```
+
+Missing exact extents and incomplete graph evidence produce unknown values;
+they never become zero or make a constraint pass.
 
 Constraint-owned waivers require an ID, owner, rationale, an exact finding
 fingerprint or comparison/key pair, and an expiry date or input-digest boundary.

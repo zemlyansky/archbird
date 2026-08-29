@@ -68,6 +68,7 @@ def _assert_project_configuration_conformance() -> None:
         "inventory_paths": "set",
         "macro_members": "set",
         "mapped_paths": "set",
+        "metrics": "values",
         "ordered_rows": "values",
         "package_entrypoints": "relation",
         "package_exports": "relation",
@@ -98,6 +99,7 @@ def _assert_project_configuration_conformance() -> None:
         "file_metrics": "file_metrics requires metric bytes",
         "graph": "graph requires level component, file, or symbol",
         "macro_members": "macro_members requires call and selector",
+        "metrics": "metrics requires a metric and level",
         "ordered_rows": "ordered_rows requires a container",
         "provider_surface": "provider_surface requires a name",
         "symbol_occurrences": (
@@ -188,6 +190,252 @@ def _fixture_map(root: Path) -> bytes:
         jobs=1,
     )
     return project.map_json()
+
+
+def _assert_metrics_projection() -> None:
+    invalid_metrics = [
+        (
+            {"metric": "source.extent_lines", "level": "file"},
+            "source.extent_lines requires level symbol",
+        ),
+        (
+            {
+                "metric": "source.extent_lines",
+                "level": "symbol",
+                "relations": ["calls"],
+            },
+            "source.extent_lines does not accept graph relations",
+        ),
+        (
+            {"metric": "graph.out_neighbors", "level": "file"},
+            "graph.out_neighbors requires unique relations",
+        ),
+        (
+            {
+                "metric": "graph.out_neighbors",
+                "level": "symbol",
+                "relations": ["imports"],
+            },
+            "symbol graph metrics support calls and references",
+        ),
+    ]
+    for definition, message in invalid_metrics:
+        configuration = {
+            "project": "invalid-metric",
+            "projections": {
+                "invalid": {"select": "metrics", **definition},
+            },
+        }
+        try:
+            compile_project_configuration(
+                json.dumps(configuration, separators=(",", ":")).encode()
+            )
+        except RuntimeError as error:
+            assert message in str(error)
+        else:
+            raise AssertionError(f"invalid metric projection accepted: {definition}")
+
+    fixture_map = _fixture_map(ROOT / "test/fixtures/map_base")
+    decoded = json.loads(fixture_map)
+    definitions = {
+        (file["path"], symbol["name"]): symbol
+        for file in decoded["files"]
+        for symbol in file["symbols"]
+    }
+    assert definitions[("js/index.js", "add")]["extent_lines"] == 3
+    assert definitions[("js/index.js", "twice")]["extent_lines"] == 1
+    assert definitions[("py/pkg/api.py", "add")]["extent_lines"] == 2
+    assert definitions[("py/pkg/api.py", "twice")]["extent_lines"] == 2
+    summaries = {
+        file["path"]: file["metrics"]["source.extent_lines"]
+        for file in decoded["files"]
+    }
+    assert summaries["js/index.js"] == {
+        "current": 2,
+        "max": 3,
+        "max_fact_id": definitions[("js/index.js", "add")]["fact_id"],
+        "max_symbol": "add",
+        "unknown": 0,
+    }
+    assert summaries["py/pkg/api.py"] == {
+        "current": 2,
+        "max": 2,
+        "max_fact_id": definitions[("py/pkg/api.py", "add")]["fact_id"],
+        "max_symbol": "add",
+        "unknown": 0,
+    }
+    assert summaries["py/pkg/__init__.py"] == {
+        "current": 0,
+        "max": 0,
+        "unknown": 0,
+    }
+
+    extent = json.loads(
+        evaluate_projection_json(
+            fixture_map,
+            {
+                "id": "source-extents",
+                "select": "metrics",
+                "metric": "source.extent_lines",
+                "level": "symbol",
+            },
+        )
+    )
+    assert extent["fact"]["shape"] == "values"
+    assert extent["completeness"]["classification"] == "complete"
+    assert {item["value"] for item in extent["fact"]["items"]} == {1, 2, 3}
+    assert all(
+        item["attributes"]["definition"] == "source.extent-lines-v1"
+        and item["attributes"]["unit"] == "line"
+        for item in extent["fact"]["items"]
+    )
+    policy = {
+        "project": "map-base",
+        "projections": {
+            "source-extents": {
+                "select": "metrics",
+                "metric": "source.extent_lines",
+                "level": "symbol",
+            }
+        },
+        "constraints": {
+            "MAX-DECLARATION-EXTENT": {
+                "assert": "numeric_bounds",
+                "actual": {"projection": "source-extents"},
+                "max": 2,
+                "owner": "architecture",
+                "rationale": "Exercise an explicit project-owned metric bound.",
+            }
+        },
+    }
+    bounded = json.loads(
+        evaluate_constraints_json(
+            json.dumps(policy, separators=(",", ":")).encode(), fixture_map
+        )
+    )
+    assert bounded["constraints"][0]["status"] == "fail"
+    incomplete_map = json.loads(fixture_map)
+    definitions = [
+        symbol
+        for file in incomplete_map["files"]
+        for symbol in file["symbols"]
+    ]
+    definitions[0].pop("extent_lines")
+    incomplete_extent = json.loads(
+        evaluate_constraints_json(
+            json.dumps(policy, separators=(",", ":")).encode(),
+            json.dumps(incomplete_map, separators=(",", ":")).encode(),
+        )
+    )
+    assert incomplete_extent["constraints"][0]["status"] == "unknown"
+
+    report_map = (ROOT / "test/fixtures/report_map.json").read_bytes()
+    legacy_extent = json.loads(
+        evaluate_projection_json(
+            report_map,
+            {
+                "id": "legacy-source-extents",
+                "select": "metrics",
+                "metric": "source.extent_lines",
+                "level": "symbol",
+            },
+        )
+    )
+    assert legacy_extent["completeness"]["classification"] == "unknown"
+    assert legacy_extent["fact"]["state"] == "unknown"
+    graph_definition = {
+        "id": "file-import-graph",
+        "select": "graph",
+        "level": "file",
+        "relations": ["imports"],
+    }
+    graph = json.loads(evaluate_projection_json(report_map, graph_definition))
+    expected: dict[str, set[str]] = {}
+    for item in graph["fact"]["items"]:
+        attributes = item["attributes"]
+        if attributes.get("record_kind") == "relation":
+            expected.setdefault(attributes["source"], set()).add(
+                attributes["target"]
+            )
+    neighbors = json.loads(
+        evaluate_projection_json(
+            report_map,
+            {
+                "id": "file-out-neighbors",
+                "select": "metrics",
+                "metric": "graph.out_neighbors",
+                "level": "file",
+                "relations": ["imports"],
+            },
+        )
+    )
+    assert neighbors["completeness"]["classification"] == "complete"
+    assert {
+        item["attributes"]["node"]: item["value"]
+        for item in neighbors["fact"]["items"]
+    } == {
+        item["attributes"]["id"]: len(expected.get(item["attributes"]["id"], set()))
+        for item in graph["fact"]["items"]
+        if item["attributes"].get("record_kind") == "node"
+    }
+    assert all(
+        item["attributes"]["definition"] == "graph.directed-neighbors-v1"
+        and item["attributes"]["unit"] == "neighbor"
+        for item in neighbors["fact"]["items"]
+    )
+
+    # Relation kinds and duplicate witnesses do not multiply one neighbor.
+    duplicate_map = json.loads(report_map)
+    duplicate_map["edges"].append(
+        {
+            "kind": "declaration",
+            "names": ["duplicate-route"],
+            "source": "js/index.js",
+            "target": "js/runtime.js",
+        }
+    )
+    duplicate_neighbors = json.loads(
+        evaluate_projection_json(
+            json.dumps(duplicate_map, separators=(",", ":")).encode(),
+            {
+                "id": "deduplicated-file-neighbors",
+                "select": "metrics",
+                "metric": "graph.out_neighbors",
+                "level": "file",
+                "relations": ["imports", "declarations"],
+            },
+        )
+    )
+    duplicate_values = {
+        item["attributes"]["node"]: item["value"]
+        for item in duplicate_neighbors["fact"]["items"]
+    }
+    assert duplicate_values["file:js/index.js"] == 1
+
+    incomplete = json.loads(
+        evaluate_projection_json(
+            report_map,
+            {
+                "id": "incomplete-neighbors",
+                "select": "metrics",
+                "metric": "graph.out_neighbors",
+                "level": "file",
+                "relations": ["calls"],
+            },
+        )
+    )
+    assert incomplete["completeness"]["classification"] == "incomplete"
+    assert all(item["state"] == "unknown" for item in incomplete["fact"]["items"])
+    assert all(item["value"] is None for item in incomplete["fact"]["items"])
+
+    report = render_map_markdown(report_map, view="metrics", detail="standard")
+    assert report.startswith(b"# sample code metrics\n")
+    assert b"## Metric definitions\n" in report
+    assert b"source.extent_lines" in report
+    assert b"graph.out_neighbors" in report
+    assert b"Source extent metrics are unavailable" in report
+    assert b"Evidence: metrics=incomplete" in report
+    assert report == _native.map_markdown_view(report_map, 4, 1, max_chars=0)
 
 
 def _assert_import_resolution_soundness() -> None:
@@ -1630,6 +1878,7 @@ def _assert_ordered_container_facts() -> None:
 
 def main() -> None:
     _assert_project_configuration_conformance()
+    _assert_metrics_projection()
     _assert_import_resolution_soundness()
     _assert_projection_markdown_explainability()
     _assert_partial_configuration_overlay()
@@ -2597,8 +2846,8 @@ def main() -> None:
     reference_map = _fixture_map(reference_root)
     subject_document = json.loads(subject_map)
     reference_document = json.loads(reference_map)
-    assert subject_document["schema_version"] == 13
-    assert reference_document["schema_version"] == 13
+    assert subject_document["schema_version"] == 14
+    assert reference_document["schema_version"] == 14
     assert {row["domain"] for row in subject_document["facts"]} == {
         "constant-values",
         "export-origins",

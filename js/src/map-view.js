@@ -32,6 +32,12 @@ const VIEW_PRESETS = Object.freeze({
     overlays: Object.freeze(["diagnostics", "evidence-quality"]),
     relations: Object.freeze([]),
   }),
+  metrics: Object.freeze({
+    groupBy: "directory",
+    level: "file",
+    overlays: Object.freeze(["diagnostics", "evidence-quality", "metrics"]),
+    relations: Object.freeze(["calls", "imports", "references", "tests"]),
+  }),
 });
 
 const DETAIL_VALUES = Object.freeze({ compact: 0, standard: 1, full: 2 });
@@ -48,7 +54,9 @@ function mapProjectionRequest({
   overlays,
 } = {}) {
   if (!Object.hasOwn(VIEW_PRESETS, view)) {
-    throw new RangeError("view must be overview, architecture, tests, or evidence");
+    throw new RangeError(
+      "view must be overview, architecture, tests, evidence, or metrics",
+    );
   }
   if (!Object.hasOwn(DETAIL_VALUES, detail)) {
     throw new RangeError("detail must be compact, standard, or full");

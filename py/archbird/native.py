@@ -1795,10 +1795,18 @@ def _map_projection_request(
             "relations": (),
             "overlays": ("diagnostics", "evidence-quality"),
         },
+        "metrics": {
+            "group_by": "directory",
+            "level": "file",
+            "relations": ("calls", "imports", "references", "tests"),
+            "overlays": ("diagnostics", "evidence-quality", "metrics"),
+        },
     }
     details = {"compact": 0, "standard": 1, "full": 2}
     if view not in views:
-        raise ValueError("view must be overview, architecture, tests, or evidence")
+        raise ValueError(
+            "view must be overview, architecture, tests, evidence, or metrics"
+        )
     if detail not in details:
         raise ValueError("detail must be compact, standard, or full")
     if compact and full:

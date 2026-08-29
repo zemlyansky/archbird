@@ -434,6 +434,7 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
     const AbString *syntax_recovery = string_attribute(fact, "syntax_recovery");
     uint64_t extent_start = integer_attribute(fact, "extent_start");
     uint64_t extent_end = integer_attribute(fact, "extent_end");
+    uint64_t extent_lines = 0;
     if (index > 0 && same_symbol(refs.items[index - 1], fact))
       continue;
     if (!first)
@@ -486,6 +487,25 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
       if (status == ARCHBIRD_OK)
         status = ab_buffer_literal(buffer, "}");
     }
+    if (status == ARCHBIRD_OK && !syntax_recovery &&
+        extent_end > extent_start && extent_end <= file->byte_length) {
+      const AbSourceManifest *manifest = ab_project_manifest(project);
+      size_t file_index = (size_t)(file - manifest->files);
+      const uint8_t *source = ab_project_source_bytes(project, file_index);
+      size_t byte;
+      extent_lines = 1;
+      if (!source)
+        extent_lines = 0;
+      for (byte = (size_t)extent_start;
+           extent_lines && byte + 1 < (size_t)extent_end; byte++)
+        if (source[byte] == '\n')
+          extent_lines++;
+      if (extent_lines) {
+        status = ab_buffer_literal(buffer, ",\"extent_lines\":");
+        if (status == ARCHBIRD_OK)
+          status = ab_buffer_u64(buffer, extent_lines);
+      }
+    }
     if (status == ARCHBIRD_OK && syntax_recovery) {
       status = ab_buffer_literal(buffer, ",\"syntax_recovery\":");
       if (status == ARCHBIRD_OK)
@@ -498,6 +518,79 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "]");
   fact_refs_free(&refs);
+  return status;
+}
+
+ArchbirdStatus ab_render_file_source_metrics(AbBuffer *buffer,
+                                             ArchbirdEngine *engine,
+                                             const ArchbirdProject *project,
+                                             const AbManifestFile *file) {
+  const AbSourceManifest *manifest;
+  const uint8_t *source;
+  FactRefs refs;
+  size_t file_index;
+  size_t index;
+  uint64_t current = 0;
+  uint64_t maximum = 0;
+  uint64_t unknown = 0;
+  const AbFact *maximum_fact = NULL;
+  ArchbirdStatus status;
+  if (!buffer || !engine || !project || !file)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  manifest = ab_project_manifest(project);
+  file_index = (size_t)(file - manifest->files);
+  source = ab_project_source_bytes(project, file_index);
+  status = collect_facts(engine, project, file, "symbols", NULL, &refs);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (refs.count > 1)
+    qsort(refs.items, refs.count, sizeof(*refs.items), symbol_fact_compare);
+  for (index = 0; index < refs.count; index++) {
+    const AbFact *fact = refs.items[index];
+    const AbString *syntax_recovery = string_attribute(fact, "syntax_recovery");
+    uint64_t start = integer_attribute(fact, "extent_start");
+    uint64_t end = integer_attribute(fact, "extent_end");
+    uint64_t lines = 1;
+    size_t byte;
+    if (index > 0 && same_symbol(refs.items[index - 1], fact))
+      continue;
+    if (!source || syntax_recovery || end <= start || end > file->byte_length) {
+      unknown++;
+      continue;
+    }
+    for (byte = (size_t)start; byte + 1 < (size_t)end; byte++)
+      if (source[byte] == '\n')
+        lines++;
+    current++;
+    if (lines > maximum) {
+      maximum = lines;
+      maximum_fact = fact;
+    }
+  }
+  fact_refs_free(&refs);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_literal(buffer, "{\"source.extent_lines\":{\"current\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, current);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"max\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, maximum);
+  if (status == ARCHBIRD_OK && maximum_fact)
+    status = ab_buffer_literal(buffer, ",\"max_fact_id\":");
+  if (status == ARCHBIRD_OK && maximum_fact)
+    status = json_string(buffer, &maximum_fact->id);
+  if (status == ARCHBIRD_OK && maximum_fact)
+    status = ab_buffer_literal(buffer, ",\"max_symbol\":");
+  if (status == ARCHBIRD_OK && maximum_fact)
+    status = json_string(buffer, &maximum_fact->name);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"unknown\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, unknown);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}}");
   return status;
 }
 
@@ -572,6 +665,8 @@ static ArchbirdStatus render_file_facts_row(AbBuffer *buffer,
   FILE_TRY(ab_buffer_literal(buffer, ",\"method_calls\":"));
   FILE_TRY(
       render_named_array(buffer, engine, project, file, "method-calls", NULL));
+  FILE_TRY(ab_buffer_literal(buffer, ",\"metrics\":"));
+  FILE_TRY(ab_render_file_source_metrics(buffer, engine, project, file));
   FILE_TRY(ab_buffer_literal(buffer, ",\"path\":"));
   FILE_TRY(json_string(buffer, &file->path));
   FILE_TRY(ab_buffer_literal(buffer, ",\"reexport_candidates\":"));

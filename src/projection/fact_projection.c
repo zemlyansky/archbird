@@ -42,6 +42,7 @@ static const char *fact_shape(const AbValue *kind) {
       ab_projection_value_is(kind, "c_designated_initializer") ||
       ab_projection_value_is(kind, "constant_values") ||
       ab_projection_value_is(kind, "file_metrics") ||
+      ab_projection_value_is(kind, "metrics") ||
       ab_projection_value_is(kind, "ordered_rows") ||
       ab_projection_value_is(kind, "component_membership") ||
       ab_projection_value_is(kind, "provider_surface") ||
@@ -485,6 +486,22 @@ static ArchbirdStatus item_increment_u64_attribute(ArchbirdEngine *engine,
                               ARCHBIRD_NO_OFFSET,
                               "projection multiplicity exceeds uint64");
   status = u64_value(engine, current + increment, &replacement);
+  if (status == ARCHBIRD_OK) {
+    ab_value_free(engine, &field->value);
+    field->value = replacement;
+  }
+  return status;
+}
+
+static ArchbirdStatus item_set_u64_attribute(ArchbirdEngine *engine,
+                                             AbProjectionItem *item,
+                                             const char *name, uint64_t value) {
+  AbObjectField *field = item_attribute(item, name);
+  AbValue replacement = {0};
+  ArchbirdStatus status;
+  if (!field)
+    return item_add_u64_attribute(engine, item, name, value);
+  status = u64_value(engine, value, &replacement);
   if (status == ARCHBIRD_OK) {
     ab_value_free(engine, &field->value);
     field->value = replacement;
@@ -2150,7 +2167,12 @@ static ArchbirdStatus item_add_symbol_definition(ArchbirdEngine *engine,
   const AbValue *line = ab_value_member(symbol, "line");
   const AbValue *scope = ab_value_member(symbol, "scope");
   const AbValue *signature = ab_value_member(symbol, "signature");
-  size_t field_count = signature && signature->kind == AB_VALUE_STRING ? 4 : 3;
+  const AbValue *extent_lines = ab_value_member(symbol, "extent_lines");
+  size_t field_count =
+      (size_t)3 +
+      (signature && signature->kind == AB_VALUE_STRING ? (size_t)1
+                                                       : (size_t)0) +
+      (extent_lines ? (size_t)1 : (size_t)0);
   size_t field = 0;
   ArchbirdStatus status = ARCHBIRD_OK;
   if (!attribute) {
@@ -2184,6 +2206,12 @@ static ArchbirdStatus item_add_symbol_definition(ArchbirdEngine *engine,
     status =
         archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
                            "out of memory storing a symbol definition");
+  if (status == ARCHBIRD_OK && extent_lines)
+    status = copy_literal(engine, &row->as.object.fields[field].name,
+                          "extent_lines");
+  if (status == ARCHBIRD_OK && extent_lines)
+    status = ab_value_copy(engine, &row->as.object.fields[field++].value,
+                           extent_lines);
   if (status == ARCHBIRD_OK)
     status = copy_literal(engine, &row->as.object.fields[field].name, "kind");
   if (status == ARCHBIRD_OK)
@@ -2307,6 +2335,28 @@ static ArchbirdStatus extract_symbol_entities(AbProjectionContext *context,
       }
       if (status == ARCHBIRD_OK)
         status = item_add_symbol_definition(context->engine, existing, symbol);
+      if (status == ARCHBIRD_OK) {
+        const AbValue *extent_lines = ab_value_member(symbol, "extent_lines");
+        uint64_t lines = 0;
+        if (extent_lines && ab_value_u64(extent_lines, &lines)) {
+          uint64_t maximum = 0;
+          AbObjectField *field =
+              item_attribute(existing, "metric.source.extent_lines.max");
+          if (field)
+            (void)ab_value_u64(&field->value, &maximum);
+          status = item_increment_u64_attribute(
+              context->engine, existing, "metric.source.extent_lines.current",
+              1);
+          if (status == ARCHBIRD_OK && lines > maximum)
+            status =
+                item_set_u64_attribute(context->engine, existing,
+                                       "metric.source.extent_lines.max", lines);
+        } else {
+          status = item_increment_u64_attribute(
+              context->engine, existing, "metric.source.extent_lines.unknown",
+              1);
+        }
+      }
       if (status == ARCHBIRD_OK)
         status = ab_projection_item_add_evidence(context->engine, existing,
                                                  &evidence);
@@ -2986,6 +3036,7 @@ static ArchbirdStatus extract_component_membership(AbProjectionContext *context,
     const AbValue *sha = ab_value_member(file->row, "sha256");
     const AbValue *layer = ab_value_member(file->row, "layer");
     const AbValue *language = ab_value_member(file->row, "language");
+    const AbValue *source_metrics = ab_value_member(file->row, "metrics");
     const AbValue *bytes = ab_value_member(file->row, "bytes");
     const AbValue *symbols = ab_value_member(file->row, "symbols");
     const AbValue *declared_symbol_count =
@@ -3092,6 +3143,33 @@ static ArchbirdStatus extract_component_membership(AbProjectionContext *context,
         layer_role->kind == AB_VALUE_STRING)
       status = item_add_string_attribute(context->engine, &item, "layer_role",
                                          &layer_role->as.text);
+    if (status == ARCHBIRD_OK && source_metrics &&
+        source_metrics->kind == AB_VALUE_OBJECT)
+      status = item_add_value_attribute(context->engine, &item,
+                                        "source_metrics", source_metrics);
+    if (status == ARCHBIRD_OK && source_metrics &&
+        source_metrics->kind == AB_VALUE_OBJECT) {
+      const AbValue *extent =
+          ab_value_member(source_metrics, "source.extent_lines");
+      const char *fields[] = {"current", "max", "unknown"};
+      size_t metric_index;
+      for (metric_index = 0;
+           status == ARCHBIRD_OK && extent && extent->kind == AB_VALUE_OBJECT &&
+           metric_index < sizeof(fields) / sizeof(fields[0]);
+           metric_index++) {
+        const AbValue *number = ab_value_member(extent, fields[metric_index]);
+        char name[64];
+        uint64_t value = 0;
+        int length =
+            snprintf(name, sizeof(name), "metric.source.extent_lines.%s",
+                     fields[metric_index]);
+        if (length < 0 || (size_t)length >= sizeof(name) || !number ||
+            !ab_value_u64(number, &value))
+          status = ARCHBIRD_INVALID_SCHEMA;
+        else
+          status = item_add_u64_attribute(context->engine, &item, name, value);
+      }
+    }
     if (status == ARCHBIRD_OK && bytes && ab_value_u64(bytes, &byte_count))
       status =
           item_add_u64_attribute(context->engine, &item, "bytes", byte_count);
@@ -6520,6 +6598,327 @@ static ArchbirdStatus extract_macro_members(AbProjectionContext *context,
   return status;
 }
 
+static const AbValue *projection_item_attribute(const AbProjectionItem *item,
+                                                const char *name) {
+  size_t index;
+  size_t length = strlen(name);
+  for (index = 0; item && index < item->attribute_count; index++)
+    if (item->attributes[index].name.length == length &&
+        !memcmp(item->attributes[index].name.data, name, length))
+      return &item->attributes[index].value;
+  return NULL;
+}
+
+static ArchbirdStatus metric_add_common_attributes(
+    AbProjectionContext *context, AbProjectionItem *item, const char *metric,
+    const char *definition, const char *unit, const AbValue *level) {
+  AbString metric_text = {(char *)metric, strlen(metric)};
+  AbString definition_text = {(char *)definition, strlen(definition)};
+  AbString unit_text = {(char *)unit, strlen(unit)};
+  ArchbirdStatus status = item_add_string_attribute(
+      context->engine, item, "definition", &definition_text);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, item, "level",
+                                       &level->as.text);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, item, "metric",
+                                       &metric_text);
+  if (status == ARCHBIRD_OK)
+    status =
+        item_add_string_attribute(context->engine, item, "unit", &unit_text);
+  return status;
+}
+
+static ArchbirdStatus metric_copy_evidence(ArchbirdEngine *engine,
+                                           AbProjectionItem *target,
+                                           const AbProjectionItem *source) {
+  size_t index;
+  for (index = 0; index < source->evidence_count; index++) {
+    ArchbirdStatus status = ab_projection_item_add_evidence(
+        engine, target, &source->evidence[index]);
+    if (status != ARCHBIRD_OK)
+      return status;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus
+extract_source_extent_metrics(AbProjectionContext *context,
+                              const AbProjectionPlan *plan,
+                              AbProjectionData *fact) {
+  const AbValue *project = ab_value_member(context->map, "project");
+  const AbValue *files = ab_value_member(context->map, "files");
+  const AbValue *schema = ab_value_member(context->map, "schema_version");
+  const AbValue *paths = ab_value_member(&plan->definition, "paths");
+  const AbValue *level = ab_value_member(&plan->definition, "level");
+  uint64_t universe = 0;
+  uint64_t selected = 0;
+  uint64_t excluded = 0;
+  uint64_t schema_version = 0;
+  size_t file_index;
+  ArchbirdStatus status = ab_projection_data_init(
+      context->engine, fact, &plan->id, "values", "derived", &project->as.text);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (!ab_value_u64(schema, &schema_version) || schema_version < 14) {
+    ab_projection_data_free(context->engine, fact);
+    return ab_projection_data_unknown(
+        context->engine, fact, &plan->id, &project->as.text, "values",
+        "source extent metrics require Map schema 14");
+  }
+  if (!files || files->kind != AB_VALUE_ARRAY) {
+    ab_projection_data_free(context->engine, fact);
+    return ab_projection_data_unknown(
+        context->engine, fact, &plan->id, &project->as.text, "values",
+        "project map has no symbol extent inventory");
+  }
+  for (file_index = 0;
+       status == ARCHBIRD_OK && file_index < files->as.array.count;
+       file_index++) {
+    const AbValue *file = &files->as.array.items[file_index];
+    const AbValue *path = ab_value_member(file, "path");
+    const AbValue *sha = ab_value_member(file, "sha256");
+    const AbValue *symbols = ab_value_member(file, "symbols");
+    size_t symbol_index;
+    if (!valid_projected_file_row(file)) {
+      status = invalid_map_inventory(
+          context, "Map contains an invalid source metric file row");
+      break;
+    }
+    for (symbol_index = 0;
+         status == ARCHBIRD_OK && symbol_index < symbols->as.array.count;
+         symbol_index++) {
+      const AbValue *symbol = &symbols->as.array.items[symbol_index];
+      const AbValue *fact_id = ab_value_member(symbol, "fact_id");
+      const AbValue *name = ab_value_member(symbol, "name");
+      const AbValue *kind = ab_value_member(symbol, "kind");
+      const AbValue *line = ab_value_member(symbol, "line");
+      const AbValue *value = ab_value_member(symbol, "extent_lines");
+      uint64_t line_number = 0;
+      uint64_t extent_lines = 0;
+      AbProjectionItem item = {0};
+      AbProjectionEvidence evidence = {0};
+      AbBuffer detail;
+      universe++;
+      if (!path_matches(&path->as.text, paths)) {
+        excluded++;
+        continue;
+      }
+      selected++;
+      if (!fact_id || fact_id->kind != AB_VALUE_STRING ||
+          !ab_projection_nonblank(fact_id)) {
+        status = invalid_map_inventory(
+            context, "Map contains a source metric without a fact identity");
+        break;
+      }
+      (void)ab_value_u64(line, &line_number);
+      status = ab_projection_item_init(
+          context->engine, &item, &fact_id->as.text, &name->as.text,
+          value && ab_value_u64(value, &extent_lines) ? value : NULL);
+      if (status == ARCHBIRD_OK)
+        status = metric_add_common_attributes(
+            context, &item, "source.extent_lines", "source.extent-lines-v1",
+            "line", level);
+      if (status == ARCHBIRD_OK)
+        status = item_add_string_attribute(context->engine, &item, "path",
+                                           &path->as.text);
+      if (status == ARCHBIRD_OK)
+        status = item_add_string_attribute(context->engine, &item, "symbol",
+                                           &name->as.text);
+      if (status == ARCHBIRD_OK)
+        status = item_add_string_attribute(context->engine, &item,
+                                           "symbol_kind", &kind->as.text);
+      if (status == ARCHBIRD_OK && (!value || !extent_lines))
+        status = ab_projection_item_set_state(
+            context->engine, &item, "unknown",
+            "exact declaration extent is unavailable");
+      ab_buffer_init(&detail, context->engine);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&detail, "source.extent_lines=");
+      if (status == ARCHBIRD_OK && value)
+        status = ab_value_render(&detail, value);
+      else if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&detail, "unknown");
+      if (status == ARCHBIRD_OK)
+        status = derived_evidence(context->engine, &project->as.text,
+                                  &path->as.text, line_number,
+                                  sha->as.text.data, &detail, &evidence);
+      if (status == ARCHBIRD_OK)
+        status =
+            ab_projection_item_add_evidence(context->engine, &item, &evidence);
+      if (status == ARCHBIRD_OK)
+        status = ab_projection_data_add_item(context->engine, fact, &item);
+      ab_buffer_free(&detail);
+      ab_projection_evidence_free(context->engine, &evidence);
+      if (status != ARCHBIRD_OK)
+        ab_projection_item_free(context->engine, &item);
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_completeness_exact(
+        context->engine, fact, "symbol_definition", universe, selected,
+        excluded, 0, 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_finish(context->engine, fact);
+  if (status != ARCHBIRD_OK)
+    ab_projection_data_free(context->engine, fact);
+  return status;
+}
+
+static ArchbirdStatus metric_graph_plan(AbProjectionContext *context,
+                                        const AbProjectionPlan *plan,
+                                        AbProjectionPlan *graph_plan) {
+  const AbValue *level = ab_value_member(&plan->definition, "level");
+  const AbValue *relations = ab_value_member(&plan->definition, "relations");
+  AbValue definition = {.kind = AB_VALUE_OBJECT};
+  AbString id = {(char *)"metric-graph", 12};
+  size_t field = 0;
+  ArchbirdStatus status;
+  definition.as.object.count = 4;
+  definition.as.object.fields = (AbObjectField *)ab_calloc(
+      context->engine, 4, sizeof(*definition.as.object.fields));
+  if (!definition.as.object.fields)
+    return ARCHBIRD_OUT_OF_MEMORY;
+  status = copy_literal(context->engine,
+                        &definition.as.object.fields[field].name, "level");
+  if (status == ARCHBIRD_OK)
+    status = ab_value_copy(context->engine,
+                           &definition.as.object.fields[field++].value, level);
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(
+        context->engine, &definition.as.object.fields[field].name, "relations");
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_value_copy(context->engine,
+                      &definition.as.object.fields[field++].value, relations);
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(context->engine,
+                          &definition.as.object.fields[field].name, "overlays");
+  if (status == ARCHBIRD_OK) {
+    AbValue *overlay;
+    definition.as.object.fields[field].value.kind = AB_VALUE_ARRAY;
+    definition.as.object.fields[field].value.as.array.count = 1;
+    overlay = (AbValue *)ab_calloc(context->engine, 1, sizeof(*overlay));
+    definition.as.object.fields[field].value.as.array.items = overlay;
+    if (!overlay)
+      status = ARCHBIRD_OUT_OF_MEMORY;
+    else {
+      overlay->kind = AB_VALUE_STRING;
+      status = copy_literal(context->engine, &overlay->as.text, "metrics");
+    }
+    field++;
+  }
+  if (status == ARCHBIRD_OK)
+    status = copy_literal(context->engine,
+                          &definition.as.object.fields[field].name, "select");
+  if (status == ARCHBIRD_OK) {
+    definition.as.object.fields[field].value.kind = AB_VALUE_STRING;
+    status = copy_literal(context->engine,
+                          &definition.as.object.fields[field++].value.as.text,
+                          "graph");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_plan_compile(context->engine, &definition, &id,
+                                        graph_plan);
+  ab_value_free(context->engine, &definition);
+  return status;
+}
+
+static ArchbirdStatus
+extract_graph_neighbor_metrics(AbProjectionContext *context,
+                               const AbProjectionPlan *plan,
+                               AbProjectionData *fact) {
+  const AbValue *project = ab_value_member(context->map, "project");
+  const AbValue *level = ab_value_member(&plan->definition, "level");
+  AbProjectionPlan graph_plan = {0};
+  AbProjectionData graph = {0};
+  size_t node_count = 0;
+  size_t item_index;
+  int complete;
+  ArchbirdStatus status = metric_graph_plan(context, plan, &graph_plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_extract_graph(context, &graph_plan, &graph);
+  for (item_index = 0; status == ARCHBIRD_OK && item_index < graph.item_count;
+       item_index++) {
+    const AbValue *record =
+        projection_item_attribute(&graph.items[item_index], "record_kind");
+    if (ab_projection_value_is(record, "node"))
+      node_count++;
+  }
+  complete = !strcmp(ab_projection_data_classification(&graph), "complete");
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_init(context->engine, fact, &plan->id, "values",
+                                     "derived", &project->as.text);
+  for (item_index = 0; status == ARCHBIRD_OK && item_index < graph.item_count;
+       item_index++) {
+    const AbProjectionItem *node = &graph.items[item_index];
+    const AbValue *record = projection_item_attribute(node, "record_kind");
+    const AbValue *id = projection_item_attribute(node, "id");
+    const AbValue *kind = projection_item_attribute(node, "entity_kind");
+    AbProjectionItem item = {0};
+    AbValue value = {0};
+    uint64_t neighbors = 0;
+    const AbValue *neighbor_value;
+    if (!ab_projection_value_is(record, "node"))
+      continue;
+    neighbor_value =
+        projection_item_attribute(node, "metric.graph.out_neighbors");
+    if (!neighbor_value || !ab_value_u64(neighbor_value, &neighbors)) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    if (complete)
+      status = u64_value(context->engine, neighbors, &value);
+    if (status == ARCHBIRD_OK)
+      status = ab_projection_item_init(context->engine, &item, &id->as.text,
+                                       &node->label, complete ? &value : NULL);
+    if (status == ARCHBIRD_OK)
+      status = metric_add_common_attributes(
+          context, &item, "graph.out_neighbors", "graph.directed-neighbors-v1",
+          "neighbor", level);
+    if (status == ARCHBIRD_OK)
+      status = item_add_string_attribute(context->engine, &item, "node",
+                                         &id->as.text);
+    if (status == ARCHBIRD_OK)
+      status = item_add_string_attribute(context->engine, &item, "entity_kind",
+                                         &kind->as.text);
+    if (status == ARCHBIRD_OK)
+      status = item_add_u64_attribute(context->engine, &item,
+                                      "known_lower_bound", neighbors);
+    if (status == ARCHBIRD_OK)
+      status = metric_copy_evidence(context->engine, &item, node);
+    if (status == ARCHBIRD_OK && !complete)
+      status = ab_projection_item_set_state(
+          context->engine, &item, "unknown",
+          "graph evidence is incomplete; the exact neighbor count is unknown");
+    if (status == ARCHBIRD_OK)
+      status = ab_projection_data_add_item(context->engine, fact, &item);
+    ab_value_free(context->engine, &value);
+    if (status != ARCHBIRD_OK)
+      ab_projection_item_free(context->engine, &item);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_completeness_exact(
+        context->engine, fact, "graph_node", (uint64_t)node_count,
+        (uint64_t)node_count, 0, 0, 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_finish(context->engine, fact);
+  ab_projection_data_free(context->engine, &graph);
+  ab_projection_plan_free(context->engine, &graph_plan);
+  if (status != ARCHBIRD_OK)
+    ab_projection_data_free(context->engine, fact);
+  return status;
+}
+
+static ArchbirdStatus extract_metrics(AbProjectionContext *context,
+                                      const AbProjectionPlan *plan,
+                                      AbProjectionData *fact) {
+  const AbValue *metric = ab_value_member(&plan->definition, "metric");
+  if (ab_projection_value_is(metric, "source.extent_lines"))
+    return extract_source_extent_metrics(context, plan, fact);
+  return extract_graph_neighbor_metrics(context, plan, fact);
+}
+
 static const AbProjectionDescriptor projection_descriptors[] = {
     {AB_PROJECTION_KIND_ARTIFACT_ROUTES, "artifact_routes", "relation",
      AB_PROJECTION_FIELD_ARTIFACTS, 0, NULL, extract_artifact_routes},
@@ -6571,6 +6970,11 @@ static const AbProjectionDescriptor projection_descriptors[] = {
     {AB_PROJECTION_KIND_MAPPED_PATHS, "mapped_paths", "set",
      AB_PROJECTION_FIELDS_NORMALIZED | AB_PROJECTION_FIELD_PATHS, 0, NULL,
      extract_mapped_paths},
+    {AB_PROJECTION_KIND_METRICS, "metrics", "values",
+     AB_PROJECTION_FIELD_LEVEL | AB_PROJECTION_FIELD_METRIC |
+         AB_PROJECTION_FIELD_PATHS | AB_PROJECTION_FIELD_RELATIONS,
+     AB_PROJECTION_FIELD_LEVEL | AB_PROJECTION_FIELD_METRIC,
+     "metrics requires a metric and level", extract_metrics},
     {AB_PROJECTION_KIND_ORDERED_ROWS, "ordered_rows", "values",
      AB_PROJECTION_FIELD_CONTAINER, AB_PROJECTION_FIELD_CONTAINER,
      "ordered_rows requires a container", extract_ordered_rows},

@@ -1844,7 +1844,7 @@ assert.deepEqual(
     resolutionJson: repositoryProject.resolutionJson,
   }),
 );
-for (const view of ["overview", "architecture", "tests", "evidence"]) {
+for (const view of ["overview", "architecture", "tests", "evidence", "metrics"]) {
   for (const detail of ["compact", "standard", "full"]) {
     assert.deepEqual(
       repositoryProject.mapMarkdown({ view, detail }),
@@ -1872,6 +1872,7 @@ for (const [viewIndex, view] of [
   "architecture",
   "tests",
   "evidence",
+  "metrics",
 ].entries()) {
   assert.deepEqual(
     renderMapMarkdown(reportFixture, { detail: "compact", view }),

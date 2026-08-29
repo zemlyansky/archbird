@@ -73,7 +73,7 @@ const DISCOVERY = {
 
 function usage(command = "map") {
   const rows = {
-    map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|tests|evidence|source] [--dump] [--group-by KIND] [--level KIND] [--relations KINDS] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
+    map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|tests|evidence|metrics|source] [--dump] [--group-by KIND] [--level KIND] [--relations KINDS] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
     observe: "archbird observe [ROOT] --map MAP.json --request COVERAGE.json [--output OBSERVATIONS.json]",
     query: "archbird query [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
     impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
@@ -725,8 +725,8 @@ function mapMain(argv) {
     options.full = true;
   }
   if (!["json", "markdown"].includes(options.format)) throw new Error("--format must be json or markdown");
-  if (!["overview", "architecture", "tests", "evidence", "source"].includes(options.view)) {
-    throw new Error("--view must be overview, architecture, tests, evidence, or source");
+  if (!["overview", "architecture", "tests", "evidence", "metrics", "source"].includes(options.view)) {
+    throw new Error("--view must be overview, architecture, tests, evidence, metrics, or source");
   }
   if (!["compact", "standard", "full"].includes(options.detail)) {
     throw new Error("--detail must be compact, standard, or full");

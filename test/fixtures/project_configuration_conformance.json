@@ -141,6 +141,7 @@
           "constant-values": {"select": "constant_values", "container": "Opcode", "paths": ["src/**"], "kinds": ["enum-member"], "exclude": ["RESERVED"]},
           "file-edges": {"select": "file_edges", "from_paths": ["src/**"], "to_paths": ["include/**"], "kinds": ["import"], "kind_patterns": ["imp*"], "name_patterns": ["api*"]},
           "file-metrics": {"select": "file_metrics", "metric": "bytes", "include": ["src/**"]},
+          "graph-metrics": {"select": "metrics", "metric": "graph.out_neighbors", "level": "file", "relations": ["imports"]},
           "architecture-graph": {"select": "graph", "group_by": "directory", "level": "file", "relations": ["imports", "calls"], "overlays": ["evidence-quality"]},
           "inventory-paths": {"select": "inventory_paths", "exclude": ["vendor/**"]},
           "macro-members": {"select": "macro_members", "call": "REGISTER", "selector": "public", "paths": ["src/**"], "selector_argument": 0, "values_from_argument": 1, "strip_prefix": "OP_"},

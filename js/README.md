@@ -155,12 +155,14 @@ npx archbird map --view overview --detail compact
 npx archbird map --view architecture \
   --group-by component --level file --relations imports,calls
 npx archbird map --view tests --group-by directory
+npx archbird map --view metrics
 npx archbird map --view evidence --detail full
 npx archbird query --symbol runtime_start --view source
 npx archbird query --symbol runtime_start --dump
 ```
 
-`--view` chooses an overview, architecture, tests, or evidence preset.
+`--view` chooses an overview, architecture, tests, metrics, or evidence preset.
+Metrics rank exact declaration extents and directed graph connectivity.
 `--group-by` independently organizes entities by directory, configured
 component, layer, or language; `--level` selects component, file, or symbol
 nodes; and repeatable comma-separated `--relations` overrides the preset.
@@ -368,6 +370,35 @@ selection. One-off primitive operands stay inline:
   }
 }
 ```
+
+Metrics are ordinary projections. `source.extent_lines` counts physical lines
+inside one exact declaration extent; `graph.out_neighbors` counts distinct
+directed targets across projected relations. They are measurements, not quality
+scores. Project-owned limits use the existing predicates:
+
+```json
+{
+  "constraints": {
+    "DECLARATION-EXTENT": {
+      "assert": "numeric_bounds",
+      "actual": {
+        "projection": {
+          "select": "metrics",
+          "metric": "source.extent_lines",
+          "level": "symbol",
+          "paths": ["src/**"]
+        }
+      },
+      "max": 120,
+      "owner": "core",
+      "rationale": "Keep reviewed declarations within the project limit."
+    }
+  }
+}
+```
+
+Missing exact extents and incomplete graph evidence remain unknown; they never
+become zero or make a constraint pass.
 
 Constraint-owned waivers require an ID, owner, rationale, an exact finding
 fingerprint or comparison/key pair, and an expiry date or input-digest boundary.

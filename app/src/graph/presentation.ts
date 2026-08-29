@@ -9,7 +9,12 @@ import type {
 } from "../artifacts/projection";
 
 export type GraphGrouping = "component" | "directory" | "language" | "layer";
-export type MapView = "architecture" | "evidence" | "overview" | "tests";
+export type MapView =
+  | "architecture"
+  | "evidence"
+  | "metrics"
+  | "overview"
+  | "tests";
 
 export interface GraphPresentation {
   files: GraphView;
@@ -38,6 +43,7 @@ const VIEW_RELATIONS: Readonly<Record<MapView, readonly string[]>> = {
     "references",
   ],
   evidence: [],
+  metrics: ["calls", "imports", "references", "tests"],
   overview: ["bridges", "builds", "imports", "packages", "tests"],
   tests: ["tests"],
 };
@@ -50,7 +56,9 @@ export function mapGraphProjectionPlan(
     group_by: grouping,
     id: `app-${view}-${grouping}`,
     level: "file",
-    overlays: ["diagnostics", "evidence-quality"],
+    overlays: view === "metrics"
+      ? ["diagnostics", "evidence-quality", "metrics"]
+      : ["diagnostics", "evidence-quality"],
     relations: [...VIEW_RELATIONS[view]],
     select: "graph",
   };

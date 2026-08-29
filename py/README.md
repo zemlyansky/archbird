@@ -98,12 +98,14 @@ archbird map .
 archbird map . --view architecture \
   --group-by component --level file --relations imports,calls
 archbird map . --view tests --group-by directory
+archbird map . --view metrics
 archbird map . --view evidence --detail full
 ```
 
-The default Markdown is an architecture-first overview. `--view` chooses the
-subject, `--group-by` organizes entities, `--level` chooses component, file, or
-symbol nodes, and `--relations` selects graph relations. Live Markdown is
+The default Markdown is an architecture-first overview. `--view metrics`
+ranks exact declaration extents and directed graph connectivity. `--group-by`
+organizes entities, `--level` chooses component, file, or symbol nodes, and
+`--relations` selects graph relations. Live Markdown is
 projected directly from the analyzed state rather than by serializing and
 decoding the complete canonical Map. `--detail` changes presentation density
 only; canonical JSON remains exhaustive. Compact and
@@ -360,6 +362,35 @@ selection. One-off primitive operands stay inline:
   }
 }
 ```
+
+Metrics are ordinary projections. `source.extent_lines` counts physical lines
+inside one exact declaration extent; `graph.out_neighbors` counts distinct
+directed targets across projected relations. They are measurements, not quality
+scores. Project-owned limits use the existing predicates:
+
+```json
+{
+  "constraints": {
+    "DECLARATION-EXTENT": {
+      "assert": "numeric_bounds",
+      "actual": {
+        "projection": {
+          "select": "metrics",
+          "metric": "source.extent_lines",
+          "level": "symbol",
+          "paths": ["src/**"]
+        }
+      },
+      "max": 120,
+      "owner": "core",
+      "rationale": "Keep reviewed declarations within the project limit."
+    }
+  }
+}
+```
+
+Missing exact extents and incomplete graph evidence remain unknown; they never
+become zero or make a constraint pass.
 
 Constraint-owned waivers require an ID, owner, rationale, an exact finding
 fingerprint or comparison/key pair, and an expiry date or input-digest boundary.

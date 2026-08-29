@@ -100,7 +100,13 @@ TOOLS = [
                 "overlays": STRINGS,
                 "relations": STRINGS,
                 "view": {
-                    "enum": ["overview", "architecture", "tests", "evidence"],
+                    "enum": [
+                        "overview",
+                        "architecture",
+                        "tests",
+                        "evidence",
+                        "metrics",
+                    ],
                     "type": "string",
                 },
             }

@@ -187,6 +187,53 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
   if (descriptor->kind == AB_PROJECTION_KIND_FILE_METRICS &&
       !ab_value_string_is(ab_value_member(definition, "metric"), "bytes"))
     return invalid(engine, "file_metrics requires metric bytes");
+  if (descriptor->kind == AB_PROJECTION_KIND_METRICS) {
+    const AbValue *metric = ab_value_member(definition, "metric");
+    const AbValue *level = ab_value_member(definition, "level");
+    const AbValue *relations = ab_value_member(definition, "relations");
+    const AbValue *paths = ab_value_member(definition, "paths");
+    size_t item;
+    if (ab_value_string_is(metric, "source.extent_lines")) {
+      if (!ab_value_string_is(level, "symbol"))
+        return invalid(engine, "source.extent_lines requires level symbol");
+      if (relations)
+        return invalid(engine,
+                       "source.extent_lines does not accept graph relations");
+    } else if (ab_value_string_is(metric, "graph.out_neighbors")) {
+      if (!ab_value_string_is(level, "component") &&
+          !ab_value_string_is(level, "file") &&
+          !ab_value_string_is(level, "symbol"))
+        return invalid(engine,
+                       "graph.out_neighbors requires level component, file, "
+                       "or symbol");
+      if (!relations || !relations->as.array.count ||
+          !string_array_unique(relations))
+        return invalid(engine, "graph.out_neighbors requires unique relations");
+      if (paths)
+        return invalid(engine,
+                       "graph.out_neighbors does not accept path filters");
+      for (item = 0; item < relations->as.array.count; item++) {
+        const AbValue *value = &relations->as.array.items[item];
+        if (!ab_value_string_is(value, "builds") &&
+            !ab_value_string_is(value, "bridges") &&
+            !ab_value_string_is(value, "calls") &&
+            !ab_value_string_is(value, "declarations") &&
+            !ab_value_string_is(value, "imports") &&
+            !ab_value_string_is(value, "packages") &&
+            !ab_value_string_is(value, "references") &&
+            !ab_value_string_is(value, "tests"))
+          return invalid(engine, "graph.out_neighbors relations contains an "
+                                 "unsupported kind");
+        if (ab_value_string_is(level, "symbol") &&
+            !ab_value_string_is(value, "calls") &&
+            !ab_value_string_is(value, "references"))
+          return invalid(engine,
+                         "symbol graph metrics support calls and references");
+      }
+    } else {
+      return invalid(engine, "metrics contains an unsupported metric");
+    }
+  }
   if (descriptor->kind == AB_PROJECTION_KIND_GRAPH) {
     const AbValue *level = ab_value_member(definition, "level");
     const AbValue *group = ab_value_member(definition, "group_by");
@@ -230,7 +277,8 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
     for (item = 0; overlays && item < overlays->as.array.count; item++) {
       const AbValue *value = &overlays->as.array.items[item];
       if (!ab_value_string_is(value, "diagnostics") &&
-          !ab_value_string_is(value, "evidence-quality"))
+          !ab_value_string_is(value, "evidence-quality") &&
+          !ab_value_string_is(value, "metrics"))
         return invalid(engine, "graph overlays contains an unsupported kind");
     }
   }

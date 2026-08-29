@@ -149,10 +149,14 @@ ArchbirdStatus archbird_map_render_markdown_view(
       "{\"group_by\":\"directory\",\"id\":\"map-evidence\","
       "\"level\":\"file\",\"overlays\":[\"diagnostics\","
       "\"evidence-quality\"],\"relations\":[],\"select\":\"graph\"}",
+      "{\"group_by\":\"directory\",\"id\":\"map-metrics\","
+      "\"level\":\"file\",\"overlays\":[\"diagnostics\","
+      "\"evidence-quality\",\"metrics\"],\"relations\":[\"calls\","
+      "\"imports\",\"references\",\"tests\"],\"select\":\"graph\"}",
   };
   const char *plan;
   if (!engine || (!map_json && map_length) || !write_fn ||
-      view < ARCHBIRD_MAP_VIEW_OVERVIEW || view > ARCHBIRD_MAP_VIEW_EVIDENCE ||
+      view < ARCHBIRD_MAP_VIEW_OVERVIEW || view > ARCHBIRD_MAP_VIEW_METRICS ||
       detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
       detail > ARCHBIRD_REPORT_DETAIL_FULL)
     return ARCHBIRD_INVALID_ARGUMENT;

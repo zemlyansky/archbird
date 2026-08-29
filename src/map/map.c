@@ -3357,6 +3357,11 @@ static ArchbirdStatus render_graph_projection_file(AbBuffer *buffer,
   if (status == ARCHBIRD_OK)
     status = json_string(buffer, &file->layer);
   if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"metrics\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_render_file_source_metrics(buffer, state->engine,
+                                           state->project, file);
+  if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"path\":");
   if (status == ARCHBIRD_OK)
     status = json_string(buffer, &file->path);
