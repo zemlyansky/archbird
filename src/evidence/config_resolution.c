@@ -3410,7 +3410,16 @@ ab_discovery_resolve(ArchbirdEngine *engine, const uint8_t *config_json,
   if (status == ARCHBIRD_OK)
     status = filter_plan(&state, max_file_bytes, max_index_bytes);
   if (status == ARCHBIRD_OK) {
+    const AbValue *selected;
+    AbString empty_path = {0};
     count_inventory_coverage(&state);
+    selected = ab_value_member(&state.plan, "files");
+    if (state.unsupported_count && selected &&
+        selected->kind == AB_VALUE_ARRAY && !selected->as.array.count)
+      status = append_plain_diagnostic(&state, "discovery-no-supported-source",
+                                       "error", &empty_path);
+  }
+  if (status == ARCHBIRD_OK) {
     status = render_resolution(&state, max_file_bytes, max_index_bytes,
                                json_flags, write_fn, user_data);
   }

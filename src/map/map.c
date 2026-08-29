@@ -3179,6 +3179,14 @@ ArchbirdStatus ab_map_state_analyze(ArchbirdEngine *engine,
     status = ab_map_analyze_parity(out);
   if (status == ARCHBIRD_OK)
     status = ab_map_run_diagnostics(out);
+  if (status == ARCHBIRD_OK && out->manifest->has_resolution &&
+      !out->manifest->resolution.coverage.selected &&
+      out->manifest->resolution.coverage.unsupported_known)
+    status = ab_map_add_diagnostic(
+        out, "error", "discovery-no-supported-source",
+        "repository contains known source files, but no selected source "
+        "language is supported",
+        NULL);
   if (status == ARCHBIRD_OK)
     status = add_provider_diagnostics(out);
   if (status == ARCHBIRD_OK)
@@ -3384,6 +3392,59 @@ static ArchbirdStatus render_graph_projection_file(AbBuffer *buffer,
     status = ab_buffer_u64(buffer, (uint64_t)symbol_count);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "}");
+  return status;
+}
+
+ArchbirdStatus
+ab_map_render_fact_projection_input(AbBuffer *buffer,
+                                    const ArchbirdProject *project,
+                                    const AbMapFactSelection *selection) {
+  const AbSourceManifest *manifest;
+  const AbMapConfig *config;
+  char input_digest[65];
+  ArchbirdStatus status;
+  if (!buffer || !project)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  manifest = ab_project_manifest(project);
+  config = ab_project_config(project);
+  if (!manifest || !config)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memcpy(input_digest, archbird_project_map_input_sha256(project), 65);
+  status = ab_buffer_literal(buffer, "{\"artifact\":\"map\"");
+  if (status == ARCHBIRD_OK && manifest->has_resolution)
+    status = ab_buffer_literal(buffer, ",\"discovery\":");
+  if (status == ARCHBIRD_OK && manifest->has_resolution)
+    status = render_discovery_identity(buffer, manifest);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"evidence\":{\"config_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, config->sha256_hex, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"input_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(buffer, input_digest, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "},\"files\":");
+  if (status == ARCHBIRD_OK)
+    status = render_selected_inputs(buffer, manifest);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"facts\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_map_render_selected_facts(buffer, project, selection);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"inputs\":");
+  if (status == ARCHBIRD_OK)
+    status = render_selected_inputs(buffer, manifest);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"project\":");
+  if (status == ARCHBIRD_OK)
+    status = json_string(buffer, &config->project);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(
+        buffer,
+        ",\"schema_version\":" ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT
+        ",\"tool\":{\"implementation_sha256\":\"" ARCHBIRD_IMPLEMENTATION_SHA256
+        "\",\"name\":\"archbird\",\"version\":\"" ARCHBIRD_VERSION "\"}}");
   return status;
 }
 

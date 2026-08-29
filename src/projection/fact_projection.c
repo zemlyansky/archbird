@@ -5504,6 +5504,16 @@ add_missing_occurrence_anchor(AbProjectionContext *context,
   return status;
 }
 
+static int discovery_has_explicit_layers(const AbValue *discovery) {
+  const AbValue *policy =
+      discovery ? ab_value_member(discovery, "policy") : NULL;
+  const AbValue *configuration =
+      policy ? ab_value_member(policy, "configuration") : NULL;
+  const AbValue *layers =
+      configuration ? ab_value_member(configuration, "layers") : NULL;
+  return layers && layers->kind == AB_VALUE_ARRAY && layers->as.array.count;
+}
+
 static ArchbirdStatus extract_symbol_occurrences(AbProjectionContext *context,
                                                  const AbProjectionPlan *plan,
                                                  AbProjectionData *fact) {
@@ -5878,7 +5888,9 @@ static ArchbirdStatus extract_symbol_occurrences(AbProjectionContext *context,
       status = invalid_map_inventory(
           context, "Map has invalid symbol occurrence discovery coverage");
     else
-      unsupported = oversized;
+      unsupported =
+          oversized +
+          (discovery_has_explicit_layers(discovery) ? 0 : unsupported_known);
   } else if (status == ARCHBIRD_OK) {
     status = invalid_map_inventory(
         context, "Map has no symbol occurrence discovery coverage");

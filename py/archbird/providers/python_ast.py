@@ -1442,6 +1442,26 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             else None
         )
 
+    @staticmethod
+    def _ordered_composition_fragments(
+        expression: ast.expr,
+    ) -> List[Tuple[ast.expr, Sequence[ast.expr], bool]]:
+        fragments: List[Tuple[ast.expr, Sequence[ast.expr], bool]] = []
+
+        def collect(candidate: ast.expr) -> None:
+            sequence = _PythonProviderVisitor._ordered_sequence(candidate)
+            if sequence is not None:
+                fragments.append(sequence)
+                return
+            # Addition preserves explicit sequence fragments without proving
+            # the contents or length of the other operands.
+            if isinstance(candidate, ast.BinOp) and isinstance(candidate.op, ast.Add):
+                collect(candidate.left)
+                collect(candidate.right)
+
+        collect(expression)
+        return fragments
+
     def _ordered_container_id(self, name: str) -> str:
         owner = "/".join(item[0] for item in self.scope)
         suffix = f"{owner}/{name}" if owner else name
@@ -1472,6 +1492,59 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             return
         sequence_info = self._ordered_sequence(expression)
         if sequence_info is None:
+            container = self._ordered_container_id(target.id)
+            fragments = self._ordered_composition_fragments(expression)
+            declared_count = sum(len(elements) for _, elements, _ in fragments)
+            self.facts.add(
+                "ordered-containers",
+                "sequence",
+                _absolute_span(expression, self.starts),
+                container,
+                target.id,
+                {
+                    "container": container,
+                    "declared_count": declared_count,
+                    "incomplete_reason": (
+                        "unsupported-composition"
+                        if isinstance(expression, (ast.BinOp, ast.BoolOp))
+                        else "unsupported-expression"
+                    ),
+                    "line": getattr(expression, "lineno"),
+                    "normalization": "python-ast-expression-v1",
+                    "population_state": "dynamic",
+                    "state": "unknown",
+                },
+            )
+            for sequence, elements, _ in fragments:
+                sequence_span = _absolute_span(sequence, self.starts)
+                fragment = (
+                    f"{container}#{self.facts.source_offset(sequence_span[0])}:"
+                    f"{self.facts.source_offset(sequence_span[1])}"
+                )
+                for ordinal, row in enumerate(elements):
+                    if isinstance(row, ast.Starred):
+                        continue
+                    row_span = _absolute_span(row, self.starts)
+                    normalized = ast.dump(
+                        row, annotate_fields=True, include_attributes=False
+                    )
+                    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+                    self.facts.add(
+                        "ordered-rows",
+                        "row",
+                        row_span,
+                        f"{fragment}:{digest}",
+                        target.id,
+                        {
+                            "container": container,
+                            "digest": digest,
+                            "fragment": fragment,
+                            "line": getattr(row, "lineno"),
+                            "normalization": "python-ast-expression-v1",
+                            "ordinal": ordinal,
+                            "state": "unknown",
+                        },
+                    )
             return
         sequence, elements, dynamic = sequence_info
         dynamic = dynamic or target.id in self.receivers[-1].unstable

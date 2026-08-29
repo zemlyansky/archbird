@@ -8,6 +8,7 @@
 #include "base/render_internal.h"
 #include "base/sha256.h"
 #include "map/diff_internal.h"
+#include "map/map_internal.h"
 #include "projection/projection_comparison.h"
 #include "projection/projection_internal.h"
 
@@ -76,6 +77,121 @@ static ArchbirdStatus plan_compile(ArchbirdEngine *engine,
   return ab_projection_plan_compile(engine, definition, &id->as.text, out);
 }
 
+static int fact_backed_projection(const AbProjectionPlan *plan) {
+  const AbValue *select = ab_value_member(&plan->definition, "select");
+  return ab_value_string_is(select, "ordered_rows");
+}
+
+static ArchbirdStatus projection_map_decode(ArchbirdEngine *engine,
+                                            const uint8_t *json, size_t length,
+                                            const AbProjectionPlan *plan,
+                                            AbValue *out) {
+  static const char *const ordered_fields[] = {
+      "artifact", "discovery", "evidence",       "facts", "files",
+      "inputs",   "project",   "schema_version", "tool"};
+  if (fact_backed_projection(plan))
+    return ab_diff_map_select(
+        engine, json, length, ordered_fields,
+        sizeof(ordered_fields) / sizeof(ordered_fields[0]), out);
+  return ab_diff_map_decode(engine, json, length, out);
+}
+
+static int bytes_suffix(const AbString *value, const char *suffix) {
+  size_t length = strlen(suffix);
+  return value->length >= length &&
+         !memcmp(value->data + value->length - length, suffix, length);
+}
+
+static ArchbirdStatus render_plan_requirements(AbBuffer *buffer,
+                                               const AbProjectionPlan *plan) {
+  const AbValue *select = ab_value_member(&plan->definition, "select");
+  const AbValue *container = ab_value_member(&plan->definition, "container");
+  const char *separator;
+  size_t path_length;
+  const char *language = NULL;
+  TRY(ab_buffer_literal(buffer, "{\"live_project\":"));
+  TRY(ab_buffer_literal(buffer,
+                        fact_backed_projection(plan) ? "true" : "false"));
+  TRY(ab_buffer_literal(buffer, ",\"ordered_containers\":["));
+  if (!ab_value_string_is(select, "ordered_rows") || !container ||
+      container->kind != AB_VALUE_STRING)
+    return ab_buffer_literal(buffer, "]}");
+  separator = memchr(container->as.text.data, ':', container->as.text.length);
+  if (!separator || separator == container->as.text.data ||
+      separator + 1 == container->as.text.data + container->as.text.length)
+    return invalid(buffer->engine,
+                   "ordered_rows container must be PATH:QUALIFIED_NAME");
+  path_length = (size_t)(separator - container->as.text.data);
+  {
+    AbString path = {container->as.text.data, path_length};
+    if (bytes_suffix(&path, ".py"))
+      language = "python";
+    else if (bytes_suffix(&path, ".c") || bytes_suffix(&path, ".h"))
+      language = "c";
+  }
+  if (!language)
+    return ab_buffer_literal(buffer, "]}");
+  TRY(ab_buffer_literal(buffer, "{\"language\":"));
+  TRY(ab_buffer_json_string(buffer, language, strlen(language)));
+  TRY(ab_buffer_literal(buffer, ",\"names\":["));
+  TRY(ab_buffer_json_string(buffer, separator + 1,
+                            container->as.text.length - path_length -
+                                (size_t)1));
+  TRY(ab_buffer_literal(buffer, "],\"paths\":["));
+  TRY(ab_buffer_json_string(buffer, container->as.text.data, path_length));
+  return ab_buffer_literal(buffer, "]}]}");
+}
+
+ArchbirdStatus
+archbird_diff_requirements(ArchbirdEngine *engine, const uint8_t *request_json,
+                           size_t request_length, uint32_t json_flags,
+                           ArchbirdWriteFn write_fn, void *user_data) {
+  AbValue request = {0};
+  const AbValue *before_definition = NULL;
+  const AbValue *after_definition = NULL;
+  const AbValue *mapping = NULL;
+  AbProjectionPlan before_plan = {0};
+  AbProjectionPlan after_plan = {0};
+  AbBuffer buffer;
+  ArchbirdStatus status;
+  if (!engine || !request_json || !request_length || !write_fn ||
+      !ab_json_flags_valid(json_flags))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  ab_buffer_init(&buffer, engine);
+  status = ab_json_value_decode(engine, request_json, request_length, &request);
+  if (status == ARCHBIRD_OK)
+    status = request_validate(engine, &request, &before_definition,
+                              &after_definition, &mapping);
+  if (status == ARCHBIRD_OK)
+    status = plan_compile(engine, before_definition, &before_plan);
+  if (status == ARCHBIRD_OK)
+    status = plan_compile(engine, after_definition, &after_plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, "{\"after\":");
+  if (status == ARCHBIRD_OK)
+    status = render_plan_requirements(&buffer, &after_plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"before\":");
+  if (status == ARCHBIRD_OK)
+    status = render_plan_requirements(&buffer, &before_plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, "}");
+  if (status == ARCHBIRD_OK && !json_flags) {
+    if (write_fn(user_data, buffer.data, buffer.length) != 0)
+      status =
+          archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
+                             "diff output writer failed");
+  } else if (status == ARCHBIRD_OK) {
+    status = archbird_json_canonicalize(engine, buffer.data, buffer.length,
+                                        json_flags, write_fn, user_data);
+  }
+  ab_buffer_free(&buffer);
+  ab_projection_plan_free(engine, &after_plan);
+  ab_projection_plan_free(engine, &before_plan);
+  ab_value_free(engine, &request);
+  return status;
+}
+
 static ArchbirdStatus
 render_projection_identity(AbBuffer *buffer, const AbProjectionPlan *plan,
                            const AbProjectionResult *result) {
@@ -119,33 +235,33 @@ static ArchbirdStatus render_group(AbBuffer *buffer,
   TRY(ab_buffer_json_string(buffer, group_state(group->state),
                             strlen(group_state(group->state))));
   TRY(ab_buffer_literal(buffer, ",\"targets\":["));
-  if (group->state == AB_COMPARISON_GROUP_SOURCE_MISSING) {
-    for (index = 0; index < group->group->right_count; index++) {
-      if (index)
-        TRY(ab_buffer_literal(buffer, ","));
-      TRY(ab_buffer_literal(buffer, "{\"after\":null,\"key\":"));
-      TRY(ab_buffer_json_string(buffer, group->group->rights[index]->data,
-                                group->group->rights[index]->length));
-      TRY(ab_buffer_literal(buffer, ",\"state\":\"unresolved\"}"));
+  for (index = 0; index < group->group->right_count; index++) {
+    const AbString *target = group->group->rights[index];
+    const AbComparisonRecord *record = NULL;
+    size_t record_index;
+    for (record_index = 0; record_index < group->record_count; record_index++) {
+      const AbComparisonRecord *candidate =
+          &comparison->records[group->record_start + record_index];
+      if (candidate->right_key &&
+          !ab_string_compare(candidate->right_key, target)) {
+        record = candidate;
+        break;
+      }
     }
-  } else {
-    for (index = 0; index < group->record_count; index++) {
-      const AbComparisonRecord *record =
-          &comparison->records[group->record_start + index];
-      if (index)
-        TRY(ab_buffer_literal(buffer, ","));
-      TRY(ab_buffer_literal(buffer, "{\"after\":"));
-      TRY(render_item_or_null(buffer, record->right));
-      TRY(ab_buffer_literal(buffer, ",\"key\":"));
-      TRY(ab_buffer_json_string(buffer, record->right_key->data,
-                                record->right_key->length));
-      TRY(ab_buffer_literal(buffer, ",\"state\":"));
-      if (record->kind == AB_COMPARISON_MATCHED)
-        TRY(ab_buffer_literal(buffer, "\"matched\""));
-      else
-        TRY(ab_buffer_literal(buffer, "\"missing\""));
-      TRY(ab_buffer_literal(buffer, "}"));
-    }
+    if (index)
+      TRY(ab_buffer_literal(buffer, ","));
+    TRY(ab_buffer_literal(buffer, "{\"after\":"));
+    TRY(render_item_or_null(buffer, record ? record->right : NULL));
+    TRY(ab_buffer_literal(buffer, ",\"key\":"));
+    TRY(ab_buffer_json_string(buffer, target->data, target->length));
+    TRY(ab_buffer_literal(buffer, ",\"state\":"));
+    if (record && record->kind == AB_COMPARISON_MATCHED)
+      TRY(ab_buffer_literal(buffer, "\"matched\""));
+    else if (record && record->kind == AB_COMPARISON_MAPPING_RIGHT_MISSING)
+      TRY(ab_buffer_literal(buffer, "\"missing\""));
+    else
+      TRY(ab_buffer_literal(buffer, "\"unresolved\""));
+    TRY(ab_buffer_literal(buffer, "}"));
   }
   return ab_buffer_literal(buffer, "]}");
 }
@@ -216,12 +332,11 @@ static ArchbirdStatus render_comparison(AbBuffer *buffer,
   TRY(ab_buffer_literal(buffer, ",\"matched\":"));
   TRY(ab_buffer_u64(buffer, (uint64_t)counts[0]));
   TRY(ab_buffer_literal(buffer, "},\"groups\":["));
-  if (!comparison->incomplete)
-    for (index = 0; index < comparison->group_count; index++) {
-      if (index)
-        TRY(ab_buffer_literal(buffer, ","));
-      TRY(render_group(buffer, comparison, &comparison->groups[index]));
-    }
+  for (index = 0; index < comparison->group_count; index++) {
+    if (index)
+      TRY(ab_buffer_literal(buffer, ","));
+    TRY(render_group(buffer, comparison, &comparison->groups[index]));
+  }
   TRY(ab_buffer_literal(buffer, "],\"state\":"));
   if (comparison->incomplete)
     TRY(ab_buffer_literal(buffer, "\"unknown\""));
@@ -245,6 +360,106 @@ static ArchbirdStatus digest_value(ArchbirdEngine *engine, const AbValue *value,
   return status;
 }
 
+static ArchbirdStatus projection_comparison_render(
+    ArchbirdEngine *engine, const AbValue *before_map,
+    const AbProjectionPlan *before_plan,
+    const AbProjectionResult *before_result, const AbValue *after_map,
+    const AbProjectionPlan *after_plan, const AbProjectionResult *after_result,
+    const AbValue *mapping, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data) {
+  AbProjectionComparisonInput input = {0};
+  AbComparisonPlan comparison_plan = {0};
+  AbComparisonResult comparison = {0};
+  AbDiffContext context = {engine};
+  AbBuffer buffer;
+  char correspondence_sha256[65] = {0};
+  ArchbirdStatus status;
+  ab_buffer_init(&buffer, engine);
+  status = ab_projection_comparison_prepare(engine, &before_result->data,
+                                            &after_result->data, mapping, 1, 1,
+                                            &input, &comparison_plan);
+  if (status == ARCHBIRD_OK)
+    status = ab_comparison_run(engine, &comparison_plan, &comparison);
+  if (status == ARCHBIRD_OK)
+    status = digest_value(engine, mapping, correspondence_sha256);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, "{\"after\":{\"map\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_diff_map_identity_render(&context, &buffer, after_map);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"projection\":");
+  if (status == ARCHBIRD_OK)
+    status = render_projection_identity(&buffer, after_plan, after_result);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer,
+                               "},\"artifact\":\"diff\",\"before\":{\"map\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_diff_map_identity_render(&context, &buffer, before_map);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"projection\":");
+  if (status == ARCHBIRD_OK)
+    status = render_projection_identity(&buffer, before_plan, before_result);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, "},\"comparison\":");
+  if (status == ARCHBIRD_OK)
+    status = render_comparison(&buffer, &comparison);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"correspondence_sha256\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_json_string(&buffer, correspondence_sha256, 64);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(
+        &buffer,
+        ",\"join\":\"correspondence\",\"schema_version\":8,\"tool\":{"
+        "\"implementation_sha256\":\"" ARCHBIRD_IMPLEMENTATION_SHA256
+        "\",\"name\":\"archbird\",\"version\":\"" ARCHBIRD_VERSION "\"}}");
+  if (status == ARCHBIRD_OK && !json_flags) {
+    if (write_fn(user_data, buffer.data, buffer.length) != 0)
+      status =
+          archbird_error_set(engine, ARCHBIRD_WRITE_FAILED, ARCHBIRD_NO_OFFSET,
+                             "diff output writer failed");
+  } else if (status == ARCHBIRD_OK) {
+    status = archbird_json_canonicalize(engine, buffer.data, buffer.length,
+                                        json_flags, write_fn, user_data);
+  }
+  ab_buffer_free(&buffer);
+  ab_comparison_result_free(engine, &comparison);
+  ab_projection_comparison_free(engine, &input);
+  return status;
+}
+
+static ArchbirdStatus project_projection_evaluate(
+    ArchbirdEngine *engine, const AbProjectionPlan *plan,
+    const ArchbirdProject *project, const AbValue *resolution,
+    AbProjectionResult *out, AbValue *out_map_identity) {
+  static const char *const ordered_domains[] = {"ordered-containers",
+                                                "ordered-rows"};
+  AbMapFactSelection selection = {0};
+  const AbValue *container = ab_value_member(&plan->definition, "container");
+  AbBuffer input;
+  ArchbirdStatus status;
+  memset(out_map_identity, 0, sizeof(*out_map_identity));
+  if (!fact_backed_projection(plan))
+    return archbird_error_set(engine, ARCHBIRD_INVALID_ARGUMENT,
+                              ARCHBIRD_NO_OFFSET,
+                              "live project projection is not fact-backed");
+  selection.domains = ordered_domains;
+  selection.domain_count = sizeof(ordered_domains) / sizeof(ordered_domains[0]);
+  selection.container = &container->as.text;
+  ab_buffer_init(&input, engine);
+  status = ab_map_render_fact_projection_input(&input, project, &selection);
+  if (status == ARCHBIRD_OK)
+    status = ab_json_value_decode(engine, input.data, input.length,
+                                  out_map_identity);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_plan_evaluate(engine, plan, out_map_identity,
+                                         resolution, out);
+  ab_buffer_free(&input);
+  if (status != ARCHBIRD_OK)
+    ab_value_free(engine, out_map_identity);
+  return status;
+}
+
 ArchbirdStatus
 ab_projection_diff(ArchbirdEngine *engine, const uint8_t *before_json,
                    size_t before_length, const uint8_t *before_resolution_json,
@@ -265,30 +480,9 @@ ab_projection_diff(ArchbirdEngine *engine, const uint8_t *before_json,
   AbProjectionPlan after_plan = {0};
   AbProjectionResult before_result = {0};
   AbProjectionResult after_result = {0};
-  AbProjectionComparisonInput input = {0};
-  AbComparisonPlan comparison_plan = {0};
-  AbComparisonResult comparison = {0};
   AbDiffContext context = {engine};
-  AbBuffer buffer;
-  char correspondence_sha256[65] = {0};
   ArchbirdStatus status;
-  ab_buffer_init(&buffer, engine);
-  status = ab_json_value_decode(engine, before_json, before_length, &before);
-  if (status == ARCHBIRD_OK)
-    status = ab_json_value_decode(engine, after_json, after_length, &after);
-  if (status == ARCHBIRD_OK)
-    status = resolution_decode(engine, before_resolution_json,
-                               before_resolution_length, &before_resolution);
-  if (status == ARCHBIRD_OK)
-    status = resolution_decode(engine, after_resolution_json,
-                               after_resolution_length, &after_resolution);
-  if (status == ARCHBIRD_OK)
-    status =
-        ab_json_value_decode(engine, request_json, request_length, &request);
-  if (status == ARCHBIRD_OK)
-    status = ab_diff_map_validate(&context, &before);
-  if (status == ARCHBIRD_OK)
-    status = ab_diff_map_validate(&context, &after);
+  status = ab_json_value_decode(engine, request_json, request_length, &request);
   if (status == ARCHBIRD_OK)
     status = request_validate(engine, &request, &before_definition,
                               &after_definition, &mapping);
@@ -296,6 +490,22 @@ ab_projection_diff(ArchbirdEngine *engine, const uint8_t *before_json,
     status = plan_compile(engine, before_definition, &before_plan);
   if (status == ARCHBIRD_OK)
     status = plan_compile(engine, after_definition, &after_plan);
+  if (status == ARCHBIRD_OK)
+    status = projection_map_decode(engine, before_json, before_length,
+                                   &before_plan, &before);
+  if (status == ARCHBIRD_OK)
+    status = projection_map_decode(engine, after_json, after_length,
+                                   &after_plan, &after);
+  if (status == ARCHBIRD_OK)
+    status = resolution_decode(engine, before_resolution_json,
+                               before_resolution_length, &before_resolution);
+  if (status == ARCHBIRD_OK)
+    status = resolution_decode(engine, after_resolution_json,
+                               after_resolution_length, &after_resolution);
+  if (status == ARCHBIRD_OK)
+    status = ab_diff_map_validate(&context, &before);
+  if (status == ARCHBIRD_OK)
+    status = ab_diff_map_validate(&context, &after);
   if (status == ARCHBIRD_OK)
     status = ab_projection_plan_evaluate(
         engine, &before_plan, &before,
@@ -305,50 +515,9 @@ ab_projection_diff(ArchbirdEngine *engine, const uint8_t *before_json,
         engine, &after_plan, &after,
         after_resolution_length ? &after_resolution : NULL, &after_result);
   if (status == ARCHBIRD_OK)
-    status = ab_projection_comparison_prepare(engine, &before_result.data,
-                                              &after_result.data, mapping, 1, 1,
-                                              &input, &comparison_plan);
-  if (status == ARCHBIRD_OK)
-    status = ab_comparison_run(engine, &comparison_plan, &comparison);
-  if (status == ARCHBIRD_OK)
-    status = digest_value(engine, mapping, correspondence_sha256);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, "{\"after\":{\"map\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_diff_map_identity_render(&context, &buffer, &after);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ",\"projection\":");
-  if (status == ARCHBIRD_OK)
-    status = render_projection_identity(&buffer, &after_plan, &after_result);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer,
-                               "},\"artifact\":\"diff\",\"before\":{\"map\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_diff_map_identity_render(&context, &buffer, &before);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ",\"projection\":");
-  if (status == ARCHBIRD_OK)
-    status = render_projection_identity(&buffer, &before_plan, &before_result);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, "},\"comparison\":");
-  if (status == ARCHBIRD_OK)
-    status = render_comparison(&buffer, &comparison);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ",\"correspondence_sha256\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_json_string(&buffer, correspondence_sha256, 64);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(
-        &buffer,
-        ",\"join\":\"correspondence\",\"schema_version\":8,\"tool\":{"
-        "\"implementation_sha256\":\"" ARCHBIRD_IMPLEMENTATION_SHA256
-        "\",\"name\":\"archbird\",\"version\":\"" ARCHBIRD_VERSION "\"}}");
-  if (status == ARCHBIRD_OK)
-    status = archbird_json_canonicalize(engine, buffer.data, buffer.length,
-                                        json_flags, write_fn, user_data);
-  ab_buffer_free(&buffer);
-  ab_comparison_result_free(engine, &comparison);
-  ab_projection_comparison_free(engine, &input);
+    status = projection_comparison_render(
+        engine, &before, &before_plan, &before_result, &after, &after_plan,
+        &after_result, mapping, json_flags, write_fn, user_data);
   ab_projection_result_free(engine, &after_result);
   ab_projection_result_free(engine, &before_result);
   ab_projection_plan_free(engine, &after_plan);
@@ -358,6 +527,76 @@ ab_projection_diff(ArchbirdEngine *engine, const uint8_t *before_json,
   ab_value_free(engine, &before_resolution);
   ab_value_free(engine, &after);
   ab_value_free(engine, &before);
+  return status;
+}
+
+ArchbirdStatus archbird_projects_diff(
+    ArchbirdEngine *engine, const ArchbirdProject *before_project,
+    const uint8_t *before_resolution_json, size_t before_resolution_length,
+    const ArchbirdProject *after_project, const uint8_t *after_resolution_json,
+    size_t after_resolution_length, const uint8_t *request_json,
+    size_t request_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data) {
+  AbValue before_resolution = {0};
+  AbValue after_resolution = {0};
+  AbValue request = {0};
+  AbValue before_map = {0};
+  AbValue after_map = {0};
+  const AbValue *before_definition = NULL;
+  const AbValue *after_definition = NULL;
+  const AbValue *mapping = NULL;
+  AbProjectionPlan before_plan = {0};
+  AbProjectionPlan after_plan = {0};
+  AbProjectionResult before_result = {0};
+  AbProjectionResult after_result = {0};
+  ArchbirdStatus status;
+  if (!engine || !before_project ||
+      (!before_resolution_json && before_resolution_length) || !after_project ||
+      (!after_resolution_json && after_resolution_length) ||
+      (!request_json && request_length) || !write_fn ||
+      !ab_json_flags_valid(json_flags))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  if (!request_length)
+    return ab_projects_map_diff(engine, before_project, after_project,
+                                json_flags, write_fn, user_data);
+  status = resolution_decode(engine, before_resolution_json,
+                             before_resolution_length, &before_resolution);
+  if (status == ARCHBIRD_OK)
+    status = resolution_decode(engine, after_resolution_json,
+                               after_resolution_length, &after_resolution);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_json_value_decode(engine, request_json, request_length, &request);
+  if (status == ARCHBIRD_OK)
+    status = request_validate(engine, &request, &before_definition,
+                              &after_definition, &mapping);
+  if (status == ARCHBIRD_OK)
+    status = plan_compile(engine, before_definition, &before_plan);
+  if (status == ARCHBIRD_OK)
+    status = plan_compile(engine, after_definition, &after_plan);
+  if (status == ARCHBIRD_OK)
+    status = project_projection_evaluate(
+        engine, &before_plan, before_project,
+        before_resolution_length ? &before_resolution : NULL, &before_result,
+        &before_map);
+  if (status == ARCHBIRD_OK)
+    status = project_projection_evaluate(
+        engine, &after_plan, after_project,
+        after_resolution_length ? &after_resolution : NULL, &after_result,
+        &after_map);
+  if (status == ARCHBIRD_OK)
+    status = projection_comparison_render(
+        engine, &before_map, &before_plan, &before_result, &after_map,
+        &after_plan, &after_result, mapping, json_flags, write_fn, user_data);
+  ab_value_free(engine, &after_map);
+  ab_value_free(engine, &before_map);
+  ab_projection_result_free(engine, &after_result);
+  ab_projection_result_free(engine, &before_result);
+  ab_projection_plan_free(engine, &after_plan);
+  ab_projection_plan_free(engine, &before_plan);
+  ab_value_free(engine, &request);
+  ab_value_free(engine, &after_resolution);
+  ab_value_free(engine, &before_resolution);
   return status;
 }
 

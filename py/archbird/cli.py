@@ -1581,20 +1581,16 @@ def _validate_project_configuration(config_json: bytes) -> None:
         raise ConfigError("archbird.json does not allow root; use --root")
 
 
-def _repository_inputs(args: argparse.Namespace) -> tuple[Path, bytes, Optional[Path]]:
-    root_path = getattr(args, "root_path", None)
-    positional = Path(root_path).resolve() if root_path else None
-    override = Path(args.root_override).resolve() if args.root_override else None
-    if positional is not None and override is not None and positional != override:
-        raise ConfigError("positional ROOT and --root select different directories")
-    selected = positional or override or Path.cwd().resolve()
+def _project_configuration(
+    selected: Path, *, config: Optional[str] = None, no_config: bool = False
+) -> tuple[bytes, Optional[Path]]:
     config_path: Optional[Path] = None
     config_json = b""
-    if args.config:
-        if args.config == "-":
+    if config:
+        if config == "-":
             config_json = sys.stdin.buffer.read()
         else:
-            config_path = Path(args.config).resolve()
+            config_path = Path(config).resolve()
             try:
                 config_json = config_path.read_bytes()
             except OSError as error:
@@ -1602,7 +1598,7 @@ def _repository_inputs(args: argparse.Namespace) -> tuple[Path, bytes, Optional[
                     f"cannot read configuration: {config_path}: {error}"
                 ) from error
         _validate_project_configuration(config_json)
-    elif not args.no_config:
+    elif not no_config:
         candidates = []
         for candidate in (selected / "archbird.json",):
             try:
@@ -1615,6 +1611,19 @@ def _repository_inputs(args: argparse.Namespace) -> tuple[Path, bytes, Optional[
             config_path = candidates[0].resolve()
             config_json = config_path.read_bytes()
             _validate_project_configuration(config_json)
+    return config_json, config_path
+
+
+def _repository_inputs(args: argparse.Namespace) -> tuple[Path, bytes, Optional[Path]]:
+    root_path = getattr(args, "root_path", None)
+    positional = Path(root_path).resolve() if root_path else None
+    override = Path(args.root_override).resolve() if args.root_override else None
+    if positional is not None and override is not None and positional != override:
+        raise ConfigError("positional ROOT and --root select different directories")
+    selected = positional or override or Path.cwd().resolve()
+    config_json, config_path = _project_configuration(
+        selected, config=args.config, no_config=args.no_config
+    )
     if not selected.is_dir():
         raise ConfigError(f"root is not a directory: {selected}")
     return selected, config_json, config_path
@@ -2768,7 +2777,39 @@ def _diff_main(argv: Sequence[str]) -> int:
 
         stdin = sys.stdin.buffer.read() if "-" in {before_operand, after_operand} else b""
 
-        def load_operand(value: str, label: str) -> tuple[bytes, bytes]:
+        correspondence = (
+            Path(args.correspondence).read_bytes() if args.correspondence else b""
+        )
+
+        requirements = (
+            json.loads(_native.diff_requirements(correspondence))
+            if correspondence
+            else {"after": {}, "before": {}}
+        )
+
+        def configured_for_diff(config_json: bytes, side: str) -> bytes:
+            document = json.loads(config_json or b"{}")
+            required = requirements.get(side)
+            if not isinstance(document, dict) or not isinstance(required, dict):
+                raise ValueError("native Diff provider requirements are invalid")
+            authored = document.get("ordered_containers", [])
+            inferred = required.get("ordered_containers", [])
+            if not isinstance(authored, list) or not isinstance(inferred, list):
+                raise ValueError("Diff ordered-container requirements are invalid")
+            unique = {
+                json.dumps(row, sort_keys=True, separators=(",", ":")): row
+                for row in (*authored, *inferred)
+            }
+            if unique:
+                document["ordered_containers"] = [unique[key] for key in sorted(unique)]
+            return json.dumps(
+                document, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+
+        def load_operand(
+            value: str, label: str
+        ) -> tuple[bytes | None, bytes, Project | None]:
+            project = None
             if value == "-":
                 encoded_map = stdin
                 resolution = b""
@@ -2778,10 +2819,11 @@ def _diff_main(argv: Sequence[str]) -> int:
                     progress.emit(
                         {"phase": "discovery", "state": "start", "side": label}
                     )
+                    config_json, _ = _project_configuration(path.resolve())
+                    if correspondence:
+                        config_json = configured_for_diff(config_json, label)
                     project = Project.from_repository(
-                        path,
-                        jobs=args.jobs,
-                        scan=False,
+                        path, config=config_json or None, jobs=args.jobs, scan=False
                     )
                     project.scan(
                         jobs=args.jobs,
@@ -2790,13 +2832,13 @@ def _diff_main(argv: Sequence[str]) -> int:
                         cache_max_bytes=_cache_max_bytes(args),
                         progress=progress.emit,
                     )
-                    encoded_map = project.map_json()
                     resolution = project.resolution_json
                     _warn_cache_stats(
                         project.cache_stats,
                         _cache_dir(args),
                         _cache_max_bytes(args),
                     )
+                    return None, resolution or b"", project
                 elif path.is_file():
                     encoded_map = path.read_bytes()
                     resolution = b""
@@ -2815,26 +2857,50 @@ def _diff_main(argv: Sequence[str]) -> int:
                         "pass its repository directory"
                     )
                 raise ValueError(f"{label} Diff operand is not an Archbird Map")
-            return encoded_map, resolution
+            return encoded_map, resolution, project
 
-        before, before_resolution = load_operand(before_operand, "before")
-        after, after_resolution = load_operand(after_operand, "after")
-        correspondence = (
-            Path(args.correspondence).read_bytes() if args.correspondence else b""
+        before, before_resolution, before_project = load_operand(
+            before_operand, "before"
         )
+        after, after_resolution, after_project = load_operand(after_operand, "after")
         if correspondence and args.check not in {None, _DIFF_DEFAULT_CHECK}:
             raise ValueError(
                 "Diff risk categories do not apply to correspondence; "
                 "use bare --check"
             )
-        encoded = diff_json(
-            before,
-            after,
-            correspondence=correspondence,
-            before_resolution=before_resolution,
-            after_resolution=after_resolution,
-            pretty=args.pretty,
+        direct_projects = all(
+            isinstance(requirements.get(side), dict)
+            and requirements[side].get("live_project") is True
+            for side in ("before", "after")
         )
+        if (
+            before_project
+            and after_project
+            and (not correspondence or direct_projects)
+        ):
+            encoded = diff_json(
+                before_project,
+                after_project,
+                correspondence=correspondence,
+                before_resolution=before_resolution,
+                after_resolution=after_resolution,
+                pretty=args.pretty,
+            )
+        else:
+            if before is None:
+                assert before_project is not None
+                before = before_project.map_json()
+            if after is None:
+                assert after_project is not None
+                after = after_project.map_json()
+            encoded = diff_json(
+                before,
+                after,
+                correspondence=correspondence,
+                before_resolution=before_resolution,
+                after_resolution=after_resolution,
+                pretty=args.pretty,
+            )
         document = json.loads(encoded)
         _write(encoded, args.output)
         progress.finish()

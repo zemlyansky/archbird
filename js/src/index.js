@@ -1866,6 +1866,38 @@ function diff(
     pretty = false,
   } = {},
 ) {
+  if (before instanceof Project || after instanceof Project) {
+    if (!(before instanceof Project) || !(after instanceof Project)) {
+      throw new TypeError("project Diff requires two Project instances");
+    }
+    if (correspondence.length) {
+      const requirements = JSON.parse(
+        native.diffRequirements(Buffer.from(correspondence)).toString("utf8"),
+      );
+      if (!["before", "after"].every(
+        (side) => requirements[side]?.live_project === true,
+      )) {
+        return native.diff(
+          before.mapJson(),
+          after.mapJson(),
+          Buffer.from(correspondence),
+          Buffer.from(beforeResolution),
+          Buffer.from(afterResolution),
+          pretty,
+        );
+      }
+    }
+    before.materialize();
+    after.materialize();
+    return native.projectsDiff(
+      before._handle,
+      after._handle,
+      Buffer.from(correspondence),
+      Buffer.from(beforeResolution),
+      Buffer.from(afterResolution),
+      pretty,
+    );
+  }
   return native.diff(
     Buffer.from(before),
     Buffer.from(after),

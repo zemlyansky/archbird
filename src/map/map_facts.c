@@ -82,15 +82,32 @@ static ArchbirdStatus render_fact(AbBuffer *buffer, const AbFact *fact,
   return ab_buffer_literal(buffer, "}}");
 }
 
-ArchbirdStatus ab_map_render_facts(AbBuffer *buffer,
-                                   const ArchbirdProject *project) {
+static int fact_selected(const AbFact *fact,
+                         const AbMapFactSelection *selection) {
+  size_t index;
+  if (!selection)
+    return map_fact_domain(&fact->domain);
+  for (index = 0; index < selection->domain_count; index++)
+    if (string_is(&fact->domain, selection->domains[index])) {
+      const AbString *container;
+      if (!selection->container)
+        return 1;
+      container = ab_map_fact_string_attribute(fact, "container");
+      return container && ab_string_equal(container, selection->container);
+    }
+  return 0;
+}
+
+ArchbirdStatus
+ab_map_render_selected_facts(AbBuffer *buffer, const ArchbirdProject *project,
+                             const AbMapFactSelection *selection) {
   size_t index;
   size_t rendered = 0;
   RENDER_TRY(ab_buffer_literal(buffer, "["));
   for (index = 0; index < ab_project_merged_fact_count(project); index++) {
     const AbFact *fact = ab_project_merged_fact(project, index);
     const AbProviderBundle *provider;
-    if (!map_fact_domain(&fact->domain))
+    if (!fact_selected(fact, selection))
       continue;
     provider = ab_project_merged_fact_provider(project, index);
     if (!provider)
@@ -102,6 +119,11 @@ ArchbirdStatus ab_map_render_facts(AbBuffer *buffer,
     RENDER_TRY(render_fact(buffer, fact, provider));
   }
   return ab_buffer_literal(buffer, "]");
+}
+
+ArchbirdStatus ab_map_render_facts(AbBuffer *buffer,
+                                   const ArchbirdProject *project) {
+  return ab_map_render_selected_facts(buffer, project, NULL);
 }
 
 #undef RENDER_TRY

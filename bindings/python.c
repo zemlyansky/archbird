@@ -1729,6 +1729,81 @@ static PyObject *py_diff(PyObject *self, PyObject *args, PyObject *kwargs) {
   return result;
 }
 
+static PyObject *py_diff_requirements(PyObject *self, PyObject *args,
+                                      PyObject *kwargs) {
+  static char *keywords[] = {"request", "pretty", NULL};
+  const char *request;
+  Py_ssize_t request_length;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y#|p:diff_requirements",
+                                   keywords, &request, &request_length,
+                                   &pretty))
+    return NULL;
+  status = input_engine((size_t)request_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_diff_requirements(
+        engine, (const uint8_t *)request, (size_t)request_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
+static PyObject *py_projects_diff(PyObject *self, PyObject *args,
+                                  PyObject *kwargs) {
+  static char *keywords[] = {
+      "before_project",   "after_project", "request", "before_resolution",
+      "after_resolution", "pretty",        NULL};
+  PyObject *before_capsule;
+  PyObject *after_capsule;
+  PyArchbirdProject *before;
+  PyArchbirdProject *after;
+  const char *request;
+  const char *before_resolution = NULL;
+  const char *after_resolution = NULL;
+  Py_ssize_t request_length;
+  Py_ssize_t before_resolution_length = 0;
+  Py_ssize_t after_resolution_length = 0;
+  int pretty = 0;
+  size_t input_length;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  PyOutput output = {0};
+  PyObject *result;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "OOy#|y#y#p:projects_diff", keywords, &before_capsule,
+          &after_capsule, &request, &request_length, &before_resolution,
+          &before_resolution_length, &after_resolution,
+          &after_resolution_length, &pretty))
+    return NULL;
+  before = get_project(before_capsule);
+  after = get_project(after_capsule);
+  if (!before || !after)
+    return NULL;
+  input_length =
+      larger_input((size_t)request_length, (size_t)before_resolution_length);
+  input_length = larger_input(input_length, (size_t)after_resolution_length);
+  status = saved_artifact_engine(input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projects_diff(
+        engine, before->project,
+        before_resolution_length ? (const uint8_t *)before_resolution : NULL,
+        (size_t)before_resolution_length, after->project,
+        after_resolution_length ? (const uint8_t *)after_resolution : NULL,
+        (size_t)after_resolution_length, (const uint8_t *)request,
+        (size_t)request_length, pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write,
+        &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_unified_diff(PyObject *self, PyObject *args,
                                  PyObject *kwargs) {
   static char *keywords[] = {
@@ -2582,6 +2657,12 @@ static PyMethodDef archbird_methods[] = {
      "Structurally diff two canonical saved maps."},
     {"diff", (PyCFunction)py_diff, METH_VARARGS | METH_KEYWORDS,
      "Diff two Maps directly or through reviewed correspondence."},
+    {"diff_requirements", (PyCFunction)py_diff_requirements,
+     METH_VARARGS | METH_KEYWORDS,
+     "Compile provider requirements for correspondence Diff."},
+    {"projects_diff", (PyCFunction)py_projects_diff,
+     METH_VARARGS | METH_KEYWORDS,
+     "Diff two collected projects by identity or reviewed correspondence."},
     {"unified_diff", (PyCFunction)py_unified_diff, METH_VARARGS | METH_KEYWORDS,
      "Render one deterministic git-style unified diff."},
     {"json_pointer_edit", (PyCFunction)py_json_pointer_edit,

@@ -378,28 +378,19 @@ function validateProjectConfiguration(configJson) {
   }
 }
 
-function repositoryInputs(options) {
-  if (options.config && options.noConfig) {
-    throw new Error("--config and --no-config are mutually exclusive");
-  }
-  const positional = options._[0] ? path.resolve(options._[0]) : null;
-  const override = options.root ? path.resolve(options.root) : null;
-  if (positional && override && positional !== override) {
-    throw new Error("positional ROOT and --root select different directories");
-  }
-  let repository = positional || override || path.resolve(".");
+function projectConfiguration(repository, { config = null, noConfig = false } = {}) {
   let configPath = null;
   let configJson = Buffer.alloc(0);
-  if (options.config) {
-    if (options.config === "-") {
+  if (config) {
+    if (config === "-") {
       configJson = fs.readFileSync(0);
     }
     else {
-      configPath = path.resolve(options.config);
+      configPath = path.resolve(config);
       configJson = fs.readFileSync(configPath);
     }
     validateProjectConfiguration(configJson);
-  } else if (!options.noConfig) {
+  } else if (!noConfig) {
     const candidates = ["archbird.json"]
       .map((name) => path.join(repository, name))
       .filter((candidate) => {
@@ -417,6 +408,23 @@ function repositoryInputs(options) {
       validateProjectConfiguration(configJson);
     }
   }
+  return { configJson, configPath };
+}
+
+function repositoryInputs(options) {
+  if (options.config && options.noConfig) {
+    throw new Error("--config and --no-config are mutually exclusive");
+  }
+  const positional = options._[0] ? path.resolve(options._[0]) : null;
+  const override = options.root ? path.resolve(options.root) : null;
+  if (positional && override && positional !== override) {
+    throw new Error("positional ROOT and --root select different directories");
+  }
+  let repository = positional || override || path.resolve(".");
+  const { configJson, configPath } = projectConfiguration(repository, {
+    config: options.config,
+    noConfig: options.noConfig,
+  });
   if (!fs.statSync(repository).isDirectory()) {
     throw new Error(`root is not a directory: ${repository}`);
   }
@@ -1733,6 +1741,37 @@ function diffMain(argv) {
   const stdin = [beforeOperand, afterOperand].includes("-")
     ? fs.readFileSync(0)
     : Buffer.alloc(0);
+  const correspondence = options.correspondence
+    ? read(options.correspondence)
+    : Buffer.alloc(0);
+  const requirements = correspondence.length
+    ? JSON.parse(native.diffRequirements(correspondence).toString("utf8"))
+    : { after: {}, before: {} };
+  const configuredForDiff = (configJson, side) => {
+    const document = JSON.parse((configJson.length ? configJson : Buffer.from("{}"))
+      .toString("utf8"));
+    const required = requirements[side];
+    if (!document || Array.isArray(document) || !required ||
+        Array.isArray(required) || typeof required !== "object") {
+      throw new Error("native Diff provider requirements are invalid");
+    }
+    const authored = document.ordered_containers || [];
+    const inferred = required.ordered_containers || [];
+    if (!Array.isArray(authored) || !Array.isArray(inferred)) {
+      throw new Error("Diff ordered-container requirements are invalid");
+    }
+    const unique = new Map();
+    for (const row of [...authored, ...inferred]) {
+      const canonical = JSON.stringify(row, Object.keys(row).sort());
+      unique.set(canonical, row);
+    }
+    if (unique.size) {
+      document.ordered_containers = [...unique.keys()].sort()
+        .map((key) => unique.get(key));
+    }
+    return Buffer.from(JSON.stringify(document));
+  };
+  const liveProjects = [];
   const loadOperand = (value, label) => {
     let map;
     let resolution = Buffer.alloc(0);
@@ -1744,7 +1783,12 @@ function diffMain(argv) {
       }
       if (fs.statSync(operand).isDirectory()) {
         progress.emit({ phase: "discovery", state: "start", side: label });
+        let { configJson } = projectConfiguration(operand);
+        if (correspondence.length) {
+          configJson = configuredForDiff(configJson, label);
+        }
         const current = archbird.Project.fromRepository(operand, {
+          config: configJson.length ? configJson : null,
           typescript: !options.noTypescript,
           cacheDir: options.noCache
             ? null
@@ -1752,17 +1796,23 @@ function diffMain(argv) {
           cacheMaxBytes: cacheMaxBytes(options),
           scan: false,
         });
-        current.scan("primary", {
-          typescript: !options.noTypescript,
-          cacheDir: options.noCache
-            ? null
-            : (options.cacheDir || archbird.defaultProviderCacheDir()),
-          cacheMaxBytes: cacheMaxBytes(options),
-          progress: (event) => progress.emit(event),
-        });
-        map = current.mapJson();
-        resolution = current.resolutionJson;
-        warnCacheStats(current.cacheStats, options);
+        try {
+          current.scan("primary", {
+            typescript: !options.noTypescript,
+            cacheDir: options.noCache
+              ? null
+              : (options.cacheDir || archbird.defaultProviderCacheDir()),
+            cacheMaxBytes: cacheMaxBytes(options),
+            progress: (event) => progress.emit(event),
+          });
+          resolution = current.resolutionJson;
+          warnCacheStats(current.cacheStats, options);
+          liveProjects.push(current);
+          return { map: null, project: current, resolution };
+        } catch (error) {
+          current.dispose();
+          throw error;
+        }
       } else if (fs.statSync(operand).isFile()) map = fs.readFileSync(operand);
       else throw new Error(`${label} Diff operand is not a file or directory`);
     }
@@ -1781,25 +1831,42 @@ function diffMain(argv) {
       }
       throw new Error(`${label} Diff operand is not an Archbird Map`);
     }
-    return { map, resolution };
+    return { map, project: null, resolution };
   };
-  const before = loadOperand(beforeOperand, "before");
-  const after = loadOperand(afterOperand, "after");
-  const correspondence = options.correspondence
-    ? read(options.correspondence)
-    : Buffer.alloc(0);
-  if (correspondence.length && options.check &&
-      options.check !== "public-api,bridges,parity,tests,architecture") {
-    throw new Error(
-      "Diff risk categories do not apply to correspondence; use bare --check",
+  let encoded;
+  try {
+    const before = loadOperand(beforeOperand, "before");
+    const after = loadOperand(afterOperand, "after");
+    if (correspondence.length && options.check &&
+        options.check !== "public-api,bridges,parity,tests,architecture") {
+      throw new Error(
+        "Diff risk categories do not apply to correspondence; use bare --check",
+      );
+    }
+    const directProjects = ["before", "after"].every(
+      (side) => requirements[side]?.live_project === true,
     );
+    if (before.project && after.project &&
+        (!correspondence.length || directProjects)) {
+      encoded = archbird.diff(before.project, after.project, {
+        correspondence,
+        beforeResolution: before.resolution,
+        afterResolution: after.resolution,
+        pretty: options.pretty,
+      });
+    } else {
+      if (!before.map) before.map = before.project.mapJson();
+      if (!after.map) after.map = after.project.mapJson();
+      encoded = archbird.diff(before.map, after.map, {
+        correspondence,
+        beforeResolution: before.resolution,
+        afterResolution: after.resolution,
+        pretty: options.pretty,
+      });
+    }
+  } finally {
+    for (const project of liveProjects) project.dispose();
   }
-  const encoded = archbird.diff(before.map, after.map, {
-    correspondence,
-    beforeResolution: before.resolution,
-    afterResolution: after.resolution,
-    pretty: options.pretty,
-  });
   write(encoded, options.output);
   progress.finish();
   if (!options.check) return 0;

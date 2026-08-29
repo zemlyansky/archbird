@@ -12,7 +12,11 @@ import sys
 import tempfile
 
 from archbird import _native, cli as python_cli
-from archbird.native import Project, evaluate_projection_json
+from archbird.native import (
+    Project,
+    diff_json,
+    evaluate_projection_json,
+)
 
 
 def encode(document: object) -> bytes:
@@ -220,6 +224,320 @@ def main() -> int:
         )
         if rejected.returncode != 2 or b"project configuration" not in rejected.stderr:
             raise AssertionError("Diff did not reject project configuration clearly")
+
+        configured_roots = []
+        for side in ("configured-before", "configured-after"):
+            configured_root = root / side
+            configured_root.mkdir()
+            (configured_root / "rules.c").write_text(
+                "typedef struct { int value; } Rule;\n"
+                "static Rule rules[] = {{1}};\n",
+                encoding="utf-8",
+            )
+            (configured_root / "archbird.json").write_text(
+                json.dumps(
+                    {
+                        "layers": [
+                            {
+                                "globs": ["*.c"],
+                                "language": "c",
+                                "name": "c",
+                            }
+                        ],
+                        "project": side,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            configured_roots.append(configured_root)
+        structural_results = {
+            host: run_host(
+                host,
+                [
+                    "diff",
+                    str(configured_roots[0]),
+                    str(configured_roots[1]),
+                    "--no-cache",
+                    "--progress",
+                    "never",
+                ],
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            for host in ("python", "node")
+        }
+        for host, result in structural_results.items():
+            if result.returncode:
+                raise AssertionError(
+                    f"structural directory Diff failed for {host}: "
+                    f"{result.stderr.decode(errors='replace')}"
+                )
+        if structural_results["python"].stdout != structural_results["node"].stdout:
+            raise AssertionError("structural directory Diff diverged across hosts")
+        configured_request = root / "configured-correspondence.json"
+        configured_request.write_bytes(
+            encode(
+                {
+                    "after": {
+                        "container": "rules.c:rules",
+                        "id": "after-rules",
+                        "select": "ordered_rows",
+                    },
+                    "before": {
+                        "container": "rules.c:rules",
+                        "id": "before-rules",
+                        "select": "ordered_rows",
+                    },
+                    "mapping": {},
+                }
+            )
+        )
+        configured_results = {
+            host: run_host(
+                host,
+                [
+                    "diff",
+                    str(configured_roots[0]),
+                    str(configured_roots[1]),
+                    "--correspondence",
+                    str(configured_request),
+                    "--no-cache",
+                    "--progress",
+                    "never",
+                ],
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            for host in ("python", "node")
+        }
+        for host, result in configured_results.items():
+            if result.returncode:
+                raise AssertionError(
+                    f"configured directory Diff failed for {host}: "
+                    f"{result.stderr.decode(errors='replace')}"
+                )
+            document = json.loads(result.stdout)
+            if document["before"]["map"]["project"] != "configured-before":
+                raise AssertionError(f"{host} ignored the before project configuration")
+            if document["after"]["map"]["project"] != "configured-after":
+                raise AssertionError(f"{host} ignored the after project configuration")
+            if document["comparison"]["state"] != "complete":
+                raise AssertionError(f"{host} omitted configured ordered facts")
+        if configured_results["python"].stdout != configured_results["node"].stdout:
+            raise AssertionError("live project Diff diverged across hosts")
+
+        for host in ("python", "node"):
+            cache_dir = root / f"{host}-live-diff-cache"
+            command = [
+                "diff",
+                str(configured_roots[0]),
+                str(configured_roots[1]),
+                "--correspondence",
+                str(configured_request),
+                "--cache-dir",
+                str(cache_dir),
+                "--progress",
+                "never",
+            ]
+            cold = run_host(
+                host,
+                command,
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            warm = run_host(
+                host,
+                command,
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            if cold.returncode or warm.returncode:
+                raise AssertionError(
+                    f"cached directory Diff failed for {host}: "
+                    f"{warm.stderr.decode(errors='replace')}"
+                )
+            if warm.stdout != cold.stdout:
+                raise AssertionError(
+                    f"Map-cache hit changed live directory Diff for {host}"
+                )
+
+        requirements = json.loads(
+            _native.diff_requirements(configured_request.read_bytes())
+        )
+        if not all(requirements[side]["live_project"] for side in ("before", "after")):
+            raise AssertionError("ordered correspondence did not select live projects")
+        live_projects = []
+        for index, side in enumerate(("before", "after")):
+            configuration = json.loads(
+                (configured_roots[index] / "archbird.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            configuration["ordered_containers"] = requirements[side][
+                "ordered_containers"
+            ]
+            live_projects.append(
+                Project.from_repository(
+                    configured_roots[index],
+                    config=encode(configuration),
+                    jobs=1,
+                    map_cache=False,
+                )
+            )
+        direct = diff_json(
+            live_projects[0],
+            live_projects[1],
+            correspondence=configured_request.read_bytes(),
+            before_resolution=live_projects[0].resolution_json or b"",
+            after_resolution=live_projects[1].resolution_json or b"",
+        )
+        materialized = diff_json(
+            live_projects[0].map_json(),
+            live_projects[1].map_json(),
+            correspondence=configured_request.read_bytes(),
+            before_resolution=live_projects[0].resolution_json or b"",
+            after_resolution=live_projects[1].resolution_json or b"",
+        )
+        if direct != materialized:
+            raise AssertionError("live and saved correspondence Diff diverged")
+        direct_map_diff = diff_json(live_projects[0], live_projects[1])
+        saved_map_diff = diff_json(
+            live_projects[0].map_json(), live_projects[1].map_json()
+        )
+        if direct_map_diff != saved_map_diff:
+            raise AssertionError("live and saved structural Diff diverged")
+
+        cached_projects = []
+        for index in range(2):
+            configuration = json.loads(
+                (configured_roots[index] / "archbird.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            configuration["ordered_containers"] = requirements[
+                ("before", "after")[index]
+            ]["ordered_containers"]
+            cache_dir = root / f"direct-project-cache-{index}"
+            warm_project = Project.from_repository(
+                configured_roots[index],
+                config=encode(configuration),
+                jobs=1,
+                cache_dir=cache_dir,
+            )
+            warm_project.map_json()
+            cached_project = Project.from_repository(
+                configured_roots[index],
+                config=encode(configuration),
+                jobs=1,
+                cache_dir=cache_dir,
+            )
+            if cached_project.map_cache_stats["hits"] != 1:
+                raise AssertionError("live Diff cache regression did not hit Map cache")
+            cached_projects.append(cached_project)
+        cached_direct = diff_json(
+            cached_projects[0],
+            cached_projects[1],
+            correspondence=configured_request.read_bytes(),
+            before_resolution=cached_projects[0].resolution_json or b"",
+            after_resolution=cached_projects[1].resolution_json or b"",
+        )
+        if cached_direct != materialized:
+            raise AssertionError("Map-cache hit changed live project Diff")
+
+        fallback_request = root / "fallback-correspondence.json"
+        fallback_request.write_bytes(
+            encode(
+                {
+                    "after": {"id": "after-symbols", "select": "symbols"},
+                    "before": {"id": "before-symbols", "select": "symbols"},
+                    "mapping": {},
+                }
+            )
+        )
+        fallback_requirements = json.loads(
+            _native.diff_requirements(fallback_request.read_bytes())
+        )
+        if any(
+            fallback_requirements[side]["live_project"]
+            for side in ("before", "after")
+        ):
+            raise AssertionError("symbol correspondence selected fact-only input")
+        direct_fallback = diff_json(
+            live_projects[0],
+            live_projects[1],
+            correspondence=fallback_request.read_bytes(),
+            before_resolution=live_projects[0].resolution_json or b"",
+            after_resolution=live_projects[1].resolution_json or b"",
+        )
+        saved_fallback = diff_json(
+            live_projects[0].map_json(),
+            live_projects[1].map_json(),
+            correspondence=fallback_request.read_bytes(),
+            before_resolution=live_projects[0].resolution_json or b"",
+            after_resolution=live_projects[1].resolution_json or b"",
+        )
+        if direct_fallback != saved_fallback:
+            raise AssertionError("project Diff fallback diverged from saved Maps")
+        fallback_results = {
+            host: run_host(
+                host,
+                [
+                    "diff",
+                    str(configured_roots[0]),
+                    str(configured_roots[1]),
+                    "--correspondence",
+                    str(fallback_request),
+                    "--no-cache",
+                    "--progress",
+                    "never",
+                ],
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            for host in ("python", "node")
+        }
+        for host, result in fallback_results.items():
+            if result.returncode:
+                raise AssertionError(
+                    f"materialized correspondence fallback failed for {host}: "
+                    f"{result.stderr.decode(errors='replace')}"
+                )
+        if fallback_results["python"].stdout != fallback_results["node"].stdout:
+            raise AssertionError("materialized correspondence fallback diverged")
+
+        unsupported_root = root / "unsupported-only"
+        unsupported_root.mkdir()
+        (unsupported_root / "lib.rs").write_text(
+            "pub fn open() {}\n", encoding="utf-8"
+        )
+        for host in ("python", "node"):
+            result = run_host(
+                host,
+                [
+                    "map",
+                    str(unsupported_root),
+                    "--no-config",
+                    "--no-cache",
+                    "--progress",
+                    "never",
+                    "--check",
+                ],
+                repository=repository,
+                node=node,
+                addon=addon,
+            )
+            if (
+                result.returncode != 1
+                or b"discovery-no-supported-source" not in result.stdout
+            ):
+                raise AssertionError(
+                    f"{host} checked Map accepted an unsupported-only repository"
+                )
 
         ordered_root = root / "ordered"
         (ordered_root / "py").mkdir(parents=True)

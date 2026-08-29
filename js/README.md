@@ -238,19 +238,19 @@ npx archbird diff reference-map.json ../subject-project \
   --correspondence matcher-rows.json
 ```
 
-Directory operands are mapped independently with their own configuration.
-Default Diff joins stable Map identities. `--correspondence` instead evaluates
-one exhaustive projection per side and joins their item keys through reviewed
-one-to-many mappings. Start with an empty `mapping` object to obtain complete
-`before_unmapped` and `after_unmapped` inventories; add `--check` after review.
-Incomplete extraction returns `unknown`. Cross-language values and order are
-not inferred as equivalent. Live Node/browser analysis currently extracts
-configured C initializer arrays. It can also consume Python ordered rows from a
-saved Map produced by the PyPI host. C enclosing functions are part of container
-identity; dynamic or recovered populations are incomplete. Use bare `--check`
-for correspondence; category checks apply only to identity Diff. For persistent
-policy, use the same projections and mapping in a `correspondence_complete`
-constraint and supply the reference Map with
+Directory operands use their own configuration. Ordered correspondence infers
+the exact container request before scanning and compares typed results without
+complete Map transport. Saved Maps must already contain those facts. Default
+Diff joins stable Map identities; `--correspondence` joins exhaustive
+projection items through reviewed one-to-many mappings. Start with an empty
+`mapping` object to inventory known items, then add `--check`. Incomplete
+extraction returns `unknown` while retaining known matches. Node/browser live
+analysis extracts C initializer arrays; it consumes Python ordered rows from a
+Map produced by the PyPI host. C enclosing functions are part of container
+identity; dynamic or recovered populations remain incomplete. Use bare
+`--check` for correspondence; category checks apply only to identity Diff. For
+persistent policy, reuse the projections and mapping in a
+`correspondence_complete` constraint and supply the reference Map with
 `npx archbird verify --map-input ID=PATH --check`.
 
 ### Verify architecture

@@ -23,6 +23,7 @@ const {
   compileProjectConfiguration,
   compileQueryPlan,
   diff,
+  diffMaps,
   evaluateConstraints,
   evaluateProjection,
   exportGraph,
@@ -328,7 +329,7 @@ const frozenConstraints = JSON.parse(freezeConstraints(constraintConfig, metricM
 assert.equal(frozenConstraints.artifact, "constraint-baseline");
 metricProject.dispose();
 
-const orderedProject = new Project("ordered-node", [
+const orderedSources = () => [
   new Source(
     "src/rules.c",
     Buffer.from(
@@ -338,7 +339,8 @@ const orderedProject = new Project("ordered-node", [
     ),
     { language: "c", layer: "c" },
   ),
-]);
+];
+const orderedProject = new Project("ordered-node", orderedSources());
 const orderedBaseConfig = {
   project: "ordered-node",
   layers: [{ name: "c", language: "c", globs: ["src/**/*.c"] }],
@@ -420,12 +422,39 @@ const orderedDiffRequest = Buffer.from(JSON.stringify({
     [orderedExpectedKeys[1]]: orderedActualKeys,
   },
 }));
-const orderedDiff = JSON.parse(diff(orderedMap, orderedMap, {
+const orderedDiffBytes = diff(orderedMap, orderedMap, {
   correspondence: orderedDiffRequest,
-}));
+});
+const orderedDiff = JSON.parse(orderedDiffBytes);
 assert.equal(orderedDiff.join, "correspondence");
 assert.equal(orderedDiff.comparison.state, "complete");
 assert.equal(orderedDiff.comparison.counts.matched, 3);
+assert.deepEqual(diff(orderedProject, orderedProject), diffMaps(orderedMap, orderedMap));
+const orderedMapCacheRoot = path.resolve(
+  process.argv[3],
+  "build/test-ordered-live-diff-cache-node",
+);
+fs.rmSync(orderedMapCacheRoot, { force: true, recursive: true });
+const orderedCachedCold = new Project("ordered-node", orderedSources());
+orderedCachedCold.setConfig(JSON.stringify(orderedBaseConfig));
+orderedCachedCold.scan("primary", {
+  cacheDir: orderedMapCacheRoot,
+  typescript: false,
+});
+orderedCachedCold.mapJson();
+const orderedCachedWarm = new Project("ordered-node", orderedSources());
+orderedCachedWarm.setConfig(JSON.stringify(orderedBaseConfig));
+orderedCachedWarm.scan("primary", {
+  cacheDir: orderedMapCacheRoot,
+  typescript: false,
+});
+assert.equal(orderedCachedWarm.mapCacheStats.hits, 1);
+assert.deepEqual(diff(orderedCachedWarm, orderedCachedWarm, {
+  correspondence: orderedDiffRequest,
+}), orderedDiffBytes);
+orderedCachedWarm.dispose();
+orderedCachedCold.dispose();
+fs.rmSync(orderedMapCacheRoot, { force: true, recursive: true });
 orderedProject.dispose();
 
 const constraintCli = path.resolve(process.argv[3], "js/src/cli.js");

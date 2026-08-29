@@ -844,6 +844,28 @@ ARCHBIRD_API ArchbirdStatus archbird_diff(
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*
+ * Compile the provider configuration required to evaluate each projection in
+ * a reviewed correspondence request. Hosts merge each returned side into that
+ * repository's project configuration before collecting provider facts.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_diff_requirements(
+    ArchbirdEngine *engine, const uint8_t *request_json, size_t request_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
+/*
+ * Compare two collected projects directly. Empty request bytes perform the
+ * ordinary identity Diff; a request evaluates reviewed correspondence. Each
+ * optional resolution belongs only to its adjacent project.
+ */
+ARCHBIRD_API ArchbirdStatus archbird_projects_diff(
+    ArchbirdEngine *engine, const ArchbirdProject *before_project,
+    const uint8_t *before_resolution_json, size_t before_resolution_length,
+    const ArchbirdProject *after_project, const uint8_t *after_resolution_json,
+    size_t after_resolution_length, const uint8_t *request_json,
+    size_t request_length, uint32_t json_flags, ArchbirdWriteFn write_fn,
+    void *user_data);
+
+/*
  * Render a deterministic git-style unified diff. Paths are canonical
  * repository-relative UTF-8 paths. A null before_path denotes file creation;
  * a null after_path denotes deletion. At least one path must be present.

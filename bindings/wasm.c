@@ -1066,6 +1066,43 @@ ab_wasm_diff(const uint8_t *before, size_t before_length,
   return stateless_end(engine, status);
 }
 
+AB_WASM_EXPORT int ab_wasm_diff_requirements(const uint8_t *request,
+                                             size_t request_length,
+                                             uint32_t flags) {
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status = stateless_begin_input(request_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_diff_requirements(engine, request, request_length, flags,
+                                        output_write, &wasm_output);
+  return stateless_end(engine, status);
+}
+
+AB_WASM_EXPORT int
+ab_wasm_projects_diff(uintptr_t before_handle, const uint8_t *before_resolution,
+                      size_t before_resolution_length, uintptr_t after_handle,
+                      const uint8_t *after_resolution,
+                      size_t after_resolution_length, const uint8_t *request,
+                      size_t request_length, uint32_t flags) {
+  WasmProject *before = checked_project(before_handle);
+  WasmProject *after = checked_project(after_handle);
+  ArchbirdEngine *engine = NULL;
+  size_t input_length = larger_input(request_length, before_resolution_length);
+  ArchbirdStatus status;
+  input_length = larger_input(input_length, after_resolution_length);
+  if (!before || !after)
+    return (int)invalid_argument("expected two live Wasm Projects");
+  status = stateless_begin_saved_artifact(input_length, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projects_diff(
+        engine, before->project,
+        before_resolution_length ? before_resolution : NULL,
+        before_resolution_length, after->project,
+        after_resolution_length ? after_resolution : NULL,
+        after_resolution_length, request, request_length, flags, output_write,
+        &wasm_output);
+  return stateless_end(engine, status);
+}
+
 AB_WASM_EXPORT int ab_wasm_map_freshness(const uint8_t *snapshot,
                                          size_t snapshot_length,
                                          const uint8_t *current,

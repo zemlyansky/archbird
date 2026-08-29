@@ -28,6 +28,14 @@ typedef struct DiffSection {
 
 typedef AbDiffContext DiffContext;
 
+typedef struct DiffMapParts {
+  AbValue discovery;
+  AbValue evidence;
+  AbValue project;
+  uint64_t schema_version;
+  uint64_t seen;
+} DiffMapParts;
+
 static ArchbirdStatus diff_error(DiffContext *context, const char *message) {
   return archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
                             ARCHBIRD_NO_OFFSET, "%s", message);
@@ -50,6 +58,19 @@ static const AbValue *optional_array(const AbValue *object, const char *name) {
   static const AbValue empty = {.kind = AB_VALUE_ARRAY};
   const AbValue *value = ab_value_member(object, name);
   return value ? value : &empty;
+}
+
+static int optional_member_kind(DiffContext *context, const AbValue *object,
+                                const char *name, AbValueKind kind) {
+  const AbValue *value = ab_value_member(object, name);
+  if (!value)
+    return 1;
+  if (value->kind == kind)
+    return 1;
+  archbird_error_set(context->engine, ARCHBIRD_INVALID_SCHEMA,
+                     ARCHBIRD_NO_OFFSET,
+                     "diff map field '%s' has the wrong type", name);
+  return 0;
 }
 
 static int string_is(const AbString *value, const char *literal) {
@@ -1463,66 +1484,6 @@ static void sections_free(ArchbirdEngine *engine,
   }
 }
 
-static ArchbirdStatus build_indexes(DiffContext *context, const AbValue *map,
-                                    DiffSection sections[DIFF_SECTION_COUNT],
-                                    int after) {
-#define INDEX_AT(which)                                                        \
-  (after ? &sections[(which)].after : &sections[(which)].before)
-  ArchbirdStatus status =
-      artifact_index(context, map, INDEX_AT(DIFF_ARTIFACTS));
-  if (status == ARCHBIRD_OK)
-    status = surface_index(context, map, INDEX_AT(DIFF_BRIDGE_SURFACES));
-  if (status == ARCHBIRD_OK)
-    status =
-        edge_index(context, map, INDEX_AT(DIFF_EDGES), INDEX_AT(DIFF_BRIDGES));
-  if (status == ARCHBIRD_OK)
-    status = build_index(context, map, INDEX_AT(DIFF_BUILD_ROUTES));
-  if (status == ARCHBIRD_OK)
-    status = call_index(context, map, INDEX_AT(DIFF_CALL_RESOLUTIONS));
-  if (status == ARCHBIRD_OK)
-    status = component_index(context, map, INDEX_AT(DIFF_COMPONENT_ROUTES));
-  if (status == ARCHBIRD_OK)
-    status = fact_index(context, map, INDEX_AT(DIFF_FACTS));
-  if (status == ARCHBIRD_OK)
-    status = simple_rows(context, map, "files", "path", "sha256",
-                         INDEX_AT(DIFF_FILES));
-  if (status == ARCHBIRD_OK) {
-    const AbValue *inputs = ab_value_member(map, "inputs");
-    if (inputs)
-      status = simple_rows(context, map, "inputs", "path", "sha256",
-                           INDEX_AT(DIFF_INPUTS));
-    else
-      status = index_finish(context, INDEX_AT(DIFF_INPUTS));
-  }
-  if (status == ARCHBIRD_OK)
-    status = package_indexes(context, map, INDEX_AT(DIFF_PACKAGE_EXPORTS),
-                             INDEX_AT(DIFF_PACKAGE_EXPORT_ORIGINS),
-                             INDEX_AT(DIFF_PACKAGE_DEPENDENCIES),
-                             INDEX_AT(DIFF_ENTRYPOINTS),
-                             INDEX_AT(DIFF_PACKAGE_ENTRYPOINT_SURFACES));
-  if (status == ARCHBIRD_OK)
-    status = parity_index(context, map, INDEX_AT(DIFF_PARITY_GAPS));
-  if (status == ARCHBIRD_OK)
-    status = symbol_index(context, map, 1, INDEX_AT(DIFF_PUBLIC_SYMBOLS));
-  if (status == ARCHBIRD_OK)
-    status = symbol_index(context, map, 0, INDEX_AT(DIFF_SYMBOLS));
-  if (status == ARCHBIRD_OK)
-    status = relation_index(context, map, "symbol_calls",
-                            INDEX_AT(DIFF_SYMBOL_CALLS));
-  if (status == ARCHBIRD_OK)
-    status = relation_index(context, map, "symbol_references",
-                            INDEX_AT(DIFF_SYMBOL_REFERENCES));
-  if (status == ARCHBIRD_OK)
-    status = test_route_evidence_index(context, map,
-                                       INDEX_AT(DIFF_TEST_ROUTE_EVIDENCE));
-  if (status == ARCHBIRD_OK)
-    status = test_route_index(context, map, INDEX_AT(DIFF_TEST_ROUTES));
-  if (status == ARCHBIRD_OK)
-    status = tool_index(context, map, INDEX_AT(DIFF_TOOL));
-#undef INDEX_AT
-  return status;
-}
-
 static int diff_value_equal(const void *left, const void *right) {
   return ab_string_equal((const AbString *)left, (const AbString *)right);
 }
@@ -1678,9 +1639,692 @@ render_sections(AbBuffer *buffer,
   return status;
 }
 
+enum {
+  MAP_FIELD_ARTIFACT,
+  MAP_FIELD_ARTIFACTS,
+  MAP_FIELD_BUILDS,
+  MAP_FIELD_CALL_RESOLUTIONS,
+  MAP_FIELD_COMPONENTS,
+  MAP_FIELD_DESCRIPTION,
+  MAP_FIELD_DIAGNOSTICS,
+  MAP_FIELD_DISCOVERY,
+  MAP_FIELD_EDGES,
+  MAP_FIELD_EVIDENCE,
+  MAP_FIELD_FACTS,
+  MAP_FIELD_FILES,
+  MAP_FIELD_INDEXES,
+  MAP_FIELD_INPUTS,
+  MAP_FIELD_LAYERS,
+  MAP_FIELD_LIMITS,
+  MAP_FIELD_NAMED_ENTRIES,
+  MAP_FIELD_PACKAGES,
+  MAP_FIELD_PARITY,
+  MAP_FIELD_PROJECT,
+  MAP_FIELD_SCHEMA_VERSION,
+  MAP_FIELD_SURFACES,
+  MAP_FIELD_SYMBOL_CALLS,
+  MAP_FIELD_SYMBOL_REFERENCES,
+  MAP_FIELD_TESTS,
+  MAP_FIELD_TOOL,
+  MAP_FIELD_COUNT
+};
+
+static const char *const map_field_names[MAP_FIELD_COUNT] = {
+    "artifact",       "artifacts",   "builds",       "call_resolutions",
+    "components",     "description", "diagnostics",  "discovery",
+    "edges",          "evidence",    "facts",        "files",
+    "indexes",        "inputs",      "layers",       "limits",
+    "named_entries",  "packages",    "parity",       "project",
+    "schema_version", "surfaces",    "symbol_calls", "symbol_references",
+    "tests",          "tool"};
+
+static int map_field_id(const AbString *name) {
+  size_t index;
+  for (index = 0; index < MAP_FIELD_COUNT; index++)
+    if (string_is(name, map_field_names[index]))
+      return (int)index;
+  return -1;
+}
+
+static void partial_map(const char *name, AbValue *value, AbObjectField *field,
+                        AbValue *map) {
+  memset(field, 0, sizeof(*field));
+  memset(map, 0, sizeof(*map));
+  field->name.data = (char *)name;
+  field->name.length = strlen(name);
+  field->value = *value;
+  map->kind = AB_VALUE_OBJECT;
+  map->as.object.fields = field;
+  map->as.object.count = 1;
+}
+
+static ArchbirdStatus map_field_kind(DiffContext *context, int field,
+                                     const AbValue *value) {
+  AbValueKind expected;
+  switch (field) {
+  case MAP_FIELD_ARTIFACT:
+  case MAP_FIELD_DESCRIPTION:
+  case MAP_FIELD_PROJECT:
+    expected = AB_VALUE_STRING;
+    break;
+  case MAP_FIELD_DISCOVERY:
+  case MAP_FIELD_EVIDENCE:
+  case MAP_FIELD_LIMITS:
+  case MAP_FIELD_NAMED_ENTRIES:
+  case MAP_FIELD_TOOL:
+    expected = AB_VALUE_OBJECT;
+    break;
+  case MAP_FIELD_SCHEMA_VERSION:
+    expected = AB_VALUE_INTEGER;
+    break;
+  default:
+    expected = AB_VALUE_ARRAY;
+    break;
+  }
+  if (value->kind == expected)
+    return ARCHBIRD_OK;
+  return archbird_error_set(
+      context->engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+      "diff map field '%s' has the wrong type", map_field_names[field]);
+}
+
+static ArchbirdStatus map_field_index(DiffContext *context, int field,
+                                      AbValue *value,
+                                      DiffSection sections[DIFF_SECTION_COUNT],
+                                      int after, DiffMapParts *parts) {
+#define INDEX_AT(which)                                                        \
+  (after ? &sections[(which)].after : &sections[(which)].before)
+  AbObjectField member;
+  AbValue map;
+  ArchbirdStatus status = map_field_kind(context, field, value);
+  if (status != ARCHBIRD_OK)
+    return status;
+  partial_map(map_field_names[field], value, &member, &map);
+  switch (field) {
+  case MAP_FIELD_ARTIFACT:
+    if (!ab_value_string_is(value, "map"))
+      return diff_error(context, "diff input must be a map object");
+    break;
+  case MAP_FIELD_ARTIFACTS:
+    status = artifact_index(context, &map, INDEX_AT(DIFF_ARTIFACTS));
+    break;
+  case MAP_FIELD_BUILDS:
+    status = build_index(context, &map, INDEX_AT(DIFF_BUILD_ROUTES));
+    break;
+  case MAP_FIELD_CALL_RESOLUTIONS:
+    status = call_index(context, &map, INDEX_AT(DIFF_CALL_RESOLUTIONS));
+    break;
+  case MAP_FIELD_COMPONENTS:
+    status = component_index(context, &map, INDEX_AT(DIFF_COMPONENT_ROUTES));
+    break;
+  case MAP_FIELD_DISCOVERY:
+    parts->discovery = *value;
+    memset(value, 0, sizeof(*value));
+    break;
+  case MAP_FIELD_EDGES:
+    status =
+        edge_index(context, &map, INDEX_AT(DIFF_EDGES), INDEX_AT(DIFF_BRIDGES));
+    break;
+  case MAP_FIELD_EVIDENCE:
+    parts->evidence = *value;
+    memset(value, 0, sizeof(*value));
+    break;
+  case MAP_FIELD_FACTS:
+    status = fact_index(context, &map, INDEX_AT(DIFF_FACTS));
+    break;
+  case MAP_FIELD_FILES:
+    status = simple_rows(context, &map, "files", "path", "sha256",
+                         INDEX_AT(DIFF_FILES));
+    if (status == ARCHBIRD_OK)
+      status = symbol_index(context, &map, 1, INDEX_AT(DIFF_PUBLIC_SYMBOLS));
+    if (status == ARCHBIRD_OK)
+      status = symbol_index(context, &map, 0, INDEX_AT(DIFF_SYMBOLS));
+    break;
+  case MAP_FIELD_INPUTS:
+    status = simple_rows(context, &map, "inputs", "path", "sha256",
+                         INDEX_AT(DIFF_INPUTS));
+    break;
+  case MAP_FIELD_PACKAGES:
+    status = package_indexes(context, &map, INDEX_AT(DIFF_PACKAGE_EXPORTS),
+                             INDEX_AT(DIFF_PACKAGE_EXPORT_ORIGINS),
+                             INDEX_AT(DIFF_PACKAGE_DEPENDENCIES),
+                             INDEX_AT(DIFF_ENTRYPOINTS),
+                             INDEX_AT(DIFF_PACKAGE_ENTRYPOINT_SURFACES));
+    break;
+  case MAP_FIELD_PARITY:
+    status = parity_index(context, &map, INDEX_AT(DIFF_PARITY_GAPS));
+    break;
+  case MAP_FIELD_PROJECT:
+    parts->project = *value;
+    memset(value, 0, sizeof(*value));
+    break;
+  case MAP_FIELD_SCHEMA_VERSION:
+    if (!ab_value_u64(value, &parts->schema_version))
+      return diff_error(context, "diff map schema version is invalid");
+    break;
+  case MAP_FIELD_SURFACES:
+    status = surface_index(context, &map, INDEX_AT(DIFF_BRIDGE_SURFACES));
+    break;
+  case MAP_FIELD_SYMBOL_CALLS:
+    status = relation_index(context, &map, "symbol_calls",
+                            INDEX_AT(DIFF_SYMBOL_CALLS));
+    break;
+  case MAP_FIELD_SYMBOL_REFERENCES:
+    status = relation_index(context, &map, "symbol_references",
+                            INDEX_AT(DIFF_SYMBOL_REFERENCES));
+    break;
+  case MAP_FIELD_TESTS:
+    status = test_route_evidence_index(context, &map,
+                                       INDEX_AT(DIFF_TEST_ROUTE_EVIDENCE));
+    if (status == ARCHBIRD_OK)
+      status = test_route_index(context, &map, INDEX_AT(DIFF_TEST_ROUTES));
+    break;
+  case MAP_FIELD_TOOL:
+    status = tool_index(context, &map, INDEX_AT(DIFF_TOOL));
+    break;
+  default:
+    break;
+  }
+#undef INDEX_AT
+  return status;
+}
+
+static size_t json_space(const uint8_t *json, size_t length, size_t offset) {
+  while (offset < length && (json[offset] == ' ' || json[offset] == '\t' ||
+                             json[offset] == '\r' || json[offset] == '\n'))
+    offset++;
+  return offset;
+}
+
+static int json_string_end(const uint8_t *json, size_t length, size_t start,
+                           size_t *out_end) {
+  size_t offset = start + 1;
+  if (start >= length || json[start] != '"')
+    return 0;
+  while (offset < length) {
+    if (json[offset] == '\\') {
+      offset += 2;
+      continue;
+    }
+    if (json[offset++] == '"') {
+      *out_end = offset;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+typedef ArchbirdStatus (*DiffMapFieldFn)(DiffContext *context, int field,
+                                         AbValue *value, void *user_data);
+
+enum {
+  DIFF_MAP_STREAM_START,
+  DIFF_MAP_STREAM_KEY,
+  DIFF_MAP_STREAM_COLON,
+  DIFF_MAP_STREAM_VALUE,
+  DIFF_MAP_STREAM_SEPARATOR,
+  DIFF_MAP_STREAM_DONE
+};
+
+typedef struct DiffMapStream {
+  DiffContext *context;
+  DiffMapFieldFn field_fn;
+  void *user_data;
+  AbBuffer pending;
+  size_t offset;
+  size_t value_scan;
+  size_t value_depth;
+  uint64_t seen;
+  int field;
+  int state;
+  int after_comma;
+  int value_started;
+  int value_kind;
+  int value_quoted;
+  int value_escaped;
+} DiffMapStream;
+
+static void map_stream_init(DiffMapStream *stream, DiffContext *context,
+                            DiffMapFieldFn field_fn, void *user_data) {
+  memset(stream, 0, sizeof(*stream));
+  stream->context = context;
+  stream->field_fn = field_fn;
+  stream->user_data = user_data;
+  stream->field = -1;
+  ab_buffer_init(&stream->pending, context->engine);
+}
+
+static void map_stream_free(DiffMapStream *stream) {
+  ab_buffer_free(&stream->pending);
+  memset(stream, 0, sizeof(*stream));
+}
+
+static void map_stream_compact(DiffMapStream *stream) {
+  size_t consumed = stream->offset;
+  if (!stream->offset)
+    return;
+  if (stream->offset < stream->pending.length)
+    memmove(stream->pending.data, stream->pending.data + stream->offset,
+            stream->pending.length - stream->offset);
+  stream->pending.length -= stream->offset;
+  stream->offset = 0;
+  if (stream->value_started)
+    stream->value_scan -= consumed;
+}
+
+static int map_stream_value_end(DiffMapStream *stream, size_t *out_end) {
+  const uint8_t *json = stream->pending.data;
+  size_t length = stream->pending.length;
+  if (!stream->value_started) {
+    uint8_t first = json[stream->offset];
+    stream->value_started = 1;
+    stream->value_scan = stream->offset;
+    stream->value_depth = 0;
+    stream->value_quoted = 0;
+    stream->value_escaped = 0;
+    if (first == '"') {
+      stream->value_kind = 1;
+      stream->value_quoted = 1;
+      stream->value_scan++;
+    } else if (first == '{' || first == '[') {
+      stream->value_kind = 2;
+      stream->value_depth = 1;
+      stream->value_scan++;
+    } else {
+      stream->value_kind = 0;
+    }
+  }
+  while (stream->value_scan < length) {
+    uint8_t byte = json[stream->value_scan++];
+    if (stream->value_kind == 0) {
+      size_t end;
+      if (byte != ',' && byte != '}')
+        continue;
+      end = stream->value_scan - 1;
+      while (end > stream->offset &&
+             (json[end - 1] == ' ' || json[end - 1] == '\t' ||
+              json[end - 1] == '\r' || json[end - 1] == '\n'))
+        end--;
+      *out_end = end;
+      return end > stream->offset;
+    }
+    if (stream->value_quoted) {
+      if (stream->value_escaped)
+        stream->value_escaped = 0;
+      else if (byte == '\\')
+        stream->value_escaped = 1;
+      else if (byte == '"') {
+        stream->value_quoted = 0;
+        if (stream->value_kind == 1) {
+          *out_end = stream->value_scan;
+          return 1;
+        }
+      }
+      continue;
+    }
+    if (byte == '"')
+      stream->value_quoted = 1;
+    else if (byte == '{' || byte == '[')
+      stream->value_depth++;
+    else if (byte == '}' || byte == ']') {
+      if (!stream->value_depth)
+        return 0;
+      stream->value_depth--;
+      if (!stream->value_depth) {
+        *out_end = stream->value_scan;
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+static ArchbirdStatus map_stream_parse(DiffMapStream *stream) {
+  const uint8_t *json = stream->pending.data;
+  size_t length = stream->pending.length;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  while (status == ARCHBIRD_OK) {
+    size_t end;
+    stream->offset = json_space(json, length, stream->offset);
+    if (stream->state == DIFF_MAP_STREAM_START) {
+      if (stream->offset == length)
+        break;
+      if (json[stream->offset++] != '{')
+        return diff_error(stream->context, "diff input must be a map object");
+      stream->state = DIFF_MAP_STREAM_KEY;
+    } else if (stream->state == DIFF_MAP_STREAM_KEY) {
+      AbValue key = {0};
+      if (stream->offset == length)
+        break;
+      if (json[stream->offset] == '}') {
+        if (stream->after_comma)
+          return diff_error(stream->context, "diff map has a trailing comma");
+        stream->offset++;
+        stream->state = DIFF_MAP_STREAM_DONE;
+        continue;
+      }
+      if (!json_string_end(json, length, stream->offset, &end))
+        break;
+      status =
+          ab_json_value_decode(stream->context->engine, json + stream->offset,
+                               end - stream->offset, &key);
+      if (status == ARCHBIRD_OK && key.kind != AB_VALUE_STRING)
+        status = diff_error(stream->context, "diff map key must be a string");
+      if (status == ARCHBIRD_OK)
+        stream->field = map_field_id(&key.as.text);
+      stream->after_comma = 0;
+      ab_value_free(stream->context->engine, &key);
+      if (status != ARCHBIRD_OK)
+        break;
+      stream->offset = end;
+      stream->state = DIFF_MAP_STREAM_COLON;
+    } else if (stream->state == DIFF_MAP_STREAM_COLON) {
+      if (stream->offset == length)
+        break;
+      if (json[stream->offset++] != ':')
+        return diff_error(stream->context,
+                          "diff map top-level key has no value");
+      stream->state = DIFF_MAP_STREAM_VALUE;
+    } else if (stream->state == DIFF_MAP_STREAM_VALUE) {
+      AbValue value = {0};
+      if (stream->offset == length)
+        break;
+      if (!map_stream_value_end(stream, &end))
+        break;
+      status =
+          ab_json_value_decode(stream->context->engine, json + stream->offset,
+                               end - stream->offset, &value);
+      if (status == ARCHBIRD_OK && stream->field >= 0) {
+        uint64_t bit = UINT64_C(1) << (unsigned)stream->field;
+        if (stream->seen & bit)
+          status = diff_error(stream->context,
+                              "diff map has a duplicate top-level field");
+        else {
+          stream->seen |= bit;
+          status = stream->field_fn(stream->context, stream->field, &value,
+                                    stream->user_data);
+        }
+      }
+      ab_value_free(stream->context->engine, &value);
+      if (status != ARCHBIRD_OK)
+        break;
+      stream->offset = end;
+      stream->value_started = 0;
+      stream->state = DIFF_MAP_STREAM_SEPARATOR;
+    } else if (stream->state == DIFF_MAP_STREAM_SEPARATOR) {
+      if (stream->offset == length)
+        break;
+      if (json[stream->offset] == ',') {
+        stream->offset++;
+        stream->field = -1;
+        stream->after_comma = 1;
+        stream->state = DIFF_MAP_STREAM_KEY;
+      } else if (json[stream->offset] == '}') {
+        stream->offset++;
+        stream->state = DIFF_MAP_STREAM_DONE;
+      } else {
+        return diff_error(stream->context,
+                          "diff map fields are not comma-separated");
+      }
+    } else {
+      if (stream->offset == length)
+        break;
+      return diff_error(stream->context, "diff map has trailing content");
+    }
+  }
+  map_stream_compact(stream);
+  return status;
+}
+
+static ArchbirdStatus map_stream_feed(DiffMapStream *stream,
+                                      const uint8_t *bytes, size_t length) {
+  ArchbirdStatus status;
+  if (!bytes && length)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_buffer_append(&stream->pending, bytes, length);
+  return status == ARCHBIRD_OK ? map_stream_parse(stream) : status;
+}
+
+static ArchbirdStatus map_stream_finish(DiffMapStream *stream) {
+  ArchbirdStatus status = map_stream_parse(stream);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (stream->state != DIFF_MAP_STREAM_DONE || stream->pending.length)
+    return diff_error(stream->context, "diff map is truncated");
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus map_fields_visit(DiffContext *context,
+                                       const uint8_t *json, size_t length,
+                                       DiffMapFieldFn field_fn,
+                                       void *user_data) {
+  const size_t chunk_bytes = 1024 * 1024;
+  DiffMapStream stream;
+  size_t offset = 0;
+  ArchbirdStatus status;
+  map_stream_init(&stream, context, field_fn, user_data);
+  status = ARCHBIRD_OK;
+  while (status == ARCHBIRD_OK && offset < length) {
+    size_t remaining = length - offset;
+    size_t chunk = remaining < chunk_bytes ? remaining : chunk_bytes;
+    status = map_stream_feed(&stream, json + offset, chunk);
+    offset += chunk;
+  }
+  if (status == ARCHBIRD_OK)
+    status = map_stream_finish(&stream);
+  map_stream_free(&stream);
+  return status;
+}
+
+typedef struct DiffMapIndexInput {
+  DiffSection *sections;
+  DiffMapParts *parts;
+  int after;
+} DiffMapIndexInput;
+
+static ArchbirdStatus map_index_field(DiffContext *context, int field,
+                                      AbValue *value, void *user_data) {
+  DiffMapIndexInput *input = (DiffMapIndexInput *)user_data;
+  input->parts->seen |= UINT64_C(1) << (unsigned)field;
+  return map_field_index(context, field, value, input->sections, input->after,
+                         input->parts);
+}
+
+static ArchbirdStatus map_stream_index(DiffContext *context,
+                                       const uint8_t *json, size_t length,
+                                       DiffSection sections[DIFF_SECTION_COUNT],
+                                       int after, DiffMapParts *parts) {
+  DiffMapIndexInput input = {sections, parts, after};
+  return map_fields_visit(context, json, length, map_index_field, &input);
+}
+
+typedef struct DiffMapSelection {
+  ArchbirdEngine *engine;
+  const char *const *fields;
+  size_t field_count;
+  AbValue *map;
+} DiffMapSelection;
+
+static int map_selection_contains(const DiffMapSelection *selection,
+                                  const char *name) {
+  size_t index;
+  for (index = 0; index < selection->field_count; index++)
+    if (!strcmp(selection->fields[index], name))
+      return 1;
+  return 0;
+}
+
+static ArchbirdStatus map_select_field(DiffContext *context, int field,
+                                       AbValue *value, void *user_data) {
+  DiffMapSelection *selection = (DiffMapSelection *)user_data;
+  AbObjectField *resized;
+  AbObjectField *added;
+  ArchbirdStatus status = map_field_kind(context, field, value);
+  if (status != ARCHBIRD_OK ||
+      !map_selection_contains(selection, map_field_names[field]))
+    return status;
+  if (selection->map->as.object.count == SIZE_MAX / sizeof(*resized))
+    return archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "too many selected Map fields");
+  resized = (AbObjectField *)ab_realloc(
+      context->engine, selection->map->as.object.fields,
+      (selection->map->as.object.count + 1) * sizeof(*resized));
+  if (!resized)
+    return archbird_error_set(context->engine, ARCHBIRD_OUT_OF_MEMORY,
+                              ARCHBIRD_NO_OFFSET,
+                              "out of memory selecting Map fields");
+  selection->map->as.object.fields = resized;
+  added = &resized[selection->map->as.object.count];
+  memset(added, 0, sizeof(*added));
+  status = ab_string_copy(context->engine, &added->name, map_field_names[field],
+                          strlen(map_field_names[field]));
+  if (status == ARCHBIRD_OK) {
+    added->value = *value;
+    memset(value, 0, sizeof(*value));
+    selection->map->as.object.count++;
+  }
+  return status;
+}
+
+ArchbirdStatus ab_diff_map_select(ArchbirdEngine *engine, const uint8_t *json,
+                                  size_t length, const char *const *fields,
+                                  size_t field_count, AbValue *out) {
+  DiffContext context = {engine};
+  DiffMapSelection selection = {engine, fields, field_count, out};
+  ArchbirdStatus status;
+  if (!engine || !json || !length || !fields || !field_count || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memset(out, 0, sizeof(*out));
+  out->kind = AB_VALUE_OBJECT;
+  status =
+      map_fields_visit(&context, json, length, map_select_field, &selection);
+  if (status != ARCHBIRD_OK)
+    ab_value_free(engine, out);
+  return status;
+}
+
+ArchbirdStatus ab_diff_map_decode(ArchbirdEngine *engine, const uint8_t *json,
+                                  size_t length, AbValue *out) {
+  return ab_diff_map_select(engine, json, length, map_field_names,
+                            MAP_FIELD_COUNT, out);
+}
+
+static ArchbirdStatus map_parts_validate(DiffContext *context,
+                                         const DiffMapParts *parts) {
+  static const int required[] = {
+      MAP_FIELD_ARTIFACT,   MAP_FIELD_ARTIFACTS,
+      MAP_FIELD_BUILDS,     MAP_FIELD_CALL_RESOLUTIONS,
+      MAP_FIELD_COMPONENTS, MAP_FIELD_EDGES,
+      MAP_FIELD_EVIDENCE,   MAP_FIELD_FILES,
+      MAP_FIELD_PACKAGES,   MAP_FIELD_PARITY,
+      MAP_FIELD_PROJECT,    MAP_FIELD_SCHEMA_VERSION,
+      MAP_FIELD_SURFACES,   MAP_FIELD_TESTS,
+      MAP_FIELD_TOOL};
+  size_t index;
+  if (parts->schema_version < ARCHBIRD_MAP_SCHEMA_MIN ||
+      parts->schema_version > ARCHBIRD_MAP_SCHEMA_CURRENT)
+    return diff_error(context, "diff input must be an Archbird map "
+                               "schema " ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT);
+  for (index = 0; index < sizeof(required) / sizeof(required[0]); index++) {
+    if (!(parts->seen & (UINT64_C(1) << (unsigned)required[index])))
+      return archbird_error_set(
+          context->engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
+          "diff map field '%s' is missing", map_field_names[required[index]]);
+  }
+  if (parts->schema_version >= 8 &&
+      !(parts->seen & (UINT64_C(1) << MAP_FIELD_FACTS)))
+    return diff_error(context, "diff map field 'facts' is missing");
+  return ARCHBIRD_OK;
+}
+
+static void map_parts_free(ArchbirdEngine *engine, DiffMapParts *parts) {
+  ab_value_free(engine, &parts->project);
+  ab_value_free(engine, &parts->evidence);
+  ab_value_free(engine, &parts->discovery);
+  memset(parts, 0, sizeof(*parts));
+}
+
+static ArchbirdStatus map_parts_identity_render(DiffContext *context,
+                                                AbBuffer *buffer,
+                                                DiffMapParts *parts) {
+  AbObjectField fields[3];
+  AbValue map = {0};
+  size_t count = 0;
+  if (parts->discovery.kind) {
+    fields[count].name = (AbString){(char *)"discovery", 9};
+    fields[count++].value = parts->discovery;
+  }
+  fields[count].name = (AbString){(char *)"evidence", 8};
+  fields[count++].value = parts->evidence;
+  fields[count].name = (AbString){(char *)"project", 7};
+  fields[count++].value = parts->project;
+  map.kind = AB_VALUE_OBJECT;
+  map.as.object.fields = fields;
+  map.as.object.count = count;
+  return ab_diff_map_identity_render(context, buffer, &map);
+}
+
+static ArchbirdStatus
+map_diff_render(DiffContext *context, DiffSection sections[DIFF_SECTION_COUNT],
+                DiffMapParts *before, DiffMapParts *after, uint32_t json_flags,
+                ArchbirdWriteFn write_fn, void *user_data) {
+  AbBuffer buffer;
+  ArchbirdStatus status;
+  ab_buffer_init(&buffer, context->engine);
+  status = ab_buffer_literal(&buffer, "{\"after\":");
+  if (status == ARCHBIRD_OK)
+    status = map_parts_identity_render(context, &buffer, after);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"artifact\":\"diff\",\"before\":");
+  if (status == ARCHBIRD_OK)
+    status = map_parts_identity_render(context, &buffer, before);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ",\"schema_version\":7,\"sections\":");
+  if (status == ARCHBIRD_OK)
+    status = render_sections(&buffer, sections);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(
+        &buffer,
+        ",\"tool\":{\"implementation_sha256\":\"" ARCHBIRD_IMPLEMENTATION_SHA256
+        "\",\"name\":\"archbird\",\"version\":\"" ARCHBIRD_VERSION "\"}}");
+  if (status == ARCHBIRD_OK && !json_flags) {
+    if (write_fn(user_data, buffer.data, buffer.length) != 0)
+      status =
+          archbird_error_set(context->engine, ARCHBIRD_WRITE_FAILED,
+                             ARCHBIRD_NO_OFFSET, "diff output writer failed");
+  } else if (status == ARCHBIRD_OK) {
+    status =
+        archbird_json_canonicalize(context->engine, buffer.data, buffer.length,
+                                   json_flags, write_fn, user_data);
+  }
+  ab_buffer_free(&buffer);
+  return status;
+}
+
 ArchbirdStatus ab_diff_map_validate(DiffContext *context, const AbValue *map) {
+  static const char *const arrays[] = {"artifacts",
+                                       "builds",
+                                       "call_resolutions",
+                                       "components",
+                                       "diagnostics",
+                                       "edges",
+                                       "facts",
+                                       "files",
+                                       "indexes",
+                                       "inputs",
+                                       "layers",
+                                       "packages",
+                                       "parity",
+                                       "surfaces",
+                                       "symbol_calls",
+                                       "symbol_references",
+                                       "tests"};
+  static const char *const objects[] = {"discovery", "evidence", "limits",
+                                        "named_entries", "tool"};
   const AbValue *artifact;
   const AbValue *schema;
+  size_t index;
   uint64_t version;
   if (!map || map->kind != AB_VALUE_OBJECT)
     return diff_error(context, "diff input must be a map object");
@@ -1696,6 +2340,14 @@ ArchbirdStatus ab_diff_map_validate(DiffContext *context, const AbValue *map) {
     return ARCHBIRD_INVALID_SCHEMA;
   if (version >= 8 && !required_member(context, map, "facts", AB_VALUE_ARRAY))
     return ARCHBIRD_INVALID_SCHEMA;
+  if (!optional_member_kind(context, map, "description", AB_VALUE_STRING))
+    return ARCHBIRD_INVALID_SCHEMA;
+  for (index = 0; index < sizeof(arrays) / sizeof(arrays[0]); index++)
+    if (!optional_member_kind(context, map, arrays[index], AB_VALUE_ARRAY))
+      return ARCHBIRD_INVALID_SCHEMA;
+  for (index = 0; index < sizeof(objects) / sizeof(objects[0]); index++)
+    if (!optional_member_kind(context, map, objects[index], AB_VALUE_OBJECT))
+      return ARCHBIRD_INVALID_SCHEMA;
   return ARCHBIRD_OK;
 }
 
@@ -1738,11 +2390,10 @@ ArchbirdStatus archbird_map_diff(ArchbirdEngine *engine,
                                  const uint8_t *after_json, size_t after_length,
                                  uint32_t json_flags, ArchbirdWriteFn write_fn,
                                  void *user_data) {
-  AbValue before = {0};
-  AbValue after = {0};
   DiffContext context = {engine};
   DiffSection sections[DIFF_SECTION_COUNT];
-  AbBuffer buffer;
+  DiffMapParts before = {0};
+  DiffMapParts after = {0};
   ArchbirdStatus status;
   if (!engine || (!before_json && before_length) ||
       (!after_json && after_length) || !write_fn ||
@@ -1752,41 +2403,86 @@ ArchbirdStatus archbird_map_diff(ArchbirdEngine *engine,
   if (status != ARCHBIRD_OK)
     return status;
   sections_init(sections);
-  ab_buffer_init(&buffer, engine);
-  status = ab_json_value_decode(engine, before_json, before_length, &before);
+  status = map_stream_index(&context, before_json, before_length, sections, 0,
+                            &before);
   if (status == ARCHBIRD_OK)
-    status = ab_json_value_decode(engine, after_json, after_length, &after);
+    status = map_parts_validate(&context, &before);
   if (status == ARCHBIRD_OK)
-    status = ab_diff_map_validate(&context, &before);
+    status = map_stream_index(&context, after_json, after_length, sections, 1,
+                              &after);
   if (status == ARCHBIRD_OK)
-    status = ab_diff_map_validate(&context, &after);
+    status = map_parts_validate(&context, &after);
   if (status == ARCHBIRD_OK)
-    status = build_indexes(&context, &before, sections, 0);
-  if (status == ARCHBIRD_OK)
-    status = build_indexes(&context, &after, sections, 1);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, "{\"after\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_diff_map_identity_render(&context, &buffer, &after);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ",\"artifact\":\"diff\",\"before\":");
-  if (status == ARCHBIRD_OK)
-    status = ab_diff_map_identity_render(&context, &buffer, &before);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, ",\"schema_version\":7,\"sections\":");
-  if (status == ARCHBIRD_OK)
-    status = render_sections(&buffer, sections);
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(
-        &buffer,
-        ",\"tool\":{\"implementation_sha256\":\"" ARCHBIRD_IMPLEMENTATION_SHA256
-        "\",\"name\":\"archbird\",\"version\":\"" ARCHBIRD_VERSION "\"}}");
-  if (status == ARCHBIRD_OK)
-    status = archbird_json_canonicalize(engine, buffer.data, buffer.length,
-                                        json_flags, write_fn, user_data);
+    status = map_diff_render(&context, sections, &before, &after, json_flags,
+                             write_fn, user_data);
   sections_free(engine, sections);
-  ab_value_free(engine, &after);
-  ab_value_free(engine, &before);
-  ab_buffer_free(&buffer);
+  map_parts_free(engine, &after);
+  map_parts_free(engine, &before);
+  return status;
+}
+
+typedef struct DiffMapStreamWriter {
+  DiffMapStream *stream;
+  ArchbirdStatus status;
+} DiffMapStreamWriter;
+
+static int map_stream_write(void *user_data, const uint8_t *bytes,
+                            size_t length) {
+  DiffMapStreamWriter *writer = (DiffMapStreamWriter *)user_data;
+  writer->status = map_stream_feed(writer->stream, bytes, length);
+  return writer->status == ARCHBIRD_OK ? 0 : -1;
+}
+
+static ArchbirdStatus
+map_project_index(DiffContext *context, const ArchbirdProject *project,
+                  DiffSection sections[DIFF_SECTION_COUNT], int after,
+                  DiffMapParts *parts) {
+  DiffMapIndexInput input = {sections, parts, after};
+  DiffMapStream stream;
+  DiffMapStreamWriter writer;
+  ArchbirdStatus status;
+  map_stream_init(&stream, context, map_index_field, &input);
+  writer.stream = &stream;
+  writer.status = ARCHBIRD_OK;
+  status = archbird_project_render_map(context->engine, project, 0,
+                                       map_stream_write, &writer);
+  if (writer.status != ARCHBIRD_OK)
+    status = writer.status;
+  if (status == ARCHBIRD_OK)
+    status = map_stream_finish(&stream);
+  map_stream_free(&stream);
+  return status;
+}
+
+ArchbirdStatus ab_projects_map_diff(ArchbirdEngine *engine,
+                                    const ArchbirdProject *before_project,
+                                    const ArchbirdProject *after_project,
+                                    uint32_t json_flags,
+                                    ArchbirdWriteFn write_fn, void *user_data) {
+  DiffContext context = {engine};
+  DiffSection sections[DIFF_SECTION_COUNT];
+  DiffMapParts before = {0};
+  DiffMapParts after = {0};
+  ArchbirdStatus status;
+  if (!engine || !before_project || !after_project || !write_fn ||
+      !ab_json_flags_valid(json_flags))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  status = ab_build_identity_validate(engine);
+  if (status != ARCHBIRD_OK)
+    return status;
+  sections_init(sections);
+  status = map_project_index(&context, before_project, sections, 0, &before);
+  if (status == ARCHBIRD_OK)
+    status = map_parts_validate(&context, &before);
+  if (status == ARCHBIRD_OK)
+    status = map_project_index(&context, after_project, sections, 1, &after);
+  if (status == ARCHBIRD_OK)
+    status = map_parts_validate(&context, &after);
+  if (status == ARCHBIRD_OK)
+    status = map_diff_render(&context, sections, &before, &after, json_flags,
+                             write_fn, user_data);
+  map_parts_free(engine, &after);
+  map_parts_free(engine, &before);
+  sections_free(engine, sections);
   return status;
 }

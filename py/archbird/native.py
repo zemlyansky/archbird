@@ -1994,15 +1994,44 @@ def render_source_markdown(
 
 
 def diff_json(
-    before: bytes,
-    after: bytes,
+    before: bytes | Project,
+    after: bytes | Project,
     *,
     correspondence: bytes = b"",
     before_resolution: bytes = b"",
     after_resolution: bytes = b"",
     pretty: bool = False,
 ) -> bytes:
-    """Diff two Maps directly or through reviewed projection correspondence."""
+    """Diff two Maps or two collected projects through one operation."""
+
+    if isinstance(before, Project) or isinstance(after, Project):
+        if not isinstance(before, Project) or not isinstance(after, Project):
+            raise TypeError("project Diff requires two Project instances")
+        if correspondence:
+            requirements = json.loads(_native.diff_requirements(correspondence))
+            if not all(
+                isinstance(requirements.get(side), dict)
+                and requirements[side].get("live_project") is True
+                for side in ("before", "after")
+            ):
+                return _native.diff(
+                    before.map_json(),
+                    after.map_json(),
+                    correspondence,
+                    before_resolution=before_resolution,
+                    after_resolution=after_resolution,
+                    pretty=pretty,
+                )
+        before._materialize()
+        after._materialize()
+        return _native.projects_diff(
+            before._capsule,
+            after._capsule,
+            correspondence,
+            before_resolution=before_resolution,
+            after_resolution=after_resolution,
+            pretty=pretty,
+        )
 
     return _native.diff(
         before,

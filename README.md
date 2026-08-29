@@ -346,9 +346,12 @@ archbird diff ../reference-project ../subject-project \
   --correspondence matcher-rows.json
 ```
 
-Directory operands are mapped independently with their own `archbird.json`.
-Map operands are validated by content, not filename. `--before` and `--after`
-remain equivalent named forms for scripts.
+Directory operands use their own `archbird.json`. For ordered correspondence,
+Diff infers the exact container provider request before scanning and compares
+the resulting typed projections without transporting complete Maps. Saved Map
+operands must already contain the requested provider facts. Map operands are
+validated by content, not filename. `--before` and `--after` remain equivalent
+named forms for scripts.
 
 Without correspondence, Diff joins stable Map identities and reports added,
 removed, and changed architecture. A correspondence file instead supplies one
@@ -373,15 +376,16 @@ exhaustive projection per side plus reviewed one-to-many mappings:
 }
 ```
 
-An empty mapping produces complete `before_unmapped` and `after_unmapped`
-inventories for review. `--check` then requires complete projections, every
-before item mapped, every named target present, and no unaccounted after item.
-Cross-language values and ordering are not equated; each implementation keeps
-its own sequence-lock constraint. Incomplete extraction makes the Diff
-`unknown`, never successful.
+An empty mapping inventories every known item for review. `--check` then
+requires complete projections, every before item mapped, every named target
+present, and no unaccounted after item. Cross-language values and ordering are
+not equated; each implementation keeps its own sequence-lock constraint.
+Incomplete extraction makes the Diff `unknown`: known matches remain visible,
+while claims that depend on the missing population remain unresolved.
 
-Correspondence works with exhaustive set or value projections. For ordered
-matcher/table migrations, opt in only the required Python or C containers:
+Correspondence works with exhaustive set or value projections. Directory Diff
+infers exact ordered-container extraction. Configure it explicitly when saving
+a reusable Map or evaluating a persistent constraint:
 
 ```json
 {
@@ -1285,7 +1289,7 @@ The complete C ABI is declared in
 | Discovery | `archbird_discovery_add_ignore`, `archbird_discovery_add_path`, `archbird_discovery_create`, `archbird_discovery_destroy`, `archbird_discovery_render`, `archbird_discovery_resolve`, `archbird_discovery_should_descend` |
 | Configuration, projections, constraints | `archbird_constraints_evaluate`, `archbird_constraints_freeze`, `archbird_constraints_report`, `archbird_constraints_report_with_blocking`, `archbird_project_configuration_compile`, `archbird_projection_evaluate`, `archbird_projection_render_markdown`, `archbird_query_plan_compile` |
 | Project evidence | `archbird_project_add_provider_facts`, `archbird_project_add_source`, `archbird_project_add_test_symbol_observations`, `archbird_project_config_sha256`, `archbird_project_create`, `archbird_project_destroy`, `archbird_project_finalize_providers`, `archbird_project_finalize_sources`, `archbird_project_manifest_sha256`, `archbird_project_map_input_sha256`, `archbird_project_merge_summary`, `archbird_project_projection_render_markdown`, `archbird_project_provider_count`, `archbird_project_provider_fact_count`, `archbird_project_render_file_facts`, `archbird_project_render_map`, `archbird_project_render_merge_conflicts`, `archbird_project_render_merge_ledger`, `archbird_project_render_provider_facts`, `archbird_project_render_source_markdown`, `archbird_project_scan_builtin`, `archbird_project_scan_builtin_provider`, `archbird_project_scan_builtin_provider_file`, `archbird_project_set_config`, `archbird_project_source`, `archbird_project_source_count`, `archbird_provider_facts_validate`, `archbird_source_manifest_validate`, `archbird_test_symbol_observations_validate` |
-| Map, Query, Path, interchange | `archbird_diff`, `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_path`, `archbird_map_path_markdown`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_path_render_markdown`, `archbird_unified_diff` |
+| Map, Query, Path, interchange | `archbird_diff`, `archbird_diff_requirements`, `archbird_map_diff`, `archbird_map_export_graph`, `archbird_map_freshness`, `archbird_map_path`, `archbird_map_path_markdown`, `archbird_map_query`, `archbird_map_query_markdown`, `archbird_map_query_markdown_view`, `archbird_map_query_markdown_view_with_verification`, `archbird_map_render_markdown`, `archbird_map_render_markdown_view`, `archbird_okf_analyze`, `archbird_okf_publish`, `archbird_path_render_markdown`, `archbird_projects_diff`, `archbird_unified_diff` |
 | Workspace | `archbird_workspace_analyze`, `archbird_workspace_plan` |
 | Plan and Act | `archbird_act_accept`, `archbird_act_materialize`, `archbird_act_preflight_apply`, `archbird_act_source_requirements`, `archbird_act_validate`, `archbird_plan_compile`, `archbird_plan_render_markdown`, `archbird_plan_source_requirements`, `archbird_plan_validate` |
 <!-- archbird-c-api:end -->

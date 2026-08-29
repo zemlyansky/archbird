@@ -1671,6 +1671,63 @@ def diff(
     )
 
 
+def diff_requirements(request: bytes, *, pretty: bool = False) -> bytes:
+    return _simple_render(
+        "archbird_diff_requirements",
+        [_bytes(request, "request")],
+        flags=_json_flags(pretty),
+    )
+
+
+def projects_diff(
+    before_project: _Project,
+    after_project: _Project,
+    request: bytes,
+    *,
+    before_resolution: bytes = b"",
+    after_resolution: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    request_bytes = _bytes(request, "request")
+    before_bytes = _bytes(before_resolution, "before_resolution")
+    after_bytes = _bytes(after_resolution, "after_resolution")
+    function = _declare(
+        "archbird_projects_diff",
+        [
+            _POINTER,
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            _POINTER,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            _WRITE,
+            _POINTER,
+        ],
+    )
+    return _one_shot(
+        lambda engine, write: function(
+            engine,
+            before_project.project,
+            before_bytes or None,
+            len(before_bytes),
+            after_project.project,
+            after_bytes or None,
+            len(after_bytes),
+            request_bytes,
+            len(request_bytes),
+            _json_flags(pretty),
+            write,
+            None,
+        ),
+        input_budget=max(len(request_bytes), len(before_bytes), len(after_bytes)),
+        saved_artifact=True,
+    )
+
+
 def unified_diff(
     before: bytes,
     after: bytes,

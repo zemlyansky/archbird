@@ -43,6 +43,16 @@ const AbFact *ab_map_unique_semantic_target(
 ArchbirdStatus ab_map_render_facts(AbBuffer *buffer,
                                    const ArchbirdProject *project);
 
+typedef struct AbMapFactSelection {
+  const char *const *domains;
+  size_t domain_count;
+  const AbString *container;
+} AbMapFactSelection;
+
+ArchbirdStatus
+ab_map_render_selected_facts(AbBuffer *buffer, const ArchbirdProject *project,
+                             const AbMapFactSelection *selection);
+
 typedef struct AbMapNamedReference {
   const AbManifestFile *file;
   const AbFact *fact;
@@ -428,6 +438,14 @@ ArchbirdStatus ab_map_state_analyze(ArchbirdEngine *engine,
 ArchbirdStatus ab_map_render_graph_projection_input(AbBuffer *buffer,
                                                     AbMapState *state,
                                                     uint32_t relation_mask);
+
+/* Render only canonical identity, selected inputs, and provider facts for
+ * fact-backed projections. This keeps live projection memory independent of
+ * unrelated symbols and graph sections. */
+ArchbirdStatus
+ab_map_render_fact_projection_input(AbBuffer *buffer,
+                                    const ArchbirdProject *project,
+                                    const AbMapFactSelection *selection);
 
 enum {
   AB_MAP_GRAPH_SYMBOL_CALLS = UINT32_C(1) << 0,

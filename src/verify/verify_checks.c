@@ -955,11 +955,8 @@ static ArchbirdStatus correspondence_complete_check(
         status = result_add_finding(engine, result, &finding);
       finding_free(engine, &finding);
     }
-    if (status != ARCHBIRD_OK || result->finding_count) {
-      if (status == ARCHBIRD_OK)
-        status = result_set_status(engine, result);
+    if (status != ARCHBIRD_OK)
       return status;
-    }
   }
   if (!correspondence_shape(expected) || !correspondence_shape(actual)) {
     AbVerifyFinding finding = {0};
@@ -1015,6 +1012,8 @@ static ArchbirdStatus correspondence_complete_check(
       status = correspondence_finding(
           engine, check, "missing", record->right_key,
           "actual fact has no reviewed correspondence", right, result);
+      break;
+    case AB_COMPARISON_UNRESOLVED:
       break;
     default:
       status = archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,

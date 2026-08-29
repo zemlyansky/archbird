@@ -1882,6 +1882,7 @@ def _assert_symbol_occurrence_projection() -> None:
             "    return old_api(2)\n"
         ),
         "py/use.py": "from api import old_api\nresult = old_api(1)\n",
+        "unsupported.go": "package fixture\n\nfunc old_api() {}\n",
     }
     for relative, source in sources.items():
         target = root / relative
@@ -1986,6 +1987,22 @@ def _assert_symbol_occurrence_projection() -> None:
         ("py/use.py", "import", "current"),
         ("py/use.py", "reference", "current"),
     }
+    unsupported_map = Project.from_repository(
+        root, config=b"{}", jobs=1, map_cache=False
+    ).map_json()
+    unsupported_projection = json.loads(
+        evaluate_projection_json(
+            unsupported_map,
+            {
+                "id": "unsupported-occurrences",
+                "names": ["old_api"],
+                "paths": ["py/api.py"],
+                "select": "symbol_occurrences",
+            },
+        )
+    )
+    assert unsupported_projection["completeness"]["classification"] == "incomplete"
+    assert unsupported_projection["completeness"]["counts"]["unsupported"] == 1
     nested_result = evaluate("outer.old_api", "py/nested.py")
     assert {
         (row["attributes"]["path"], row["attributes"]["role"], row["state"])
@@ -2023,6 +2040,7 @@ def _assert_ordered_container_facts() -> None:
         "    ])\n"
         "    dynamic_rules = [*function_rules]\n"
         "    comprehension_rules = [item for item in function_rules]\n"
+        "    composed_rules = function_rules + PatternMatcher([('z', callback_x)])\n"
         "    mutated_rules = [(\"initial\", callback_x)]\n"
         "    mutated_rules.append((\"later\", callback_x))\n"
         "    return (function_rules, dynamic_rules, comprehension_rules, "
@@ -2110,10 +2128,18 @@ def _assert_ordered_container_facts() -> None:
         "c/rules.c:second/rules": (1, "closed"),
         "py/rules.py:build/function_rules": (2, "closed"),
         "py/rules.py:build/comprehension_rules": (0, "dynamic"),
+        "py/rules.py:build/composed_rules": (1, "dynamic"),
         "py/rules.py:build/dynamic_rules": (1, "dynamic"),
         "py/rules.py:build/mutated_rules": (1, "dynamic"),
         "py/rules.py:module_rules": (2, "closed"),
     }
+    composed = next(
+        row
+        for row in containers
+        if row["attributes"]["container"]
+        == "py/rules.py:build/composed_rules"
+    )
+    assert composed["attributes"]["incomplete_reason"] == "unsupported-composition"
     rows = [row for row in document["facts"] if row["domain"] == "ordered-rows"]
     first_rows = [
         row
@@ -2129,6 +2155,30 @@ def _assert_ordered_container_facts() -> None:
     ]
     assert [row["attributes"]["ordinal"] for row in function_rows] == [0, 1]
     assert len({row["attributes"]["digest"] for row in function_rows}) == 1
+    composed_rows = [
+        row
+        for row in rows
+        if row["attributes"]["container"]
+        == "py/rules.py:build/composed_rules"
+    ]
+    assert len(composed_rows) == 1
+    assert composed_rows[0]["attributes"]["state"] == "unknown"
+    assert composed_rows[0]["attributes"]["fragment"].startswith(
+        "py/rules.py:build/composed_rules#"
+    )
+    composed_projection = json.loads(
+        evaluate_projection_json(
+            project.map_json(),
+            {
+                "container": "py/rules.py:build/composed_rules",
+                "id": "composed-rules",
+                "select": "ordered_rows",
+            },
+        )
+    )
+    assert composed_projection["completeness"]["classification"] == "incomplete"
+    assert len(composed_projection["fact"]["items"]) == 1
+    assert composed_projection["fact"]["items"][0]["state"] == "unknown"
 
     definition = {
         "container": "c/rules.c:first/rules",
@@ -2304,6 +2354,27 @@ def _assert_ordered_container_facts() -> None:
         )
     )
     assert correspondence["constraints"][0]["status"] == "pass"
+    partial_known = json.loads(json.dumps(correspondence_config))
+    partial_known["projections"]["module-rules"]["container"] = (
+        "py/rules.py:build/composed_rules"
+    )
+    partial_known["constraints"]["RULE-CORRESPONDENCE"]["mapping"] = {
+        composed_projection["fact"]["items"][0]["key"]: [target_keys[0]]
+    }
+    partial_known["constraints"]["RULE-CORRESPONDENCE"][
+        "require_target_coverage"
+    ] = False
+    partial_known_result = json.loads(
+        evaluate_constraints_json(
+            json.dumps(partial_known, separators=(",", ":")).encode(),
+            project.map_json(),
+        )
+    )["constraints"][0]
+    assert partial_known_result["status"] == "unknown"
+    assert set(partial_known_result["coverage"]) == {
+        composed_projection["fact"]["items"][0]["key"],
+        target_keys[0],
+    }
 
     mapped_diff_request = {
         "after": {
@@ -2352,7 +2423,34 @@ def _assert_ordered_container_facts() -> None:
         )
     )
     assert incomplete_diff["comparison"]["state"] == "unknown"
-    assert incomplete_diff["comparison"]["groups"] == []
+    assert incomplete_diff["comparison"]["counts"] == {
+        "after_unmapped": 0,
+        "before_unmapped": 0,
+        "mapping_after_missing": 0,
+        "mapping_before_missing": 0,
+        "matched": 1,
+    }
+    assert [
+        group["state"] for group in incomplete_diff["comparison"]["groups"]
+    ] == ["partial", "partial"]
+    assert sorted(
+        target["state"]
+        for group in incomplete_diff["comparison"]["groups"]
+        for target in group["targets"]
+    ) == ["matched", "unresolved", "unresolved"]
+
+    malformed_map = json.loads(project.map_json())
+    malformed_map["packages"] = "invalid"
+    try:
+        _native.diff(
+            json.dumps(malformed_map, separators=(",", ":")).encode(),
+            project.map_json(),
+            json.dumps(mapped_diff_request, separators=(",", ":")).encode(),
+        )
+    except RuntimeError as error:
+        assert "packages" in str(error)
+    else:
+        raise AssertionError("mapped Diff accepted a malformed Map section")
 
     reordered_map = json.loads(project.map_json())
     reordered_rows = [
