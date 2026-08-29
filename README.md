@@ -1332,44 +1332,19 @@ archbird verify \
   --format sarif --output .archbird/architecture.sarif --check
 ```
 
-For agents:
+Install the portable consumer skill to teach compatible coding agents when and
+how to use Archbird without copying a command policy into every repository:
 
-Copy this compact policy into a project's `AGENTS.md`, `CLAUDE.md`, or
-equivalent agent instructions:
-
-```text
-Use Archbird before broad source exploration.
-
-- Start with `archbird map . --view overview --detail standard --max-chars
-  12000 --check`.
-- When an exact identity is known, use `archbird query . --symbol
-  'PATH:SYMBOL' --depth 1 --test-depth 1 --max-chars 12000 --check`.
-- When the identity is unknown, use `archbird query . --search 'CONCISE
-  REPOSITORY TERMS' --max-chars 12000 --check`. Search is lexical; its ranked
-  matches are advisory starting points, not proven semantic edges.
-- Read an exact declaration with `archbird query . --symbol 'PATH:SYMBOL'
-  --view source --detail standard --max-chars 12000 --check`. Read one complete
-  selected file with `archbird query . --path PATH --dump --check`; do not add
-  `--max-chars` to `--dump`.
-- Use `archbird path SOURCE TARGET --check` for an explicit connection
-  question. Only a current, source-evidenced witness is `found`; candidate-only
-  or incomplete connectivity remains `unknown`.
-- Run `archbird verify --root . --check` before and after architecture-sensitive
-  work. Verify is exhaustive; Query may rank, collapse, and bound context.
-- Treat static test routes as navigation candidates, not proof that a test ran.
-  Use project-owned runner observations for execution evidence.
-- Before reusing `.archbird/map.json`, run `archbird freshness --root .
-  --snapshot .archbird/map.json --check`.
-- Review generated Plans and accepted Acts. Never run `archbird apply` unless
-  repository mutation is explicitly authorized and the exact Act was reviewed.
-- If Archbird disagrees with source, inspect source directly and report a
-  general reproducer; never hide uncertainty or manufacture observed evidence.
+<!-- archbird-example: template core-agent-skill -->
+```bash
+npx skills add zemlyansky/archbird --skill archbird -g
 ```
 
-For repeated read-only exploration, an MCP-capable agent can launch
-`archbird mcp --root .` and use its generation-bound Map, Projection, Query,
-source, Verify, and Diff tools. Plan, Act, and Apply remain explicit CLI review
-steps.
+The skill uses an installed Archbird CLI or configured `archbird_*` MCP tools;
+it does not install Archbird itself. It covers root selection, bounded Map and
+Query, exact source, Path, exhaustive Verify, Diff, freshness, evidence
+confidence, and reviewed Plan/Act/Apply. Project instructions need only record
+project-specific scope or policy, such as the correct monorepo child root.
 
 ## Project configuration
 

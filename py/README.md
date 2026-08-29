@@ -825,35 +825,19 @@ those remain explicit reviewed CLI or Python API operations.
 
 ## Agent workflow
 
-Copy this compact policy into a project's `AGENTS.md`, `CLAUDE.md`, or
-equivalent agent instructions:
+Install the portable consumer skill instead of copying an Archbird command
+policy into every repository:
 
-```text
-Use Archbird before broad source exploration.
-
-- Start with `archbird map . --view overview --detail standard --max-chars
-  12000 --check`.
-- When an exact identity is known, use `archbird query . --symbol
-  'PATH:SYMBOL' --depth 1 --test-depth 1 --max-chars 12000 --check`.
-- When the identity is unknown, use `archbird query . --search 'CONCISE
-  REPOSITORY TERMS' --max-chars 12000 --check`. Search is lexical and advisory.
-- Read an exact declaration with `archbird query . --symbol 'PATH:SYMBOL'
-  --view source --detail standard --max-chars 12000 --check`. Read one complete
-  file with `archbird query . --path PATH --dump --check`; do not combine
-  `--dump` with `--max-chars`.
-- Use `archbird path SOURCE TARGET --check` for explicit connection questions.
-  Candidate-only or incomplete connectivity remains `unknown`.
-- Run `archbird verify --root . --check` before and after
-  architecture-sensitive work. Treat static test routes as navigation, not
-  proof of execution.
-- Check `archbird freshness --root . --snapshot .archbird/map.json --check`
-  before reusing a saved Map.
-- Prefer `archbird mcp --root .` for repeated read-only agent exploration.
-- Review generated Plans and accepted Acts. Never run `archbird apply` unless
-  repository mutation is explicitly authorized and the exact Act was reviewed.
-- If Archbird disagrees with source, inspect source directly and report a
-  general reproducer; never hide uncertainty or manufacture observed evidence.
+<!-- archbird-example: template python-agent-skill -->
+```bash
+npx skills add zemlyansky/archbird --skill archbird -g
 ```
+
+The skill uses the active environment's `archbird` command or configured
+`archbird_*` MCP tools. It does not install Archbird. It covers root selection,
+bounded exploration, exact source and paths, exhaustive constraints, Diff,
+freshness, evidence confidence, and reviewed Plan/Act/Apply. Keep only
+project-specific roots and policies in `AGENTS.md` or equivalent instructions.
 
 ## Project configuration
 

@@ -195,6 +195,7 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_evidence_routes.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_query_adjacency_scaling.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_readme_examples.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_agent_skill.py
 	$(PYTHON) test/test_build_graph.py $(CURDIR)
 	$(PYTHON) test/test_release_gates.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) py/tests/test_repository.py \

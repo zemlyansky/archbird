@@ -35,6 +35,7 @@ src.zip
 *.md
 !README.md
 !**/README.md
+!skills/*/SKILL.md
 
 # Downloaded research corpora stay external/local.
 references/
