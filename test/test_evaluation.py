@@ -168,10 +168,10 @@ elif command == 'map':
 
 ## Graph structure
 
-- `file:src/a.py`: out-neighbors=>=1; in-neighbors=>=1; out-relations=>=2; in-relations=>=2; scc-size=>=1; cyclic=yes
-- `file:src/other.py`: out-neighbors=>=1; in-neighbors=>=1; out-relations=>=1; in-relations=>=1; scc-size=>=2; cyclic=yes
-- `file:tests/test_a.py`: out-neighbors=>=0; in-neighbors=>=1; out-relations=>=0; in-relations=>=1; scc-size=>=1; cyclic=no
-- `file:tests/test_regression.py`: out-neighbors=>=0; in-neighbors=>=0; out-relations=>=0; in-relations=>=0; scc-size=>=1; cyclic=unknown (no known cycle)
+- `file:src/a.py`: out-neighbors=>=1; in-neighbors=>=1; out-relations=>=2; in-relations=>=2; scc-size=>=1; cyclic=yes; cycle-kind=self-loop
+- `file:src/other.py`: out-neighbors=>=1; in-neighbors=>=1; out-relations=>=1; in-relations=>=1; scc-size=>=2; cyclic=yes; cycle-kind=multi-node
+- `file:tests/test_a.py`: out-neighbors=>=0; in-neighbors=>=1; out-relations=>=0; in-relations=>=1; scc-size=>=1; cyclic=no; cycle-kind=none
+- `file:tests/test_regression.py`: out-neighbors=>=0; in-neighbors=>=0; out-relations=>=0; in-relations=>=0; scc-size=>=1; cyclic=unknown (no known cycle); cycle-kind=unknown
 - ... 3 metric rows omitted
 
 ## Group boundaries

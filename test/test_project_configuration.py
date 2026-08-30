@@ -601,6 +601,24 @@ def _assert_metrics_projection() -> None:
                 "source": "js/worker.js",
                 "target": "js/worker.js",
             },
+            {
+                "kind": "import",
+                "names": ["../native/addon.c"],
+                "source": "js/main.js",
+                "target": "native/addon.c",
+            },
+            {
+                "kind": "import",
+                "names": ["../py/sample/api.py"],
+                "source": "js/main.js",
+                "target": "py/sample/api.py",
+            },
+            {
+                "kind": "import",
+                "names": ["../src/core.c"],
+                "source": "js/main.js",
+                "target": "src/core.c",
+            },
         ]
     )
     encoded_cyclic_map = json.dumps(
@@ -686,6 +704,30 @@ def _assert_metrics_projection() -> None:
         )
     )
     assert cycle_verification["constraints"][0]["status"] == "fail"
+    for detail in ("compact", "standard", "full"):
+        cycle_report = render_map_markdown(
+            encoded_cyclic_map,
+            view="metrics",
+            detail=detail,
+            relations=["imports"],
+        )
+        assert b"scc-size=2; cyclic=yes; cycle-kind=multi-node" in cycle_report
+        assert b"scc-size=1; cyclic=yes; cycle-kind=self-loop" in cycle_report
+        assert b"scc-size=1; cyclic=no; cycle-kind=none" in cycle_report
+        assert cycle_report.index(b"file:js/index.js") < cycle_report.index(
+            b"file:js/main.js"
+        )
+        assert cycle_report.index(b"file:js/main.js") < cycle_report.index(
+            b"file:js/worker.js"
+        )
+    incomplete_cycle_report = render_map_markdown(
+        encoded_cyclic_map, view="metrics", detail="standard"
+    )
+    assert (
+        b"scc-size=>=2; cyclic=yes; cycle-kind=multi-node"
+        in incomplete_cycle_report
+    )
+    assert b"cycle-kind=unknown" in incomplete_cycle_report
 
     # Relation kinds and duplicate witnesses do not multiply one neighbor.
     duplicate_map = json.loads(report_map)
@@ -1012,7 +1054,16 @@ def _assert_metrics_projection() -> None:
     assert b"graph.scc_size" in report
     assert b"graph.cyclic" in report
     assert b"Source extent metrics are unavailable" in report
+    assert b"out-neighbors=>=1; in-neighbors=>=0" in report
+    assert b"scc-size=>=1; cyclic=unknown (no known cycle)" in report
+    assert b"internal-relations=>=1; inbound-relations=>=1" in report
     assert b"Evidence: metrics=incomplete" in report
+    complete_graph_report = render_map_markdown(
+        report_map, view="metrics", detail="standard", relations=["imports"]
+    )
+    assert b"out-neighbors=1; in-neighbors=0" in complete_graph_report
+    assert b"scc-size=1; cyclic=no" in complete_graph_report
+    assert b"out-neighbors=>=" not in complete_graph_report
     assert report == _native.map_markdown_view(report_map, 4, 1, max_chars=0)
 
 

@@ -580,8 +580,12 @@ with project-owned observed symbol hits. `evidence.current_relations`,
 relation records contributing to the selected graph, including self-relations
 collapsed in graph presentation.
 Every count includes its denominator; incomplete graph evidence makes the
-projection incomplete even when known counts are displayed. These are
-measurements, not quality scores; projects own their thresholds:
+projection incomplete even when known counts are displayed. Markdown prefixes
+known graph counts with `>=`; no detected cycle is `unknown`, while a detected
+cycle remains `yes`. `cycle-kind` distinguishes multi-node cycles, self-loops,
+noncyclic nodes, and unknowns; it changes ranking and wording, not the
+`graph.cyclic` fact. These are measurements, not quality scores; projects own
+their thresholds:
 
 ```json
 {

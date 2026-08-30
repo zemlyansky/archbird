@@ -1891,8 +1891,12 @@ static int metric_neighbors_compare(const void *left, const void *right) {
   uint64_t b_out_relations = item_u64(b, "metric.graph.out_relations");
   uint64_t a_in_relations = item_u64(a, "metric.graph.in_relations");
   uint64_t b_in_relations = item_u64(b, "metric.graph.in_relations");
-  if (a_cyclic != b_cyclic)
-    return a_cyclic > b_cyclic ? -1 : 1;
+  int a_multi_node = a_cyclic && a_scc > 1;
+  int b_multi_node = b_cyclic && b_scc > 1;
+  int a_self_loop = a_cyclic && a_scc == 1;
+  int b_self_loop = b_cyclic && b_scc == 1;
+  if (a_multi_node != b_multi_node)
+    return a_multi_node ? -1 : 1;
   if (a_scc != b_scc)
     return a_scc > b_scc ? -1 : 1;
   if (a_value != b_value)
@@ -1903,7 +1907,22 @@ static int metric_neighbors_compare(const void *left, const void *right) {
     return a_out_relations > b_out_relations ? -1 : 1;
   if (a_in_relations != b_in_relations)
     return a_in_relations > b_in_relations ? -1 : 1;
+  if (a_self_loop != b_self_loop)
+    return a_self_loop ? -1 : 1;
   return ab_string_compare(&a->key, &b->key);
+}
+
+static const char *metric_cycle_kind(const AbProjectionData *data,
+                                     const AbProjectionItem *item) {
+  uint64_t cyclic = item_u64(item, "metric.graph.cyclic");
+  uint64_t scc_size = item_u64(item, "metric.graph.scc_size");
+  if (cyclic && scc_size > 1)
+    return "multi-node";
+  if (cyclic)
+    return "self-loop";
+  return !strcmp(ab_projection_data_classification(data), "complete")
+             ? "none"
+             : "unknown";
 }
 
 static int metric_boundary_compare(const void *left, const void *right) {
@@ -1923,7 +1942,7 @@ static int metric_boundary_compare(const void *left, const void *right) {
 static ArchbirdStatus render_metric_nodes(AbBuffer *out,
                                           const AbProjectionData *data,
                                           size_t limit, int source_extent,
-                                          size_t *omitted) {
+                                          int graph_complete, size_t *omitted) {
   const AbProjectionItem **items = NULL;
   size_t total = 0;
   size_t shown;
@@ -1976,18 +1995,23 @@ static ArchbirdStatus render_metric_nodes(AbBuffer *out,
           symbol ? " (`" : "", symbol ? (int)symbol->length : 0,
           symbol ? symbol->data : "", symbol ? "`)" : "", current, unknown));
     } else {
+      const char *bound = graph_complete ? "" : ">=";
+      const char *cyclic =
+          item_u64(item, "metric.graph.cyclic")
+              ? "yes"
+              : (graph_complete ? "no" : "unknown (no known cycle)");
       METRIC_REPORT_TRY(ab_report_linef(
           out,
-          "- `%.*s`: out-neighbors=%" PRIu64 "; in-neighbors=%" PRIu64
-          "; out-relations=%" PRIu64 "; in-relations=%" PRIu64
-          "; scc-size=%" PRIu64 "; cyclic=%s",
-          id ? (int)id->length : 0, id ? id->data : "",
-          item_u64(item, "metric.graph.out_neighbors"),
-          item_u64(item, "metric.graph.in_neighbors"),
-          item_u64(item, "metric.graph.out_relations"),
-          item_u64(item, "metric.graph.in_relations"),
-          item_u64(item, "metric.graph.scc_size"),
-          item_u64(item, "metric.graph.cyclic") ? "yes" : "no"));
+          "- `%.*s`: out-neighbors=%s%" PRIu64 "; in-neighbors=%s%" PRIu64
+          "; out-relations=%s%" PRIu64 "; in-relations=%s%" PRIu64
+          "; scc-size=%s%" PRIu64 "; cyclic=%s; cycle-kind=%s",
+          id ? (int)id->length : 0, id ? id->data : "", bound,
+          item_u64(item, "metric.graph.out_neighbors"), bound,
+          item_u64(item, "metric.graph.in_neighbors"), bound,
+          item_u64(item, "metric.graph.out_relations"), bound,
+          item_u64(item, "metric.graph.in_relations"), bound,
+          item_u64(item, "metric.graph.scc_size"), cyclic,
+          metric_cycle_kind(data, item)));
     }
   }
   if (shown < total) {
@@ -2004,7 +2028,8 @@ cleanup:
 
 static ArchbirdStatus render_metric_groups(AbBuffer *out,
                                            const AbProjectionData *data,
-                                           size_t limit, size_t *omitted) {
+                                           size_t limit, int graph_complete,
+                                           size_t *omitted) {
   const AbProjectionItem **items = NULL;
   size_t total = 0;
   size_t shown;
@@ -2024,14 +2049,15 @@ static ArchbirdStatus render_metric_groups(AbBuffer *out,
   for (index = 0; status == ARCHBIRD_OK && index < shown; index++) {
     const AbProjectionItem *item = items[index];
     const AbString *id = item_text(item, "id");
-    status = ab_report_linef(out,
-                             "- `%.*s`: internal-relations=%" PRIu64
-                             "; inbound-relations=%" PRIu64
-                             "; outbound-relations=%" PRIu64,
-                             id ? (int)id->length : 0, id ? id->data : "",
-                             item_u64(item, "metric.graph.internal_relations"),
-                             item_u64(item, "metric.graph.inbound_relations"),
-                             item_u64(item, "metric.graph.outbound_relations"));
+    const char *bound = graph_complete ? "" : ">=";
+    status = ab_report_linef(
+        out,
+        "- `%.*s`: internal-relations=%s%" PRIu64
+        "; inbound-relations=%s%" PRIu64 "; outbound-relations=%s%" PRIu64,
+        id ? (int)id->length : 0, id ? id->data : "", bound,
+        item_u64(item, "metric.graph.internal_relations"), bound,
+        item_u64(item, "metric.graph.inbound_relations"), bound,
+        item_u64(item, "metric.graph.outbound_relations"));
   }
   if (status == ARCHBIRD_OK && shown < total) {
     *omitted += total - shown;
@@ -2054,6 +2080,7 @@ static ArchbirdStatus render_metrics_once(const AbProjectionPlan *plan,
   const char *metrics_classification;
   GraphReportSummary summary;
   int source_available = 0;
+  int graph_complete = !strcmp(classification, "complete");
   size_t omitted = 0;
   uint64_t unknown;
   size_t index;
@@ -2125,9 +2152,12 @@ static ArchbirdStatus render_metrics_once(const AbProjectionPlan *plan,
       "- `graph.cyclic` (`graph.cycle-membership-v1`, unit `boolean`): one "
       "when the entity belongs to a multi-node cycle or has a self-loop."));
   REPORT_TRY(ab_report_blank(out));
-  REPORT_TRY(render_metric_nodes(out, &result->data, limit, 1, &omitted));
-  REPORT_TRY(render_metric_nodes(out, &result->data, limit, 0, &omitted));
-  REPORT_TRY(render_metric_groups(out, &result->data, limit, &omitted));
+  REPORT_TRY(render_metric_nodes(out, &result->data, limit, 1, graph_complete,
+                                 &omitted));
+  REPORT_TRY(render_metric_nodes(out, &result->data, limit, 0, graph_complete,
+                                 &omitted));
+  REPORT_TRY(render_metric_groups(out, &result->data, limit, graph_complete,
+                                  &omitted));
   REPORT_TRY(render_section(out, &result->data, "coverage",
                             "Repository coverage", limit, standard_detail,
                             full_detail, &omitted));

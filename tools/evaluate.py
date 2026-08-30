@@ -1138,7 +1138,8 @@ METRICS_EVIDENCE_RE = re.compile(
 )
 METRICS_GRAPH_ROW_RE = re.compile(
     r"^- `[^`]+`: .*; scc-size=(>=)?(\d+); "
-    r"cyclic=(yes|no|unknown \(no known cycle\))$"
+    r"cyclic=(yes|no|unknown \(no known cycle\)); "
+    r"cycle-kind=(multi-node|self-loop|none|unknown)$"
 )
 
 
@@ -1203,15 +1204,26 @@ def metrics_report_summary(path: Path, max_chars: int) -> Mapping[str, Any]:
         graph_match = METRICS_GRAPH_ROW_RE.fullmatch(line)
         if not graph_match:
             raise EvaluationError("public Metrics graph row is malformed")
-        bounded, scc_size, cyclic = graph_match.groups()
+        bounded, scc_size, cyclic, cycle_kind = graph_match.groups()
         size = int(scc_size)
+        expected_kind = (
+            "multi-node"
+            if cyclic == "yes" and size > 1
+            else "self-loop"
+            if cyclic == "yes"
+            else "none"
+            if cyclic == "no"
+            else "unknown"
+        )
+        if cycle_kind != expected_kind:
+            raise EvaluationError("public Metrics cycle classification is inconsistent")
         if bounded or cyclic.startswith("unknown"):
             cycles["incomplete"] += 1
-        if cyclic == "yes" and size > 1:
+        if cycle_kind == "multi-node":
             cycles["multi_node"] += 1
-        elif cyclic == "yes":
+        elif cycle_kind == "self-loop":
             cycles["singleton_cyclic"] += 1
-        elif cyclic == "no":
+        elif cycle_kind == "none":
             cycles["noncyclic"] += 1
         else:
             cycles["unknown"] += 1

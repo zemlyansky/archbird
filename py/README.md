@@ -380,9 +380,12 @@ with project-owned observed symbol hits. `evidence.current_relations`,
 `evidence.unknown_relations`, and `evidence.stale_relations` count source
 relation records contributing to the selected graph, including self-relations
 collapsed in graph presentation, and retain graph completeness. Every
-aggregate includes its denominator. These are measurements, not quality
-scores. Project-owned limits use the existing
-predicates:
+aggregate includes its denominator. When graph evidence is incomplete,
+Markdown prefixes known counts with `>=` and reports no detected cycle as
+`unknown`; a detected cycle remains `yes`. `cycle-kind` separates multi-node
+cycles, self-loops, noncyclic nodes, and unknowns without changing the
+`graph.cyclic` fact. These are measurements, not quality scores. Project-owned
+limits use the existing predicates:
 
 ```json
 {
