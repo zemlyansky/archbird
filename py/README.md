@@ -665,6 +665,10 @@ valid new generation replaces the last good Map. The page uses the native
 Python host for analysis; it does not download the canonical Map unless the
 user explicitly saves it.
 
+The Metrics workspace shows exhaustive typed metric distributions,
+completeness, neutral heatmaps, and exact contributors. Values are measurements,
+not quality scores; selecting a hotspot opens its focused evidence.
+
 ### Reuse saved evidence safely
 
 Saved Maps preserve one analyzed state; they do not prove that the checkout is

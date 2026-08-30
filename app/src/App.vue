@@ -37,6 +37,7 @@ import ConstraintPanel from "./components/ConstraintPanel.vue";
 import DocumentPanel from "./components/DocumentPanel.vue";
 import GraphCanvas from "./components/GraphCanvas.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
+import MetricsPanel from "./components/MetricsPanel.vue";
 import VerificationEditor from "./components/VerificationEditor.vue";
 import {
   mapGraphProjectionPlan,
@@ -56,6 +57,12 @@ import {
   applyVerificationOverlay,
   verificationConstraints,
 } from "./graph/verification";
+import {
+  applyMetricOverlay,
+  DEFAULT_METRIC,
+  metricProjectionPlan,
+  type MetricId,
+} from "./graph/metrics";
 
 type Theme = "dark" | "light" | "system";
 type TransportMode = "browser" | "none" | "server";
@@ -121,11 +128,17 @@ const selectedConstraintId = ref<string | null>(null);
 const zoomPercent = ref(100);
 const graphSpacing = ref(60);
 const baseGeneration = ref<string | null>(null);
+const selectedMetric = ref<MetricId>(DEFAULT_METRIC);
+const metricProjection = shallowRef<ProjectionResult | null>(null);
+const metricCache = shallowRef<ReadonlyMap<MetricId, ProjectionResult>>(new Map());
+const metricLoading = ref(false);
+const metricError = ref("");
 
 let liveHost: BrowserHost | ServerHost | null = null;
 let unsubscribe: (() => void) | null = null;
 let operationId = 0;
 let operationStartedAt = 0;
+let metricRequestId = 0;
 let themeMedia: MediaQueryList | null = null;
 
 const availableViews = computed(() => {
@@ -229,22 +242,26 @@ const overlay = computed(() => explorationGraph.value
   )
   : null);
 const presentedGraph = computed(() => overlay.value?.graph || null);
+const measuredGraph = computed(() =>
+  mapView.value === "metrics" && presentedGraph.value && metricProjection.value
+    ? applyMetricOverlay(presentedGraph.value, metricProjection.value)
+    : presentedGraph.value);
 const constraintRows = computed(() => verificationConstraints(verification.value));
 const selectedConstraint = computed(() =>
   constraintRows.value.find((row) => row.id === selectedConstraintId.value) || null);
 const edgeKinds = computed(() =>
-  [...new Set((presentedGraph.value?.edges || []).map((edge) => edge.kind))].sort());
+  [...new Set((measuredGraph.value?.edges || []).map((edge) => edge.kind))].sort());
 const edgeClassifications = computed(() =>
-  [...new Set((presentedGraph.value?.edges || []).map((edge) => edge.classification))].sort());
+  [...new Set((measuredGraph.value?.edges || []).map((edge) => edge.classification))].sort());
 const visibleGraph = computed<GraphView | null>(() => {
-  if (!presentedGraph.value) return null;
-  const edges = presentedGraph.value.edges.filter((edge) =>
+  if (!measuredGraph.value) return null;
+  const edges = measuredGraph.value.edges.filter((edge) =>
     (edgeKind.value === "all" || edge.kind === edgeKind.value) &&
     (edgeClassification.value === "all" || edge.classification === edgeClassification.value));
   return orientGraphEdges({
-    ...presentedGraph.value,
+    ...measuredGraph.value,
     edges,
-    summary: { edges: edges.length, nodes: presentedGraph.value.nodes.length },
+    summary: { edges: edges.length, nodes: measuredGraph.value.nodes.length },
   }, edgeFlow.value);
 });
 const searchResults = computed(() => {
@@ -308,10 +325,15 @@ function resetGraphState() {
 }
 
 function resetMapProjections() {
+  metricRequestId += 1;
   graphPresentations.value = null;
   fileGraph.value = null;
   symbolGraphs.value = new Map();
   verification.value = null;
+  metricProjection.value = null;
+  metricCache.value = new Map();
+  metricLoading.value = false;
+  metricError.value = "";
 }
 
 function selectGraphElement(id: string | null) {
@@ -686,10 +708,53 @@ async function changeMapPresentation(
 
 async function changeMapView(view: MapView) {
   await changeMapPresentation(view, graphGrouping.value);
+  if (mapView.value === "metrics") await loadMetric(selectedMetric.value);
 }
 
 async function changeGraphGrouping(grouping: GraphGrouping) {
   await changeMapPresentation(mapView.value, grouping);
+}
+
+async function loadMetric(metric: MetricId) {
+  selectedMetric.value = metric;
+  metricError.value = "";
+  const cached = metricCache.value.get(metric);
+  if (cached) {
+    metricProjection.value = cached;
+    return;
+  }
+  if (!baseMap.value) return;
+  metricProjection.value = null;
+  const request = ++metricRequestId;
+  metricLoading.value = true;
+  try {
+    const plan = metricProjectionPlan(metric);
+    const host = workspaceMode.value !== "saved" && liveHost
+      && !(workspaceMode.value === "snapshot" && liveHost instanceof BrowserHost)
+      ? liveHost
+      : null;
+    const projection = host
+      ? await hostFactProjection(host, plan, baseGeneration.value || undefined)
+      : await evaluateArtifactProjection(
+        requireParsedArtifact(baseMap.value, "local Metrics projection"),
+        plan,
+      ).then((bytes) => parseProjectionResult(bytes, "metrics"));
+    if (request !== metricRequestId) return;
+    metricCache.value = new Map(metricCache.value).set(metric, projection);
+    metricProjection.value = projection;
+  } catch (cause) {
+    if (request === metricRequestId) {
+      metricError.value = cause instanceof Error ? cause.message : String(cause);
+    }
+  } finally {
+    if (request === metricRequestId) metricLoading.value = false;
+  }
+}
+
+function openMetricContext(path: string, symbol: string | null) {
+  queryKind.value = symbol ? "symbol" : "path";
+  queryValue.value = symbol ? `${path}:${symbol}` : path;
+  void runQuery();
 }
 
 async function open(file: File) {
@@ -1190,21 +1255,22 @@ onMounted(async () => {
 
 <template>
   <main>
-    <header class="topbar">
+    <header class="topbar" :class="{ 'source-empty': !artifact && !busy && !error }">
       <div class="brand">
         <span class="bird">A</span>
         <div>
           <strong>Archbird</strong>
-          <small>architecture evidence</small>
+          <small>codebase explorer</small>
         </div>
       </div>
       <ArtifactDrop
+        v-if="artifact || busy || error"
         :status="inputStatus"
         @select="open"
         @directory="openLive({ kind: 'directory', files: $event })"
         @zip="openLive({ kind: 'zip', file: $event })"
       />
-      <label class="search">
+      <label v-if="artifact" class="search">
         <span>Filter current graph</span>
         <input v-model="search" :disabled="!graph" placeholder="symbol, file, component…" />
       </label>
@@ -1248,12 +1314,19 @@ onMounted(async () => {
     </section>
 
     <section v-else-if="!artifact && !error" class="welcome">
-      <p class="eyebrow">Architecture evidence workspace</p>
-      <h1>Open a project or saved artifact</h1>
+      <p class="eyebrow">Architecture explorer</p>
+      <h1>See how a codebase is built.</h1>
       <p>
-        Map a local folder or ZIP in this browser, inspect a live repository,
-        or review canonical Archbird JSON.
+        Map files, symbols, dependencies, tests, builds, and constraints. Then
+        follow exact source evidence from the overview into focused context.
       </p>
+      <ArtifactDrop
+        prominent
+        :status="inputStatus"
+        @select="open"
+        @directory="openLive({ kind: 'directory', files: $event })"
+        @zip="openLive({ kind: 'zip', file: $event })"
+      />
     </section>
 
     <section v-else class="workspace" :class="{ 'inspector-hidden': !inspectorOpen }">
@@ -1533,7 +1606,17 @@ onMounted(async () => {
           @layout-start="graphLayoutBusy = true"
           @select="selectGraphElement"
           @zoom="zoomPercent = $event"
-        />
+        >
+          <MetricsPanel
+            v-if="mapView === 'metrics'"
+            :error="metricError"
+            :loading="metricLoading"
+            :projection="metricProjection"
+            :selected="selectedMetric"
+            @change="loadMetric"
+            @query="openMetricContext"
+          />
+        </GraphCanvas>
         <InspectorPanel
           v-if="!emptyMappedScope"
           v-show="inspectorOpen"

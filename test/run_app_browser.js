@@ -337,6 +337,12 @@ async function main() {
     });
     await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 
+    await page.getByRole("heading", { name: "See how a codebase is built." }).waitFor();
+    await page.getByRole("button", { name: /Project folder/ }).waitFor();
+    await page.getByRole("button", { name: /Source ZIP/ }).waitFor();
+    await page.getByRole("button", { name: /Saved artifact/ }).waitFor();
+    await page.getByText("Nothing is sent to a remote service.", { exact: false }).waitFor();
+
     await page.getByLabel("Theme").selectOption("light");
     await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === "rgb(244, 246, 248)");
     await page.getByLabel("Theme").selectOption("dark");
@@ -482,6 +488,10 @@ async function main() {
     await page.locator('.graph-canvas[data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
     await page.getByText("Constraints", { exact: true }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "metrics", exact: true }).click();
+    await page.getByRole("heading", { name: "Complexity distribution", exact: true })
+      .waitFor({ timeout: 30_000 });
+    await page.getByText("Measurements, not quality scores.", { exact: true }).waitFor();
     await changeMapAxis(page, "component", "group-by", "component");
     const firstConstraint = page.locator(".constraint-row").first();
     await firstConstraint.click();

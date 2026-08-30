@@ -80,6 +80,20 @@ archbird query . --path PATH --dump --check
 Use `archbird path SOURCE TARGET --check` for an explicit connectivity
 question. A candidate-only or incomplete route is `unknown`, not a proven path.
 
+## Measure and explain hotspots
+
+Use the exhaustive Metrics view to locate measured structural tails:
+
+```bash
+archbird map . --view metrics
+archbird query . --symbol 'PATH:SYMBOL' --view metrics --detail full
+```
+
+Metrics are measurements, not quality scores. Compare distributions and
+evidence completeness before prioritizing work. Full focused detail lists the
+exact control-flow constructs or graph relations contributing to a value; read
+that evidence before changing code.
+
 ## Check architecture and changes
 
 Run exhaustive project constraints before and after architecture-sensitive

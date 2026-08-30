@@ -1041,10 +1041,11 @@ artifact workflows.
 The application provides:
 
 - useful zero-config exploration from the same exhaustive graph
-  ProjectionResult used by Markdown: switch overview, architecture, tests, and
-  evidence views, then independently group by directory, configured component,
-  layer, or language; configured components and constraints refine the graph
-  when `archbird.json` exists but never gate the zero-config path;
+  ProjectionResult used by Markdown: switch overview, architecture, tests,
+  metrics, and evidence views, then independently group by directory,
+  configured component, layer, or language; configured components and
+  constraints refine the graph when `archbird.json` exists but never gate the
+  zero-config path;
 - one mixed-resolution architecture graph: double-click, press Enter, or use
   the inspector to expand a component or inferred layer through directories
   into files, then expand one file into symbols while unrelated groups remain
@@ -1060,6 +1061,10 @@ The application provides:
 - compact node and edge hover details for identity, relation counts, evidence,
   and verification state; external symbol relations stay at the file frontier
   until explicitly revealed for one symbol;
+- a Metrics workspace that evaluates one typed metric projection, shows its
+  distribution and completeness, applies a neutral quantitative heatmap, and
+  opens exact source or relation contributors for any selected hotspot; metrics
+  are measurements, not quality scores;
 - graph-local filtering plus focused typed or lexical Query from the current
   canonical Map;
 - exact source witnesses for live repositories, retained last-good evidence,

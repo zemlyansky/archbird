@@ -85,6 +85,16 @@ interface PreservedViewport {
   zoom: number;
 }
 
+function metricColor(value: unknown): string {
+  const ratio = Math.max(0, Math.min(1, Number(value) || 0));
+  const low = [125, 211, 252];
+  const high = [14, 116, 144];
+  const channel = (index: number) => Math.round(
+    low[index] + (high[index] - low[index]) * ratio,
+  );
+  return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
+}
+
 function elements(viewport: PreservedViewport | null) {
   const parents = new Set(
     props.graph.nodes.flatMap((node) => node.parent ? [node.parent] : []),
@@ -92,6 +102,8 @@ function elements(viewport: PreservedViewport | null) {
   return [
     ...props.graph.nodes.map((node) => {
       const initial = viewport?.positions[node.id] || viewport?.anchorModel;
+      const metricValue = Number(node.attributes.metric_value);
+      const metricPresent = Number.isFinite(metricValue);
       return {
         data: {
           id: node.id,
@@ -102,6 +114,14 @@ function elements(viewport: PreservedViewport | null) {
           presentationRole: String(node.attributes.presentation_role || ""),
           verificationFindings: Number(node.attributes.verification_findings || 0),
           verificationStatus: String(node.attributes.verification_status || ""),
+          metricName: metricPresent ? String(node.attributes.metric_name || "metric") : "",
+          metricPopulation: metricPresent
+            ? Number(node.attributes.metric_population || 1)
+            : 0,
+          metricPresent: metricPresent ? 1 : 0,
+          metricRatio: metricPresent ? Number(node.attributes.metric_ratio || 0) : 0,
+          metricState: metricPresent ? String(node.attributes.metric_state || "") : "",
+          metricValue: metricPresent ? metricValue : 0,
           ...(node.parent ? { parent: node.parent } : {}),
         },
         ...(!parents.has(node.id) && initial
@@ -433,6 +453,21 @@ function render() {
         },
       },
       {
+        selector: "node[metricPresent = 1]",
+        style: {
+          "background-color": (element) => metricColor(element.data("metricRatio")),
+          "border-color": token("--metric-edge", "#d7f3fa"),
+          "border-width": "2px",
+        },
+      },
+      {
+        selector: "node[metricPresent = 1]:parent",
+        style: {
+          "background-opacity": 0.2,
+          "border-style": "solid",
+        },
+      },
+      {
         selector: "edge",
         style: {
           "curve-style": "bezier",
@@ -578,6 +613,14 @@ function showHover(event: EventObject) {
     const status = String(node.attributes.verification_status || "");
     if (status || findings) {
       details.push(`${status || "verification"} · ${findings} findings`);
+    }
+    const metricValue = node.attributes.metric_value;
+    if (typeof metricValue === "number") {
+      const population = Number(node.attributes.metric_population || 1);
+      details.push(
+        `${String(node.attributes.metric_name || "metric")}: ${metricValue}`
+        + `${population > 1 ? ` · max across ${population} values` : ""}`,
+      );
     }
     hover.value = {
       details,
@@ -833,6 +876,7 @@ onBeforeUnmount(() => {
       tabindex="0"
       @keydown="keyboard"
     ></div>
+    <slot />
     <aside
       v-if="hover"
       class="graph-tooltip"

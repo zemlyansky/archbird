@@ -675,6 +675,10 @@ Live Map, projection, Query, Verify, and source work runs in the native Node
 host; the page receives typed ProjectionResults and does not load browser Wasm.
 Normal exploration does not download the canonical Map; saving it is explicit.
 
+The Metrics workspace shows exhaustive typed metric distributions,
+completeness, neutral heatmaps, and exact contributors. Values are measurements,
+not quality scores; selecting a hotspot opens its focused evidence.
+
 ### Reuse saved evidence safely
 
 Save complete evidence when subsequent operations must use the exact same

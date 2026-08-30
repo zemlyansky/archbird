@@ -86,12 +86,19 @@ def check_skill_contract() -> None:
     for phrase in (
         "candidate",
         "conservative",
+        "measurements, not quality scores",
         "observed",
         "smallest",
         "aggregator",
         "source directly",
     ):
         assert phrase in text, f"consumer skill omits boundary {phrase!r}"
+
+    for command in (
+        "archbird map . --view metrics",
+        "archbird query . --symbol 'PATH:SYMBOL' --view metrics --detail full",
+    ):
+        assert command in text, f"consumer skill omits metric workflow {command!r}"
 
 
 def check_public_installation() -> None:

@@ -3,9 +3,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, nextTick, type App as VueApp } from "vue";
 import type { ParsedArtifact } from "../src/artifacts/model";
+import ArtifactDrop from "../src/components/ArtifactDrop.vue";
 import ConstraintPanel from "../src/components/ConstraintPanel.vue";
 import DocumentPanel from "../src/components/DocumentPanel.vue";
 import InspectorPanel from "../src/components/InspectorPanel.vue";
+import MetricsPanel from "../src/components/MetricsPanel.vue";
 import VerificationEditor from "../src/components/VerificationEditor.vue";
 
 const encoder = new TextEncoder();
@@ -46,6 +48,69 @@ afterEach(() => {
 });
 
 describe("artifact workspaces", () => {
+  it("makes local source choices and provenance explicit", () => {
+    const root = mount(ArtifactDrop, {
+      prominent: true,
+      status: "Ready for local analysis",
+    });
+    expect(root.textContent).toContain("Choose what to explore");
+    expect(root.textContent).toContain("Project folder");
+    expect(root.textContent).toContain("Source ZIP");
+    expect(root.textContent).toContain("Saved artifact");
+    expect(root.textContent).toContain("Nothing is sent to a remote service");
+  });
+
+  it("presents metric distributions and evidence-backed hotspots", async () => {
+    const root = mount(MetricsPanel, {
+      error: "",
+      loading: false,
+      projection: {
+        artifact: "projection-result",
+        completeness: { classification: "complete", exhaustive: true, truncated: false },
+        definition: {
+          id: "app-metric-source-cyclomatic-complexity",
+          level: "symbol",
+          metric: "source.cyclomatic_complexity",
+          select: "metrics",
+        },
+        fact: {
+          completeness: { classification: "complete", exhaustive: true, truncated: false },
+          items: [{
+            attributes: {
+              definition: "source.control-flow.c-v1",
+              metric: "source.cyclomatic_complexity",
+              path: "src/core.c",
+              symbol: "dispatch",
+              unit: "path",
+            },
+            evidence: [{ detail: "construct=if_statement", line: 42, path: "src/core.c" }],
+            key: "f:dispatch",
+            label: "dispatch",
+            message: "",
+            state: "current",
+            value: 8,
+          }],
+          message: "",
+          name: "app-metric-source-cyclomatic-complexity",
+          project: "fixture",
+          shape: "values",
+          state: "current",
+        },
+        id: "app-metric-source-cyclomatic-complexity",
+        schema_version: 1,
+      },
+      selected: "source.cyclomatic_complexity",
+    });
+    expect(root.textContent).toContain("Complexity distribution");
+    expect(root.textContent).toContain("1Measured");
+    expect(root.textContent).toContain("8P95");
+    expect(root.textContent).toContain("dispatch");
+    (root.querySelector(".metric-hotspot") as HTMLButtonElement).click();
+    await nextTick();
+    expect(root.textContent).toContain("src/core.c:42");
+    expect(root.textContent).toContain("construct=if_statement");
+  });
+
   it("explains configured component dependencies with concrete file relations", () => {
     const graph = {
       artifact: "archbird-graph-view",
