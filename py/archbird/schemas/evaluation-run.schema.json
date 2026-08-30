@@ -15,11 +15,12 @@
     "cache_policy",
     "host",
     "tool",
+    "operations",
     "cases",
     "aggregate"
   ],
   "properties": {
-    "schema_version": {"const": 3},
+    "schema_version": {"const": 4},
     "artifact": {"const": "archbird-evaluation-run"},
     "provenance": {"const": "observed"},
     "corpus_sha256": {"$ref": "#/$defs/sha256"},
@@ -92,6 +93,19 @@
       }
     },
     "tool": {"type": "object"},
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diff"],
+      "properties": {
+        "diff": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inputs"],
+          "properties": {"inputs": {"const": "saved_maps"}}
+        }
+      }
+    },
     "cases": {"type": "array", "items": {"type": "object"}},
     "aggregate": {"type": "object"}
   },

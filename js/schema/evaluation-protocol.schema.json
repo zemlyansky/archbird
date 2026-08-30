@@ -13,6 +13,7 @@
     "case_selection",
     "analysis",
     "metrics",
+    "operations",
     "split_policy"
   ],
   "properties": {
@@ -87,6 +88,19 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diff"],
+      "properties": {
+        "diff": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inputs"],
+          "properties": {"inputs": {"const": "saved_maps"}}
         }
       }
     },

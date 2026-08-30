@@ -140,9 +140,31 @@ elif command == 'map':
     assert marker.read_text() == 'warm'
   if variant == 'fail':
     raise SystemExit(3)
-  value = {'artifact':'map','schema_version':7,'project':'fixture','files':[],
+  files = [
+    {'path':'src/a.py','sha256':('a' if out.name == 'map.json' else 'b')*64},
+    {'path':'src/other.py','sha256':'c'*64},
+    {'path':'tests/test_a.py','sha256':'d'*64},
+  ]
+  if out.name == 'after-map.json':
+    files.append({'path':'tests/test_regression.py','sha256':'e'*64})
+  value = {'artifact':'map','schema_version':7,'project':'fixture','files':files,
            'source_tool':{'name':'archbird','version':'0.test',
              'implementation_sha256':'1'*64}}
+elif command == 'diff':
+  before_map = pathlib.Path(sys.argv[sys.argv.index('--before') + 1])
+  assert before_map.name == 'map.json'
+  assert pathlib.Path(sys.argv[sys.argv.index('--after') + 1]).name == 'after-map.json'
+  assert '--root' not in sys.argv and '--config' not in sys.argv
+  if variant == 'mutating-diff':
+    before_map.write_text('{}')
+  changed = 'src/a.py: ' + 'a'*64 + ' -> ' + 'b'*64
+  if variant == 'bad-diff':
+    changed = 'src/other.py: ' + 'c'*64 + ' -> ' + 'f'*64
+  value = {'artifact':'diff','schema_version':7,'sections':{'files':{
+    'added':['tests/test_regression.py'],
+    'changed':[changed],
+    'removed':[],
+  }}}
 elif command in ('query', 'impact'):
   good = variant in ('good', 'context', 'retained')
   files = ([{'distance':0,'path':'src/a.py','symbols':[{'name':'target'}]}]
@@ -299,6 +321,7 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
             "retrieval": ["mrr", "recall_all", "recall_at_20"],
             "split_aggregation": "separate",
         },
+        "operations": {"diff": {"inputs": "saved_maps"}},
         "provenance": "asserted",
         "schema_version": 1,
         "split_policy": {
@@ -414,7 +437,8 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         (REPOSITORY / "schema/evaluation-run.schema.json").read_text()
     )
     assert set(first).issubset(run_schema["properties"])
-    assert first["schema_version"] == 3
+    assert first["schema_version"] == 4
+    assert first["operations"] == {"diff": {"inputs": "saved_maps"}}
     assert first["cache_policy"] == {
         "provider_cache": {
             "initial_state": "empty",
@@ -425,6 +449,25 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     }
     assert first["held_out_opened"] is False
     assert first["cases"][0]["metrics"]["relevant_file_recall_all"] == 0.0
+    diff_result = first["cases"][0]
+    assert diff_result["operations"]["diff"]["status"] == "ok"
+    assert diff_result["operations"]["diff"]["file_section_exact"] is True
+    assert diff_result["operations"]["diff"]["map_git_consistency"] == {
+        "git_changed_unmapped_paths": [],
+        "git_mapped_paths_without_content_change": [],
+        "map_content_paths_not_in_git": [],
+        "mapped_content_paths_exact": True,
+    }
+    assert diff_result["operations"]["diff"]["section_counts"]["files"] == {
+        "added": 1,
+        "changed": 1,
+        "removed": 0,
+    }
+    assert diff_result["artifacts"]["map_diff"]["bytes"] > 0
+    assert diff_result["metrics"]["map_diff_file_section_exact"] == 1.0
+    assert diff_result["metrics"]["map_diff_map_git_content_paths_exact"] == 1.0
+    assert "impact_git_file_recall_all" in diff_result["metrics"]
+    assert not any(name.startswith("diff_file") for name in diff_result["metrics"])
     path_result = next(
         row for row in first["cases"] if row["id"] == "zz-fixture-path-change"
     )
@@ -442,6 +485,56 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert first["tool"]["support"]["report"]["runtime"]["version"] == (
         ".".join(map(str, sys.version_info[:3]))
     )
+
+    schema_three_run = json.loads(json.dumps(first))
+    schema_three_run["schema_version"] = 3
+    schema_three_run.pop("operations")
+    for result in schema_three_run["cases"]:
+        result.pop("operations", None)
+        result.get("artifacts", {}).pop("map_diff", None)
+        metrics = result.get("metrics", {})
+        for current, legacy in (
+            ("impact_git_context_file_", "diff_context_file_"),
+            ("impact_git_file_context_", "diff_file_context_"),
+            ("impact_git_file_", "diff_file_"),
+        ):
+            for name in list(metrics):
+                if name.startswith(current):
+                    metrics[legacy + name[len(current) :]] = metrics.pop(name)
+    schema_three_bytes = (
+        json.dumps(
+            schema_three_run,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    schema_three_sha256 = __import__("hashlib").sha256(
+        schema_three_bytes
+    ).hexdigest()
+    schema_three_path = root / f"runs/{schema_three_sha256}/result.json"
+    schema_three_path.parent.mkdir()
+    schema_three_path.write_bytes(schema_three_bytes)
+    schema_three_comparison_path = root / "schema-three-comparison.json"
+    run(
+        "compare",
+        "--before",
+        schema_three_sha256,
+        "--after",
+        first_run,
+        "--output",
+        str(schema_three_comparison_path),
+        environment=environment,
+    )
+    schema_three_comparison = json.loads(
+        schema_three_comparison_path.read_text()
+    )
+    schema_three_metrics = schema_three_comparison["cases"][0]["metrics"]
+    assert schema_three_metrics["impact_git_file_recall_all"][
+        "classification"
+    ] == "unchanged"
+    assert not any(name.startswith("diff_file") for name in schema_three_metrics)
 
     incompatible_run = json.loads(json.dumps(first))
     incompatible_run["cache_policy"]["provider_cache"]["max_bytes"] //= 2
@@ -622,6 +715,9 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert row["metrics"]["verification_transition_accuracy"]["classification"] == "improved"
     assert comparison["summary"]["reviewed_quality"]["improved"] == 1
     second = json.loads((root / f"runs/{second_run}/result.json").read_text())
+    assert second["cases"][0]["artifacts"]["map_diff"]["sha256"] == first[
+        "cases"
+    ][0]["artifacts"]["map_diff"]["sha256"]
     assert second["aggregate"]["reviewed_by_split"]["development"]["cases"] == 1
     assert second["aggregate"]["reviewed_by_split"]["held_out"]["cases"] == 0
     assert second["aggregate"]["reviewed_by_split"]["development"][
@@ -736,6 +832,46 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert reservation_comparison["changed"] == ["reserved-fixture"]
     assert reservation_comparison["added"] == []
     assert reservation_comparison["removed"] == []
+
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "bad-diff"
+    rejected_diff = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "bad-public-diff",
+        environment=environment,
+        check=False,
+    )
+    assert rejected_diff.returncode == 2
+    state = json.loads((root / "state.json").read_text())
+    rejected_diff_run = json.loads(
+        (root / f"runs/{state['current_run_sha256']}/result.json").read_text()
+    )
+    assert all(
+        result["error"] == "public Diff file section differs from its input Maps"
+        and result["operations"]["diff"]["file_section_exact"] is False
+        for result in rejected_diff_run["cases"]
+    )
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "mutating-diff"
+    mutated_diff = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "mutating-public-diff",
+        environment=environment,
+        check=False,
+    )
+    assert mutated_diff.returncode == 2
+    state = json.loads((root / "state.json").read_text())
+    mutated_diff_run = json.loads(
+        (root / f"runs/{state['current_run_sha256']}/result.json").read_text()
+    )
+    assert all(
+        result["error"] == "public Diff mutated a saved Map input"
+        for result in mutated_diff_run["cases"]
+    )
 
     failed_root = TEMPORARY / "failed-held-out-open"
     shutil.copytree(root, failed_root)

@@ -25,7 +25,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
 SCHEMA_VERSION = 1
-RUN_SCHEMA_VERSION = 3
+RUN_SCHEMA_VERSION = 4
 COMPARISON_SCHEMA_VERSION = 3
 ROOT_ENV = "ARCHBIRD_EVAL_ROOT"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
@@ -486,6 +486,7 @@ def validate_protocol(
             "case_selection",
             "analysis",
             "metrics",
+            "operations",
             "split_policy",
         },
         set(),
@@ -612,6 +613,17 @@ def validate_protocol(
         raise EvaluationError(
             f"{where}.metrics.line_budgets must be sorted unique positive integers"
         )
+
+    operations = value["operations"]
+    if not isinstance(operations, dict):
+        raise EvaluationError(f"{where}.operations must be an object")
+    exact_keys(operations, {"diff"}, set(), f"{where}.operations")
+    diff = operations["diff"]
+    if not isinstance(diff, dict):
+        raise EvaluationError(f"{where}.operations.diff must be an object")
+    exact_keys(diff, {"inputs"}, set(), f"{where}.operations.diff")
+    if diff["inputs"] != "saved_maps":
+        raise EvaluationError(f"{where}.operations.diff.inputs is unsupported")
 
     split_policy = value["split_policy"]
     if not isinstance(split_policy, dict):
@@ -1015,6 +1027,84 @@ def diff_files(repository: Path, before: str, after: str) -> list[str]:
     ).stdout
     values = [safe_relative(item.decode("utf-8"), "Git diff path") for item in raw.split(b"\0") if item]
     return sorted(set(values), key=str.encode)
+
+
+def map_file_hashes(value: Mapping[str, Any], label: str) -> dict[str, str]:
+    files = value.get("files")
+    if not isinstance(files, list):
+        raise EvaluationError(f"{label}.files must be an array")
+    result: dict[str, str] = {}
+    for index, row in enumerate(files):
+        if not isinstance(row, dict):
+            raise EvaluationError(f"{label}.files[{index}] must be an object")
+        path = row.get("path")
+        digest = row.get("sha256")
+        if not isinstance(path, str) or not path:
+            raise EvaluationError(f"{label}.files[{index}].path is invalid")
+        path = safe_relative(path, f"{label}.files[{index}].path")
+        if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+            raise EvaluationError(f"{label}.files[{index}].sha256 is invalid")
+        if path in result:
+            raise EvaluationError(f"{label}.files contains duplicate path {path!r}")
+        result[path] = digest
+    return result
+
+
+def expected_map_file_diff(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> tuple[Mapping[str, list[str]], set[str], set[str]]:
+    left = map_file_hashes(before, "before Map")
+    right = map_file_hashes(after, "after Map")
+    added = sorted(set(right) - set(left), key=str.encode)
+    removed = sorted(set(left) - set(right), key=str.encode)
+    changed_paths = sorted(
+        (path for path in set(left) & set(right) if left[path] != right[path]),
+        key=str.encode,
+    )
+    changed = [f"{path}: {left[path]} -> {right[path]}" for path in changed_paths]
+    return (
+        {"added": added, "changed": changed, "removed": removed},
+        set(added) | set(removed) | set(changed_paths),
+        set(left) | set(right),
+    )
+
+
+def diff_section_counts(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    schema_version = value.get("schema_version")
+    if (
+        value.get("artifact") != "diff"
+        or not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+    ):
+        raise EvaluationError("public Diff artifact identity is invalid")
+    sections = value.get("sections")
+    if not isinstance(sections, dict) or "files" not in sections:
+        raise EvaluationError("public Diff sections are invalid")
+    counts: dict[str, Mapping[str, int]] = {}
+    for name in sorted(sections, key=str.encode):
+        section = sections[name]
+        if not isinstance(section, dict) or set(section) != {
+            "added",
+            "changed",
+            "removed",
+        }:
+            raise EvaluationError(f"public Diff section {name!r} is invalid")
+        for kind in ("added", "changed", "removed"):
+            rows = section[kind]
+            if not isinstance(rows, list) or any(
+                not isinstance(row, str) for row in rows
+            ):
+                raise EvaluationError(
+                    f"public Diff section {name!r}.{kind} is invalid"
+                )
+            if rows != sorted(set(rows), key=str.encode):
+                raise EvaluationError(
+                    f"public Diff section {name!r}.{kind} is not canonical"
+                )
+        counts[name] = {
+            kind: len(section[kind]) for kind in ("added", "changed", "removed")
+        }
+    return counts
 
 
 def corpus_document(
@@ -2485,11 +2575,13 @@ def run_case(
             )
             metrics.update(rank_metrics("seed_file", seed_files, seed_truth))
             metrics.update(
-                rank_metrics("diff_file", ranked_files, entry["diff_files"])
+                rank_metrics(
+                    "impact_git_file", ranked_files, entry["diff_files"]
+                )
             )
             metrics.update(
                 rank_metrics(
-                    "diff_context_file",
+                    "impact_git_context_file",
                     ranked_context_files,
                     entry["diff_files"],
                 )
@@ -2531,7 +2623,7 @@ def run_case(
             )
             metrics.update(
                 line_budget_metrics(
-                    "diff_file_context",
+                    "impact_git_file_context",
                     ranked_context_files,
                     entry["diff_files"],
                     worktree,
@@ -2621,6 +2713,117 @@ def run_case(
                 "split": entry["split"],
                 "status": "error",
             }
+        after_map_document = read_json(after_map_path, "case after Map")
+        map_hashes_before_diff = {
+            "after": sha256_file(after_map_path),
+            "before": sha256_file(map_path),
+        }
+        diff_path = case_output / "map-diff.json"
+        diff_observation = run_process(
+            [
+                str(archbird),
+                "diff",
+                "--before",
+                str(map_path),
+                "--after",
+                str(after_map_path),
+                "--format",
+                "json",
+                "--output",
+                str(diff_path),
+            ],
+            worktree,
+            case_output / "map-diff.stdout",
+            case_output / "map-diff.stderr",
+        )
+        if diff_observation["returncode"] != 0 or not diff_path.is_file():
+            return {
+                "case_sha256": entry["case_sha256"],
+                "error": "public Diff command failed",
+                "id": case_id,
+                "map": map_observation,
+                "map_after": after_map_observation,
+                "operations": {"diff": {"observation": diff_observation, "status": "error"}},
+                analysis_kind: analysis_observation,
+                "review_status": entry["review_status"],
+                "split": entry["split"],
+                "status": "error",
+            }
+        if map_hashes_before_diff != {
+            "after": sha256_file(after_map_path),
+            "before": sha256_file(map_path),
+        }:
+            return {
+                "case_sha256": entry["case_sha256"],
+                "error": "public Diff mutated a saved Map input",
+                "id": case_id,
+                "map": map_observation,
+                "map_after": after_map_observation,
+                "operations": {
+                    "diff": {"observation": diff_observation, "status": "error"}
+                },
+                analysis_kind: analysis_observation,
+                "review_status": entry["review_status"],
+                "split": entry["split"],
+                "status": "error",
+            }
+        diff_document = read_json(diff_path, "case public Diff")
+        section_counts = diff_section_counts(diff_document)
+        # Map hashes are an independent oracle for the public Diff file section.
+        expected_files, map_changed_paths, mapped_paths = expected_map_file_diff(
+            map_document, after_map_document
+        )
+        actual_files = diff_document["sections"]["files"]
+        if actual_files != expected_files:
+            return {
+                "case_sha256": entry["case_sha256"],
+                "error": "public Diff file section differs from its input Maps",
+                "id": case_id,
+                "map": map_observation,
+                "map_after": after_map_observation,
+                "operations": {
+                    "diff": {
+                        "file_section_exact": False,
+                        "observation": diff_observation,
+                        "status": "error",
+                    }
+                },
+                analysis_kind: analysis_observation,
+                "review_status": entry["review_status"],
+                "split": entry["split"],
+                "status": "error",
+            }
+        git_paths = set(entry["diff_files"])
+        git_mapped_paths = git_paths & mapped_paths
+        map_git = {
+            "git_changed_unmapped_paths": sorted(
+                git_paths - mapped_paths, key=str.encode
+            ),
+            "git_mapped_paths_without_content_change": sorted(
+                git_mapped_paths - map_changed_paths, key=str.encode
+            ),
+            "map_content_paths_not_in_git": sorted(
+                map_changed_paths - git_paths, key=str.encode
+            ),
+            "mapped_content_paths_exact": map_changed_paths == git_mapped_paths,
+        }
+        metrics.update(
+            {
+                "map_diff_duration_ms": diff_observation["duration_ms"],
+                "map_diff_file_section_exact": 1.0,
+                "map_diff_map_git_content_paths_exact": float(
+                    map_git["mapped_content_paths_exact"]
+                ),
+                "map_diff_max_rss_kib": diff_observation["max_rss_kib"],
+            }
+        )
+        diff_operation = {
+            "file_section_exact": True,
+            "map_git_consistency": map_git,
+            "observation": diff_observation,
+            "section_counts": section_counts,
+            "status": "ok",
+        }
         checkout(
             repository,
             before_action_worktree,
@@ -2651,6 +2854,10 @@ def run_case(
                     "sha256": sha256_file(issue_query_path),
                 },
                 "map": {"bytes": map_path.stat().st_size, "sha256": sha256_file(map_path)},
+                "map_diff": {
+                    "bytes": diff_path.stat().st_size,
+                    "sha256": sha256_file(diff_path),
+                },
                 analysis_kind: {
                     "bytes": analysis_path.stat().st_size,
                     "sha256": sha256_file(analysis_path),
@@ -2664,6 +2871,7 @@ def run_case(
             "map_after": after_map_observation,
             "map_tool": map_document.get("source_tool", map_document.get("tool")),
             "metrics": metrics,
+            "operations": {"diff": diff_operation},
             analysis_kind: analysis_observation,
             "review_status": entry["review_status"],
             "split": entry["split"],
@@ -2706,8 +2914,8 @@ def aggregate_cases(
             metrics[name] = statistics.fmean(values)
     pooled = {}
     for prefix in (
-        "diff_context_file",
-        "diff_file",
+        "impact_git_context_file",
+        "impact_git_file",
         "issue_context_file",
         "issue_file",
         "issue_retrieval_file",
@@ -2766,6 +2974,10 @@ def run_evaluation(
 ) -> str:
     reject_after_held_out_open(root, "another evaluation run")
     corpus_sha256, corpus, corpus_directory = load_corpus(root, corpus_sha256)
+    protocol = validate_protocol(
+        read_json(corpus_directory / "protocol.json", "frozen evaluation protocol"),
+        corpus_directory / "protocol.json",
+    )
     entries = list(corpus["cases"])
     held_out = [entry for entry in entries if entry.get("split") == "held_out"]
     if open_held_out:
@@ -2864,6 +3076,7 @@ def run_evaluation(
             "host": evaluation_host(),
             "held_out_opened": open_held_out,
             "label": label,
+            "operations": protocol["operations"],
             "provenance": "observed",
             "schema_version": RUN_SCHEMA_VERSION,
             "tool": {
@@ -3078,6 +3291,36 @@ def comparable_performance_environment(
     }
 
 
+def normalized_run_cases(run: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
+    cases = run.get("cases", [])
+    if not isinstance(cases, list) or run.get("schema_version") != 3:
+        return cases if isinstance(cases, list) else []
+    aliases = (
+        ("diff_context_file_", "impact_git_context_file_"),
+        ("diff_file_context_", "impact_git_file_context_"),
+        ("diff_file_", "impact_git_file_"),
+    )
+    normalized = []
+    for case in cases:
+        if not isinstance(case, dict) or not isinstance(case.get("metrics"), dict):
+            normalized.append(case)
+            continue
+        metrics: dict[str, Any] = {}
+        for name, value in case["metrics"].items():
+            target = name
+            for old, new in aliases:
+                if name.startswith(old):
+                    target = new + name[len(old) :]
+                    break
+            if target in metrics and metrics[target] != value:
+                raise EvaluationError(
+                    f"schema-3 evaluation run has conflicting metric {target!r}"
+                )
+            metrics[target] = value
+        normalized.append({**case, "metrics": metrics})
+    return normalized
+
+
 def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, Any]:
     for value in (before_sha, after_sha):
         if not SHA256_RE.fullmatch(value):
@@ -3103,8 +3346,8 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
     else:
         environment_relation = "same" if environment_comparable else "changed"
     performance_comparable = cache_comparable and environment_comparable
-    old = {str(case["id"]): case for case in before["cases"]}
-    new = {str(case["id"]): case for case in after["cases"]}
+    old = {str(case["id"]): case for case in normalized_run_cases(before)}
+    new = {str(case["id"]): case for case in normalized_run_cases(after)}
     rows = []
     def counters() -> dict[str, int]:
         return {"changed": 0, "improved": 0, "regressed": 0, "unchanged": 0}

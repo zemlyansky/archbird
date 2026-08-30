@@ -135,6 +135,14 @@ def write_case(root: Path, name: str, before: object, after: object) -> tuple[Pa
     return before_path, after_path
 
 
+def split_change(row: str) -> tuple[str, str, str]:
+    identity, separator, values = row.partition(": ")
+    left, arrow, right = values.partition(" -> ")
+    if not separator or not arrow:
+        raise AssertionError(f"invalid Diff change row: {row}")
+    return identity, left, right
+
+
 def assert_case(
     root: Path,
     name: str,
@@ -186,6 +194,35 @@ def main() -> int:
     temporary_root = repository / "build/tmp"
     temporary_root.mkdir(parents=True, exist_ok=True)
     before = position_fixture(repository)
+    structural_after = copy.deepcopy(before)
+    structural_after["files"][0]["sha256"] = "f" * 64
+    removed_file = structural_after["files"].pop(1)
+    added_file = copy.deepcopy(removed_file)
+    added_file["path"] = "js/new.js"
+    structural_after["files"].append(added_file)
+    forward_files = json.loads(
+        _native.map_diff(encode(before), encode(structural_after))
+    )["sections"]["files"]
+    reverse_files = json.loads(
+        _native.map_diff(encode(structural_after), encode(before))
+    )["sections"]["files"]
+    if (
+        forward_files["added"] != reverse_files["removed"]
+        or forward_files["removed"] != reverse_files["added"]
+        or len(forward_files["changed"]) != len(reverse_files["changed"])
+    ):
+        raise AssertionError((forward_files, reverse_files))
+    for forward, reverse in zip(
+        forward_files["changed"], reverse_files["changed"], strict=True
+    ):
+        forward_id, forward_left, forward_right = split_change(forward)
+        reverse_id, reverse_left, reverse_right = split_change(reverse)
+        if (
+            forward_id != reverse_id
+            or forward_left != reverse_right
+            or forward_right != reverse_left
+        ):
+            raise AssertionError((forward, reverse))
     repeated_route = repeated_route_fixture(before)
     repeated_self = json.loads(
         _native.map_diff(encode(repeated_route), encode(repeated_route))
