@@ -8,9 +8,9 @@
       "source": "schema/act.schema.json"
     },
     {
-      "bytes": 52025,
+      "bytes": 52200,
       "path": "archbird.schema.json",
-      "sha256": "40b05c0dfc49a78f59f8c7c09cc980e788887ff02bbf345f8f8655d94a19d45e",
+      "sha256": "c6929459bcd8e932b2cddb506712a9533809615058a7b34b4ba8c7fdba54f26d",
       "source": "schema/archbird.schema.json"
     },
     {
@@ -80,9 +80,9 @@
       "source": "schema/evaluation-run.schema.json"
     },
     {
-      "bytes": 3936,
+      "bytes": 7487,
       "path": "file-facts.schema.json",
-      "sha256": "e1a7ed67d2c896381d88bee19e0f4af74c863896664bb64d10b949c23e872040",
+      "sha256": "0065dc70a885e47b3fec00a69774e2e9e7b775ef75c27048777cd859adf831e7",
       "source": "schema/file-facts.schema.json"
     },
     {

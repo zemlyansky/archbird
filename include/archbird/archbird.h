@@ -685,7 +685,8 @@ typedef enum ArchbirdReportDetail {
 
 typedef enum ArchbirdQueryView {
   ARCHBIRD_QUERY_VIEW_FOCUSED = 0,
-  ARCHBIRD_QUERY_VIEW_CHANGES = 1
+  ARCHBIRD_QUERY_VIEW_CHANGES = 1,
+  ARCHBIRD_QUERY_VIEW_METRICS = 2
 } ArchbirdQueryView;
 
 /*

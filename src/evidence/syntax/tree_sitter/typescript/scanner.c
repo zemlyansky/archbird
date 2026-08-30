@@ -29,13 +29,19 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
       {"module-reexports", "static ESM star and CommonJS require routes"},
       {"module-surface-unknowns",
        "dynamic or conditionally mutated CommonJS surfaces"},
+      {"source-metric-contributors",
+       "exact TypeScript or TSX branch and control syntax inside named "
+       "functions and methods"},
+      {"source-metrics",
+       "versioned decision, cyclomatic, and control-nesting summaries for "
+       "named functions and methods"},
       {"symbols", "named classes, functions, methods, variable-bound function "
                   "values, and statically proven descriptor-helper members"}};
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TYPESCRIPT
   static const AbTreeSitterDescriptor typescript = {
       "archbird-tree-sitter-typescript",
-      "4",
-      "archbird-tree-sitter-typescript-v4;runtime=0.26.9;grammar=0.23.2;abi=14",
+      "5",
+      "archbird-tree-sitter-typescript-v5;runtime=0.26.9;grammar=0.23.2;abi=14",
       "tree-sitter-0.26.9;tree-sitter-typescript-0.23.2;grammar-abi-14",
       "typescript",
       tree_sitter_typescript,
@@ -43,13 +49,16 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
       sizeof(capabilities) / sizeof(capabilities[0]),
       ab_tree_sitter_visit_ecmascript,
       NULL,
-      NULL};
+      NULL,
+      "source.control-flow.typescript-v1",
+      ab_tree_sitter_classify_ecmascript_metric,
+      ab_tree_sitter_ecmascript_callable_boundary};
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TSX
   static const AbTreeSitterDescriptor typescript_react = {
       "archbird-tree-sitter-tsx",
-      "4",
-      "archbird-tree-sitter-tsx-v4;runtime=0.26.9;grammar=0.23.2;abi=14",
+      "5",
+      "archbird-tree-sitter-tsx-v5;runtime=0.26.9;grammar=0.23.2;abi=14",
       "tree-sitter-0.26.9;tree-sitter-tsx-0.23.2;grammar-abi-14",
       "tsx",
       tree_sitter_tsx,
@@ -57,7 +66,10 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
       sizeof(capabilities) / sizeof(capabilities[0]),
       ab_tree_sitter_visit_ecmascript,
       NULL,
-      NULL};
+      NULL,
+      "source.control-flow.tsx-v1",
+      ab_tree_sitter_classify_ecmascript_metric,
+      ab_tree_sitter_ecmascript_callable_boundary};
 #endif
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TSX
   if (tsx)

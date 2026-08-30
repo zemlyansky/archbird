@@ -231,14 +231,14 @@
             {"$ref": "#/$defs/projection_base"},
             {"required": ["metric", "level"], "properties": {
               "select": {"const": "metrics"},
-              "metric": {"enum": ["source.extent_lines", "graph.out_neighbors", "graph.in_neighbors", "graph.out_relations", "graph.in_relations", "graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.inbound_group_neighbors", "graph.outbound_group_neighbors", "graph.scc_size", "graph.cyclic", "evidence.current_relations", "evidence.unknown_relations", "evidence.stale_relations", "evidence.candidate_relations", "evidence.ambiguous_relations", "evidence.unresolved_relations", "tests.static_case_occurrences", "tests.candidate_case_occurrences", "tests.routed_cases", "tests.observed_cases"]},
+              "metric": {"enum": ["source.extent_lines", "source.decision_count", "source.cyclomatic_complexity", "source.max_control_nesting", "graph.out_neighbors", "graph.in_neighbors", "graph.out_relations", "graph.in_relations", "graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.inbound_group_neighbors", "graph.outbound_group_neighbors", "graph.scc_size", "graph.cyclic", "evidence.current_relations", "evidence.unknown_relations", "evidence.stale_relations", "evidence.candidate_relations", "evidence.ambiguous_relations", "evidence.unresolved_relations", "tests.static_case_occurrences", "tests.candidate_case_occurrences", "tests.routed_cases", "tests.observed_cases"]},
               "level": {"enum": ["component", "file", "map", "symbol"]},
               "group_by": {"enum": ["component", "layer"]},
               "paths": {"$ref": "#/$defs/collection_patterns"},
               "relations": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["builds", "bridges", "calls", "declarations", "imports", "packages", "references", "tests"]}}
             }},
             {
-              "if": {"properties": {"metric": {"const": "source.extent_lines"}}, "required": ["metric"]},
+              "if": {"properties": {"metric": {"enum": ["source.extent_lines", "source.decision_count", "source.cyclomatic_complexity", "source.max_control_nesting"]}}, "required": ["metric"]},
               "then": {"properties": {"level": {"const": "symbol"}}, "not": {"required": ["relations"]}}
             },
             {

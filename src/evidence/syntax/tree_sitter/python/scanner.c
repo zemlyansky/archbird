@@ -9,6 +9,77 @@
 
 const TSLanguage *tree_sitter_python(void);
 
+static void classify_python_metric(const AbTreeSitterScan *scan, TSNode node,
+                                   AbTreeSitterMetricNode *out) {
+  const char *type = ts_node_type(node);
+  TSNode parent = ts_node_parent(node);
+  (void)scan;
+  if (!strcmp(type, "if_statement")) {
+    out->construct = "if";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "elif_clause")) {
+    out->construct = "elif";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+    out->flattens_parent_nesting = 1;
+  } else if (!strcmp(type, "for_statement") || !strcmp(type, "for_in_clause")) {
+    out->construct =
+        !strcmp(type, "for_in_clause") ? "comprehension-for" : "for";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "while_statement")) {
+    out->construct = "while";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "else_clause") &&
+             (ab_tree_sitter_node_type(parent, "for_statement") ||
+              ab_tree_sitter_node_type(parent, "while_statement"))) {
+    out->construct = "loop-else";
+    out->decision_contribution = 1;
+  } else if (!strcmp(type, "conditional_expression")) {
+    out->construct = "conditional";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "boolean_operator")) {
+    TSNode operator_node = ab_tree_sitter_child(node, "operator");
+    out->construct = ab_tree_sitter_node_type(operator_node, "and")
+                         ? "logical-and"
+                         : "logical-or";
+    out->decision_contribution = 1;
+  } else if (!strcmp(type, "try_statement")) {
+    out->construct = "try";
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "except_clause")) {
+    out->construct = "except";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+    out->flattens_parent_nesting = 1;
+  } else if (!strcmp(type, "with_statement")) {
+    out->construct = "with";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "assert_statement")) {
+    out->construct = "assert";
+    out->decision_contribution = 1;
+  } else if (!strcmp(type, "match_statement")) {
+    out->construct = "match";
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "case_clause")) {
+    out->construct = "case";
+    out->decision_contribution = 1;
+  } else if (!strcmp(type, "if_clause")) {
+    out->construct = "comprehension-if";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  }
+}
+
+static int python_callable_boundary(TSNode node) {
+  return ab_tree_sitter_node_type(node, "function_definition") ||
+         ab_tree_sitter_node_type(node, "lambda");
+}
+
 static int node_is_name(const AbTreeSitterScan *scan, TSNode node) {
   return ab_tree_sitter_node_has_text(scan, node) &&
          (ab_tree_sitter_node_type(node, "identifier") ||
@@ -235,6 +306,7 @@ static ArchbirdStatus visit_python(AbTreeSitterScan *scan,
     status = add_symbol(scan, frame, frame->node, "class", &name, &fact);
     child_frame->context &= ~AB_TS_CONTEXT_FUNCTION;
     child_frame->context |= AB_TS_CONTEXT_CLASS;
+    ab_tree_sitter_suspend_source_metrics(child_frame);
     if (status == ARCHBIRD_OK && fact)
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
   } else if (ab_tree_sitter_node_type(frame->node, "function_definition")) {
@@ -245,8 +317,11 @@ static ArchbirdStatus visit_python(AbTreeSitterScan *scan,
     status = add_symbol(scan, frame, frame->node, kind, &name, &fact);
     child_frame->context &= ~AB_TS_CONTEXT_CLASS;
     child_frame->context |= AB_TS_CONTEXT_FUNCTION;
-    if (status == ARCHBIRD_OK && fact)
+    if (status == ARCHBIRD_OK && fact) {
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      status = ab_tree_sitter_start_source_metrics(scan, fact, frame->node,
+                                                   child_frame);
+    }
   } else if (ab_tree_sitter_node_type(frame->node, "assignment") &&
              !(frame->context &
                (AB_TS_CONTEXT_CLASS | AB_TS_CONTEXT_FUNCTION))) {
@@ -271,13 +346,19 @@ ArchbirdStatus ab_scan_tree_sitter_python_file(
       {"imports", "statically named import and from-import module nodes"},
       {"method-calls",
        "attribute call member names; receiver identity remains unresolved"},
+      {"source-metric-contributors",
+       "exact Python branch and control syntax inside named function and "
+       "method definitions"},
+      {"source-metrics",
+       "versioned decision, cyclomatic, and control-nesting summaries for "
+       "named function and method definitions"},
       {"symbols",
        "named class/function definitions and simple module assignments with "
        "lexical enclosing context"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-python",
-      "3",
-      "archbird-tree-sitter-python-v3;runtime=0.26.9;grammar=0.25.0;abi=15",
+      "4",
+      "archbird-tree-sitter-python-v4;runtime=0.26.9;grammar=0.25.0;abi=15",
       "tree-sitter-0.26.9;tree-sitter-python-0.25.0;grammar-abi-15",
       "python",
       tree_sitter_python,
@@ -285,7 +366,10 @@ ArchbirdStatus ab_scan_tree_sitter_python_file(
       sizeof(capabilities) / sizeof(capabilities[0]),
       visit_python,
       prepare_python,
-      cleanup_python};
+      cleanup_python,
+      "source.control-flow.python-v1",
+      classify_python_metric,
+      python_callable_boundary};
   return ab_tree_sitter_scan_file(
       engine, manifest, config, file, source, source_length,
       source_manifest_sha256, implementation_sha256, &descriptor, out_bundle);

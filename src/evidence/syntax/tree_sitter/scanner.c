@@ -1,5 +1,6 @@
 #include "evidence/syntax/tree_sitter/scanner.h"
 
+#include "base/json_value.h"
 #include "base/sha256.h"
 #include "evidence/config.h"
 #include "evidence/syntax/tree_sitter/tree_sitter_allocator.h"
@@ -112,6 +113,18 @@ TSNode ab_tree_sitter_child(TSNode node, const char *field) {
   return ts_node_child_by_field_name(node, field, (uint32_t)strlen(field));
 }
 
+int ab_tree_sitter_node_is_field(TSNode node, const char *field) {
+  TSNode parent;
+  TSNode selected;
+  if (ts_node_is_null(node) || !field)
+    return 0;
+  parent = ts_node_parent(node);
+  if (ts_node_is_null(parent))
+    return 0;
+  selected = ab_tree_sitter_child(parent, field);
+  return !ts_node_is_null(selected) && ts_node_eq(selected, node);
+}
+
 ArchbirdStatus ab_tree_sitter_add_line(AbTreeSitterScan *scan, AbFact *fact,
                                        TSNode node) {
   TSPoint point;
@@ -120,6 +133,19 @@ ArchbirdStatus ab_tree_sitter_add_line(AbTreeSitterScan *scan, AbFact *fact,
   point = ts_node_start_point(node);
   return ab_fact_add_u64_attribute(scan->engine, fact, "line",
                                    (uint64_t)point.row + 1);
+}
+
+static int fact_u64_attribute(const AbFact *fact, const char *name,
+                              uint64_t *out) {
+  size_t name_length = strlen(name);
+  size_t index;
+  for (index = 0; index < fact->attribute_count; index++) {
+    const AbObjectField *field = &fact->attributes[index];
+    if (field->name.length == name_length &&
+        !memcmp(field->name.data, name, name_length))
+      return ab_value_u64(&field->value, out);
+  }
+  return 0;
 }
 
 ArchbirdStatus
@@ -327,6 +353,234 @@ void ab_tree_sitter_set_enclosing_fact(AbTreeSitterFrame *frame,
   frame->enclosing = (const uint8_t *)fact->name.data;
   frame->enclosing_length = fact->name.length;
   frame->has_enclosing = 1;
+}
+
+ArchbirdStatus
+ab_tree_sitter_start_source_metrics(AbTreeSitterScan *scan,
+                                    const AbFact *symbol, TSNode declaration,
+                                    AbTreeSitterFrame *child_frame) {
+  AbTreeSitterMetricScope *resized;
+  AbTreeSitterMetricScope *scope;
+  AbFact *summary = NULL;
+  size_t scope_index;
+  size_t callable_start;
+  size_t callable_end;
+  uint64_t symbol_line;
+  ArchbirdStatus status;
+  if (!scan || !symbol || !child_frame || ts_node_is_null(declaration))
+    return ARCHBIRD_INVALID_ARGUMENT;
+  if (!scan->descriptor->metric_definition ||
+      !scan->descriptor->classify_metric)
+    return ARCHBIRD_OK;
+  if (!symbol->has_name || !symbol->name.length)
+    return ARCHBIRD_INVALID_SCHEMA;
+  if (!fact_u64_attribute(symbol, "line", &symbol_line) || !symbol_line)
+    return ARCHBIRD_INVALID_SCHEMA;
+  if (!ab_tree_sitter_node_slice(scan, declaration, &callable_start,
+                                 &callable_end) ||
+      callable_end <= callable_start)
+    return ARCHBIRD_INVALID_SCHEMA;
+  if (scan->metric_scope_count == scan->metric_scope_capacity) {
+    size_t next =
+        scan->metric_scope_capacity ? scan->metric_scope_capacity * 2 : 32;
+    if (next < scan->metric_scope_capacity ||
+        next > scan->engine->options.max_facts)
+      next = scan->engine->options.max_facts;
+    if (next <= scan->metric_scope_capacity)
+      return archbird_error_set(scan->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "source metric scope limit exceeded");
+    resized = (AbTreeSitterMetricScope *)ab_realloc(
+        scan->engine, scan->metric_scopes, next * sizeof(*resized));
+    if (!resized)
+      return archbird_error_set(scan->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory storing source metric scopes");
+    scan->metric_scopes = resized;
+    scan->metric_scope_capacity = next;
+  }
+  scope_index = scan->metric_scope_count;
+  status = ab_bundle_builder_add_fact(
+      scan->builder, "source-metrics", "summary", "syntax-structure",
+      symbol->span_start, symbol->span_end, (const uint8_t *)symbol->name.data,
+      symbol->name.length, (const uint8_t *)symbol->name.data,
+      symbol->name.length, &summary);
+  if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_track_fact_region(scan, summary, declaration);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_fact_add_u64_attribute(scan->engine, summary, "line", symbol_line);
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(
+        scan->engine, summary, "definition",
+        (const uint8_t *)scan->descriptor->metric_definition,
+        strlen(scan->descriptor->metric_definition));
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(
+        scan->engine, summary, "language",
+        (const uint8_t *)scan->descriptor->language_name,
+        strlen(scan->descriptor->language_name));
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(
+        scan->engine, summary, "provider",
+        (const uint8_t *)scan->descriptor->provider_name,
+        strlen(scan->descriptor->provider_name));
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(scan->engine, summary, "state",
+                                          (const uint8_t *)"current", 7);
+  if (status != ARCHBIRD_OK)
+    return status;
+  scope = &scan->metric_scopes[scan->metric_scope_count++];
+  memset(scope, 0, sizeof(*scope));
+  scope->summary_fact_index = (size_t)(summary - scan->builder->bundle.facts);
+  scope->callable_start = callable_start;
+  scope->callable_end = callable_end;
+  child_frame->metric_scope_index = scope_index;
+  child_frame->metric_nesting = 0;
+  child_frame->has_metric_scope = 1;
+  return ARCHBIRD_OK;
+}
+
+void ab_tree_sitter_suspend_source_metrics(AbTreeSitterFrame *child_frame) {
+  if (!child_frame)
+    return;
+  child_frame->has_metric_scope = 0;
+  child_frame->metric_scope_index = 0;
+  child_frame->metric_nesting = 0;
+}
+
+static int source_metrics_owns_node(const AbTreeSitterScan *scan,
+                                    const AbTreeSitterFrame *frame,
+                                    TSNode node) {
+  const AbTreeSitterMetricScope *scope;
+  size_t start;
+  size_t end;
+  if (!frame->has_metric_scope ||
+      frame->metric_scope_index >= scan->metric_scope_count ||
+      !ab_tree_sitter_node_slice(scan, node, &start, &end))
+    return 0;
+  scope = &scan->metric_scopes[frame->metric_scope_index];
+  return start == scope->callable_start && end == scope->callable_end;
+}
+
+static ArchbirdStatus
+add_source_metric_contributor(AbTreeSitterScan *scan,
+                              const AbTreeSitterFrame *frame,
+                              AbTreeSitterFrame *child_frame,
+                              const AbTreeSitterMetricNode *classification) {
+  AbTreeSitterMetricScope *scope;
+  AbFact *summary;
+  AbString summary_id;
+  AbString summary_name;
+  AbFact *contributor = NULL;
+  uint64_t base;
+  uint64_t depth;
+  size_t start;
+  size_t end;
+  const char *kind;
+  ArchbirdStatus status;
+  if (!classification->construct || (!classification->decision_contribution &&
+                                     !classification->starts_control_nesting))
+    return ARCHBIRD_OK;
+  if (frame->metric_scope_index >= scan->metric_scope_count)
+    return ARCHBIRD_INVALID_SCHEMA;
+  scope = &scan->metric_scopes[frame->metric_scope_index];
+  if (scope->summary_fact_index >= scan->builder->bundle.fact_count)
+    return ARCHBIRD_INVALID_SCHEMA;
+  summary = &scan->builder->bundle.facts[scope->summary_fact_index];
+  summary_id = summary->id;
+  summary_name = summary->name;
+  base = frame->metric_nesting;
+  if (classification->flattens_parent_nesting && base)
+    base--;
+  if (classification->starts_control_nesting) {
+    if (base == UINT64_MAX)
+      return ARCHBIRD_LIMIT_EXCEEDED;
+    depth = base + 1;
+    child_frame->metric_nesting = depth;
+  } else {
+    depth = base;
+  }
+  if (classification->decision_contribution >
+      UINT64_MAX - scope->decision_count)
+    return archbird_error_set(scan->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "source decision count overflow");
+  if (!ab_tree_sitter_node_slice(scan, frame->node, &start, &end) ||
+      start == end)
+    return ARCHBIRD_INVALID_SCHEMA;
+  kind = classification->decision_contribution ? "decision" : "control";
+  status = ab_bundle_builder_add_fact(
+      scan->builder, "source-metric-contributors", kind, "syntax-structure",
+      start, end, (const uint8_t *)summary_id.data, summary_id.length,
+      (const uint8_t *)summary_name.data, summary_name.length, &contributor);
+  if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_track_fact_region(scan, contributor, frame->node);
+  if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_add_line(scan, contributor, frame->node);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_fact_add_string_attribute(scan->engine, contributor, "construct",
+                                     (const uint8_t *)classification->construct,
+                                     strlen(classification->construct));
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(
+        scan->engine, contributor, "provider",
+        (const uint8_t *)scan->descriptor->provider_name,
+        strlen(scan->descriptor->provider_name));
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_fact_add_u64_attribute(scan->engine, contributor, "contribution",
+                                  classification->decision_contribution);
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_u64_attribute(scan->engine, contributor,
+                                       "control_depth", depth);
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_u64_attribute(
+        scan->engine, contributor, "nesting",
+        classification->starts_control_nesting ? 1 : 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(scan->engine, contributor, "summary",
+                                          (const uint8_t *)summary_id.data,
+                                          summary_id.length);
+  if (status == ARCHBIRD_OK) {
+    scope->decision_count += classification->decision_contribution;
+    if (depth > scope->max_control_nesting)
+      scope->max_control_nesting = depth;
+    scope->contributor_count++;
+  }
+  return status;
+}
+
+static ArchbirdStatus finish_source_metrics(AbTreeSitterScan *scan) {
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0; status == ARCHBIRD_OK && index < scan->metric_scope_count;
+       index++) {
+    const AbTreeSitterMetricScope *scope = &scan->metric_scopes[index];
+    AbFact *summary;
+    if (scope->summary_fact_index >= scan->builder->bundle.fact_count)
+      return ARCHBIRD_INVALID_SCHEMA;
+    if (scope->decision_count == UINT64_MAX)
+      return archbird_error_set(scan->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "source cyclomatic complexity overflow");
+    summary = &scan->builder->bundle.facts[scope->summary_fact_index];
+    status = ab_fact_add_u64_attribute(
+        scan->engine, summary, "contributor_count", scope->contributor_count);
+    if (status == ARCHBIRD_OK)
+      status = ab_fact_add_u64_attribute(
+          scan->engine, summary, "decision_count", scope->decision_count);
+    if (status == ARCHBIRD_OK)
+      status = ab_fact_add_u64_attribute(scan->engine, summary,
+                                         "cyclomatic_complexity",
+                                         scope->decision_count + 1);
+    if (status == ARCHBIRD_OK)
+      status = ab_fact_add_u64_attribute(scan->engine, summary,
+                                         "max_control_nesting",
+                                         scope->max_control_nesting);
+  }
+  return status;
 }
 
 ArchbirdStatus ab_tree_sitter_track_fact_region(AbTreeSitterScan *scan,
@@ -658,6 +912,18 @@ static ArchbirdStatus parse_and_extract(void *user_data) {
     status = scan->descriptor->visit(scan, &frame, &child_frame);
     if (status != ARCHBIRD_OK)
       break;
+    if (scan->descriptor->callable_boundary &&
+        scan->descriptor->callable_boundary(frame.node) &&
+        !source_metrics_owns_node(scan, &child_frame, frame.node))
+      ab_tree_sitter_suspend_source_metrics(&child_frame);
+    if (frame.has_metric_scope && scan->descriptor->classify_metric) {
+      AbTreeSitterMetricNode classification = {0};
+      scan->descriptor->classify_metric(scan, frame.node, &classification);
+      status = add_source_metric_contributor(scan, &frame, &child_frame,
+                                             &classification);
+      if (status != ARCHBIRD_OK)
+        break;
+    }
     child_count = ts_node_child_count(frame.node);
     if (child_count > SIZE_MAX - frame_count) {
       status = archbird_error_set(scan->engine, ARCHBIRD_LIMIT_EXCEEDED,
@@ -918,6 +1184,8 @@ ArchbirdStatus ab_tree_sitter_scan_file(
   if (status == ARCHBIRD_OK && out_bundle->producer.name.data)
     goto done;
   if (status == ARCHBIRD_OK)
+    status = finish_source_metrics(&scan);
+  if (status == ARCHBIRD_OK)
     status = mark_recovered_facts(&scan);
   if (status == ARCHBIRD_OK)
     status = add_recovery_evidence(&scan);
@@ -942,6 +1210,7 @@ done:
     descriptor->cleanup(&scan);
   ab_free(engine, scan.recoveries);
   ab_free(engine, scan.fact_regions);
+  ab_free(engine, scan.metric_scopes);
   ab_bundle_builder_abort(&builder);
   return status;
 }

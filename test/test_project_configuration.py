@@ -374,6 +374,283 @@ def _assert_metrics_projection() -> None:
     )
     assert incomplete_extent["constraints"][0]["status"] == "unknown"
 
+    complexity_map = _fixture_map(ROOT / "test/fixtures/source_complexity")
+    complexity_document = json.loads(complexity_map)
+    unsupported_complexity = dict(complexity_document)
+    unsupported_complexity["schema_version"] = 16
+    try:
+        query_map_markdown(
+            json.dumps(unsupported_complexity, separators=(",", ":")).encode(),
+            symbols=["jsFlow"],
+        )
+    except RuntimeError as error:
+        assert "schema 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, or 15" in str(
+            error
+        )
+    else:
+        raise AssertionError("unsupported Map schema was accepted")
+    complexity_symbols = {
+        (file["path"], symbol["name"]): symbol
+        for file in complexity_document["files"]
+        for symbol in file["symbols"]
+    }
+    expected_complexity = {
+        ("src/control.c", "c_flow"): (10, 11, 3, "source.control-flow.c-v1"),
+        ("src/control.cpp", "cpp_flow"): (4, 5, 3, "source.control-flow.cpp-v1"),
+        ("src/control.cpp", "cpp_outer"): (0, 1, 0, "source.control-flow.cpp-v1"),
+        ("js/control.js", "jsFlow"): (11, 12, 3, "source.control-flow.javascript-v1"),
+        ("js/control.js", "jsBound"): (1, 2, 1, "source.control-flow.javascript-v1"),
+        ("js/control.js", "jsOuter"): (0, 1, 0, "source.control-flow.javascript-v1"),
+        ("ts/control.ts", "tsFlow"): (4, 5, 2, "source.control-flow.typescript-v1"),
+        ("tsx/control.tsx", "View"): (2, 3, 2, "source.control-flow.tsx-v1"),
+        ("py/control.py", "py_flow"): (12, 13, 3, "source.control-flow.python-v1"),
+        ("py/control.py", "py_outer"): (0, 1, 0, "source.control-flow.python-v1"),
+        ("r/control.R", "r_flow"): (10, 11, 3, "source.control-flow.r-v1"),
+        ("r/control.R", "r_outer"): (0, 1, 0, "source.control-flow.r-v1"),
+    }
+    for identity, (decisions, cyclomatic, nesting, definition) in (
+        expected_complexity.items()
+    ):
+        metrics = complexity_symbols[identity]["source_metrics"]
+        assert metrics["definition"] == definition
+        assert metrics["fact_id"].startswith("f:")
+        assert metrics["provider"].startswith("archbird-tree-sitter-")
+        assert metrics["state"] == "current"
+        assert metrics["values"] == {
+            "source.cyclomatic_complexity": cyclomatic,
+            "source.decision_count": decisions,
+            "source.max_control_nesting": nesting,
+        }
+        contributors = metrics["contributors"]
+        assert sum(row["contribution"] for row in contributors) == decisions
+        assert max(
+            (row["control_depth"] for row in contributors), default=0
+        ) == nesting
+        assert all(
+            row["construct"]
+            and row["fact_id"]
+            and row["provider"].startswith("archbird-tree-sitter-")
+            and row["line"] > 0
+            and row["span"]["end"] > row["span"]["start"]
+            for row in contributors
+        )
+
+    for metric, expected_index in (
+        ("source.decision_count", 0),
+        ("source.cyclomatic_complexity", 1),
+        ("source.max_control_nesting", 2),
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                complexity_map,
+                {
+                    "id": metric,
+                    "select": "metrics",
+                    "metric": metric,
+                    "level": "symbol",
+                },
+            )
+        )
+        assert result["completeness"]["classification"] == "complete"
+        actual = {
+            (item["attributes"]["path"], item["attributes"]["symbol"]): item
+            for item in result["fact"]["items"]
+        }
+        assert set(actual) == set(expected_complexity)
+        for identity, expected in expected_complexity.items():
+            item = actual[identity]
+            assert item["value"] == expected[expected_index]
+            assert item["attributes"]["definition"] == expected[3]
+            assert len(item["evidence"]) >= (2 if expected[0] or expected[2] else 1)
+
+    compact_metrics = query_map_markdown(
+        complexity_map,
+        symbols=["js/control.js:jsFlow"],
+        view="metrics",
+        detail="compact",
+    ).decode()
+    standard_metrics = query_map_markdown(
+        complexity_map,
+        symbols=["js/control.js:jsFlow"],
+        view="metrics",
+        detail="standard",
+    ).decode()
+    full_metrics = query_map_markdown(
+        complexity_map,
+        symbols=["js/control.js:jsFlow"],
+        view="metrics",
+        detail="full",
+    ).decode()
+    metric_line = (
+        "`js/control.js:jsFlow`: complexity=12; decisions=11; "
+        "max-nesting=3"
+    )
+    assert metric_line in compact_metrics
+    assert "contributors-shown=0" in compact_metrics
+    assert metric_line in standard_metrics
+    assert "contributors-shown=6" in standard_metrics
+    assert "contributors-omitted=7" in standard_metrics
+    assert metric_line in full_metrics
+    assert "contributors-shown=13" in full_metrics
+    assert "contributors-omitted=0" in full_metrics
+    assert "span=33..167" in full_metrics
+    assert "provider=archbird-tree-sitter-javascript" in full_metrics
+    assert "; fact=`f:" in full_metrics
+    budgeted_metrics = query_map_markdown(
+        complexity_map,
+        symbols=["js/control.js:jsFlow"],
+        view="metrics",
+        detail="standard",
+        max_chars=2_000,
+    ).decode()
+    assert "# Focused source metrics: source-complexity" in budgeted_metrics
+    assert len(budgeted_metrics) <= 2_000
+    assert "Ranked neighborhood" not in budgeted_metrics
+
+    complexity_policy = {
+        "project": "source-complexity",
+        "projections": {
+            "complexity": {
+                "select": "metrics",
+                "metric": "source.cyclomatic_complexity",
+                "level": "symbol",
+            }
+        },
+        "constraints": {
+            "MAX-COMPLEXITY": {
+                "assert": "numeric_bounds",
+                "actual": {"projection": "complexity"},
+                "max": 11,
+                "owner": "architecture",
+                "rationale": "Exercise source-metric evidence in Verify.",
+            }
+        },
+    }
+    complexity_verification = json.loads(
+        evaluate_constraints_json(
+            json.dumps(complexity_policy, separators=(",", ":")).encode(),
+            complexity_map,
+        )
+    )
+    assert complexity_verification["constraints"][0]["status"] == "fail"
+    assert any(
+        evidence["path"] == "js/control.js" and evidence["line"] == 2
+        for finding in complexity_verification["constraints"][0]["findings"]
+        for evidence in finding["evidence"]
+    )
+
+    incomplete_complexity = json.loads(complexity_map)
+    incomplete_symbol = next(
+        symbol
+        for file in incomplete_complexity["files"]
+        if file["path"] == "js/control.js"
+        for symbol in file["symbols"]
+        if symbol["name"] == "jsFlow"
+    )
+    incomplete_symbol["source_metrics"]["state"] = "unknown"
+    incomplete_result = json.loads(
+        evaluate_projection_json(
+            json.dumps(incomplete_complexity, separators=(",", ":")).encode(),
+            {
+                "id": "incomplete-complexity",
+                "select": "metrics",
+                "metric": "source.cyclomatic_complexity",
+                "level": "symbol",
+            },
+        )
+    )
+    assert incomplete_result["completeness"]["classification"] == "incomplete"
+    assert next(
+        item
+        for item in incomplete_result["fact"]["items"]
+        if item["attributes"]["path"] == "js/control.js"
+    )["state"] == "unknown"
+
+    malformed_complexity = json.loads(complexity_map)
+    malformed_symbol = next(
+        symbol
+        for file in malformed_complexity["files"]
+        if file["path"] == "js/control.js"
+        for symbol in file["symbols"]
+        if symbol["name"] == "jsFlow"
+    )
+    malformed_symbol["source_metrics"]["contributors"][0]["span"].pop("end")
+    try:
+        evaluate_projection_json(
+            json.dumps(malformed_complexity, separators=(",", ":")).encode(),
+            {
+                "id": "malformed-complexity",
+                "select": "metrics",
+                "metric": "source.cyclomatic_complexity",
+                "level": "symbol",
+            },
+        )
+    except RuntimeError as error:
+        assert "invalid source metric contributor" in str(error)
+    else:
+        raise AssertionError("malformed source metric contributor was accepted")
+
+    missing_provenance = json.loads(complexity_map)
+    missing_provenance_symbol = next(
+        symbol
+        for file in missing_provenance["files"]
+        if file["path"] == "js/control.js"
+        for symbol in file["symbols"]
+        if symbol["name"] == "jsFlow"
+    )
+    missing_provenance_symbol["source_metrics"]["contributors"][0].pop(
+        "provider"
+    )
+    try:
+        evaluate_projection_json(
+            json.dumps(missing_provenance, separators=(",", ":")).encode(),
+            {
+                "id": "missing-complexity-provenance",
+                "select": "metrics",
+                "metric": "source.cyclomatic_complexity",
+                "level": "symbol",
+            },
+        )
+    except RuntimeError as error:
+        assert "invalid source metric contributor" in str(error)
+    else:
+        raise AssertionError("source metric contributor without provider was accepted")
+
+    inconsistent_complexity = json.loads(complexity_map)
+    inconsistent_symbol = next(
+        symbol
+        for file in inconsistent_complexity["files"]
+        if file["path"] == "js/control.js"
+        for symbol in file["symbols"]
+        if symbol["name"] == "jsFlow"
+    )
+    inconsistent_symbol["source_metrics"]["values"]["source.decision_count"] += 1
+    try:
+        evaluate_projection_json(
+            json.dumps(inconsistent_complexity, separators=(",", ":")).encode(),
+            {
+                "id": "inconsistent-complexity-ledger",
+                "select": "metrics",
+                "metric": "source.cyclomatic_complexity",
+                "level": "symbol",
+            },
+        )
+    except RuntimeError as error:
+        assert "inconsistent source metric evidence" in str(error)
+    else:
+        raise AssertionError("inconsistent source metric evidence was accepted")
+    try:
+        query_map_markdown(
+            json.dumps(inconsistent_complexity, separators=(",", ":")).encode(),
+            symbols=["js/control.js:jsFlow"],
+            view="metrics",
+            detail="full",
+        )
+    except RuntimeError as error:
+        assert "source metric evidence is inconsistent" in str(error)
+    else:
+        raise AssertionError("inconsistent source metrics were rendered")
+
     report_map = (ROOT / "test/fixtures/report_map.json").read_bytes()
     legacy_extent = json.loads(
         evaluate_projection_json(
@@ -3714,8 +3991,8 @@ def main() -> None:
     reference_map = _fixture_map(reference_root)
     subject_document = json.loads(subject_map)
     reference_document = json.loads(reference_map)
-    assert subject_document["schema_version"] == 14
-    assert reference_document["schema_version"] == 14
+    assert subject_document["schema_version"] == 15
+    assert reference_document["schema_version"] == 15
     assert {row["domain"] for row in subject_document["facts"]} == {
         "constant-values",
         "export-origins",

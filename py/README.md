@@ -103,7 +103,8 @@ archbird map . --view evidence --detail full
 ```
 
 The default Markdown is an architecture-first overview. `--view metrics`
-ranks exact declaration extents and directed graph connectivity. `--group-by`
+ranks source complexity, exact declaration extents, and directed graph
+connectivity. `--group-by`
 organizes entities, `--level` chooses component, file, or symbol nodes, and
 `--relations` selects graph relations. Live Markdown is
 projected directly from the analyzed state rather than by serializing and
@@ -157,6 +158,9 @@ archbird query . \
 
 archbird query . --search 'provider registry' \
   --search-limit 8 --max-chars 12000 --check
+
+archbird query . --symbol 'src/runtime.c:runtime_start' \
+  --view metrics --detail full --max-chars 12000 --check
 
 archbird impact . --path src/runtime.c --depth 2 --check
 ```
@@ -364,8 +368,15 @@ selection. One-off primitive operands stay inline:
 }
 ```
 
-Metrics are ordinary projections. `source.extent_lines` counts physical lines
-inside one exact declaration extent. On a selected directed graph,
+Metrics are ordinary projections. `source.decision_count`,
+`source.cyclomatic_complexity`, and `source.max_control_nesting` retain each
+contributing control-flow construct with its line, byte span, depth, provider,
+and fact identity. `source.extent_lines` counts physical lines inside one exact
+declaration extent. Definitions are versioned per language and are not assumed
+equivalent across languages. Values are absolute per function or method;
+repository distributions provide context without normalizing them. Use
+`query --view metrics --detail standard|full` to expand exact contributors
+behind a value. On a selected directed graph,
 `graph.*_neighbors` counts distinct adjacent identities, `graph.*_relations`
 counts relation witnesses, group boundary metrics classify internal, inbound,
 and outbound witnesses, `graph.*_group_neighbors` counts distinct connected

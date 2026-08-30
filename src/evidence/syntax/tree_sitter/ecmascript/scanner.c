@@ -33,6 +33,61 @@ TSNode ab_tree_sitter_unwrap_ecmascript_expression(TSNode node) {
   }
 }
 
+void ab_tree_sitter_classify_ecmascript_metric(const AbTreeSitterScan *scan,
+                                               TSNode node,
+                                               AbTreeSitterMetricNode *out) {
+  const char *type = ts_node_type(node);
+  TSNode parent = ts_node_parent(node);
+  (void)scan;
+  if (!strcmp(type, "if_statement")) {
+    out->construct = "if";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+    out->flattens_parent_nesting =
+        ab_tree_sitter_node_type(parent, "else_clause");
+  } else if (!strcmp(type, "for_statement") ||
+             !strcmp(type, "for_in_statement")) {
+    out->construct = !strcmp(type, "for_in_statement") ? "for-in" : "for";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "while_statement")) {
+    out->construct = "while";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "do_statement")) {
+    out->construct = "do-while";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "switch_statement")) {
+    out->construct = "switch";
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "switch_case")) {
+    out->construct = "case";
+    out->decision_contribution = 1;
+  } else if (!strcmp(type, "try_statement")) {
+    out->construct = "try";
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "catch_clause")) {
+    out->construct = "catch";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+    out->flattens_parent_nesting = 1;
+  } else if (!strcmp(type, "ternary_expression")) {
+    out->construct = "conditional";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "binary_expression")) {
+    TSNode operator_node = ab_tree_sitter_child(node, "operator");
+    if (ab_tree_sitter_node_type(operator_node, "&&") ||
+        ab_tree_sitter_node_type(operator_node, "||")) {
+      out->construct = ab_tree_sitter_node_type(operator_node, "&&")
+                           ? "logical-and"
+                           : "logical-or";
+      out->decision_contribution = 1;
+    }
+  }
+}
+
 static int identifier_node(const AbTreeSitterScan *scan, TSNode node) {
   return ab_tree_sitter_node_has_text(scan, node) &&
          (ab_tree_sitter_node_type(node, "identifier") ||
@@ -59,6 +114,15 @@ static int function_value(TSNode node) {
   return ab_tree_sitter_node_type(node, "arrow_function") ||
          ab_tree_sitter_node_type(node, "function_expression") ||
          ab_tree_sitter_node_type(node, "generator_function");
+}
+
+int ab_tree_sitter_ecmascript_callable_boundary(TSNode node) {
+  return ab_tree_sitter_node_type(node, "function_declaration") ||
+         ab_tree_sitter_node_type(node, "generator_function_declaration") ||
+         ab_tree_sitter_node_type(node, "function_expression") ||
+         ab_tree_sitter_node_type(node, "generator_function") ||
+         ab_tree_sitter_node_type(node, "arrow_function") ||
+         ab_tree_sitter_node_type(node, "method_definition");
 }
 
 static int class_value(TSNode node) {
@@ -762,6 +826,7 @@ ArchbirdStatus ab_tree_sitter_visit_ecmascript(AbTreeSitterScan *scan,
                         &name, &fact);
     child_frame->context &= ~AB_TS_CONTEXT_FUNCTION;
     child_frame->context |= AB_TS_CONTEXT_CLASS;
+    ab_tree_sitter_suspend_source_metrics(child_frame);
     if (status == ARCHBIRD_OK && fact)
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
   } else if (ab_tree_sitter_node_type(frame->node, "class") ||
@@ -784,6 +849,7 @@ ArchbirdStatus ab_tree_sitter_visit_ecmascript(AbTreeSitterScan *scan,
     child_frame->context &= ~AB_TS_CONTEXT_FUNCTION;
     child_frame->context &= ~AB_TS_CONTEXT_CLASS_BINDING;
     child_frame->context |= AB_TS_CONTEXT_CLASS;
+    ab_tree_sitter_suspend_source_metrics(child_frame);
     if (status == ARCHBIRD_OK && fact) {
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
       if (anonymous)
@@ -797,18 +863,26 @@ ArchbirdStatus ab_tree_sitter_visit_ecmascript(AbTreeSitterScan *scan,
                         &name, &fact);
     child_frame->context &= ~AB_TS_CONTEXT_CLASS;
     child_frame->context |= AB_TS_CONTEXT_FUNCTION;
-    if (status == ARCHBIRD_OK && fact)
+    if (status == ARCHBIRD_OK && fact) {
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      status = ab_tree_sitter_start_source_metrics(scan, fact, frame->node,
+                                                   child_frame);
+    }
   } else if (ab_tree_sitter_node_type(frame->node, "method_definition")) {
     status = add_symbol(scan, frame, frame->node,
                         ab_tree_sitter_child(frame->node, "name"), "method",
                         &name, &fact);
     child_frame->context &= ~AB_TS_CONTEXT_CLASS;
     child_frame->context |= AB_TS_CONTEXT_FUNCTION;
-    if (status == ARCHBIRD_OK && fact)
+    if (status == ARCHBIRD_OK && fact) {
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      status = ab_tree_sitter_start_source_metrics(scan, fact, frame->node,
+                                                   child_frame);
+    }
   } else if (ab_tree_sitter_node_type(frame->node, "variable_declarator")) {
     int is_class = class_value(ab_tree_sitter_child(frame->node, "value"));
+    TSNode value = ab_tree_sitter_unwrap_ecmascript_expression(
+        ab_tree_sitter_child(frame->node, "value"));
     status = is_class ? add_variable_class(scan, frame, &name, &fact)
                       : add_variable_function(scan, frame, &name, &fact);
     if (status == ARCHBIRD_OK && fact) {
@@ -817,9 +891,16 @@ ArchbirdStatus ab_tree_sitter_visit_ecmascript(AbTreeSitterScan *scan,
       child_frame->context |=
           is_class ? AB_TS_CONTEXT_CLASS_BINDING : AB_TS_CONTEXT_FUNCTION;
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      if (is_class)
+        ab_tree_sitter_suspend_source_metrics(child_frame);
+      else
+        status =
+            ab_tree_sitter_start_source_metrics(scan, fact, value, child_frame);
     }
   } else if (ab_tree_sitter_node_type(frame->node, "assignment_expression")) {
     int is_class = class_value(ab_tree_sitter_child(frame->node, "right"));
+    TSNode value = ab_tree_sitter_unwrap_ecmascript_expression(
+        ab_tree_sitter_child(frame->node, "right"));
     status = is_class ? add_assignment_class(scan, frame, &name, &fact)
                       : add_assignment_function(scan, frame, &name, &fact);
     if (status == ARCHBIRD_OK && fact) {
@@ -828,13 +909,22 @@ ArchbirdStatus ab_tree_sitter_visit_ecmascript(AbTreeSitterScan *scan,
       child_frame->context |=
           is_class ? AB_TS_CONTEXT_CLASS_BINDING : AB_TS_CONTEXT_FUNCTION;
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      if (is_class)
+        ab_tree_sitter_suspend_source_metrics(child_frame);
+      else
+        status =
+            ab_tree_sitter_start_source_metrics(scan, fact, value, child_frame);
     }
   } else if (ab_tree_sitter_node_type(frame->node, "pair")) {
+    TSNode value = ab_tree_sitter_unwrap_ecmascript_expression(
+        ab_tree_sitter_child(frame->node, "value"));
     status = add_pair_function(scan, frame, &name, &fact);
     if (status == ARCHBIRD_OK && fact) {
       child_frame->context &= ~AB_TS_CONTEXT_CLASS;
       child_frame->context |= AB_TS_CONTEXT_FUNCTION;
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      status =
+          ab_tree_sitter_start_source_metrics(scan, fact, value, child_frame);
     }
   } else if (ab_tree_sitter_node_type(frame->node, "call_expression")) {
     status = add_call(scan, frame);

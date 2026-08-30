@@ -3,6 +3,7 @@
 #include "base/archbird_internal.h"
 #include "interchange/reports/report_utils.h"
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -136,6 +137,7 @@ typedef struct QueryReportViewContext {
   int include_routed;
   int compact_header;
   int change_view;
+  int metrics_view;
   int full_detail;
   int compact_detail;
   int named_plan;
@@ -1621,6 +1623,7 @@ query_report_view_init(QueryReportViewContext *view, ArchbirdEngine *engine,
   view->compact_header = compact_header;
   view->detail = detail;
   view->change_view = selected_view == ARCHBIRD_QUERY_VIEW_CHANGES;
+  view->metrics_view = selected_view == ARCHBIRD_QUERY_VIEW_METRICS;
   view->full_detail = detail == ARCHBIRD_REPORT_DETAIL_FULL;
   view->compact_detail = detail == ARCHBIRD_REPORT_DETAIL_COMPACT;
   view->map_files = optional_array(map, "files");
@@ -1791,7 +1794,9 @@ static ArchbirdStatus render_query_header(QueryReportViewContext *view) {
 
   QUERY_TRY(ab_report_linef(out,
                             change_view ? "# Change brief: %.*s"
-                                        : "# Focused architecture map: %.*s",
+                            : view->metrics_view
+                                ? "# Focused source metrics: %.*s"
+                                : "# Focused architecture map: %.*s",
                             (int)project->length, project->data));
   QUERY_TRY(ab_report_blank(out));
   if (named_plan) {
@@ -2093,6 +2098,206 @@ static ArchbirdStatus render_query_scope_summary(QueryReportViewContext *view) {
     if (components->as.array.count || packages->as.array.count)
       QUERY_TRY(ab_report_blank(out));
   }
+
+cleanup:
+  return status;
+}
+
+typedef struct QuerySourceMetricContributor {
+  const AbString *construct;
+  const AbString *fact_id;
+  const AbString *provider;
+  uint64_t contribution;
+  uint64_t depth;
+  uint64_t line;
+  uint64_t nesting;
+  uint64_t start;
+  uint64_t end;
+} QuerySourceMetricContributor;
+
+static int
+decode_query_source_metric_contributor(const AbValue *row,
+                                       QuerySourceMetricContributor *out) {
+  const AbValue *span;
+  if (!row || row->kind != AB_VALUE_OBJECT || !out)
+    return 0;
+  memset(out, 0, sizeof(*out));
+  out->construct = ab_report_string(row, "construct");
+  out->fact_id = ab_report_string(row, "fact_id");
+  out->provider = ab_report_string(row, "provider");
+  span = ab_report_object(row, "span");
+  return out->construct && out->fact_id && out->provider && span &&
+         ab_value_u64(ab_value_member(row, "contribution"),
+                      &out->contribution) &&
+         ab_value_u64(ab_value_member(row, "control_depth"), &out->depth) &&
+         ab_value_u64(ab_value_member(row, "line"), &out->line) && out->line &&
+         ab_value_u64(ab_value_member(row, "nesting"), &out->nesting) &&
+         out->nesting <= 1 && (out->contribution || out->nesting) &&
+         ab_value_u64(ab_value_member(span, "start"), &out->start) &&
+         ab_value_u64(ab_value_member(span, "end"), &out->end) &&
+         out->end > out->start;
+}
+
+static ArchbirdStatus render_query_metrics(QueryReportViewContext *view) {
+  AbBuffer *out = view->out;
+  size_t file_index;
+  size_t symbol_count = 0;
+  size_t contributor_count = 0;
+  size_t contributor_omitted = 0;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  QUERY_TRY(ab_report_literal_line(out, "## Source metrics"));
+  QUERY_TRY(ab_report_blank(out));
+  QUERY_TRY(ab_report_literal_line(
+      out, "Definitions are versioned per language. Values are comparable "
+           "only when their `definition` identities match."));
+  QUERY_TRY(ab_report_blank(out));
+  for (file_index = 0; file_index < view->visible_count; file_index++) {
+    QueryReportFile *file =
+        &view->report_files[view->visible_start + file_index];
+    size_t symbol_index;
+    for (symbol_index = 0; symbol_index < file->symbols->as.array.count;
+         symbol_index++) {
+      const AbValue *symbol = &file->symbols->as.array.items[symbol_index];
+      const AbString *name = ab_report_string(symbol, "name");
+      const AbValue *metrics = optional_object(symbol, "source_metrics");
+      const AbString *definition;
+      const AbString *fact_id;
+      const AbString *provider;
+      const AbString *state;
+      const AbValue *values;
+      const AbValue *contributors;
+      uint64_t decisions;
+      uint64_t complexity;
+      uint64_t nesting;
+      uint64_t contributor_decisions = 0;
+      uint64_t contributor_nesting = 0;
+      size_t shown;
+      size_t contributor_index;
+      if (!metrics)
+        continue;
+      definition = ab_report_string(metrics, "definition");
+      fact_id = ab_report_string(metrics, "fact_id");
+      provider = ab_report_string(metrics, "provider");
+      state = ab_report_string(metrics, "state");
+      values = ab_report_object(metrics, "values");
+      contributors = ab_report_array(metrics, "contributors");
+      if (!name || !definition || !fact_id || !provider || !state || !values ||
+          !contributors ||
+          (!ab_report_string_equal(state, "current") &&
+           !ab_report_string_equal(state, "unknown")) ||
+          !ab_value_u64(ab_value_member(values, "source.decision_count"),
+                        &decisions) ||
+          !ab_value_u64(ab_value_member(values, "source.cyclomatic_complexity"),
+                        &complexity) ||
+          !ab_value_u64(ab_value_member(values, "source.max_control_nesting"),
+                        &nesting) ||
+          decisions == UINT64_MAX) {
+        status = query_schema_error(
+            view->engine, "query symbol source metrics are malformed");
+        goto cleanup;
+      }
+      if (complexity != decisions + 1) {
+        status = query_schema_error(
+            view->engine, "query source metric evidence is inconsistent");
+        goto cleanup;
+      }
+      for (contributor_index = 0;
+           contributor_index < contributors->as.array.count;
+           contributor_index++) {
+        QuerySourceMetricContributor contributor;
+        if (!decode_query_source_metric_contributor(
+                &contributors->as.array.items[contributor_index],
+                &contributor) ||
+            contributor.contribution > UINT64_MAX - contributor_decisions) {
+          status = query_schema_error(
+              view->engine, "query source metric contributor is malformed");
+          goto cleanup;
+        }
+        contributor_decisions += contributor.contribution;
+        if (contributor.depth > contributor_nesting)
+          contributor_nesting = contributor.depth;
+      }
+      if (decisions != contributor_decisions ||
+          nesting != contributor_nesting) {
+        status = query_schema_error(
+            view->engine, "query source metric evidence is inconsistent");
+        goto cleanup;
+      }
+      symbol_count++;
+      if (view->full_detail)
+        QUERY_TRY(ab_report_linef(
+            out,
+            "- `%.*s:%.*s`: complexity=%" PRIu64 "; decisions=%" PRIu64
+            "; max-nesting=%" PRIu64
+            "; state=%.*s; definition=`%.*s`; provider=%.*s; fact=`%.*s`",
+            (int)file->path->length, file->path->data, (int)name->length,
+            name->data, complexity, decisions, nesting, (int)state->length,
+            state->data, (int)definition->length, definition->data,
+            (int)provider->length, provider->data, (int)fact_id->length,
+            fact_id->data));
+      else
+        QUERY_TRY(ab_report_linef(
+            out,
+            "- `%.*s:%.*s`: complexity=%" PRIu64 "; decisions=%" PRIu64
+            "; max-nesting=%" PRIu64 "; state=%.*s; definition=`%.*s`",
+            (int)file->path->length, file->path->data, (int)name->length,
+            name->data, complexity, decisions, nesting, (int)state->length,
+            state->data, (int)definition->length, definition->data));
+      shown = view->compact_detail ? 0
+              : view->full_detail || contributors->as.array.count < 6
+                  ? contributors->as.array.count
+                  : 6;
+      for (contributor_index = 0; contributor_index < shown;
+           contributor_index++) {
+        const AbValue *contributor =
+            &contributors->as.array.items[contributor_index];
+        QuerySourceMetricContributor decoded;
+        if (!decode_query_source_metric_contributor(contributor, &decoded)) {
+          status = query_schema_error(
+              view->engine, "query source metric contributor is malformed");
+          goto cleanup;
+        }
+        if (view->full_detail)
+          QUERY_TRY(ab_report_linef(
+              out,
+              "  - line=%" PRIu64 "; `%.*s`; +%" PRIu64
+              "; control-depth=%" PRIu64 "; starts-nesting=%s; span=%" PRIu64
+              "..%" PRIu64 "; provider=%.*s; fact=`%.*s`",
+              decoded.line, (int)decoded.construct->length,
+              decoded.construct->data, decoded.contribution, decoded.depth,
+              decoded.nesting ? "yes" : "no", decoded.start, decoded.end,
+              (int)decoded.provider->length, decoded.provider->data,
+              (int)decoded.fact_id->length, decoded.fact_id->data));
+        else
+          QUERY_TRY(ab_report_linef(
+              out,
+              "  - line=%" PRIu64 "; `%.*s`; +%" PRIu64
+              "; control-depth=%" PRIu64 "; starts-nesting=%s; span=%" PRIu64
+              "..%" PRIu64,
+              decoded.line, (int)decoded.construct->length,
+              decoded.construct->data, decoded.contribution, decoded.depth,
+              decoded.nesting ? "yes" : "no", decoded.start, decoded.end));
+        contributor_count++;
+      }
+      contributor_omitted += contributors->as.array.count - shown;
+    }
+  }
+  if (!symbol_count)
+    QUERY_TRY(ab_report_literal_line(
+        out, "No selected symbol has current source-metric evidence."));
+  if (contributor_omitted)
+    QUERY_TRY(ab_report_linef(
+        out,
+        "- ... %zu contributors omitted; use `--detail full` with the same "
+        "selectors.",
+        contributor_omitted));
+  QUERY_TRY(ab_report_blank(out));
+  QUERY_TRY(
+      ab_report_linef(out,
+                      "Metric evidence: symbols=%zu; contributors-shown=%zu; "
+                      "contributors-omitted=%zu.",
+                      symbol_count, contributor_count, contributor_omitted));
+  QUERY_TRY(ab_report_blank(out));
 
 cleanup:
   return status;
@@ -2906,8 +3111,12 @@ static ArchbirdStatus render_query_view(
   QUERY_TRY(render_query_header(&report));
   QUERY_TRY(render_query_change_context(&report));
   QUERY_TRY(render_query_scope_summary(&report));
-  QUERY_TRY(render_query_neighborhood(&report));
-  QUERY_TRY(render_query_routed_evidence(&report));
+  if (report.metrics_view)
+    QUERY_TRY(render_query_metrics(&report));
+  else {
+    QUERY_TRY(render_query_neighborhood(&report));
+    QUERY_TRY(render_query_routed_evidence(&report));
+  }
   QUERY_TRY(render_query_selection_manifest(&report));
 
 cleanup:
@@ -2928,14 +3137,15 @@ static ArchbirdStatus
 render_query_budget_summary(ArchbirdEngine *engine, const AbValue *query,
                             size_t budget, size_t node_limit,
                             int include_neighborhood, int include_routed,
-                            AbBuffer *out) {
+                            ArchbirdQueryView view, AbBuffer *out) {
   const AbValue *files = optional_array(query, "files");
   AbReportStringList omitted;
   ArchbirdStatus status = ARCHBIRD_OK;
   ab_report_list_init(&omitted, engine);
-  if (!include_neighborhood)
+  if (view != ARCHBIRD_QUERY_VIEW_METRICS && !include_neighborhood)
     status = ab_report_list_add(&omitted, "Ranked neighborhood", 19);
-  if (status == ARCHBIRD_OK && !include_routed)
+  if (status == ARCHBIRD_OK && view != ARCHBIRD_QUERY_VIEW_METRICS &&
+      !include_routed)
     status = ab_report_list_add(&omitted, "Routed evidence", 15);
   if (status == ARCHBIRD_OK)
     status = ab_report_blank(out);
@@ -2943,7 +3153,13 @@ render_query_budget_summary(ArchbirdEngine *engine, const AbValue *query,
     status = ab_report_literal_line(out, "## Compact projection");
   if (status == ARCHBIRD_OK)
     status = ab_report_blank(out);
-  if (status == ARCHBIRD_OK)
+  if (status == ARCHBIRD_OK && view == ARCHBIRD_QUERY_VIEW_METRICS)
+    status = ab_report_linef(
+        out,
+        "Budget=%zu characters; sections=1/1; selected-file node cap=%zu; "
+        "canonical-files=%zu.",
+        budget, node_limit, files->as.array.count);
+  else if (status == ARCHBIRD_OK)
     status = ab_report_linef(
         out,
         "Budget=%zu characters; sections=%d/2; ranked-file node cap=%zu; "
@@ -2971,9 +3187,9 @@ static ArchbirdStatus render_query_budget_candidate(
       engine, map, query, verification, node_limit, include_neighborhood,
       include_routed, 1, view, detail, out);
   if (status == ARCHBIRD_OK)
-    status =
-        render_query_budget_summary(engine, query, budget, node_limit,
-                                    include_neighborhood, include_routed, out);
+    status = render_query_budget_summary(engine, query, budget, node_limit,
+                                         include_neighborhood, include_routed,
+                                         view, out);
   return status;
 }
 
@@ -3083,7 +3299,7 @@ ArchbirdStatus ab_query_report_markdown_view_with_verification(
   ArchbirdStatus status;
   uint64_t schema;
   if (!engine || !map || !query || !out || view < ARCHBIRD_QUERY_VIEW_FOCUSED ||
-      view > ARCHBIRD_QUERY_VIEW_CHANGES ||
+      view > ARCHBIRD_QUERY_VIEW_METRICS ||
       detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
       detail > ARCHBIRD_REPORT_DETAIL_FULL ||
       (verification && view != ARCHBIRD_QUERY_VIEW_CHANGES))

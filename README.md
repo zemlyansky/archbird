@@ -223,7 +223,7 @@ The default is an architecture-first overview for a person or coding agent;
 canonical JSON still contains every selected file and mapped fact. Choose the
 human projection and its amount of detail independently:
 
-<!-- archbird-example: tested-pass core-views covers=map,source -->
+<!-- archbird-example: tested-pass core-views covers=map,query,source -->
 ```bash
 archbird map --view overview --detail compact
 archbird map --view architecture \
@@ -231,6 +231,7 @@ archbird map --view architecture \
 archbird map --view tests --group-by directory
 archbird map --view metrics
 archbird map --view evidence --detail full
+archbird query --symbol runtime_start --view metrics --detail full
 archbird query --symbol runtime_start --view source
 archbird query --symbol runtime_start --dump
 ```
@@ -238,7 +239,8 @@ archbird query --symbol runtime_start --dump
 `--view` selects a question-oriented preset. `overview` includes project
 landmarks and broad package/build/test connections; `architecture` emphasizes
 code dependencies; `tests` isolates test routes; `metrics` ranks measured
-source extents and graph connectivity; and `evidence` exposes coverage,
+source complexity, declaration extents, and graph connectivity; and `evidence`
+exposes coverage,
 diagnostics, and completeness. `--group-by` reorganizes the same
 selected entities by directory, configured component, layer, or language.
 `--level` chooses component, file, or symbol nodes. `--relations` overrides the
@@ -556,9 +558,25 @@ separate required CLI stage. One-off primitive operands stay inline:
 }
 ```
 
-Metrics use the same projection contract. Archbird currently defines
-`source.extent_lines` as the physical lines covered by one exact declaration
-extent. Graph metrics operate on the selected directed graph:
+Metrics use the same projection contract. Source metrics are attached to each
+function or method:
+
+- `source.decision_count` counts versioned language-specific control-flow
+  constructs;
+- `source.cyclomatic_complexity` is decision count plus one;
+- `source.max_control_nesting` records the deepest contributing construct;
+- `source.extent_lines` counts physical lines covered by one exact declaration
+  extent.
+
+Every control-flow value retains the contributing construct, line, byte span,
+control depth, provider, and fact identity. Inspect them with
+`archbird query --symbol SYMBOL --view metrics`: compact detail shows values,
+standard detail shows the first contributors and their omitted count, and full
+detail shows every contributor. Definitions are versioned per language; values
+from different definitions are not asserted to be equivalent. Values are
+absolute per function or method; repository size does not change them, and
+repository distributions provide context without normalizing them. Graph
+metrics operate on the selected directed graph:
 
 - `graph.out_neighbors` and `graph.in_neighbors` count distinct adjacent
   identities;

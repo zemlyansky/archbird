@@ -210,7 +210,7 @@ ArchbirdStatus archbird_map_query_markdown_view_with_verification(
       (!query_json && query_length) ||
       (!verification_json && verification_length) || !write_fn ||
       view < ARCHBIRD_QUERY_VIEW_FOCUSED ||
-      view > ARCHBIRD_QUERY_VIEW_CHANGES ||
+      view > ARCHBIRD_QUERY_VIEW_METRICS ||
       detail < ARCHBIRD_REPORT_DETAIL_COMPACT ||
       detail > ARCHBIRD_REPORT_DETAIL_FULL)
     return ARCHBIRD_INVALID_ARGUMENT;

@@ -56,8 +56,9 @@
     "symbol": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "kind", "scope", "line", "signature"],
+      "required": ["fact_id", "name", "kind", "scope", "line", "signature"],
       "properties": {
+        "fact_id": {"type": "string", "pattern": "^f:[0-9a-f]{64}$"},
         "name": {"type": "string", "minLength": 1},
         "kind": {"type": "string", "minLength": 1},
         "scope": {"type": "string"},
@@ -72,7 +73,85 @@
             "end": {"type": "integer", "minimum": 1}
           }
         },
+        "extent_lines": {"type": "integer", "minimum": 1},
+        "span": {"$ref": "#/$defs/span"},
+        "source_metrics": {"$ref": "#/$defs/sourceMetrics"},
         "syntax_recovery": {"const": "intersects"}
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 1}
+      }
+    },
+    "sourceMetricContributor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["construct", "contribution", "control_depth", "fact_id", "line", "nesting", "provider", "span"],
+      "properties": {
+        "construct": {"type": "string", "minLength": 1},
+        "contribution": {"type": "integer", "minimum": 0},
+        "control_depth": {"type": "integer", "minimum": 0},
+        "fact_id": {"type": "string", "pattern": "^f:[0-9a-f]{64}$"},
+        "line": {"type": "integer", "minimum": 1},
+        "nesting": {"enum": [0, 1]},
+        "provider": {"type": "string", "minLength": 1},
+        "span": {"$ref": "#/$defs/span"},
+        "syntax_recovery": {"const": "intersects"}
+      }
+    },
+    "sourceMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contributors", "definition", "fact_id", "provider", "state", "values"],
+      "properties": {
+        "contributors": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/sourceMetricContributor"}
+        },
+        "definition": {"type": "string", "pattern": "^source\\.control-flow\\.[A-Za-z0-9_-]+-v[0-9]+$"},
+        "fact_id": {"type": "string", "pattern": "^f:[0-9a-f]{64}$"},
+        "provider": {"type": "string", "minLength": 1},
+        "state": {"enum": ["current", "unknown"]},
+        "syntax_recovery": {"const": "intersects"},
+        "values": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source.cyclomatic_complexity", "source.decision_count", "source.max_control_nesting"],
+          "properties": {
+            "source.cyclomatic_complexity": {"type": "integer", "minimum": 1},
+            "source.decision_count": {"type": "integer", "minimum": 0},
+            "source.max_control_nesting": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "sourceMetricAggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "max", "unknown"],
+      "properties": {
+        "current": {"type": "integer", "minimum": 0},
+        "definition": {"type": "string", "minLength": 1},
+        "max": {"type": "integer", "minimum": 0},
+        "max_fact_id": {"type": "string", "pattern": "^f:[0-9a-f]{64}$"},
+        "max_symbol": {"type": "string", "minLength": 1},
+        "unknown": {"type": "integer", "minimum": 0}
+      }
+    },
+    "sourceMetricAggregates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source.cyclomatic_complexity", "source.decision_count", "source.extent_lines", "source.max_control_nesting"],
+      "properties": {
+        "source.cyclomatic_complexity": {"$ref": "#/$defs/sourceMetricAggregate"},
+        "source.decision_count": {"$ref": "#/$defs/sourceMetricAggregate"},
+        "source.extent_lines": {"$ref": "#/$defs/sourceMetricAggregate"},
+        "source.max_control_nesting": {"$ref": "#/$defs/sourceMetricAggregate"}
       }
     },
     "messages": {
@@ -103,7 +182,8 @@
         "exports",
         "export_origins",
         "reexport_candidates",
-        "messages"
+        "messages",
+        "metrics"
       ],
       "properties": {
         "path": {"$ref": "#/$defs/repositoryPath"},
@@ -124,7 +204,8 @@
         "exports": {"$ref": "#/$defs/strings"},
         "export_origins": {"$ref": "#/$defs/stringMap"},
         "reexport_candidates": {"$ref": "#/$defs/strings"},
-        "messages": {"$ref": "#/$defs/messages"}
+        "messages": {"$ref": "#/$defs/messages"},
+        "metrics": {"$ref": "#/$defs/sourceMetricAggregates"}
       }
     }
   }

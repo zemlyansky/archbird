@@ -18,12 +18,31 @@ typedef struct AbTreeSitterFactRegion {
   size_t end;
 } AbTreeSitterFactRegion;
 
+typedef struct AbTreeSitterMetricScope {
+  size_t summary_fact_index;
+  size_t callable_start;
+  size_t callable_end;
+  uint64_t decision_count;
+  uint64_t max_control_nesting;
+  uint64_t contributor_count;
+} AbTreeSitterMetricScope;
+
+typedef struct AbTreeSitterMetricNode {
+  const char *construct;
+  uint64_t decision_contribution;
+  int starts_control_nesting;
+  int flattens_parent_nesting;
+} AbTreeSitterMetricNode;
+
 typedef struct AbTreeSitterFrame {
   TSNode node;
   const uint8_t *enclosing;
   size_t enclosing_length;
   unsigned context;
+  size_t metric_scope_index;
+  uint64_t metric_nesting;
   int has_enclosing;
+  int has_metric_scope;
   int identity_partial;
 } AbTreeSitterFrame;
 
@@ -41,6 +60,9 @@ typedef ArchbirdStatus (*AbTreeSitterVisitFn)(AbTreeSitterScan *scan,
                                               AbTreeSitterFrame *child_frame);
 typedef ArchbirdStatus (*AbTreeSitterPrepareFn)(AbTreeSitterScan *scan);
 typedef void (*AbTreeSitterCleanupFn)(AbTreeSitterScan *scan);
+typedef void (*AbTreeSitterMetricFn)(const AbTreeSitterScan *scan, TSNode node,
+                                     AbTreeSitterMetricNode *out);
+typedef int (*AbTreeSitterCallableFn)(TSNode node);
 
 typedef struct AbTreeSitterDescriptor {
   const char *provider_name;
@@ -54,6 +76,9 @@ typedef struct AbTreeSitterDescriptor {
   AbTreeSitterVisitFn visit;
   AbTreeSitterPrepareFn prepare;
   AbTreeSitterCleanupFn cleanup;
+  const char *metric_definition;
+  AbTreeSitterMetricFn classify_metric;
+  AbTreeSitterCallableFn callable_boundary;
 } AbTreeSitterDescriptor;
 
 struct AbTreeSitterScan {
@@ -83,6 +108,9 @@ struct AbTreeSitterScan {
   AbTreeSitterFactRegion *fact_regions;
   size_t fact_region_count;
   size_t fact_region_capacity;
+  AbTreeSitterMetricScope *metric_scopes;
+  size_t metric_scope_count;
+  size_t metric_scope_capacity;
 };
 
 int ab_tree_sitter_node_type(TSNode node, const char *type);
@@ -90,6 +118,7 @@ int ab_tree_sitter_node_slice(const AbTreeSitterScan *scan, TSNode node,
                               size_t *out_start, size_t *out_end);
 int ab_tree_sitter_node_has_text(const AbTreeSitterScan *scan, TSNode node);
 TSNode ab_tree_sitter_child(TSNode node, const char *field);
+int ab_tree_sitter_node_is_field(TSNode node, const char *field);
 ArchbirdStatus ab_tree_sitter_add_line(AbTreeSitterScan *scan, AbFact *fact,
                                        TSNode node);
 ArchbirdStatus
@@ -120,6 +149,11 @@ ArchbirdStatus ab_tree_sitter_track_fact_region(AbTreeSitterScan *scan,
 ArchbirdStatus ab_tree_sitter_add_symbol_extent(AbTreeSitterScan *scan,
                                                 AbFact *fact,
                                                 TSNode declaration);
+ArchbirdStatus
+ab_tree_sitter_start_source_metrics(AbTreeSitterScan *scan,
+                                    const AbFact *symbol, TSNode declaration,
+                                    AbTreeSitterFrame *child_frame);
+void ab_tree_sitter_suspend_source_metrics(AbTreeSitterFrame *child_frame);
 
 ArchbirdStatus ab_tree_sitter_scan_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,

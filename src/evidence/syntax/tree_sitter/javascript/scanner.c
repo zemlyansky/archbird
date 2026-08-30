@@ -22,12 +22,18 @@ ArchbirdStatus ab_scan_tree_sitter_javascript_file(
       {"module-reexports", "static ESM star and CommonJS require routes"},
       {"module-surface-unknowns",
        "dynamic or conditionally mutated CommonJS surfaces"},
+      {"source-metric-contributors",
+       "exact JavaScript branch and control syntax inside named functions "
+       "and methods"},
+      {"source-metrics",
+       "versioned decision, cyclomatic, and control-nesting summaries for "
+       "named functions and methods"},
       {"symbols", "named classes, functions, methods, variable-bound function "
                   "values, and statically proven descriptor-helper members"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-javascript",
-      "4",
-      "archbird-tree-sitter-javascript-v4;runtime=0.26.9;grammar=0.25.0;abi=15",
+      "5",
+      "archbird-tree-sitter-javascript-v5;runtime=0.26.9;grammar=0.25.0;abi=15",
       "tree-sitter-0.26.9;tree-sitter-javascript-0.25.0;grammar-abi-15",
       "javascript",
       tree_sitter_javascript,
@@ -35,7 +41,10 @@ ArchbirdStatus ab_scan_tree_sitter_javascript_file(
       sizeof(capabilities) / sizeof(capabilities[0]),
       ab_tree_sitter_visit_ecmascript,
       NULL,
-      NULL};
+      NULL,
+      "source.control-flow.javascript-v1",
+      ab_tree_sitter_classify_ecmascript_metric,
+      ab_tree_sitter_ecmascript_callable_boundary};
   return ab_scan_tree_sitter_ecmascript_file(
       engine, manifest, config, file, source, source_length,
       source_manifest_sha256, implementation_sha256, &descriptor, out_bundle);

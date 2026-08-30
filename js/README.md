@@ -116,6 +116,8 @@ npx archbird query . --symbol 'src/runtime.c:runtime_start' \
   --depth 1 --test-depth 1 --max-chars 12000 --check
 npx archbird query . --search 'provider registry' \
   --search-limit 8 --max-chars 12000 --check
+npx archbird query . --symbol 'src/runtime.c:runtime_start' \
+  --view metrics --detail full --max-chars 12000 --check
 npx archbird impact . --path src/runtime.c --depth 2 --check
 npx archbird query . --symbol 'src/runtime.c:runtime_start' \
   --view source --detail standard --max-chars 12000 --check
@@ -149,7 +151,7 @@ without exact source-path evidence.
 The default is an architecture-first overview. Canonical JSON contains every
 selected file and mapped fact; Markdown is only a human projection:
 
-<!-- archbird-example: tested-pass node-views covers=map,source -->
+<!-- archbird-example: tested-pass node-views covers=map,query,source -->
 ```bash
 npx archbird map --view overview --detail compact
 npx archbird map --view architecture \
@@ -157,12 +159,14 @@ npx archbird map --view architecture \
 npx archbird map --view tests --group-by directory
 npx archbird map --view metrics
 npx archbird map --view evidence --detail full
+npx archbird query --symbol runtime_start --view metrics --detail full
 npx archbird query --symbol runtime_start --view source
 npx archbird query --symbol runtime_start --dump
 ```
 
 `--view` chooses an overview, architecture, tests, metrics, or evidence preset.
-Metrics rank exact declaration extents and directed graph connectivity.
+Metrics rank source complexity, exact declaration extents, and directed graph
+connectivity.
 `--group-by` independently organizes entities by directory, configured
 component, layer, or language; `--level` selects component, file, or symbol
 nodes; and repeatable comma-separated `--relations` overrides the preset.
@@ -373,8 +377,15 @@ selection. One-off primitive operands stay inline:
 }
 ```
 
-Metrics are ordinary projections. `source.extent_lines` counts physical lines
-inside one exact declaration extent. On a selected directed graph,
+Metrics are ordinary projections. `source.decision_count`,
+`source.cyclomatic_complexity`, and `source.max_control_nesting` retain each
+contributing control-flow construct with its line, byte span, depth, provider,
+and fact identity. `source.extent_lines` counts physical lines inside one exact
+declaration extent. Definitions are versioned per language and are not assumed
+equivalent across languages. Values are absolute per function or method;
+repository distributions provide context without normalizing them. Use
+`query --view metrics --detail standard|full` to expand exact contributors
+behind a value. On a selected directed graph,
 `graph.*_neighbors` counts distinct adjacent identities, `graph.*_relations`
 counts relation witnesses, group boundary metrics classify internal, inbound,
 and outbound witnesses, `graph.*_group_neighbors` counts distinct connected

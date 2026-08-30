@@ -82,6 +82,59 @@ static void cleanup_c(AbTreeSitterScan *scan) {
   scan->language_data = NULL;
 }
 
+static int logical_operator(TSNode node) {
+  TSNode operator_node = ab_tree_sitter_child(node, "operator");
+  return ab_tree_sitter_node_type(operator_node, "&&") ||
+         ab_tree_sitter_node_type(operator_node, "||");
+}
+
+static void classify_c_metric(const AbTreeSitterScan *scan, TSNode node,
+                              AbTreeSitterMetricNode *out) {
+  const char *type = ts_node_type(node);
+  TSNode parent = ts_node_parent(node);
+  (void)scan;
+  if (!strcmp(type, "if_statement")) {
+    out->construct = "if";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+    out->flattens_parent_nesting =
+        ab_tree_sitter_node_type(parent, "else_clause");
+  } else if (!strcmp(type, "for_statement")) {
+    out->construct = "for";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "while_statement")) {
+    out->construct = "while";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "do_statement")) {
+    out->construct = "do-while";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "switch_statement")) {
+    out->construct = "switch";
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "case_statement") &&
+             !ts_node_is_null(ab_tree_sitter_child(node, "value"))) {
+    out->construct = "case";
+    out->decision_contribution = 1;
+  } else if (!strcmp(type, "conditional_expression")) {
+    out->construct = "conditional";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "binary_expression") && logical_operator(node)) {
+    TSNode operator_node = ab_tree_sitter_child(node, "operator");
+    out->construct = ab_tree_sitter_node_type(operator_node, "&&")
+                         ? "logical-and"
+                         : "logical-or";
+    out->decision_contribution = 1;
+  }
+}
+
+static int c_callable_boundary(TSNode node) {
+  return ab_tree_sitter_node_type(node, "function_definition");
+}
+
 static TSNode declarator_identifier(TSNode node) {
   size_t depth;
   for (depth = 0; depth < 32 && !ts_node_is_null(node); depth++) {
@@ -547,8 +600,11 @@ static ArchbirdStatus visit_c(AbTreeSitterScan *scan,
   if (ab_tree_sitter_node_type(frame->node, "function_definition")) {
     status = add_symbol(scan, frame->node, "function", &name, &fact);
     child_frame->context |= AB_TS_CONTEXT_FUNCTION;
-    if (status == ARCHBIRD_OK && fact)
+    if (status == ARCHBIRD_OK && fact) {
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      status = ab_tree_sitter_start_source_metrics(scan, fact, frame->node,
+                                                   child_frame);
+    }
   } else if (ab_tree_sitter_node_type(frame->node, "declaration") &&
              !(frame->context & AB_TS_CONTEXT_FUNCTION)) {
     status = add_symbol(scan, frame->node, "declaration", &name, &fact);
@@ -586,6 +642,11 @@ ArchbirdStatus ab_scan_tree_sitter_c_file(
       {"ordered-rows",
        "ordered initializer rows in statically enumerable C arrays; syntax "
        "digests are language-local"},
+      {"source-metric-contributors",
+       "exact C branch and control syntax inside named function definitions"},
+      {"source-metrics",
+       "versioned decision, cyclomatic, and control-nesting summaries for "
+       "named function definitions"},
       {"symbol-references",
        "direct identifier values in initializers, assignments, call "
        "arguments, and returns; target identity remains unresolved syntax "
@@ -595,8 +656,8 @@ ArchbirdStatus ab_scan_tree_sitter_c_file(
        "ranges reduce coverage to partial"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-c",
-      "2",
-      "archbird-tree-sitter-c-v2;runtime=0.26.9;grammar=0.24.2;abi=15",
+      "3",
+      "archbird-tree-sitter-c-v3;runtime=0.26.9;grammar=0.24.2;abi=15",
       "tree-sitter-0.26.9;tree-sitter-c-0.24.2;grammar-abi-15",
       "c",
       tree_sitter_c,
@@ -604,7 +665,10 @@ ArchbirdStatus ab_scan_tree_sitter_c_file(
       sizeof(capabilities) / sizeof(capabilities[0]),
       visit_c,
       NULL,
-      cleanup_c};
+      cleanup_c,
+      "source.control-flow.c-v1",
+      classify_c_metric,
+      c_callable_boundary};
   return ab_tree_sitter_scan_file(
       engine, manifest, config, file, source, source_length,
       source_manifest_sha256, implementation_sha256, &descriptor, out_bundle);

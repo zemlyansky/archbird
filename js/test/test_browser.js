@@ -268,6 +268,15 @@ function markedNames(relative, name) {
   assert.match(changeBrief, /## Affected code/);
   assert.match(changeBrief, /## Routes, tests, and delivery/);
   assert.match(changeBrief, /## Evidence limits/);
+  const metricBrief = project.queryMarkdown({
+    paths: ["js/index.js"],
+    depth: 0,
+    view: "metrics",
+    detail: "full",
+  }).toString("utf8");
+  assert.match(metricBrief, /## Source metrics/);
+  assert.match(metricBrief, /complexity=1; decisions=0; max-nesting=0/);
+  assert.match(metricBrief, /Metric evidence: symbols=2;/);
   const overlay = archbird.core.constraintsEvaluate(
     config,
     first,

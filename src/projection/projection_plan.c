@@ -206,14 +206,17 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
     const AbValue *paths = ab_value_member(definition, "paths");
     const AbValue *group_by = ab_value_member(definition, "group_by");
     size_t item;
-    if (ab_value_string_is(metric, "source.extent_lines")) {
+    if (ab_value_string_is(metric, "source.extent_lines") ||
+        ab_value_string_is(metric, "source.decision_count") ||
+        ab_value_string_is(metric, "source.cyclomatic_complexity") ||
+        ab_value_string_is(metric, "source.max_control_nesting")) {
       if (!ab_value_string_is(level, "symbol"))
-        return invalid(engine, "source.extent_lines requires level symbol");
+        return invalid_metric(engine, metric, "requires level symbol");
       if (relations)
-        return invalid(engine,
-                       "source.extent_lines does not accept graph relations");
+        return invalid_metric(engine, metric,
+                              "does not accept graph relations");
       if (group_by)
-        return invalid(engine, "source.extent_lines does not accept group_by");
+        return invalid_metric(engine, metric, "does not accept group_by");
     } else if (ab_value_string_is(metric, "tests.static_case_occurrences") ||
                ab_value_string_is(metric, "tests.candidate_case_occurrences") ||
                ab_value_string_is(metric, "tests.routed_cases") ||

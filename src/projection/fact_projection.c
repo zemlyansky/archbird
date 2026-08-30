@@ -6698,6 +6698,28 @@ static ArchbirdStatus metric_copy_evidence(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+static ArchbirdStatus metric_add_source_attributes(
+    AbProjectionContext *context, AbProjectionItem *item, const AbValue *metric,
+    const AbValue *definition, const char *unit, const AbValue *level) {
+  static const AbString unavailable = {(char *)"unavailable", 11};
+  AbString unit_text = {(char *)unit, strlen(unit)};
+  const AbString *definition_text =
+      definition && definition->kind == AB_VALUE_STRING ? &definition->as.text
+                                                        : &unavailable;
+  ArchbirdStatus status = item_add_string_attribute(
+      context->engine, item, "definition", definition_text);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, item, "level",
+                                       &level->as.text);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, item, "metric",
+                                       &metric->as.text);
+  if (status == ARCHBIRD_OK)
+    status =
+        item_add_string_attribute(context->engine, item, "unit", &unit_text);
+  return status;
+}
+
 static ArchbirdStatus
 extract_source_extent_metrics(AbProjectionContext *context,
                               const AbProjectionPlan *plan,
@@ -6814,6 +6836,375 @@ extract_source_extent_metrics(AbProjectionContext *context,
     status = ab_projection_data_completeness_exact(
         context->engine, fact, "symbol_definition", universe, selected,
         excluded, 0, 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_finish(context->engine, fact);
+  if (status != ARCHBIRD_OK)
+    ab_projection_data_free(context->engine, fact);
+  return status;
+}
+
+static int source_control_metric(const AbValue *metric) {
+  return ab_projection_value_is(metric, "source.decision_count") ||
+         ab_projection_value_is(metric, "source.cyclomatic_complexity") ||
+         ab_projection_value_is(metric, "source.max_control_nesting");
+}
+
+static int source_metric_symbol_kind(const AbValue *kind) {
+  return ab_projection_value_is(kind, "function") ||
+         ab_projection_value_is(kind, "method");
+}
+
+static const char *source_metric_unit(const AbValue *metric) {
+  if (ab_projection_value_is(metric, "source.decision_count"))
+    return "decision";
+  if (ab_projection_value_is(metric, "source.max_control_nesting"))
+    return "level";
+  return "complexity-point";
+}
+
+typedef struct AbSourceMetricContributorValue {
+  const AbValue *construct;
+  const AbValue *fact_id;
+  const AbValue *provider;
+  const AbValue *start;
+  const AbValue *end;
+  uint64_t contribution;
+  uint64_t depth;
+  uint64_t line;
+  uint64_t nesting;
+  uint64_t start_offset;
+  uint64_t end_offset;
+} AbSourceMetricContributorValue;
+
+static int
+source_metric_contributor_value(const AbValue *contributor,
+                                AbSourceMetricContributorValue *out) {
+  const AbValue *contribution;
+  const AbValue *depth;
+  const AbValue *line;
+  const AbValue *nesting;
+  const AbValue *span;
+  if (!contributor || contributor->kind != AB_VALUE_OBJECT || !out)
+    return 0;
+  memset(out, 0, sizeof(*out));
+  out->construct = ab_value_member(contributor, "construct");
+  contribution = ab_value_member(contributor, "contribution");
+  depth = ab_value_member(contributor, "control_depth");
+  out->fact_id = ab_value_member(contributor, "fact_id");
+  line = ab_value_member(contributor, "line");
+  nesting = ab_value_member(contributor, "nesting");
+  out->provider = ab_value_member(contributor, "provider");
+  span = ab_value_member(contributor, "span");
+  out->start = span ? ab_value_member(span, "start") : NULL;
+  out->end = span ? ab_value_member(span, "end") : NULL;
+  return out->construct && out->construct->kind == AB_VALUE_STRING &&
+         ab_projection_nonblank(out->construct) && out->fact_id &&
+         out->fact_id->kind == AB_VALUE_STRING &&
+         ab_projection_nonblank(out->fact_id) && out->provider &&
+         out->provider->kind == AB_VALUE_STRING &&
+         ab_projection_nonblank(out->provider) &&
+         ab_value_u64(contribution, &out->contribution) &&
+         ab_value_u64(depth, &out->depth) && ab_value_u64(line, &out->line) &&
+         out->line && ab_value_u64(nesting, &out->nesting) &&
+         out->nesting <= 1 && (out->contribution || out->nesting) &&
+         ab_value_u64(out->start, &out->start_offset) &&
+         ab_value_u64(out->end, &out->end_offset) &&
+         out->end_offset > out->start_offset;
+}
+
+static ArchbirdStatus
+validate_source_metric_ledger(AbProjectionContext *context,
+                              const AbValue *source_metrics) {
+  const AbValue *contributors = ab_value_member(source_metrics, "contributors");
+  const AbValue *state = ab_value_member(source_metrics, "state");
+  const AbValue *values = ab_value_member(source_metrics, "values");
+  const AbValue *decision_value =
+      values ? ab_value_member(values, "source.decision_count") : NULL;
+  const AbValue *complexity_value =
+      values ? ab_value_member(values, "source.cyclomatic_complexity") : NULL;
+  const AbValue *nesting_value =
+      values ? ab_value_member(values, "source.max_control_nesting") : NULL;
+  uint64_t decisions = 0;
+  uint64_t complexity = 0;
+  uint64_t nesting = 0;
+  uint64_t contributor_decisions = 0;
+  uint64_t contributor_nesting = 0;
+  size_t index;
+  if (!contributors || contributors->kind != AB_VALUE_ARRAY || !state ||
+      state->kind != AB_VALUE_STRING ||
+      (!ab_projection_value_is(state, "current") &&
+       !ab_projection_value_is(state, "unknown")) ||
+      !values || values->kind != AB_VALUE_OBJECT ||
+      !ab_value_u64(decision_value, &decisions) ||
+      !ab_value_u64(complexity_value, &complexity) ||
+      !ab_value_u64(nesting_value, &nesting) || decisions == UINT64_MAX ||
+      complexity != decisions + 1)
+    return invalid_map_inventory(
+        context, "Map contains inconsistent source metric evidence");
+  for (index = 0; index < contributors->as.array.count; index++) {
+    AbSourceMetricContributorValue contributor;
+    if (!source_metric_contributor_value(&contributors->as.array.items[index],
+                                         &contributor))
+      return invalid_map_inventory(
+          context, "Map contains an invalid source metric contributor");
+    if (contributor.contribution > UINT64_MAX - contributor_decisions)
+      return invalid_map_inventory(
+          context, "Map contains inconsistent source metric evidence");
+    contributor_decisions += contributor.contribution;
+    if (contributor.depth > contributor_nesting)
+      contributor_nesting = contributor.depth;
+  }
+  if (decisions != contributor_decisions || nesting != contributor_nesting)
+    return invalid_map_inventory(
+        context, "Map contains inconsistent source metric evidence");
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus source_metric_contributor_evidence(
+    AbProjectionContext *context, AbProjectionItem *item,
+    const AbValue *project, const AbValue *path, const AbValue *sha,
+    const AbValue *contributor) {
+  AbSourceMetricContributorValue value;
+  AbBuffer detail;
+  AbProjectionEvidence evidence = {0};
+  ArchbirdStatus status;
+  if (!source_metric_contributor_value(contributor, &value))
+    return invalid_map_inventory(
+        context, "Map contains an invalid source metric contributor");
+  ab_buffer_init(&detail, context->engine);
+  status = ab_buffer_literal(&detail, "construct=");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&detail, value.construct->as.text.data,
+                              value.construct->as.text.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, "; contribution=");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(&detail, value.contribution);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, "; control_depth=");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(&detail, value.depth);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, "; starts_nesting=");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(&detail, value.nesting);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, "; span=");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(&detail, value.start_offset);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, "..");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(&detail, value.end_offset);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, "; provider=");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&detail, value.provider->as.text.data,
+                              value.provider->as.text.length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&detail, "; fact_id=");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&detail, value.fact_id->as.text.data,
+                              value.fact_id->as.text.length);
+  if (status == ARCHBIRD_OK)
+    status =
+        derived_evidence(context->engine, &project->as.text, &path->as.text,
+                         value.line, sha->as.text.data, &detail, &evidence);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_item_add_evidence(context->engine, item, &evidence);
+  ab_projection_evidence_free(context->engine, &evidence);
+  ab_buffer_free(&detail);
+  return status;
+}
+
+static ArchbirdStatus
+extract_source_control_metrics(AbProjectionContext *context,
+                               const AbProjectionPlan *plan,
+                               AbProjectionData *fact) {
+  const AbValue *project = ab_value_member(context->map, "project");
+  const AbValue *files = ab_value_member(context->map, "files");
+  const AbValue *schema = ab_value_member(context->map, "schema_version");
+  const AbValue *paths = ab_value_member(&plan->definition, "paths");
+  const AbValue *level = ab_value_member(&plan->definition, "level");
+  const AbValue *metric = ab_value_member(&plan->definition, "metric");
+  const char *metric_name =
+      ab_projection_value_is(metric, "source.decision_count")
+          ? "source.decision_count"
+      : ab_projection_value_is(metric, "source.cyclomatic_complexity")
+          ? "source.cyclomatic_complexity"
+          : "source.max_control_nesting";
+  uint64_t universe = 0;
+  uint64_t selected = 0;
+  uint64_t excluded = 0;
+  uint64_t unknown = 0;
+  uint64_t schema_version = 0;
+  size_t file_index;
+  ArchbirdStatus status = ab_projection_data_init(
+      context->engine, fact, &plan->id, "values", "derived", &project->as.text);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (!ab_value_u64(schema, &schema_version) || schema_version < 15) {
+    ab_projection_data_free(context->engine, fact);
+    return ab_projection_data_unknown(
+        context->engine, fact, &plan->id, &project->as.text, "values",
+        "source control metrics require Map schema 15");
+  }
+  if (!files || files->kind != AB_VALUE_ARRAY) {
+    ab_projection_data_free(context->engine, fact);
+    return ab_projection_data_unknown(
+        context->engine, fact, &plan->id, &project->as.text, "values",
+        "project map has no source metric inventory");
+  }
+  for (file_index = 0;
+       status == ARCHBIRD_OK && file_index < files->as.array.count;
+       file_index++) {
+    const AbValue *file = &files->as.array.items[file_index];
+    const AbValue *path = ab_value_member(file, "path");
+    const AbValue *sha = ab_value_member(file, "sha256");
+    const AbValue *symbols = ab_value_member(file, "symbols");
+    size_t symbol_index;
+    if (!valid_projected_file_row(file)) {
+      status = invalid_map_inventory(
+          context, "Map contains an invalid source metric file row");
+      break;
+    }
+    for (symbol_index = 0;
+         status == ARCHBIRD_OK && symbol_index < symbols->as.array.count;
+         symbol_index++) {
+      const AbValue *symbol = &symbols->as.array.items[symbol_index];
+      const AbValue *fact_id = ab_value_member(symbol, "fact_id");
+      const AbValue *name = ab_value_member(symbol, "name");
+      const AbValue *kind = ab_value_member(symbol, "kind");
+      const AbValue *line = ab_value_member(symbol, "line");
+      const AbValue *source_metrics = ab_value_member(symbol, "source_metrics");
+      const AbValue *definition =
+          source_metrics ? ab_value_member(source_metrics, "definition") : NULL;
+      const AbValue *summary_fact_id =
+          source_metrics ? ab_value_member(source_metrics, "fact_id") : NULL;
+      const AbValue *metric_state =
+          source_metrics ? ab_value_member(source_metrics, "state") : NULL;
+      const AbValue *provider =
+          source_metrics ? ab_value_member(source_metrics, "provider") : NULL;
+      const AbValue *values =
+          source_metrics ? ab_value_member(source_metrics, "values") : NULL;
+      const AbValue *contributors =
+          source_metrics ? ab_value_member(source_metrics, "contributors")
+                         : NULL;
+      const AbValue *value =
+          values ? ab_value_member(values, metric_name) : NULL;
+      uint64_t line_number = 0;
+      int current;
+      AbProjectionItem item = {0};
+      AbProjectionEvidence evidence = {0};
+      AbBuffer detail;
+      size_t contributor_index;
+      if (!source_metric_symbol_kind(kind))
+        continue;
+      universe++;
+      if (!path_matches(&path->as.text, paths)) {
+        excluded++;
+        continue;
+      }
+      selected++;
+      if (!fact_id || fact_id->kind != AB_VALUE_STRING ||
+          !ab_projection_nonblank(fact_id)) {
+        status = invalid_map_inventory(
+            context, "Map contains a source metric without a fact identity");
+        break;
+      }
+      if (source_metrics &&
+          (source_metrics->kind != AB_VALUE_OBJECT || !definition ||
+           definition->kind != AB_VALUE_STRING ||
+           !ab_projection_nonblank(definition) || !summary_fact_id ||
+           summary_fact_id->kind != AB_VALUE_STRING ||
+           !ab_projection_nonblank(summary_fact_id) || !provider ||
+           provider->kind != AB_VALUE_STRING ||
+           !ab_projection_nonblank(provider) || !metric_state ||
+           metric_state->kind != AB_VALUE_STRING || !values ||
+           values->kind != AB_VALUE_OBJECT || !contributors ||
+           contributors->kind != AB_VALUE_ARRAY)) {
+        status = invalid_map_inventory(
+            context, "Map contains a malformed source metric summary");
+        break;
+      }
+      if (source_metrics) {
+        status = validate_source_metric_ledger(context, source_metrics);
+        if (status != ARCHBIRD_OK)
+          break;
+      }
+      current = source_metrics &&
+                ab_projection_value_is(metric_state, "current") && value &&
+                value->kind == AB_VALUE_INTEGER;
+      (void)ab_value_u64(line, &line_number);
+      status =
+          ab_projection_item_init(context->engine, &item, &fact_id->as.text,
+                                  &name->as.text, current ? value : NULL);
+      if (status == ARCHBIRD_OK)
+        status =
+            metric_add_source_attributes(context, &item, metric, definition,
+                                         source_metric_unit(metric), level);
+      if (status == ARCHBIRD_OK)
+        status = item_add_string_attribute(context->engine, &item, "path",
+                                           &path->as.text);
+      if (status == ARCHBIRD_OK)
+        status = item_add_string_attribute(context->engine, &item, "symbol",
+                                           &name->as.text);
+      if (status == ARCHBIRD_OK)
+        status = item_add_string_attribute(context->engine, &item,
+                                           "symbol_kind", &kind->as.text);
+      if (status == ARCHBIRD_OK && !current) {
+        unknown++;
+        status = ab_projection_item_set_state(
+            context->engine, &item, "unknown",
+            source_metrics ? "source metric evidence is incomplete"
+                           : "source metric evidence is unavailable");
+      }
+      ab_buffer_init(&detail, context->engine);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_append(&detail, metric->as.text.data,
+                                  metric->as.text.length);
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&detail, "=");
+      if (status == ARCHBIRD_OK && current)
+        status = ab_value_render(&detail, value);
+      else if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&detail, "unknown");
+      if (status == ARCHBIRD_OK && source_metrics)
+        status = ab_buffer_literal(&detail, "; provider=");
+      if (status == ARCHBIRD_OK && source_metrics)
+        status = ab_buffer_append(&detail, provider->as.text.data,
+                                  provider->as.text.length);
+      if (status == ARCHBIRD_OK && source_metrics)
+        status = ab_buffer_literal(&detail, "; fact_id=");
+      if (status == ARCHBIRD_OK && source_metrics)
+        status = ab_buffer_append(&detail, summary_fact_id->as.text.data,
+                                  summary_fact_id->as.text.length);
+      if (status == ARCHBIRD_OK)
+        status = derived_evidence(context->engine, &project->as.text,
+                                  &path->as.text, line_number,
+                                  sha->as.text.data, &detail, &evidence);
+      if (status == ARCHBIRD_OK)
+        status =
+            ab_projection_item_add_evidence(context->engine, &item, &evidence);
+      ab_projection_evidence_free(context->engine, &evidence);
+      ab_buffer_free(&detail);
+      for (contributor_index = 0;
+           status == ARCHBIRD_OK && current &&
+           contributor_index < contributors->as.array.count;
+           contributor_index++)
+        status = source_metric_contributor_evidence(
+            context, &item, project, path, sha,
+            &contributors->as.array.items[contributor_index]);
+      if (status == ARCHBIRD_OK)
+        status = ab_projection_data_add_item(context->engine, fact, &item);
+      if (status != ARCHBIRD_OK)
+        ab_projection_item_free(context->engine, &item);
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_data_completeness_exact(
+        context->engine, fact, "symbol_definition", universe, selected,
+        excluded, unknown, 0);
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(context->engine, fact);
   if (status != ARCHBIRD_OK)
@@ -7407,6 +7798,8 @@ static ArchbirdStatus extract_metrics(AbProjectionContext *context,
   const AbValue *metric = ab_value_member(&plan->definition, "metric");
   if (ab_projection_value_is(metric, "source.extent_lines"))
     return extract_source_extent_metrics(context, plan, fact);
+  if (source_control_metric(metric))
+    return extract_source_control_metrics(context, plan, fact);
   if (metric && metric->kind == AB_VALUE_STRING && metric->as.text.length > 6 &&
       !memcmp(metric->as.text.data, "tests.", 6))
     return extract_test_metrics(context, plan, fact);

@@ -430,7 +430,7 @@ def query_parser(command: str, *, default_direction: str) -> argparse.ArgumentPa
     )
     result.add_argument(
         "--view",
-        choices=("focused", "changes", "source"),
+        choices=("focused", "changes", "metrics", "source"),
         default="focused",
         help="human Markdown projection",
     )

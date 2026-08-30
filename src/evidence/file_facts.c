@@ -199,6 +199,250 @@ static int same_symbol(const AbFact *left, const AbFact *right) {
   return symbol_fact_compare(&values[0], &values[1]) == 0;
 }
 
+static int source_metric_summary_compare(const void *left_raw,
+                                         const void *right_raw) {
+  const AbFact *left = *(const AbFact *const *)left_raw;
+  const AbFact *right = *(const AbFact *const *)right_raw;
+  uint64_t left_line = integer_attribute(left, "line");
+  uint64_t right_line = integer_attribute(right, "line");
+  int compared;
+  if (left_line != right_line)
+    return left_line < right_line ? -1 : 1;
+  compared = ab_string_compare(&left->name, &right->name);
+  if (compared != 0)
+    return compared;
+  return ab_string_compare(&left->id, &right->id);
+}
+
+static int source_metric_contributor_compare(const void *left_raw,
+                                             const void *right_raw) {
+  const AbFact *left = *(const AbFact *const *)left_raw;
+  const AbFact *right = *(const AbFact *const *)right_raw;
+  const AbString *left_summary = string_attribute(left, "summary");
+  const AbString *right_summary = string_attribute(right, "summary");
+  int compared;
+  if (left_summary && right_summary) {
+    compared = ab_string_compare(left_summary, right_summary);
+    if (compared != 0)
+      return compared;
+  } else if (left_summary || right_summary) {
+    return left_summary ? 1 : -1;
+  }
+  if (left->span_start != right->span_start)
+    return left->span_start < right->span_start ? -1 : 1;
+  if (left->span_end != right->span_end)
+    return left->span_end < right->span_end ? -1 : 1;
+  return ab_string_compare(&left->id, &right->id);
+}
+
+static int source_metric_matches_symbol(const AbFact *summary,
+                                        const AbFact *symbol) {
+  const char *kind = symbol->kind.data;
+  size_t kind_length = symbol->kind.length;
+  int eligible = (kind_length == 8 && !memcmp(kind, "function", 8)) ||
+                 (kind_length == 6 && !memcmp(kind, "method", 6));
+  return eligible && ab_string_equal(&summary->name, &symbol->name) &&
+         integer_attribute(summary, "line") ==
+             integer_attribute(symbol, "line");
+}
+
+static int source_metric_symbol_order(const AbFact *summary,
+                                      const AbFact *symbol) {
+  uint64_t summary_line = integer_attribute(summary, "line");
+  uint64_t symbol_line = integer_attribute(symbol, "line");
+  if (summary_line != symbol_line)
+    return summary_line < symbol_line ? -1 : 1;
+  return ab_string_compare(&summary->name, &symbol->name);
+}
+
+static ArchbirdStatus render_source_metric_contributor(AbBuffer *buffer,
+                                                       const AbFact *fact) {
+  const AbString *construct = string_attribute(fact, "construct");
+  const AbString *provider = string_attribute(fact, "provider");
+  const AbString *recovery = string_attribute(fact, "syntax_recovery");
+  ArchbirdStatus status = ab_buffer_literal(buffer, "{\"construct\":");
+  if (status == ARCHBIRD_OK)
+    status = construct ? json_string(buffer, construct)
+                       : ab_buffer_literal(buffer, "\"unknown\"");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"contribution\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, integer_attribute(fact, "contribution"));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"control_depth\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, integer_attribute(fact, "control_depth"));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"fact_id\":");
+  if (status == ARCHBIRD_OK)
+    status = json_string(buffer, &fact->id);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"line\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, integer_attribute(fact, "line"));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"nesting\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, integer_attribute(fact, "nesting"));
+  if (status == ARCHBIRD_OK && provider)
+    status = ab_buffer_literal(buffer, ",\"provider\":");
+  if (status == ARCHBIRD_OK && provider)
+    status = json_string(buffer, provider);
+  if (status == ARCHBIRD_OK && recovery)
+    status = ab_buffer_literal(buffer, ",\"syntax_recovery\":");
+  if (status == ARCHBIRD_OK && recovery)
+    status = json_string(buffer, recovery);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"span\":{\"end\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, fact->span_end);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"start\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, fact->span_start);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}}");
+  return status;
+}
+
+static ArchbirdStatus
+render_symbol_source_metrics(AbBuffer *buffer, const AbFact *summary,
+                             const FactRefs *contributors) {
+  const AbString *definition = string_attribute(summary, "definition");
+  const AbString *provider = string_attribute(summary, "provider");
+  const AbString *recovery = string_attribute(summary, "syntax_recovery");
+  size_t low = 0;
+  size_t high = contributors->count;
+  size_t index;
+  int first = 1;
+  ArchbirdStatus status = ab_buffer_literal(buffer, ",\"source_metrics\":{");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "\"contributors\":[");
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    const AbString *owner =
+        string_attribute(contributors->items[middle], "summary");
+    if (!owner || ab_string_compare(owner, &summary->id) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  for (index = low; status == ARCHBIRD_OK && index < contributors->count;
+       index++) {
+    const AbString *owner =
+        string_attribute(contributors->items[index], "summary");
+    if (!owner || !ab_string_equal(owner, &summary->id))
+      break;
+    if (!first)
+      status = ab_buffer_literal(buffer, ",");
+    if (status == ARCHBIRD_OK)
+      status =
+          render_source_metric_contributor(buffer, contributors->items[index]);
+    first = 0;
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "],\"definition\":");
+  if (status == ARCHBIRD_OK)
+    status = definition ? json_string(buffer, definition)
+                        : ab_buffer_literal(buffer, "\"unknown\"");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"fact_id\":");
+  if (status == ARCHBIRD_OK)
+    status = json_string(buffer, &summary->id);
+  if (status == ARCHBIRD_OK && provider)
+    status = ab_buffer_literal(buffer, ",\"provider\":");
+  if (status == ARCHBIRD_OK && provider)
+    status = json_string(buffer, provider);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"state\":");
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_literal(buffer, recovery ? "\"unknown\"" : "\"current\"");
+  if (status == ARCHBIRD_OK && recovery)
+    status = ab_buffer_literal(buffer, ",\"syntax_recovery\":");
+  if (status == ARCHBIRD_OK && recovery)
+    status = json_string(buffer, recovery);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(
+        buffer, ",\"values\":{\"source.cyclomatic_complexity\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer,
+                           integer_attribute(summary, "cyclomatic_complexity"));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"source.decision_count\":");
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_buffer_u64(buffer, integer_attribute(summary, "decision_count"));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"source.max_control_nesting\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer,
+                           integer_attribute(summary, "max_control_nesting"));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}}");
+  return status;
+}
+
+static ArchbirdStatus render_file_control_metric(AbBuffer *buffer,
+                                                 const FactRefs *summaries,
+                                                 const char *metric,
+                                                 const char *attribute,
+                                                 int trailing_comma) {
+  const AbFact *maximum_fact = NULL;
+  const AbString *definition = NULL;
+  uint64_t current = 0;
+  uint64_t maximum = 0;
+  uint64_t unknown = 0;
+  size_t index;
+  ArchbirdStatus status;
+  for (index = 0; index < summaries->count; index++) {
+    const AbFact *summary = summaries->items[index];
+    const AbString *recovery = string_attribute(summary, "syntax_recovery");
+    const AbString *candidate_definition =
+        string_attribute(summary, "definition");
+    uint64_t value = integer_attribute(summary, attribute);
+    if (!definition && candidate_definition)
+      definition = candidate_definition;
+    if (recovery) {
+      unknown++;
+      continue;
+    }
+    current++;
+    if (!maximum_fact || value > maximum) {
+      maximum = value;
+      maximum_fact = summary;
+    }
+  }
+  status = ab_buffer_json_string(buffer, metric, strlen(metric));
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ":{\"current\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, current);
+  if (status == ARCHBIRD_OK && definition)
+    status = ab_buffer_literal(buffer, ",\"definition\":");
+  if (status == ARCHBIRD_OK && definition)
+    status = json_string(buffer, definition);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"max\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, maximum);
+  if (status == ARCHBIRD_OK && maximum_fact)
+    status = ab_buffer_literal(buffer, ",\"max_fact_id\":");
+  if (status == ARCHBIRD_OK && maximum_fact)
+    status = json_string(buffer, &maximum_fact->id);
+  if (status == ARCHBIRD_OK && maximum_fact)
+    status = ab_buffer_literal(buffer, ",\"max_symbol\":");
+  if (status == ARCHBIRD_OK && maximum_fact)
+    status = json_string(buffer, &maximum_fact->name);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"unknown\":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_u64(buffer, unknown);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, trailing_comma ? "}," : "}");
+  return status;
+}
+
 static ArchbirdStatus render_named_array(AbBuffer *buffer,
                                          ArchbirdEngine *engine,
                                          const ArchbirdProject *project,
@@ -417,26 +661,50 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
                                      const ArchbirdProject *project,
                                      const AbManifestFile *file) {
   static const AbString empty = {(char *)"", 0};
-  FactRefs refs;
+  FactRefs refs = {0};
+  FactRefs summaries = {0};
+  FactRefs contributors = {0};
   ArchbirdStatus status =
       collect_facts(engine, project, file, "symbols", NULL, &refs);
   size_t index;
+  size_t summary_index = 0;
   int first = 1;
   if (status != ARCHBIRD_OK)
     return status;
+  status = collect_facts(engine, project, file, "source-metrics", "summary",
+                         &summaries);
+  if (status != ARCHBIRD_OK)
+    goto done;
+  status = collect_facts(engine, project, file, "source-metric-contributors",
+                         NULL, &contributors);
+  if (status != ARCHBIRD_OK)
+    goto done;
   if (refs.count > 1)
     qsort(refs.items, refs.count, sizeof(*refs.items), symbol_fact_compare);
+  if (summaries.count > 1)
+    qsort(summaries.items, summaries.count, sizeof(*summaries.items),
+          source_metric_summary_compare);
+  if (contributors.count > 1)
+    qsort(contributors.items, contributors.count, sizeof(*contributors.items),
+          source_metric_contributor_compare);
   status = ab_buffer_literal(buffer, "[");
   for (index = 0; status == ARCHBIRD_OK && index < refs.count; index++) {
     const AbFact *fact = refs.items[index];
     const AbString *scope = string_attribute(fact, "scope");
     const AbString *signature = string_attribute(fact, "signature");
     const AbString *syntax_recovery = string_attribute(fact, "syntax_recovery");
+    const AbFact *source_metrics = NULL;
     uint64_t extent_start = integer_attribute(fact, "extent_start");
     uint64_t extent_end = integer_attribute(fact, "extent_end");
     uint64_t extent_lines = 0;
     if (index > 0 && same_symbol(refs.items[index - 1], fact))
       continue;
+    while (summary_index < summaries.count &&
+           source_metric_symbol_order(summaries.items[summary_index], fact) < 0)
+      summary_index++;
+    if (summary_index < summaries.count &&
+        source_metric_matches_symbol(summaries.items[summary_index], fact))
+      source_metrics = summaries.items[summary_index];
     if (!first)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
@@ -511,12 +779,18 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
       if (status == ARCHBIRD_OK)
         status = json_string(buffer, syntax_recovery);
     }
+    if (status == ARCHBIRD_OK && source_metrics)
+      status =
+          render_symbol_source_metrics(buffer, source_metrics, &contributors);
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "}");
     first = 0;
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "]");
+done:
+  fact_refs_free(&contributors);
+  fact_refs_free(&summaries);
   fact_refs_free(&refs);
   return status;
 }
@@ -527,7 +801,8 @@ ArchbirdStatus ab_render_file_source_metrics(AbBuffer *buffer,
                                              const AbManifestFile *file) {
   const AbSourceManifest *manifest;
   const uint8_t *source;
-  FactRefs refs;
+  FactRefs refs = {0};
+  FactRefs summaries = {0};
   size_t file_index;
   size_t index;
   uint64_t current = 0;
@@ -543,6 +818,12 @@ ArchbirdStatus ab_render_file_source_metrics(AbBuffer *buffer,
   status = collect_facts(engine, project, file, "symbols", NULL, &refs);
   if (status != ARCHBIRD_OK)
     return status;
+  status = collect_facts(engine, project, file, "source-metrics", "summary",
+                         &summaries);
+  if (status != ARCHBIRD_OK) {
+    fact_refs_free(&refs);
+    return status;
+  }
   if (refs.count > 1)
     qsort(refs.items, refs.count, sizeof(*refs.items), symbol_fact_compare);
   for (index = 0; index < refs.count; index++) {
@@ -569,8 +850,16 @@ ArchbirdStatus ab_render_file_source_metrics(AbBuffer *buffer,
   }
   fact_refs_free(&refs);
   if (status == ARCHBIRD_OK)
-    status =
-        ab_buffer_literal(buffer, "{\"source.extent_lines\":{\"current\":");
+    status = ab_buffer_literal(buffer, "{");
+  if (status == ARCHBIRD_OK)
+    status = render_file_control_metric(buffer, &summaries,
+                                        "source.cyclomatic_complexity",
+                                        "cyclomatic_complexity", 1);
+  if (status == ARCHBIRD_OK)
+    status = render_file_control_metric(
+        buffer, &summaries, "source.decision_count", "decision_count", 1);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "\"source.extent_lines\":{\"current\":");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_u64(buffer, current);
   if (status == ARCHBIRD_OK)
@@ -590,7 +879,14 @@ ArchbirdStatus ab_render_file_source_metrics(AbBuffer *buffer,
   if (status == ARCHBIRD_OK)
     status = ab_buffer_u64(buffer, unknown);
   if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(buffer, "}}");
+    status = ab_buffer_literal(buffer, "},");
+  if (status == ARCHBIRD_OK)
+    status = render_file_control_metric(buffer, &summaries,
+                                        "source.max_control_nesting",
+                                        "max_control_nesting", 0);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, "}");
+  fact_refs_free(&summaries);
   return status;
 }
 

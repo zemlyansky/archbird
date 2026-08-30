@@ -130,7 +130,7 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
   summary.struct_size = sizeof(summary);
   expect("syntax-summary", archbird_project_merge_summary(project, &summary),
          ARCHBIRD_OK);
-  if (summary.providers != 2 || summary.selected_facts != 6 ||
+  if (summary.providers != 2 || summary.selected_facts != 8 ||
       summary.enriched != 3 || summary.conflicts != 0) {
     fprintf(stderr,
             "FAIL syntax composition summary: providers=%zu facts=%zu "
@@ -146,6 +146,8 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
   if (!strstr(facts.bytes, "\"imports\":[\"api.h\"]") ||
       !strstr(facts.bytes, "\"calls\":[\"helper\"]") ||
       !strstr(facts.bytes, "\"name\":\"run\"") ||
+      !strstr(facts.bytes, "\"source_metrics\":") ||
+      !strstr(facts.bytes, "\"source.cyclomatic_complexity\":1") ||
       !strstr(facts.bytes, "\"extent\":{\"end\":") ||
       !strstr(facts.bytes, ",\"start\":")) {
     fputs("FAIL composed syntax facts were not reduced into common IR\n",

@@ -7,6 +7,10 @@
  * JavaScript uses parentheses; TypeScript additionally uses assertion and
  * satisfaction wrappers. */
 TSNode ab_tree_sitter_unwrap_ecmascript_expression(TSNode node);
+void ab_tree_sitter_classify_ecmascript_metric(const AbTreeSitterScan *scan,
+                                               TSNode node,
+                                               AbTreeSitterMetricNode *out);
+int ab_tree_sitter_ecmascript_callable_boundary(TSNode node);
 
 ArchbirdStatus ab_scan_tree_sitter_ecmascript_file(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,

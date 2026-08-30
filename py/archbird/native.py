@@ -1917,14 +1917,14 @@ def query_map_markdown(
     verification_result: bytes = b"",
     resolution_json: bytes = b"",
 ) -> bytes:
-    """Project a canonical Query as focused context or a change brief."""
+    """Project a canonical Query as focused, change, or metric context."""
 
     if max_chars < 0:
         raise ValueError("max_chars must be nonnegative")
-    views = {"focused": 0, "changes": 1}
+    views = {"focused": 0, "changes": 1, "metrics": 2}
     details = {"compact": 0, "standard": 1, "full": 2}
     if view not in views:
-        raise ValueError("view must be focused or changes")
+        raise ValueError("view must be focused, changes, or metrics")
     if detail not in details:
         raise ValueError("detail must be compact, standard, or full")
     if compact and full:

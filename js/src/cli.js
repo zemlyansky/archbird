@@ -75,8 +75,8 @@ function usage(command = "map") {
   const rows = {
     map: "archbird map [ROOT] [--config PROJECT.json] [--view overview|architecture|tests|evidence|metrics|source] [--dump] [--group-by KIND] [--level KIND] [--relations KINDS] [--detail compact|standard|full] [--progress auto|always|never] [--format markdown|json] [--check]",
     observe: "archbird observe [ROOT] --map MAP.json --request COVERAGE.json [--output OBSERVATIONS.json]",
-    query: "archbird query [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
-    impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|source] [--detail compact|standard|full] [--dump] [--check]",
+    query: "archbird query [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|metrics|source] [--detail compact|standard|full] [--dump] [--check]",
+    impact: "archbird impact [QUERY|ROOT] [--root PROJECT | --map MAP.json] [SELECTORS] [--view focused|changes|metrics|source] [--detail compact|standard|full] [--dump] [--check]",
     path: "archbird path SOURCE TARGET [--root PROJECT | --map MAP.json] [--level component|file|symbol] [--relation FAMILY] [--direction downstream|upstream|both] [--format markdown|json] [--check]",
     config: "archbird config show|init [ROOT] [--config PROJECT.json]",
     diff: "archbird diff OLD_ROOT_OR_MAP NEW_ROOT_OR_MAP [--correspondence FILE] [--check[=CATEGORIES]]",
@@ -1292,8 +1292,8 @@ function queryMain(argv, command) {
     options.view = "source";
     options.full = true;
   }
-  if (options.view && !["focused", "changes", "source"].includes(options.view)) {
-    throw new Error("--view must be focused, changes, or source");
+  if (options.view && !["focused", "changes", "metrics", "source"].includes(options.view)) {
+    throw new Error("--view must be focused, changes, metrics, or source");
   }
   if (options.map && (
     positionalRoot || options.noConfig ||

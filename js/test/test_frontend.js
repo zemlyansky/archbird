@@ -2042,9 +2042,18 @@ assert.deepEqual(
     view: "changes",
   }),
 );
+const metricBrief = repositoryProject.queryMarkdown({
+  paths: ["js/index.js"],
+  depth: 0,
+  view: "metrics",
+  detail: "full",
+}).toString("utf8");
+assert.match(metricBrief, /## Source metrics/);
+assert.match(metricBrief, /complexity=1; decisions=0; max-nesting=0/);
+assert.match(metricBrief, /Metric evidence: symbols=2;/);
 assert.throws(
   () => repositoryProject.queryMarkdown({ paths: ["py/pkg"], view: "other" }),
-  /view must be focused or changes/,
+  /view must be focused, changes, or metrics/,
 );
 assert.throws(
   () => repositoryProject.queryMarkdown({

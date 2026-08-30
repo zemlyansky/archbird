@@ -1,0 +1,12 @@
+{
+  "project": "source-complexity",
+  "layers": [
+    {"name": "c", "language": "c", "globs": ["src/**/*.c"]},
+    {"name": "cpp", "language": "cpp", "globs": ["src/**/*.cpp"]},
+    {"name": "javascript", "language": "javascript", "globs": ["js/**/*.js"]},
+    {"name": "typescript", "language": "typescript", "globs": ["ts/**/*.ts"]},
+    {"name": "tsx", "language": "typescript", "globs": ["tsx/**/*.tsx"]},
+    {"name": "python", "language": "python", "globs": ["py/**/*.py"]},
+    {"name": "r", "language": "r", "globs": ["r/**/*.R"]}
+  ]
+}

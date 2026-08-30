@@ -1793,14 +1793,14 @@ function renderMapMarkdown(
 
 function queryMapMarkdown(mapJson, options = {}) {
   const request = queryRequest(options);
-  const views = { focused: 0, changes: 1 };
+  const views = { focused: 0, changes: 1, metrics: 2 };
   const details = { compact: 0, standard: 1, full: 2 };
   const view = options.view ?? "focused";
   const detail = options.detail ?? "standard";
   const compact = options.compact ?? false;
   const full = options.full ?? false;
   if (!Object.hasOwn(views, view)) {
-    throw new RangeError("view must be focused or changes");
+    throw new RangeError("view must be focused, changes, or metrics");
   }
   if (!Object.hasOwn(details, detail)) {
     throw new RangeError("detail must be compact, standard, or full");

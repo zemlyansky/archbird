@@ -6,6 +6,69 @@
 
 const TSLanguage *tree_sitter_cpp(void);
 
+static int logical_operator(TSNode node) {
+  TSNode operator_node = ab_tree_sitter_child(node, "operator");
+  return ab_tree_sitter_node_type(operator_node, "&&") ||
+         ab_tree_sitter_node_type(operator_node, "||");
+}
+
+static void classify_cpp_metric(const AbTreeSitterScan *scan, TSNode node,
+                                AbTreeSitterMetricNode *out) {
+  const char *type = ts_node_type(node);
+  TSNode parent = ts_node_parent(node);
+  (void)scan;
+  if (!strcmp(type, "if_statement")) {
+    out->construct = "if";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+    out->flattens_parent_nesting =
+        ab_tree_sitter_node_type(parent, "else_clause");
+  } else if (!strcmp(type, "for_statement") ||
+             !strcmp(type, "for_range_loop")) {
+    out->construct = !strcmp(type, "for_range_loop") ? "range-for" : "for";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "while_statement")) {
+    out->construct = "while";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "do_statement")) {
+    out->construct = "do-while";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "switch_statement")) {
+    out->construct = "switch";
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "case_statement") &&
+             !ts_node_is_null(ab_tree_sitter_child(node, "value"))) {
+    out->construct = "case";
+    out->decision_contribution = 1;
+  } else if (!strcmp(type, "try_statement")) {
+    out->construct = "try";
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "catch_clause")) {
+    out->construct = "catch";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+    out->flattens_parent_nesting = 1;
+  } else if (!strcmp(type, "conditional_expression")) {
+    out->construct = "conditional";
+    out->decision_contribution = 1;
+    out->starts_control_nesting = 1;
+  } else if (!strcmp(type, "binary_expression") && logical_operator(node)) {
+    TSNode operator_node = ab_tree_sitter_child(node, "operator");
+    out->construct = ab_tree_sitter_node_type(operator_node, "&&")
+                         ? "logical-and"
+                         : "logical-or";
+    out->decision_contribution = 1;
+  }
+}
+
+static int cpp_callable_boundary(TSNode node) {
+  return ab_tree_sitter_node_type(node, "function_definition") ||
+         ab_tree_sitter_node_type(node, "lambda_expression");
+}
+
 static int name_node(const AbTreeSitterScan *scan, TSNode node) {
   return ab_tree_sitter_node_has_text(scan, node) &&
          (ab_tree_sitter_node_type(node, "identifier") ||
@@ -173,6 +236,7 @@ static ArchbirdStatus visit_cpp(AbTreeSitterScan *scan,
                    "class", &name, &fact);
     child_frame->context &= ~AB_TS_CONTEXT_FUNCTION;
     child_frame->context |= AB_TS_CONTEXT_CLASS;
+    ab_tree_sitter_suspend_source_metrics(child_frame);
     if (status == ARCHBIRD_OK && fact)
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
   } else if (ab_tree_sitter_node_type(frame->node, "namespace_definition")) {
@@ -186,8 +250,11 @@ static ArchbirdStatus visit_cpp(AbTreeSitterScan *scan,
     status = add_function(scan, frame, &name, &fact);
     child_frame->context &= ~AB_TS_CONTEXT_CLASS;
     child_frame->context |= AB_TS_CONTEXT_FUNCTION;
-    if (status == ARCHBIRD_OK && fact)
+    if (status == ARCHBIRD_OK && fact) {
       ab_tree_sitter_set_enclosing_fact(child_frame, fact);
+      status = ab_tree_sitter_start_source_metrics(scan, fact, frame->node,
+                                                   child_frame);
+    }
   } else if (ab_tree_sitter_node_type(frame->node, "declaration") &&
              !(frame->context & AB_TS_CONTEXT_FUNCTION)) {
     status = add_declaration(scan, frame);
@@ -209,12 +276,18 @@ ArchbirdStatus ab_scan_tree_sitter_cpp_file(
       {"calls", "direct and qualified call names without overload resolution"},
       {"imports", "preprocessor include paths without include search"},
       {"method-calls", "field call names without receiver type resolution"},
+      {"source-metric-contributors",
+       "exact C++ branch and control syntax inside named function and method "
+       "definitions"},
+      {"source-metrics",
+       "versioned decision, cyclomatic, and control-nesting summaries for "
+       "named function and method definitions"},
       {"symbols",
        "functions, declarations, classes, structs, unions, and namespaces"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-cpp",
-      "1",
-      "archbird-tree-sitter-cpp-v1;runtime=0.26.9;grammar=0.23.4;abi=14",
+      "2",
+      "archbird-tree-sitter-cpp-v2;runtime=0.26.9;grammar=0.23.4;abi=14",
       "tree-sitter-0.26.9;tree-sitter-cpp-0.23.4;grammar-abi-14",
       "cpp",
       tree_sitter_cpp,
@@ -222,7 +295,10 @@ ArchbirdStatus ab_scan_tree_sitter_cpp_file(
       sizeof(capabilities) / sizeof(capabilities[0]),
       visit_cpp,
       NULL,
-      NULL};
+      NULL,
+      "source.control-flow.cpp-v1",
+      classify_cpp_metric,
+      cpp_callable_boundary};
   return ab_tree_sitter_scan_file(
       engine, manifest, config, file, source, source_length,
       source_manifest_sha256, implementation_sha256, &descriptor, out_bundle);
