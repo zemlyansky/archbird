@@ -1925,6 +1925,209 @@ static const char *metric_cycle_kind(const AbProjectionData *data,
              : "unknown";
 }
 
+static int metric_u64_compare(const void *left_raw, const void *right_raw) {
+  uint64_t left = *(const uint64_t *)left_raw;
+  uint64_t right = *(const uint64_t *)right_raw;
+  return left < right ? -1 : left > right;
+}
+
+static size_t metric_nearest_rank(size_t count, size_t percentile) {
+  size_t rank =
+      (count / 100) * percentile + ((count % 100) * percentile + 99) / 100;
+  return rank ? rank - 1 : 0;
+}
+
+/* Summaries expose distribution tails without replacing exact item values. */
+static ArchbirdStatus render_metric_distributions(AbBuffer *out,
+                                                  const AbProjectionData *data,
+                                                  int graph_complete) {
+  static const struct {
+    const char *label;
+    const char *attribute;
+  } fields[] = {
+      {"out-neighbors", "metric.graph.out_neighbors"},
+      {"in-neighbors", "metric.graph.in_neighbors"},
+      {"out-relations", "metric.graph.out_relations"},
+      {"in-relations", "metric.graph.in_relations"},
+      {"scc-size", "metric.graph.scc_size"},
+  };
+  const AbProjectionItem **items = NULL;
+  uint64_t *values = NULL;
+  uint64_t largest_scc = 0;
+  size_t total = 0;
+  size_t cyclic_nodes = 0;
+  size_t multi_node_members = 0;
+  size_t self_loop_members = 0;
+  size_t field_index;
+  size_t item_index;
+  ArchbirdStatus status =
+      collect_items(out, data, "node", NULL, &items, &total);
+#define METRIC_DISTRIBUTION_TRY(expression)                                    \
+  do {                                                                         \
+    status = (expression);                                                     \
+    if (status != ARCHBIRD_OK)                                                 \
+      goto cleanup;                                                            \
+  } while (0)
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (total > SIZE_MAX / sizeof(*values)) {
+    status = ARCHBIRD_LIMIT_EXCEEDED;
+    goto cleanup;
+  }
+  if (total)
+    values = (uint64_t *)ab_calloc(out->engine, total, sizeof(*values));
+  if (total && !values) {
+    status = ARCHBIRD_OUT_OF_MEMORY;
+    goto cleanup;
+  }
+  METRIC_DISTRIBUTION_TRY(
+      ab_report_literal_line(out, "## Metric distributions"));
+  METRIC_DISTRIBUTION_TRY(ab_report_blank(out));
+  if (!total) {
+    METRIC_DISTRIBUTION_TRY(
+        ab_report_literal_line(out, "No applicable entities."));
+    status = ab_report_blank(out);
+    goto cleanup;
+  }
+  if (graph_complete)
+    METRIC_DISTRIBUTION_TRY(
+        ab_report_linef(out,
+                        "Graph population: entities=%zu; exact=yes; "
+                        "quantiles=nearest-rank.",
+                        total));
+  else
+    METRIC_DISTRIBUTION_TRY(
+        ab_report_linef(out,
+                        "Graph population: known-entities=%zu; exact=no; "
+                        "quantiles=unavailable (incomplete population).",
+                        total));
+  for (field_index = 0; status == ARCHBIRD_OK &&
+                        field_index < sizeof(fields) / sizeof(fields[0]);
+       field_index++) {
+    uint64_t maximum = 0;
+    for (item_index = 0; item_index < total; item_index++) {
+      values[item_index] =
+          item_u64(items[item_index], fields[field_index].attribute);
+      if (values[item_index] > maximum)
+        maximum = values[item_index];
+    }
+    if (graph_complete) {
+      qsort(values, total, sizeof(*values), metric_u64_compare);
+      METRIC_DISTRIBUTION_TRY(ab_report_linef(
+          out,
+          "- `%s`: population=%zu; median=%" PRIu64 "; p90=%" PRIu64
+          "; p95=%" PRIu64 "; max=%" PRIu64,
+          fields[field_index].label, total,
+          values[metric_nearest_rank(total, 50)],
+          values[metric_nearest_rank(total, 90)],
+          values[metric_nearest_rank(total, 95)], values[total - 1]));
+    } else {
+      METRIC_DISTRIBUTION_TRY(
+          ab_report_linef(out, "- `%s`: known-lower-bound-max>=%" PRIu64,
+                          fields[field_index].label, maximum));
+    }
+  }
+  for (item_index = 0; item_index < total; item_index++) {
+    uint64_t cyclic = item_u64(items[item_index], "metric.graph.cyclic");
+    uint64_t scc_size = item_u64(items[item_index], "metric.graph.scc_size");
+    if (scc_size > largest_scc)
+      largest_scc = scc_size;
+    if (!cyclic)
+      continue;
+    cyclic_nodes++;
+    if (scc_size > 1)
+      multi_node_members++;
+    else
+      self_loop_members++;
+  }
+  if (graph_complete)
+    METRIC_DISTRIBUTION_TRY(ab_report_linef(
+        out,
+        "- cycle-burden: cyclic-nodes=%zu/%zu; multi-node-members=%zu; "
+        "self-loop-members=%zu; largest-scc=%" PRIu64,
+        cyclic_nodes, total, multi_node_members, self_loop_members,
+        largest_scc));
+  else
+    METRIC_DISTRIBUTION_TRY(ab_report_linef(
+        out,
+        "- cycle-burden: known-cyclic-nodes>=%zu/%zu; "
+        "known-multi-node-members>=%zu; known-self-loop-members>=%zu; "
+        "largest-known-scc>=%" PRIu64,
+        cyclic_nodes, total, multi_node_members, self_loop_members,
+        largest_scc));
+  status = ab_report_blank(out);
+cleanup:
+  ab_free(out->engine, values);
+  ab_free(out->engine, items);
+#undef METRIC_DISTRIBUTION_TRY
+  return status;
+}
+
+static ArchbirdStatus metric_sum_attribute(AbBuffer *out,
+                                           const AbProjectionData *data,
+                                           const char *attribute,
+                                           uint64_t *sum) {
+  size_t index;
+  *sum = 0;
+  for (index = 0; index < data->item_count; index++) {
+    const AbProjectionItem *item = &data->items[index];
+    uint64_t value;
+    if (!item_is(item, "node") && !item_is(item, "relation"))
+      continue;
+    value = item_u64(item, attribute);
+    if (UINT64_MAX - *sum < value)
+      return archbird_error_set(out->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                ARCHBIRD_NO_OFFSET,
+                                "relation evidence metric exceeds uint64");
+    *sum += value;
+  }
+  return ARCHBIRD_OK;
+}
+
+static ArchbirdStatus render_metric_evidence(AbBuffer *out,
+                                             const AbProjectionData *data,
+                                             int graph_complete) {
+  uint64_t current;
+  uint64_t unknown;
+  uint64_t stale;
+  uint64_t candidate;
+  uint64_t ambiguous;
+  uint64_t unresolved;
+  uint64_t total;
+  const char *bound = graph_complete ? "" : ">=";
+  REPORT_TRY(metric_sum_attribute(
+      out, data, "metric.evidence.current_relation_records", &current));
+  REPORT_TRY(metric_sum_attribute(
+      out, data, "metric.evidence.unknown_relation_records", &unknown));
+  REPORT_TRY(metric_sum_attribute(
+      out, data, "metric.evidence.stale_relation_records", &stale));
+  REPORT_TRY(metric_sum_attribute(
+      out, data, "metric.evidence.candidate_relation_records", &candidate));
+  REPORT_TRY(metric_sum_attribute(
+      out, data, "metric.evidence.ambiguous_relation_records", &ambiguous));
+  REPORT_TRY(metric_sum_attribute(
+      out, data, "metric.evidence.unresolved_relation_records", &unresolved));
+  if (UINT64_MAX - current < unknown || UINT64_MAX - current - unknown < stale)
+    return archbird_error_set(out->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                              ARCHBIRD_NO_OFFSET,
+                              "relation evidence total exceeds uint64");
+  total = current + unknown + stale;
+  REPORT_TRY(ab_report_literal_line(out, "## Relation evidence"));
+  REPORT_TRY(ab_report_blank(out));
+  REPORT_TRY(ab_report_linef(
+      out,
+      "- states: current=%s%" PRIu64 "; unknown=%s%" PRIu64 "; stale=%s%" PRIu64
+      "; total=%s%" PRIu64,
+      bound, current, bound, unknown, bound, stale, bound, total));
+  REPORT_TRY(ab_report_linef(out,
+                             "- uncertain-resolution: candidate=%s%" PRIu64
+                             "; ambiguous=%s%" PRIu64 "; unresolved=%s%" PRIu64,
+                             bound, candidate, bound, ambiguous, bound,
+                             unresolved));
+  REPORT_TRY(ab_report_blank(out));
+  return ARCHBIRD_OK;
+}
+
 static int metric_boundary_compare(const void *left, const void *right) {
   const AbProjectionItem *a = *(const AbProjectionItem *const *)left;
   const AbProjectionItem *b = *(const AbProjectionItem *const *)right;
@@ -2050,14 +2253,40 @@ static ArchbirdStatus render_metric_groups(AbBuffer *out,
     const AbProjectionItem *item = items[index];
     const AbString *id = item_text(item, "id");
     const char *bound = graph_complete ? "" : ">=";
+    uint64_t internal = item_u64(item, "metric.graph.internal_relations");
+    uint64_t inbound = item_u64(item, "metric.graph.inbound_relations");
+    uint64_t outbound = item_u64(item, "metric.graph.outbound_relations");
+    uint64_t external;
+    uint64_t total_relations;
+    if (UINT64_MAX - inbound < outbound ||
+        UINT64_MAX - internal < inbound + outbound) {
+      status = archbird_error_set(out->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "graph boundary ratio exceeds uint64");
+      break;
+    }
+    external = inbound + outbound;
+    total_relations = internal + external;
     status = ab_report_linef(
         out,
         "- `%.*s`: internal-relations=%s%" PRIu64
-        "; inbound-relations=%s%" PRIu64 "; outbound-relations=%s%" PRIu64,
-        id ? (int)id->length : 0, id ? id->data : "", bound,
-        item_u64(item, "metric.graph.internal_relations"), bound,
-        item_u64(item, "metric.graph.inbound_relations"), bound,
-        item_u64(item, "metric.graph.outbound_relations"));
+        "; inbound-relations=%s%" PRIu64 "; outbound-relations=%s%" PRIu64
+        "; inbound-group-neighbors=%s%" PRIu64
+        "; outbound-group-neighbors=%s%" PRIu64,
+        id ? (int)id->length : 0, id ? id->data : "", bound, internal, bound,
+        inbound, bound, outbound, bound,
+        item_u64(item, "metric.graph.inbound_group_neighbors"), bound,
+        item_u64(item, "metric.graph.outbound_group_neighbors"));
+    if (status == ARCHBIRD_OK && graph_complete && total_relations)
+      status = ab_report_linef(out, "  boundary-fraction=%" PRIu64 "/%" PRIu64,
+                               external, total_relations);
+    else if (status == ARCHBIRD_OK && graph_complete)
+      status = ab_report_literal_line(
+          out, "  boundary-fraction=not-applicable (no selected relations)");
+    else if (status == ARCHBIRD_OK)
+      status = ab_report_linef(
+          out, "  boundary-fraction=unknown (known=%" PRIu64 "/%" PRIu64 ")",
+          external, total_relations);
   }
   if (status == ARCHBIRD_OK && shown < total) {
     *omitted += total - shown;
@@ -2144,6 +2373,11 @@ static ArchbirdStatus render_metrics_once(const AbProjectionPlan *plan,
            "`relation`): the same relation multiplicity classified by the "
            "selected grouping."));
   REPORT_TRY(ab_report_literal_line(
+      out, "- `graph.inbound_group_neighbors` and "
+           "`graph.outbound_group_neighbors` "
+           "(`graph.group-*-neighbors-v1`, unit `group`): distinct other "
+           "groups connected across the selected boundary."));
+  REPORT_TRY(ab_report_literal_line(
       out, "- `graph.scc_size` "
            "(`graph.strongly-connected-component-size-v1`, unit `node`): nodes "
            "in the entity's strongly connected component."));
@@ -2151,13 +2385,22 @@ static ArchbirdStatus render_metrics_once(const AbProjectionPlan *plan,
       out,
       "- `graph.cyclic` (`graph.cycle-membership-v1`, unit `boolean`): one "
       "when the entity belongs to a multi-node cycle or has a self-loop."));
+  REPORT_TRY(ab_report_literal_line(
+      out, "- Distribution quantiles use nearest-rank only for an exhaustive "
+           "graph population; incomplete graphs expose lower-bound maxima."));
+  REPORT_TRY(ab_report_literal_line(
+      out, "- `evidence.*_relations` counts materialized relation evidence "
+           "records by state or uncertain resolution; every value retains "
+           "the selected relation-record denominator."));
   REPORT_TRY(ab_report_blank(out));
+  REPORT_TRY(render_metric_distributions(out, &result->data, graph_complete));
   REPORT_TRY(render_metric_nodes(out, &result->data, limit, 1, graph_complete,
                                  &omitted));
   REPORT_TRY(render_metric_nodes(out, &result->data, limit, 0, graph_complete,
                                  &omitted));
   REPORT_TRY(render_metric_groups(out, &result->data, limit, graph_complete,
                                   &omitted));
+  REPORT_TRY(render_metric_evidence(out, &result->data, graph_complete));
   REPORT_TRY(render_section(out, &result->data, "coverage",
                             "Repository coverage", limit, standard_detail,
                             full_detail, &omitted));

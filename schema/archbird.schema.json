@@ -231,7 +231,7 @@
             {"$ref": "#/$defs/projection_base"},
             {"required": ["metric", "level"], "properties": {
               "select": {"const": "metrics"},
-              "metric": {"enum": ["source.extent_lines", "graph.out_neighbors", "graph.in_neighbors", "graph.out_relations", "graph.in_relations", "graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.scc_size", "graph.cyclic", "evidence.current_relations", "evidence.unknown_relations", "evidence.stale_relations", "tests.static_case_occurrences", "tests.candidate_case_occurrences", "tests.routed_cases", "tests.observed_cases"]},
+              "metric": {"enum": ["source.extent_lines", "graph.out_neighbors", "graph.in_neighbors", "graph.out_relations", "graph.in_relations", "graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.inbound_group_neighbors", "graph.outbound_group_neighbors", "graph.scc_size", "graph.cyclic", "evidence.current_relations", "evidence.unknown_relations", "evidence.stale_relations", "evidence.candidate_relations", "evidence.ambiguous_relations", "evidence.unresolved_relations", "tests.static_case_occurrences", "tests.candidate_case_occurrences", "tests.routed_cases", "tests.observed_cases"]},
               "level": {"enum": ["component", "file", "map", "symbol"]},
               "group_by": {"enum": ["component", "layer"]},
               "paths": {"$ref": "#/$defs/collection_patterns"},
@@ -242,15 +242,15 @@
               "then": {"properties": {"level": {"const": "symbol"}}, "not": {"required": ["relations"]}}
             },
             {
-              "if": {"properties": {"metric": {"enum": ["graph.out_neighbors", "graph.in_neighbors", "graph.out_relations", "graph.in_relations", "graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.scc_size", "graph.cyclic"]}}, "required": ["metric"]},
+              "if": {"properties": {"metric": {"enum": ["graph.out_neighbors", "graph.in_neighbors", "graph.out_relations", "graph.in_relations", "graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.inbound_group_neighbors", "graph.outbound_group_neighbors", "graph.scc_size", "graph.cyclic"]}}, "required": ["metric"]},
               "then": {"required": ["relations"], "properties": {"level": {"enum": ["component", "file", "symbol"]}}, "not": {"required": ["paths"]}}
             },
             {
-              "if": {"properties": {"metric": {"enum": ["graph.out_neighbors", "graph.in_neighbors", "graph.out_relations", "graph.in_relations", "graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.scc_size", "graph.cyclic"]}, "level": {"const": "symbol"}}, "required": ["metric", "level"]},
+              "if": {"properties": {"metric": {"enum": ["graph.out_neighbors", "graph.in_neighbors", "graph.out_relations", "graph.in_relations", "graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.inbound_group_neighbors", "graph.outbound_group_neighbors", "graph.scc_size", "graph.cyclic"]}, "level": {"const": "symbol"}}, "required": ["metric", "level"]},
               "then": {"properties": {"relations": {"items": {"enum": ["calls", "references"]}}}}
             },
             {
-              "if": {"properties": {"metric": {"enum": ["graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations"]}}, "required": ["metric"]},
+              "if": {"properties": {"metric": {"enum": ["graph.internal_relations", "graph.inbound_relations", "graph.outbound_relations", "graph.inbound_group_neighbors", "graph.outbound_group_neighbors"]}}, "required": ["metric"]},
               "then": {"required": ["group_by"], "properties": {"level": {"enum": ["file", "symbol"]}}},
               "else": {"not": {"required": ["group_by"]}}
             },
@@ -259,11 +259,11 @@
               "then": {"properties": {"level": {"const": "map"}}, "not": {"anyOf": [{"required": ["group_by"]}, {"required": ["paths"]}, {"required": ["relations"]}]}}
             },
             {
-              "if": {"properties": {"metric": {"enum": ["evidence.current_relations", "evidence.unknown_relations", "evidence.stale_relations"]}}, "required": ["metric"]},
+              "if": {"properties": {"metric": {"enum": ["evidence.current_relations", "evidence.unknown_relations", "evidence.stale_relations", "evidence.candidate_relations", "evidence.ambiguous_relations", "evidence.unresolved_relations"]}}, "required": ["metric"]},
               "then": {"required": ["relations"], "properties": {"level": {"enum": ["component", "file", "symbol"]}}, "not": {"anyOf": [{"required": ["group_by"]}, {"required": ["paths"]}]}}
             },
             {
-              "if": {"properties": {"metric": {"enum": ["evidence.current_relations", "evidence.unknown_relations", "evidence.stale_relations"]}, "level": {"const": "symbol"}}, "required": ["metric", "level"]},
+              "if": {"properties": {"metric": {"enum": ["evidence.current_relations", "evidence.unknown_relations", "evidence.stale_relations", "evidence.candidate_relations", "evidence.ambiguous_relations", "evidence.unresolved_relations"]}, "level": {"const": "symbol"}}, "required": ["metric", "level"]},
               "then": {"properties": {"relations": {"items": {"enum": ["calls", "references"]}}}}
             }
           ],

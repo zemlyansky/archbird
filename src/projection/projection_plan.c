@@ -225,7 +225,10 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
                               "does not accept relations, paths, or group_by");
     } else if (ab_value_string_is(metric, "evidence.current_relations") ||
                ab_value_string_is(metric, "evidence.unknown_relations") ||
-               ab_value_string_is(metric, "evidence.stale_relations")) {
+               ab_value_string_is(metric, "evidence.stale_relations") ||
+               ab_value_string_is(metric, "evidence.candidate_relations") ||
+               ab_value_string_is(metric, "evidence.ambiguous_relations") ||
+               ab_value_string_is(metric, "evidence.unresolved_relations")) {
       if (!ab_value_string_is(level, "component") &&
           !ab_value_string_is(level, "file") &&
           !ab_value_string_is(level, "symbol"))
@@ -262,11 +265,16 @@ static ArchbirdStatus validate_definition(ArchbirdEngine *engine,
                ab_value_string_is(metric, "graph.internal_relations") ||
                ab_value_string_is(metric, "graph.inbound_relations") ||
                ab_value_string_is(metric, "graph.outbound_relations") ||
+               ab_value_string_is(metric, "graph.inbound_group_neighbors") ||
+               ab_value_string_is(metric, "graph.outbound_group_neighbors") ||
                ab_value_string_is(metric, "graph.scc_size") ||
                ab_value_string_is(metric, "graph.cyclic")) {
-      int boundary = ab_value_string_is(metric, "graph.internal_relations") ||
-                     ab_value_string_is(metric, "graph.inbound_relations") ||
-                     ab_value_string_is(metric, "graph.outbound_relations");
+      int boundary =
+          ab_value_string_is(metric, "graph.internal_relations") ||
+          ab_value_string_is(metric, "graph.inbound_relations") ||
+          ab_value_string_is(metric, "graph.outbound_relations") ||
+          ab_value_string_is(metric, "graph.inbound_group_neighbors") ||
+          ab_value_string_is(metric, "graph.outbound_group_neighbors");
       if (!ab_value_string_is(level, "component") &&
           !ab_value_string_is(level, "file") &&
           !ab_value_string_is(level, "symbol"))

@@ -1498,6 +1498,8 @@ add_relation_item_state(ArchbirdEngine *engine, AbProjectionData *fact,
                         const char *message, AbProjectionItem **retained) {
   AbProjectionItem item = {0};
   AbProjectionItem *existing;
+  uint64_t *item_state_count = NULL;
+  uint64_t *existing_state_count = NULL;
   ArchbirdStatus status = relation_key(engine, source, kind, target, &item.key);
   if (retained)
     *retained = NULL;
@@ -1514,6 +1516,16 @@ add_relation_item_state(ArchbirdEngine *engine, AbProjectionData *fact,
     status = item_add_string_attribute(engine, &item, "source", source);
   if (status == ARCHBIRD_OK)
     status = item_add_string_attribute(engine, &item, "target", target);
+  if (!strcmp(state, "current"))
+    item_state_count = &item.relation_ledger.current;
+  else if (!strcmp(state, "unknown"))
+    item_state_count = &item.relation_ledger.unknown;
+  else if (!strcmp(state, "stale"))
+    item_state_count = &item.relation_ledger.stale;
+  else if (status == ARCHBIRD_OK)
+    status = ARCHBIRD_INVALID_SCHEMA;
+  if (status == ARCHBIRD_OK)
+    *item_state_count = 1;
   if (status != ARCHBIRD_OK) {
     ab_projection_item_free(engine, &item);
     return status;
@@ -1527,7 +1539,19 @@ add_relation_item_state(ArchbirdEngine *engine, AbProjectionData *fact,
     AbString incoming = {(char *)state, strlen(state)};
     int existing_rank = ab_projection_evidence_state_strength(&existing->state);
     int incoming_rank = ab_projection_evidence_state_strength(&incoming);
+    if (!strcmp(state, "current"))
+      existing_state_count = &existing->relation_ledger.current;
+    else if (!strcmp(state, "unknown"))
+      existing_state_count = &existing->relation_ledger.unknown;
+    else
+      existing_state_count = &existing->relation_ledger.stale;
     status = ab_projection_item_add_evidence(engine, existing, evidence);
+    if (status == ARCHBIRD_OK && *existing_state_count == UINT64_MAX)
+      status = archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "relation evidence count exceeds uint64");
+    if (status == ARCHBIRD_OK)
+      (*existing_state_count)++;
     if (status == ARCHBIRD_OK && incoming_rank > existing_rank)
       status = ab_projection_item_set_state(engine, existing, state, message);
     if (status == ARCHBIRD_OK && retained)
@@ -2537,6 +2561,22 @@ static ArchbirdStatus add_symbol_relation_projection_item(
   if (status == ARCHBIRD_OK && !item_attribute(item, "resolution"))
     status = item_add_string_attribute(context->engine, item, "resolution",
                                        &resolution->as.text);
+  if (status == ARCHBIRD_OK &&
+      (ab_projection_value_is(resolution, "candidate") ||
+       ab_projection_value_is(resolution, "ambiguous") ||
+       ab_projection_value_is(resolution, "unresolved"))) {
+    uint64_t *count = ab_projection_value_is(resolution, "candidate")
+                          ? &item->relation_ledger.candidate
+                      : ab_projection_value_is(resolution, "ambiguous")
+                          ? &item->relation_ledger.ambiguous
+                          : &item->relation_ledger.unresolved;
+    if (*count == UINT64_MAX)
+      status = archbird_error_set(context->engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                  ARCHBIRD_NO_OFFSET,
+                                  "relation resolution count exceeds uint64");
+    else
+      (*count)++;
+  }
   if (status == ARCHBIRD_OK && !item_attribute(item, "source_path"))
     status = item_add_string_attribute(context->engine, item, "source_path",
                                        &source_path->as.text);
@@ -6903,6 +6943,16 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
     attribute = "metric.graph.outbound_relations";
     definition = "graph.group-outbound-relations-v1";
     unit = "relation";
+  } else if (ab_projection_value_is(metric, "graph.inbound_group_neighbors")) {
+    metric_name = "graph.inbound_group_neighbors";
+    attribute = "metric.graph.inbound_group_neighbors";
+    definition = "graph.group-inbound-neighbors-v1";
+    unit = "group";
+  } else if (ab_projection_value_is(metric, "graph.outbound_group_neighbors")) {
+    metric_name = "graph.outbound_group_neighbors";
+    attribute = "metric.graph.outbound_group_neighbors";
+    definition = "graph.group-outbound-neighbors-v1";
+    unit = "group";
   } else if (ab_projection_value_is(metric, "graph.scc_size")) {
     metric_name = "graph.scc_size";
     attribute = "metric.graph.scc_size";
@@ -7227,6 +7277,7 @@ static ArchbirdStatus extract_evidence_metrics(AbProjectionContext *context,
   const AbValue *level = ab_value_member(&plan->definition, "level");
   const char *metric_name = NULL;
   const char *wanted_state = NULL;
+  const char *wanted_resolution = NULL;
   AbProjectionPlan graph_plan = {0};
   AbProjectionData graph = {0};
   uint64_t denominator = 0;
@@ -7246,6 +7297,15 @@ static ArchbirdStatus extract_evidence_metrics(AbProjectionContext *context,
   } else if (ab_projection_value_is(metric, "evidence.stale_relations")) {
     metric_name = "evidence.stale_relations";
     wanted_state = "stale";
+  } else if (ab_projection_value_is(metric, "evidence.candidate_relations")) {
+    metric_name = "evidence.candidate_relations";
+    wanted_resolution = "candidate";
+  } else if (ab_projection_value_is(metric, "evidence.ambiguous_relations")) {
+    metric_name = "evidence.ambiguous_relations";
+    wanted_resolution = "ambiguous";
+  } else if (ab_projection_value_is(metric, "evidence.unresolved_relations")) {
+    metric_name = "evidence.unresolved_relations";
+    wanted_resolution = "unresolved";
   } else {
     return ARCHBIRD_INVALID_SCHEMA;
   }
@@ -7282,13 +7342,33 @@ static ArchbirdStatus extract_evidence_metrics(AbProjectionContext *context,
           break;
         }
         denominator += number;
-        if (!strcmp(states[state_index], wanted_state)) {
+        if (wanted_state && !strcmp(states[state_index], wanted_state)) {
           if (UINT64_MAX - value < number) {
             status = ARCHBIRD_LIMIT_EXCEEDED;
             break;
           }
           value += number;
         }
+      }
+      if (status == ARCHBIRD_OK && wanted_resolution) {
+        char attribute[72];
+        const AbValue *count;
+        uint64_t number = 0;
+        int written =
+            snprintf(attribute, sizeof(attribute),
+                     "metric.evidence.%s_relation_records", wanted_resolution);
+        if (written < 0 || (size_t)written >= sizeof(attribute))
+          status = ARCHBIRD_LIMIT_EXCEEDED;
+        count = status == ARCHBIRD_OK
+                    ? projection_item_attribute(item, attribute)
+                    : NULL;
+        if (status == ARCHBIRD_OK && count && !ab_value_u64(count, &number))
+          status = invalid_map_inventory(
+              context, "graph contains an invalid relation resolution count");
+        if (status == ARCHBIRD_OK && UINT64_MAX - value < number)
+          status = ARCHBIRD_LIMIT_EXCEEDED;
+        if (status == ARCHBIRD_OK)
+          value += number;
       }
     }
   }
@@ -7299,13 +7379,15 @@ static ArchbirdStatus extract_evidence_metrics(AbProjectionContext *context,
     const char *classification = ab_projection_data_classification(&graph);
     status = metric_add_map_value(
         context, fact, project, level, metric_name,
-        "evidence.graph-source-relation-state-v1", "source_relation_record",
-        value, denominator, "source_relation_record", input_sha->as.text.data,
+        wanted_state ? "evidence.graph-relation-state-v2"
+                     : "evidence.graph-relation-resolution-v1",
+        "relation_evidence_record", value, denominator,
+        "relation_evidence_record", input_sha->as.text.data,
         !strcmp(classification, "complete") ? "current" : "unknown",
         !strcmp(classification, "complete")
             ? ""
             : "selected graph evidence is incomplete; counts describe only "
-              "materialized source relation records");
+              "materialized relation evidence records");
   }
   if (status == ARCHBIRD_OK)
     status =

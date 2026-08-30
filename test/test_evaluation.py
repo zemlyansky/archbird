@@ -375,6 +375,8 @@ Evidence: metrics=incomplete; exhaustive=no; unknown=2; unsupported=1; presentat
 '''
     if variant == 'malformed-metrics':
       report = '# fixture code metrics\\n'
+    if variant == 'unicode-budget-metrics':
+      report = ('·' * 6000) + '\\n' + report
     out.write_text(report)
     raise SystemExit(0)
   if variant == 'fail':
@@ -1248,6 +1250,18 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         result["error"] == "public Metrics report exceeds max_chars (12001 > 12000)"
         for result in oversized_metrics_run["cases"]
     )
+
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "unicode-budget-metrics"
+    unicode_metrics = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "unicode-public-metrics",
+        environment=environment,
+        check=False,
+    )
+    assert unicode_metrics.returncode == 0
 
     environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "malformed-metrics"
     malformed_metrics = run(

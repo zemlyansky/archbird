@@ -20,6 +20,15 @@ typedef struct AbProjectionEvidence {
   AbString detail;
 } AbProjectionEvidence;
 
+typedef struct AbProjectionRelationLedger {
+  uint64_t current;
+  uint64_t unknown;
+  uint64_t stale;
+  uint64_t candidate;
+  uint64_t ambiguous;
+  uint64_t unresolved;
+} AbProjectionRelationLedger;
+
 typedef struct AbProjectionItem {
   AbString key;
   AbString label;
@@ -31,6 +40,8 @@ typedef struct AbProjectionItem {
   size_t evidence_capacity;
   AbString state;
   AbString message;
+  /* Preserve pre-merge relation classes without changing public artifacts. */
+  AbProjectionRelationLedger relation_ledger;
 } AbProjectionItem;
 
 typedef struct AbProjectionCompleteness {

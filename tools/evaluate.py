@@ -1155,14 +1155,14 @@ def metrics_report_summary(path: Path, max_chars: int) -> Mapping[str, Any]:
         raise EvaluationError(f"cannot read Metrics report {path}: {error}") from error
     if not encoded:
         raise EvaluationError("public Metrics report is empty")
-    if len(encoded) > max_chars:
-        raise EvaluationError(
-            f"public Metrics report exceeds max_chars ({len(encoded)} > {max_chars})"
-        )
     try:
         text = encoded.decode("utf-8")
     except UnicodeDecodeError as error:
         raise EvaluationError("public Metrics report is not UTF-8") from error
+    if len(text) > max_chars:
+        raise EvaluationError(
+            f"public Metrics report exceeds max_chars ({len(text)} > {max_chars})"
+        )
     lines = text.splitlines()
     nonblank = [line for line in lines if line]
     if len(nonblank) < 2:

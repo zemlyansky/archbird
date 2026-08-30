@@ -223,10 +223,53 @@ def _check_metric_graph_scaling(document: dict[str, object]) -> None:
     )
     if core["value"] != 100_000:
         raise AssertionError("group boundary metric lost relation multiplicity")
+    for metric in (
+        "graph.inbound_group_neighbors",
+        "graph.outbound_group_neighbors",
+    ):
+        result = json.loads(
+            evaluate_projection_json(
+                encoded,
+                {
+                    **plan,
+                    "group_by": "layer",
+                    "id": f"metric-graph-scaling-{metric}",
+                    "metric": metric,
+                },
+            )
+        )
+        core = next(
+            item
+            for item in result["fact"]["items"]
+            if item["attributes"]["group"] == "layer:core"
+        )
+        if core["value"] != 0:
+            raise AssertionError(f"{metric} counted an internal group route")
+    started = perf_counter()
+    report = render_map_markdown(
+        encoded,
+        view="metrics",
+        detail="standard",
+        relations=["imports"],
+        max_chars=12_000,
+    )
+    report_elapsed = perf_counter() - started
+    if (
+        len(report) > 12_000
+        or b"## Metric distributions\n" not in report
+        or b"p95=" not in report
+        or b"## Relation evidence\n" not in report
+        or report_elapsed >= 3.0
+    ):
+        raise AssertionError(
+            "bounded metric distributions regressed: "
+            f"bytes={len(report)} elapsed={report_elapsed:.3f}s"
+        )
     print(
         "graph metric scaling passed "
         f"(50000={elapsed[50_000]:.3f}s, "
-        f"100000={elapsed[100_000]:.3f}s, targets=1000)"
+        f"100000={elapsed[100_000]:.3f}s, "
+        f"report={report_elapsed:.3f}s, targets=1000)"
     )
 
 

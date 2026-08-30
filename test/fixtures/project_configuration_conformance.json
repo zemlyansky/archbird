@@ -188,6 +188,8 @@
           "internal-relations": {"select": "metrics", "metric": "graph.internal_relations", "level": "file", "group_by": "component", "relations": ["imports"]},
           "inbound-relations": {"select": "metrics", "metric": "graph.inbound_relations", "level": "file", "group_by": "layer", "relations": ["imports"]},
           "outbound-relations": {"select": "metrics", "metric": "graph.outbound_relations", "level": "file", "group_by": "component", "relations": ["imports"]},
+          "inbound-group-neighbors": {"select": "metrics", "metric": "graph.inbound_group_neighbors", "level": "file", "group_by": "component", "relations": ["imports"]},
+          "outbound-group-neighbors": {"select": "metrics", "metric": "graph.outbound_group_neighbors", "level": "file", "group_by": "layer", "relations": ["imports"]},
           "components": {"select": "metrics", "metric": "graph.scc_size", "level": "file", "relations": ["imports"]},
           "cycles": {"select": "metrics", "metric": "graph.cyclic", "level": "file", "relations": ["imports"]},
           "static-tests": {"select": "metrics", "metric": "tests.static_case_occurrences", "level": "map"},
@@ -196,7 +198,10 @@
           "observed-tests": {"select": "metrics", "metric": "tests.observed_cases", "level": "map"},
           "current-evidence": {"select": "metrics", "metric": "evidence.current_relations", "level": "file", "relations": ["imports"]},
           "unknown-evidence": {"select": "metrics", "metric": "evidence.unknown_relations", "level": "component", "relations": ["imports"]},
-          "stale-evidence": {"select": "metrics", "metric": "evidence.stale_relations", "level": "symbol", "relations": ["calls"]}
+          "stale-evidence": {"select": "metrics", "metric": "evidence.stale_relations", "level": "symbol", "relations": ["calls"]},
+          "candidate-evidence": {"select": "metrics", "metric": "evidence.candidate_relations", "level": "symbol", "relations": ["calls"]},
+          "ambiguous-evidence": {"select": "metrics", "metric": "evidence.ambiguous_relations", "level": "symbol", "relations": ["calls"]},
+          "unresolved-evidence": {"select": "metrics", "metric": "evidence.unresolved_relations", "level": "symbol", "relations": ["calls"]}
         }
       }
     },

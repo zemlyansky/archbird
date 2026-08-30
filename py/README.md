@@ -368,9 +368,10 @@ Metrics are ordinary projections. `source.extent_lines` counts physical lines
 inside one exact declaration extent. On a selected directed graph,
 `graph.*_neighbors` counts distinct adjacent identities, `graph.*_relations`
 counts relation witnesses, group boundary metrics classify internal, inbound,
-and outbound witnesses, and `graph.scc_size`/`graph.cyclic` expose strongly
-connected components. Self-relations count in both directions and as internal
-group relations.
+and outbound witnesses, `graph.*_group_neighbors` counts distinct connected
+groups, and `graph.scc_size`/`graph.cyclic` expose strongly connected
+components. Self-relations count in both directions and as internal group
+relations.
 
 When groups overlap, one source relation contributes to every applicable group
 pair; group totals therefore need not sum to the repository total.
@@ -379,15 +380,18 @@ Map-level `tests.static_case_occurrences`,
 `tests.candidate_case_occurrences`, `tests.routed_cases`, and
 `tests.observed_cases` distinguish static inventory, routed cases, and cases
 with project-owned observed symbol hits. `evidence.current_relations`,
-`evidence.unknown_relations`, and `evidence.stale_relations` count source
-relation records contributing to the selected graph, including self-relations
-collapsed in graph presentation, and retain graph completeness. Every
-aggregate includes its denominator. When graph evidence is incomplete,
-Markdown prefixes known counts with `>=` and reports no detected cycle as
+`evidence.unknown_relations`, `evidence.stale_relations`,
+`evidence.candidate_relations`, `evidence.ambiguous_relations`, and
+`evidence.unresolved_relations` count relation evidence records contributing
+to the selected graph and retain graph completeness. Every aggregate includes
+its denominator. An exhaustive Metrics view reports median, p90, p95, maximum,
+cycle burden, and boundary fractions. Incomplete populations omit quantiles,
+prefix proven lower bounds with `>=`, and report no detected cycle as
 `unknown`; a detected cycle remains `yes`. `cycle-kind` separates multi-node
 cycles, self-loops, noncyclic nodes, and unknowns without changing the
-`graph.cyclic` fact. These are measurements, not quality scores. Project-owned
-limits use the existing predicates:
+`graph.cyclic` fact. Summaries do not replace the exact values consumed by
+Verify. These are measurements, not quality scores. Project-owned limits use
+the existing predicates:
 
 ```json
 {

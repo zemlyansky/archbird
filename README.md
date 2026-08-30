@@ -567,6 +567,8 @@ extent. Graph metrics operate on the selected directed graph:
 - `graph.internal_relations`, `graph.inbound_relations`, and
   `graph.outbound_relations` classify those witnesses for a selected component
   or layer grouping;
+- `graph.inbound_group_neighbors` and `graph.outbound_group_neighbors` count
+  distinct other groups connected across that boundary;
 - `graph.scc_size` and `graph.cyclic` expose strongly connected components
   without enumerating simple cycles.
 
@@ -577,16 +579,21 @@ Map-level `tests.static_case_occurrences`,
 `tests.candidate_case_occurrences`, `tests.routed_cases`, and
 `tests.observed_cases` distinguish static inventory, routed cases, and cases
 with project-owned observed symbol hits. `evidence.current_relations`,
-`evidence.unknown_relations`, and `evidence.stale_relations` count source
-relation records contributing to the selected graph, including self-relations
-collapsed in graph presentation.
+`evidence.unknown_relations`, `evidence.stale_relations`,
+`evidence.candidate_relations`, `evidence.ambiguous_relations`, and
+`evidence.unresolved_relations` count relation evidence records contributing
+to the selected graph, including self-relations collapsed in presentation.
 Every count includes its denominator; incomplete graph evidence makes the
 projection incomplete even when known counts are displayed. Markdown prefixes
 known graph counts with `>=`; no detected cycle is `unknown`, while a detected
 cycle remains `yes`. `cycle-kind` distinguishes multi-node cycles, self-loops,
 noncyclic nodes, and unknowns; it changes ranking and wording, not the
-`graph.cyclic` fact. These are measurements, not quality scores; projects own
-their thresholds:
+`graph.cyclic` fact. The Metrics view also reports exact median, p90, p95,
+maximum, cycle burden, and boundary fractions when the selected graph is
+exhaustive. Incomplete populations expose lower-bound maxima and omit
+quantiles; those summaries never replace the exact per-entity values consumed
+by Verify. These are measurements, not quality scores; projects own their
+thresholds:
 
 ```json
 {
