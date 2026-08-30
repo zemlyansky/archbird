@@ -74,6 +74,7 @@
         "retrieval",
         "context",
         "performance",
+        "retrieval_miss_ledger",
         "split_aggregation",
         "introduced_tests_role"
       ],
@@ -81,6 +82,7 @@
         "retrieval": {"$ref": "#/$defs/strings"},
         "context": {"$ref": "#/$defs/strings"},
         "performance": {"const": "observational_single_sample"},
+        "retrieval_miss_ledger": {"const": "terminal-cause-v1"},
         "split_aggregation": {"const": "separate"},
         "introduced_tests_role": {"const": "act_only"},
         "line_budgets": {

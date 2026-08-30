@@ -50,9 +50,9 @@
       "source": "schema/evaluation-corpus.schema.json"
     },
     {
-      "bytes": 4522,
+      "bytes": 4620,
       "path": "evaluation-protocol.schema.json",
-      "sha256": "47d7f02f4e00d6f40f975fd344bb15500bfa1845910ee0333ce571ec71a49a51",
+      "sha256": "4dbe96099b3d5e62f19b0f4e0cdb6fc38fc00f1b6be7d910a240f465d30d808d",
       "source": "schema/evaluation-protocol.schema.json"
     },
     {

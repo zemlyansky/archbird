@@ -586,6 +586,7 @@ def validate_protocol(
             "performance",
             "split_aggregation",
             "introduced_tests_role",
+            "retrieval_miss_ledger",
         },
         {"line_budgets"},
         f"{where}.metrics",
@@ -598,6 +599,10 @@ def validate_protocol(
         raise EvaluationError(f"{where}.metrics.split_aggregation is unsupported")
     if metrics["introduced_tests_role"] != "act_only":
         raise EvaluationError(f"{where}.metrics.introduced_tests_role is unsupported")
+    if metrics["retrieval_miss_ledger"] != "terminal-cause-v1":
+        raise EvaluationError(
+            f"{where}.metrics.retrieval_miss_ledger is unsupported"
+        )
     line_budgets = metrics.get("line_budgets", [200, 500, 1000, 2000])
     if (
         not isinstance(line_budgets, list)
@@ -1739,6 +1744,7 @@ def extract_rankings(
     list[str],
     list[str],
     Mapping[str, int],
+    Mapping[str, Any],
 ]:
     canonical_file_rows = [
         item
@@ -1835,7 +1841,7 @@ def extract_rankings(
     if not isinstance(allowed_confidence, list):
         allowed_confidence = None
 
-    def test_presented(row: Mapping[str, Any]) -> bool:
+    def test_exclusion(row: Mapping[str, Any]) -> str | None:
         axes = (
             row.get("provenance"),
             row.get("confidence"),
@@ -1844,7 +1850,7 @@ def extract_rankings(
             row.get("target"),
         )
         if not any(value is not None for value in axes):
-            return True
+            return None
         if any(value is None for value in axes):
             raise EvaluationError(
                 "case Query test route axes are partially specified"
@@ -1852,12 +1858,12 @@ def extract_rankings(
         provenance = row["provenance"]
         confidence = row["confidence"]
         if allowed_provenance is not None and provenance not in allowed_provenance:
-            return False
+            return "evidence_policy"
         if allowed_confidence is not None:
             if confidence not in allowed_confidence:
-                return False
+                return "evidence_policy"
         elif profile == "exact" and confidence != "exact":
-            return False
+            return "evidence_policy"
         seed_distance = row.get("seed_distance")
         if (
             isinstance(seed_distance, int)
@@ -1865,15 +1871,18 @@ def extract_rankings(
             and max_distance is not None
             and seed_distance > max_distance
         ):
-            return False
+            return "projection_boundary"
         if confidence == "candidate" and candidate_policy != "expand":
-            return False
+            return "evidence_policy"
         if confidence == "conservative" and conservative_policy != "expand":
-            return False
-        return True
+            return "evidence_policy"
+        return None
 
+    test_exclusions = [test_exclusion(row) for row in canonical_test_rows]
     eligible_test_rows = [
-        row for row in canonical_test_rows if test_presented(row)
+        row
+        for row, exclusion in zip(canonical_test_rows, test_exclusions)
+        if exclusion is None
     ]
     test_offset = context_count(offsets, "test_matches", 0)
     test_quota = context_count(
@@ -1935,6 +1944,15 @@ def extract_rankings(
             "canonical_symbol_evidence_returned": canonical_symbols,
             "canonical_test_evidence_returned": len(canonical_test_rows),
         },
+        {
+            "canonical_file_rows": canonical_file_rows,
+            "canonical_test_rows": canonical_test_rows,
+            "eligible_file_rows": eligible_file_rows,
+            "eligible_test_rows": eligible_test_rows,
+            "presented_file_rows": presented_file_rows,
+            "presented_test_rows": presented_test_rows,
+            "test_exclusions": test_exclusions,
+        },
     )
 
 
@@ -1989,6 +2007,349 @@ def extract_test_tiers(query: Mapping[str, Any]) -> Mapping[str, list[str]]:
             if strength <= limit:
                 result[name].append(identity)
     return {name: deduplicate(values) for name, values in result.items()}
+
+
+def retrieval_miss_ledger(
+    map_document: Mapping[str, Any],
+    query_document: Mapping[str, Any],
+    truth: Mapping[str, Any],
+    *,
+    top_k: int,
+    selection: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    """Classify each reviewed truth item at one terminal retrieval boundary."""
+    if top_k != 20:
+        raise EvaluationError("retrieval ledger currently requires top_k=20")
+    if selection is None:
+        *_, selection = extract_rankings(query_document)
+
+    def rows(name: str) -> list[Mapping[str, Any]]:
+        value = selection.get(name)
+        if not isinstance(value, list) or any(
+            not isinstance(row, dict) for row in value
+        ):
+            raise EvaluationError(f"retrieval ledger selection {name} is invalid")
+        return value
+
+    canonical_file_rows = rows("canonical_file_rows")
+    eligible_file_rows = rows("eligible_file_rows")
+    presented_file_rows = rows("presented_file_rows")
+    canonical_test_rows = rows("canonical_test_rows")
+    eligible_test_rows = rows("eligible_test_rows")
+    presented_test_rows = rows("presented_test_rows")
+    test_exclusions = selection.get("test_exclusions")
+    if (
+        not isinstance(test_exclusions, list)
+        or len(test_exclusions) != len(canonical_test_rows)
+        or any(
+            value not in {None, "evidence_policy", "projection_boundary"}
+            for value in test_exclusions
+        )
+    ):
+        raise EvaluationError("retrieval ledger test exclusions are invalid")
+
+    map_files: set[str] = set()
+    map_symbols: set[str] = set()
+    for file in map_document.get("files", []):
+        if not isinstance(file, dict) or not isinstance(file.get("path"), str):
+            continue
+        path = str(file["path"])
+        map_files.add(path)
+        for symbol in file.get("symbols", []):
+            identity = symbol_identity(symbol, inherited_path=path)
+            if identity is not None:
+                map_symbols.add(identity)
+    map_tests: set[str] = set()
+    for test in map_document.get("tests", []):
+        if not isinstance(test, dict) or not isinstance(test.get("path"), str):
+            continue
+        path = str(test["path"])
+        for case in test.get("cases", []):
+            if isinstance(case, dict) and isinstance(case.get("selector"), str):
+                map_tests.add(f"{path}::{case['selector']}")
+
+    metadata = query_document.get("query")
+    retrieval = metadata.get("retrieval") if isinstance(metadata, dict) else None
+    hits = retrieval.get("hits") if isinstance(retrieval, dict) else None
+    retrieval_complete = isinstance(hits, list) and all(
+        isinstance(hit, dict) for hit in hits
+    )
+    lexical_file_ranks: dict[str, int] = {}
+    lexical_symbol_ranks: dict[str, int] = {}
+    lexical_test_ranks: dict[str, int] = {}
+    if retrieval_complete:
+        for rank, hit in enumerate(hits, 1):
+            path = hit.get("path")
+            if not isinstance(path, str):
+                continue
+            lexical_file_ranks.setdefault(path, rank)
+            name = hit.get("name")
+            if hit.get("kind") == "symbol" and isinstance(name, str):
+                lexical_symbol_ranks.setdefault(f"{path}:{name}", rank)
+                lexical_test_ranks.setdefault(f"{path}::{name}", rank)
+
+    def file_identity(row: Mapping[str, Any]) -> str | None:
+        path = row.get("path")
+        return str(path) if isinstance(path, str) else None
+
+    def test_identity(row: Mapping[str, Any]) -> str | None:
+        path = row.get("path")
+        selector = row.get("selector")
+        if not isinstance(path, str) or not isinstance(selector, str):
+            return None
+        return f"{path}::{selector}"
+
+    def ordered_identities(
+        source: Sequence[Mapping[str, Any]],
+        identity: Any,
+    ) -> list[str]:
+        return deduplicate(
+            value for row in source if (value := identity(row)) is not None
+        )
+
+    matched_symbol_rows = [
+        row
+        for row in query_document.get("matched_symbols", [])
+        if isinstance(row, dict)
+    ]
+    matched_symbol_files = ordered_identities(matched_symbol_rows, file_identity)
+    matched_symbol_identities = deduplicate(
+        identity
+        for row in matched_symbol_rows
+        if (identity := symbol_identity(row)) is not None
+    )
+    canonical_file_ids = ordered_identities(canonical_file_rows, file_identity)
+    eligible_file_ids = ordered_identities(eligible_file_rows, file_identity)
+    presented_file_ids = ordered_identities(presented_file_rows, file_identity)
+    canonical_test_ids = ordered_identities(canonical_test_rows, test_identity)
+    eligible_test_ids = ordered_identities(eligible_test_rows, test_identity)
+    presented_test_ids = ordered_identities(presented_test_rows, test_identity)
+    canonical_test_files = ordered_identities(canonical_test_rows, file_identity)
+    eligible_test_files = ordered_identities(eligible_test_rows, file_identity)
+    presented_test_files = ordered_identities(presented_test_rows, file_identity)
+    canonical_context_files = deduplicate(
+        [*canonical_file_ids, *matched_symbol_files, *canonical_test_files]
+    )
+    eligible_context_files = deduplicate(
+        [*eligible_file_ids, *matched_symbol_files, *eligible_test_files]
+    )
+    presented_context_files = deduplicate(
+        [*presented_file_ids, *matched_symbol_files, *presented_test_files]
+    )
+
+    def symbol_rows(source: Sequence[Mapping[str, Any]]) -> list[str]:
+        result: list[str] = []
+        for file in source:
+            path = file.get("path")
+            if not isinstance(path, str):
+                continue
+            for symbol in file.get("symbols", []):
+                identity = symbol_identity(symbol, inherited_path=path)
+                if identity is not None:
+                    result.append(identity)
+        return deduplicate(result)
+
+    canonical_symbol_ids = deduplicate(
+        [*matched_symbol_identities, *symbol_rows(canonical_file_rows)]
+    )
+    eligible_symbol_ids = deduplicate(
+        [*matched_symbol_identities, *symbol_rows(eligible_file_rows)]
+    )
+    presented_symbol_ids = deduplicate(
+        [*matched_symbol_identities, *symbol_rows(presented_file_rows)]
+    )
+    evidence_excluded_tests = {
+        identity
+        for row, exclusion in zip(canonical_test_rows, test_exclusions)
+        if exclusion == "evidence_policy"
+        and (identity := test_identity(row)) is not None
+    }
+    projection_excluded_tests = {
+        identity
+        for row, exclusion in zip(canonical_test_rows, test_exclusions)
+        if exclusion == "projection_boundary"
+        and (identity := test_identity(row)) is not None
+    }
+    evidence_excluded_files = {
+        identity.split("::", 1)[0] for identity in evidence_excluded_tests
+    }
+    projection_excluded_files = {
+        identity.split("::", 1)[0] for identity in projection_excluded_tests
+    }
+
+    def ranks(values: Sequence[str]) -> Mapping[str, int]:
+        return {value: rank for rank, value in enumerate(values, 1)}
+
+    canonical_ranks = {
+        "files": ranks(canonical_context_files),
+        "symbols": ranks(canonical_symbol_ids),
+        "tests": ranks(canonical_test_ids),
+    }
+    eligible = {
+        "files": set(eligible_context_files),
+        "symbols": set(eligible_symbol_ids),
+        "tests": set(eligible_test_ids),
+    }
+    presented_ranks = {
+        "files": ranks(presented_context_files),
+        "symbols": ranks(presented_symbol_ids),
+        "tests": ranks(presented_test_ids),
+    }
+    map_inventory = {
+        "files": map_files,
+        "symbols": map_symbols,
+        "tests": map_tests,
+    }
+    lexical_ranks = {
+        "files": lexical_file_ranks,
+        "symbols": lexical_symbol_ranks,
+        "tests": lexical_test_ranks,
+    }
+
+    def file_row(identity: str) -> Mapping[str, Any] | None:
+        for row in canonical_file_rows:
+            if row.get("path") == identity:
+                return row
+        return None
+
+    def test_row(identity: str) -> Mapping[str, Any] | None:
+        for row in canonical_test_rows:
+            if test_identity(row) == identity:
+                return row
+        return None
+
+    introduced_tests = set(truth.get("introduced_tests", []))
+    projection_shape_known = (
+        isinstance(query_document.get("files"), list)
+        and isinstance(query_document.get("test_matches"), list)
+        and isinstance(query_document.get("matched_symbols", []), list)
+    )
+
+    def row(kind: str, identity: str) -> Mapping[str, Any]:
+        lexical_rank = lexical_ranks[kind].get(identity)
+        context_rank = presented_ranks[kind].get(identity)
+        projection_rank = canonical_ranks[kind].get(identity)
+        if kind == "tests" and identity in introduced_tests:
+            cause = "not_applicable_to_before_state"
+        elif identity not in map_inventory[kind]:
+            cause = "absent_from_Map"
+        elif context_rank is not None and context_rank <= top_k:
+            cause = f"hit@{top_k}"
+        elif context_rank is not None:
+            cause = f"ranked_below_{top_k}"
+        elif (
+            kind == "tests"
+            and identity in evidence_excluded_tests
+            and identity not in eligible[kind]
+        ) or (
+            kind == "files"
+            and identity in evidence_excluded_files
+            and identity not in eligible[kind]
+        ):
+            cause = "present_but_collapsed_by_evidence_policy"
+        elif identity in eligible[kind]:
+            cause = "present_but_omitted_by_context_budget"
+        elif projection_rank is not None or (
+            kind == "tests" and identity in projection_excluded_tests
+        ) or (
+            kind == "files" and identity in projection_excluded_files
+        ):
+            cause = "absent_from_projection"
+        elif projection_shape_known:
+            cause = "absent_from_projection"
+        else:
+            cause = "unknown"
+
+        if lexical_rank is not None:
+            origin = "lexical_seed"
+        elif context_rank is not None or projection_rank is not None:
+            origin = (
+                "test_route"
+                if kind == "tests"
+                or (
+                    kind == "files"
+                    and identity not in canonical_file_ids
+                    and identity in canonical_test_files
+                )
+                else "context_expansion"
+            )
+        elif retrieval_complete:
+            retrieval_count = retrieval.get("candidate_count")
+            origin = (
+                "unknown"
+                if isinstance(retrieval_count, int)
+                and retrieval_count > len(hits)
+                else "none"
+            )
+        else:
+            origin = "unknown"
+
+        evidence_state: str | None = None
+        confidence: str | None = None
+        seed_distance: int | None = None
+        if kind in {"files", "symbols"}:
+            path = identity if kind == "files" else identity.rsplit(":", 1)[0]
+            source = file_row(path)
+            if source is not None:
+                route = source.get("route")
+                if isinstance(route, dict) and isinstance(
+                    route.get("evidence_state"), str
+                ):
+                    evidence_state = str(route["evidence_state"])
+                distance = source.get("distance")
+                if isinstance(distance, int) and not isinstance(distance, bool):
+                    seed_distance = distance
+            elif kind == "files":
+                routed = next(
+                    (
+                        value
+                        for value in canonical_test_rows
+                        if value.get("path") == path
+                    ),
+                    None,
+                )
+                if routed is not None:
+                    if isinstance(routed.get("confidence"), str):
+                        confidence = str(routed["confidence"])
+                    distance = routed.get("seed_distance")
+                    if isinstance(distance, int) and not isinstance(distance, bool):
+                        seed_distance = distance
+        else:
+            source = test_row(identity)
+            if source is not None:
+                if isinstance(source.get("confidence"), str):
+                    confidence = str(source["confidence"])
+                distance = source.get("seed_distance")
+                if isinstance(distance, int) and not isinstance(distance, bool):
+                    seed_distance = distance
+        return {
+            "cause": cause,
+            "confidence": confidence,
+            "context_rank": context_rank,
+            "evidence_state": evidence_state,
+            "identity": identity,
+            "lexical_rank": lexical_rank,
+            "origin": origin,
+            "projection_rank": projection_rank,
+            "seed_distance": seed_distance,
+        }
+
+    result = {
+        "contract": "terminal-cause-v1",
+        "files": [row("files", identity) for identity in truth["relevant_files"]],
+        "symbols": [
+            row("symbols", identity) for identity in truth["relevant_symbols"]
+        ],
+        "tests": [
+            row("tests", identity)
+            for identity in sorted(
+                set(truth["relevant_tests"]) | introduced_tests,
+                key=str.encode,
+            )
+        ],
+        "top_k": top_k,
+    }
+    return result
 
 
 def source_line_count(path: Path) -> int:
@@ -2647,6 +3008,7 @@ def run_case(
                 matched_symbols,
                 ranked_tests,
                 canonical_evidence_counts,
+                _analysis_selection,
             ) = extract_rankings(analysis_document)
             seed_truth, matched_symbol_truth = selector_truth(
                 analysis["selectors"], worktree
@@ -2700,6 +3062,7 @@ def run_case(
             _issue_matched_symbols,
             issue_tests,
             issue_canonical_evidence_counts,
+            issue_selection,
         ) = extract_rankings(issue_query_document)
         issue_retrieval_files, issue_retrieval_symbols = (
             extract_retrieval_rankings(issue_query_document)
@@ -2708,6 +3071,13 @@ def run_case(
             {} if path_track else extract_test_tiers(analysis_document)
         )
         truth = case["ground_truth"]
+        retrieval_ledger = retrieval_miss_ledger(
+            map_document,
+            issue_query_document,
+            truth,
+            top_k=20,
+            selection=issue_selection,
+        )
         line_budgets = protocol["metrics"].get(
             "line_budgets", [200, 500, 1000, 2000]
         )
@@ -3178,6 +3548,7 @@ def run_case(
             },
             analysis_kind: analysis_observation,
             "review_status": entry["review_status"],
+            "retrieval_ledger": retrieval_ledger,
             "split": entry["split"],
             "status": "ok",
             "transition_track": verification_track,
@@ -3623,6 +3994,58 @@ def normalized_run_cases(run: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
     return normalized
 
 
+def compare_retrieval_ledgers(
+    before: object, after: object
+) -> list[Mapping[str, str]]:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return []
+    if (
+        before.get("contract") != "terminal-cause-v1"
+        or after.get("contract") != "terminal-cause-v1"
+        or before.get("top_k") != after.get("top_k")
+    ):
+        return []
+    result: list[Mapping[str, str]] = []
+    for kind in ("files", "symbols", "tests"):
+        left_rows = before.get(kind)
+        right_rows = after.get(kind)
+        if not isinstance(left_rows, list) or not isinstance(right_rows, list):
+            raise EvaluationError("evaluation retrieval ledger rows are invalid")
+        left = {
+            str(row["identity"]): row
+            for row in left_rows
+            if isinstance(row, dict)
+            and isinstance(row.get("identity"), str)
+            and isinstance(row.get("cause"), str)
+        }
+        right = {
+            str(row["identity"]): row
+            for row in right_rows
+            if isinstance(row, dict)
+            and isinstance(row.get("identity"), str)
+            and isinstance(row.get("cause"), str)
+        }
+        if len(left) != len(left_rows) or len(right) != len(right_rows):
+            raise EvaluationError("evaluation retrieval ledger row is invalid")
+        if set(left) != set(right):
+            raise EvaluationError("evaluation retrieval ledger identities differ")
+        for identity in sorted(left, key=str.encode):
+            before_cause = str(left[identity]["cause"])
+            after_cause = str(right[identity]["cause"])
+            result.append(
+                {
+                    "after": after_cause,
+                    "before": before_cause,
+                    "classification": (
+                        "unchanged" if before_cause == after_cause else "changed"
+                    ),
+                    "identity": identity,
+                    "kind": kind,
+                }
+            )
+    return result
+
+
 def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, Any]:
     for value in (before_sha, after_sha):
         if not SHA256_RE.fullmatch(value):
@@ -3732,6 +4155,9 @@ def compare_runs(root: Path, before_sha: str, after_sha: str) -> Mapping[str, An
                 "metrics": metrics,
                 "performance_status": performance_status,
                 "review_status": review_status,
+                "retrieval_transitions": compare_retrieval_ledgers(
+                    left.get("retrieval_ledger"), right.get("retrieval_ledger")
+                ),
                 "split": split,
                 "status": status,
             }

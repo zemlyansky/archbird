@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,12 @@ import sys
 REPOSITORY = Path(__file__).resolve().parents[1]
 TEMPORARY = REPOSITORY / "build/evaluation-test"
 EVALUATOR = REPOSITORY / "tools/evaluate.py"
+EVALUATION_SPEC = importlib.util.spec_from_file_location(
+    "archbird_evaluation", EVALUATOR
+)
+assert EVALUATION_SPEC is not None and EVALUATION_SPEC.loader is not None
+evaluation = importlib.util.module_from_spec(EVALUATION_SPEC)
+EVALUATION_SPEC.loader.exec_module(evaluation)
 
 
 def run(*arguments: str, environment: dict[str, str], check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -47,7 +54,189 @@ def write_json(path: Path, value: object) -> None:
     )
 
 
+def assert_retrieval_ledger_contract() -> None:
+    files = []
+    tests = []
+    query_files = []
+    query_tests = []
+    for index in range(1, 26):
+        path = {
+            1: "src/hit.py",
+            21: "src/below.py",
+            25: "src/omitted.py",
+        }.get(index, f"src/filler_{index:02d}.py")
+        symbol = {
+            1: "hit",
+            21: "below",
+            25: "omitted",
+        }.get(index, f"filler_{index:02d}")
+        files.append({"path": path, "symbols": [{"name": symbol}]})
+        query_files.append(
+            {
+                "distance": 0 if index == 1 else 1,
+                "path": path,
+                "route": {"evidence_state": "current"},
+                "symbols": [{"name": symbol}],
+            }
+        )
+        test_path = f"tests/test_{index:02d}.py"
+        selector = f"test_{index:02d}"
+        tests.append({"cases": [{"selector": selector}], "path": test_path})
+        query_tests.append(
+            {
+                "classification": "direct",
+                "confidence": "exact",
+                "evidence_scope": "case",
+                "path": test_path,
+                "provenance": "derived",
+                "seed_distance": 1,
+                "selector": selector,
+                "target": {"path": "src/hit.py", "symbol": "hit"},
+                "target_role": "transitive-context",
+            }
+        )
+    files.append(
+        {"path": "src/absent_projection.py", "symbols": [{"name": "absent"}]}
+    )
+    tests.append(
+        {
+            "cases": [{"selector": "test_absent"}],
+            "path": "tests/test_absent.py",
+        }
+    )
+    tests.append(
+        {
+            "cases": [{"selector": "test_collapsed"}],
+            "path": "tests/test_collapsed.py",
+        }
+    )
+    query_tests.insert(
+        1,
+        {
+            "classification": "conservative",
+            "confidence": "conservative",
+            "evidence_scope": "case",
+            "path": "tests/test_collapsed.py",
+            "provenance": "derived",
+            "seed_distance": 1,
+            "selector": "test_collapsed",
+            "target": {"path": "src/hit.py", "symbol": "hit"},
+            "target_role": "transitive-context",
+        },
+    )
+    map_document = {"files": files, "tests": tests}
+    query_document = {
+        "files": query_files,
+        "query": {
+            "context": {},
+            "retrieval": {
+                "candidate_count": 40,
+                "hits": [
+                    {"kind": "symbol", "name": "hit", "path": "src/hit.py"},
+                    {
+                        "kind": "symbol",
+                        "name": "test_01",
+                        "path": "tests/test_01.py",
+                    },
+                ],
+                "limit": 20,
+            },
+        },
+        "test_matches": query_tests,
+    }
+    truth = {
+        "introduced_tests": ["tests/test_new.py::test_new"],
+        "relevant_files": [
+            "src/absent_projection.py",
+            "src/below.py",
+            "src/hit.py",
+            "src/missing.py",
+            "src/omitted.py",
+        ],
+        "relevant_symbols": [
+            "src/absent_projection.py:absent",
+            "src/below.py:below",
+            "src/hit.py:hit",
+            "src/missing.py:missing",
+            "src/omitted.py:omitted",
+        ],
+        "relevant_tests": [
+            "tests/test_01.py::test_01",
+            "tests/test_21.py::test_21",
+            "tests/test_absent.py::test_absent",
+            "tests/test_collapsed.py::test_collapsed",
+            "tests/test_missing.py::test_missing",
+        ],
+    }
+    ledger = evaluation.retrieval_miss_ledger(
+        map_document, query_document, truth, top_k=20
+    )
+    assert ledger["contract"] == "terminal-cause-v1"
+    assert ledger["top_k"] == 20
+    causes = {
+        (kind, row["identity"]): row["cause"]
+        for kind in ("files", "symbols", "tests")
+        for row in ledger[kind]
+    }
+    assert causes[("files", "src/hit.py")] == "hit@20"
+    assert causes[("files", "src/below.py")] == "ranked_below_20"
+    assert causes[("files", "src/omitted.py")] == (
+        "present_but_omitted_by_context_budget"
+    )
+    assert causes[("files", "src/absent_projection.py")] == (
+        "absent_from_projection"
+    )
+    assert causes[("files", "src/missing.py")] == "absent_from_Map"
+    assert causes[("symbols", "src/hit.py:hit")] == "hit@20"
+    assert causes[("symbols", "src/below.py:below")] == "ranked_below_20"
+    assert causes[("symbols", "src/omitted.py:omitted")] == (
+        "present_but_omitted_by_context_budget"
+    )
+    assert causes[("tests", "tests/test_01.py::test_01")] == "hit@20"
+    assert causes[("tests", "tests/test_21.py::test_21")] == (
+        "ranked_below_20"
+    )
+    assert causes[("tests", "tests/test_collapsed.py::test_collapsed")] == (
+        "present_but_collapsed_by_evidence_policy"
+    )
+    assert causes[("tests", "tests/test_absent.py::test_absent")] == (
+        "absent_from_projection"
+    )
+    assert causes[("tests", "tests/test_missing.py::test_missing")] == (
+        "absent_from_Map"
+    )
+    assert causes[("tests", "tests/test_new.py::test_new")] == (
+        "not_applicable_to_before_state"
+    )
+    rows = {
+        (kind, row["identity"]): row
+        for kind in ("files", "symbols", "tests")
+        for row in ledger[kind]
+    }
+    assert rows[("files", "src/hit.py")]["origin"] == "lexical_seed"
+    assert rows[("files", "src/below.py")]["origin"] == "context_expansion"
+    assert rows[("files", "src/below.py")]["seed_distance"] == 1
+    assert rows[("files", "src/below.py")]["evidence_state"] == "current"
+    assert rows[("tests", "tests/test_collapsed.py::test_collapsed")][
+        "confidence"
+    ] == "conservative"
+    unknown = evaluation.retrieval_miss_ledger(
+        {"files": [{"path": "src/unknown.py", "symbols": []}], "tests": []},
+        {},
+        {
+            "introduced_tests": [],
+            "relevant_files": ["src/unknown.py"],
+            "relevant_symbols": [],
+            "relevant_tests": [],
+        },
+        top_k=20,
+    )
+    assert unknown["files"][0]["cause"] == "unknown"
+    assert unknown["files"][0]["origin"] == "unknown"
+
+
 def main() -> int:
+    assert_retrieval_ledger_contract()
     shutil.rmtree(TEMPORARY, ignore_errors=True)
     source = TEMPORARY / "source"
     root = TEMPORARY / "external"
@@ -191,13 +380,20 @@ Evidence: metrics=incomplete; exhaustive=no; unknown=2; unsupported=1; presentat
   if variant == 'fail':
     raise SystemExit(3)
   files = [
-    {'path':'src/a.py','sha256':('a' if out.name == 'map.json' else 'b')*64},
-    {'path':'src/other.py','sha256':'c'*64},
-    {'path':'tests/test_a.py','sha256':'d'*64},
+    {'path':'src/a.py','sha256':('a' if out.name == 'map.json' else 'b')*64,
+     'symbols':[{'name':'helper'},{'name':'target'}]},
+    {'path':'src/other.py','sha256':'c'*64,'symbols':[{'name':'other'}]},
+    {'path':'tests/test_a.py','sha256':'d'*64,
+     'symbols':[{'name':'test_target'}]},
   ]
   if out.name == 'after-map.json':
     files.append({'path':'tests/test_regression.py','sha256':'e'*64})
+  tests = [{'path':'tests/test_a.py','cases':[{'selector':'test_target'}]}]
+  if out.name == 'after-map.json':
+    tests.append({'path':'tests/test_regression.py',
+                  'cases':[{'selector':'test_regression'}]})
   value = {'artifact':'map','schema_version':7,'project':'fixture','files':files,
+           'tests':tests,
            'source_tool':{'name':'archbird','version':'0.test',
              'implementation_sha256':'1'*64}}
 elif command == 'diff':
@@ -239,8 +435,12 @@ elif command in ('query', 'impact'):
       'target_role':'transitive-context',
     })
   matched = ([{'path':'src/a.py','name':'target'}] if good else [])
+  retrieval = {'candidate_count':2,'hits':[
+    {'kind':'symbol','name':'target','path':'src/a.py'},
+    {'kind':'symbol','name':'test_target','path':'tests/test_a.py'},
+  ],'limit':20} if '--search' in sys.argv else {'candidate_count':0,'hits':[],'limit':20}
   value = {'artifact':'query','schema_version':7,'files':files,
-           'query':{'context':{}},
+           'query':{'context':{},'retrieval':retrieval},
            'matched_symbols':matched,'test_matches':matches}
 elif command == 'path':
   value = {
@@ -369,6 +569,7 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
             "line_budgets": [20, 100],
             "performance": "observational_single_sample",
             "retrieval": ["mrr", "recall_all", "recall_at_20"],
+            "retrieval_miss_ledger": "terminal-cause-v1",
             "split_aggregation": "separate",
         },
         "operations": {
@@ -807,6 +1008,14 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     row = comparison["cases"][0]
     assert row["metrics"]["relevant_file_recall_all"]["classification"] == "improved"
     assert row["metrics"]["relevant_test_recall_all"]["classification"] == "improved"
+    transitions = {
+        (item["kind"], item["identity"]): item
+        for item in row["retrieval_transitions"]
+    }
+    assert transitions[("files", "src/a.py")]["before"] == (
+        "absent_from_projection"
+    )
+    assert transitions[("files", "src/a.py")]["after"] == "hit@20"
     assert row["metrics"]["verification_false_findings"]["classification"] == "improved"
     assert (
         row["metrics"]["verification_transition_accuracy"]["classification"]
@@ -862,6 +1071,28 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert second["cases"][0]["metrics"]["issue_file_recall_all"] == 0.5
     assert second["cases"][0]["metrics"]["issue_context_file_recall_all"] == 1.0
     assert second["cases"][0]["metrics"]["issue_test_recall_all"] == 1.0
+    ledger = second["cases"][0]["retrieval_ledger"]
+    assert ledger["contract"] == "terminal-cause-v1"
+    assert ledger["top_k"] == 20
+    ledger_rows = {
+        (kind, item["identity"]): item
+        for kind in ("files", "symbols", "tests")
+        for item in ledger[kind]
+    }
+    assert ledger_rows[("files", "src/a.py")]["cause"] == "hit@20"
+    assert ledger_rows[("files", "src/a.py")]["origin"] == "lexical_seed"
+    assert ledger_rows[("files", "tests/test_a.py")]["origin"] == (
+        "lexical_seed"
+    )
+    assert ledger_rows[("symbols", "src/a.py:helper")]["cause"] == (
+        "absent_from_projection"
+    )
+    assert ledger_rows[("tests", "tests/test_a.py::test_target")][
+        "cause"
+    ] == "hit@20"
+    assert ledger_rows[("tests", "tests/test_regression.py::test_regression")][
+        "cause"
+    ] == "not_applicable_to_before_state"
     assert second["cases"][0]["artifacts"]["issue_query"]["bytes"] > 0
     assert second["cases"][0]["metrics"]["seed_file_recall_all"] == 1.0
     assert second["cases"][0]["metrics"]["seed_file_truth"] == 1
