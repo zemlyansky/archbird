@@ -571,6 +571,7 @@ static ArchbirdStatus call_index(DiffContext *context, const AbValue *map,
     ab_buffer_free(&value);
     ab_buffer_free(&key);
   }
+  /* Group across all cases so repeated callsites retain multiset semantics. */
   if (status == ARCHBIRD_OK && grouped.count > 1)
     qsort(grouped.items, grouped.count, sizeof(*grouped.items),
           pair_full_compare);
@@ -983,7 +984,6 @@ test_route_evidence_rows(DiffContext *context, DiffIndex *out,
   static char empty_data[] = "";
   static const AbString empty = {empty_data, 0};
   static const char *const position_fields[] = {"fact_id", "line", "span"};
-  DiffIndex grouped = {0};
   size_t index;
   ArchbirdStatus status = ARCHBIRD_OK;
   if (!rows)
@@ -1032,9 +1032,52 @@ test_route_evidence_rows(DiffContext *context, DiffIndex *out,
                                       sizeof(position_fields) /
                                           sizeof(position_fields[0]));
     if (status == ARCHBIRD_OK)
-      status = add_buffers(context, &grouped, &key, &value);
+      status = add_buffers(context, out, &key, &value);
     ab_buffer_free(&value);
     ab_buffer_free(&key);
+  }
+  return status;
+}
+
+static ArchbirdStatus test_route_evidence_index(DiffContext *context,
+                                                const AbValue *map,
+                                                DiffIndex *out) {
+  const AbValue *tests = required_member(context, map, "tests", AB_VALUE_ARRAY);
+  DiffIndex grouped = {0};
+  size_t index;
+  ArchbirdStatus status = tests ? ARCHBIRD_OK : ARCHBIRD_INVALID_SCHEMA;
+  for (index = 0; status == ARCHBIRD_OK && index < tests->as.array.count;
+       index++) {
+    const AbValue *test = &tests->as.array.items[index];
+    const AbValue *path =
+        required_member(context, test, "path", AB_VALUE_STRING);
+    const AbValue *group =
+        required_member(context, test, "group", AB_VALUE_STRING);
+    const AbValue *cases =
+        required_member(context, test, "cases", AB_VALUE_ARRAY);
+    size_t case_index;
+    if (!path || !group || !cases) {
+      status = ARCHBIRD_INVALID_SCHEMA;
+      break;
+    }
+    if (!cases->as.array.count)
+      status = test_route_evidence_rows(
+          context, &grouped, &group->as.text, &path->as.text, &path->as.text,
+          ab_value_member(test, "route_evidence"));
+    for (case_index = 0;
+         status == ARCHBIRD_OK && case_index < cases->as.array.count;
+         case_index++) {
+      const AbValue *test_case = &cases->as.array.items[case_index];
+      const AbValue *selector =
+          required_member(context, test_case, "selector", AB_VALUE_STRING);
+      if (!selector) {
+        status = ARCHBIRD_INVALID_SCHEMA;
+        break;
+      }
+      status = test_route_evidence_rows(
+          context, &grouped, &group->as.text, &path->as.text,
+          &selector->as.text, ab_value_member(test_case, "route_evidence"));
+    }
   }
   if (status == ARCHBIRD_OK && grouped.count > 1)
     qsort(grouped.items, grouped.count, sizeof(*grouped.items),
@@ -1075,44 +1118,6 @@ test_route_evidence_rows(DiffContext *context, DiffIndex *out,
     }
   }
   diff_index_free(context->engine, &grouped);
-  return status;
-}
-
-static ArchbirdStatus test_route_evidence_index(DiffContext *context,
-                                                const AbValue *map,
-                                                DiffIndex *out) {
-  const AbValue *tests = required_member(context, map, "tests", AB_VALUE_ARRAY);
-  size_t index;
-  ArchbirdStatus status = tests ? ARCHBIRD_OK : ARCHBIRD_INVALID_SCHEMA;
-  for (index = 0; status == ARCHBIRD_OK && index < tests->as.array.count;
-       index++) {
-    const AbValue *test = &tests->as.array.items[index];
-    const AbValue *path =
-        required_member(context, test, "path", AB_VALUE_STRING);
-    const AbValue *group =
-        required_member(context, test, "group", AB_VALUE_STRING);
-    const AbValue *cases =
-        required_member(context, test, "cases", AB_VALUE_ARRAY);
-    size_t case_index;
-    if (!path || !group || !cases)
-      return ARCHBIRD_INVALID_SCHEMA;
-    if (!cases->as.array.count)
-      status = test_route_evidence_rows(
-          context, out, &group->as.text, &path->as.text, &path->as.text,
-          ab_value_member(test, "route_evidence"));
-    for (case_index = 0;
-         status == ARCHBIRD_OK && case_index < cases->as.array.count;
-         case_index++) {
-      const AbValue *test_case = &cases->as.array.items[case_index];
-      const AbValue *selector =
-          required_member(context, test_case, "selector", AB_VALUE_STRING);
-      if (!selector)
-        return ARCHBIRD_INVALID_SCHEMA;
-      status = test_route_evidence_rows(
-          context, out, &group->as.text, &path->as.text, &selector->as.text,
-          ab_value_member(test_case, "route_evidence"));
-    }
-  }
   return status == ARCHBIRD_OK ? index_finish(context, out) : status;
 }
 

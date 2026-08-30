@@ -183,6 +183,7 @@ test-py: build-py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_coverage_observations.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_frontend_input_budget.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_map_report_scaling.py
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_diff_route_scaling.py $(CURDIR)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_source_extent_merge.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_source_report_scaling.py
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_python_provider_applicability.py

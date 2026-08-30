@@ -115,6 +115,18 @@ def shifted_positions(before: dict[str, object]) -> dict[str, object]:
     return after
 
 
+def repeated_route_fixture(before: dict[str, object]) -> dict[str, object]:
+    repeated = copy.deepcopy(before)
+    repeated_case = copy.deepcopy(repeated["tests"][0]["cases"][0])
+    repeated_case["route_evidence"][0].update(
+        fact_id="route-2",
+        line=8,
+        span={"end": 44, "start": 38},
+    )
+    repeated["tests"][0]["cases"].append(repeated_case)
+    return repeated
+
+
 def write_case(root: Path, name: str, before: object, after: object) -> tuple[Path, Path]:
     before_path = root / f"{name}-before.json"
     after_path = root / f"{name}-after.json"
@@ -174,6 +186,74 @@ def main() -> int:
     temporary_root = repository / "build/tmp"
     temporary_root.mkdir(parents=True, exist_ok=True)
     before = position_fixture(repository)
+    repeated_route = repeated_route_fixture(before)
+    repeated_self = json.loads(
+        _native.map_diff(encode(repeated_route), encode(repeated_route))
+    )
+    if any(repeated_self["sections"]["test_route_evidence"].values()):
+        raise AssertionError(repeated_self["sections"]["test_route_evidence"])
+    repeated_delta = json.loads(
+        _native.map_diff(encode(before), encode(repeated_route))
+    )
+    repeated_change = repeated_delta["sections"]["test_route_evidence"]
+    if (
+        len(repeated_change["changed"]) != 1
+        or repeated_change["added"]
+        or repeated_change["removed"]
+    ):
+        raise AssertionError(repeated_change)
+    reordered_route = copy.deepcopy(repeated_route)
+    reordered_route["tests"][0]["cases"].reverse()
+    reordered_delta = json.loads(
+        _native.map_diff(encode(repeated_route), encode(reordered_route))
+    )
+    if any(reordered_delta["sections"]["test_route_evidence"].values()):
+        raise AssertionError(reordered_delta["sections"]["test_route_evidence"])
+    semantic_route = copy.deepcopy(repeated_route)
+    semantic_route["tests"][0]["cases"][1]["route_evidence"][0]["claim"] = (
+        "observed-route"
+    )
+    semantic_delta = json.loads(
+        _native.map_diff(encode(repeated_route), encode(semantic_route))
+    )
+    semantic_change = semantic_delta["sections"]["test_route_evidence"]
+    if (
+        len(semantic_change["changed"]) != 1
+        or semantic_change["added"]
+        or semantic_change["removed"]
+    ):
+        raise AssertionError(semantic_change)
+    distinct_route = copy.deepcopy(repeated_route)
+    distinct_route["tests"][0]["cases"][1]["selector"] = "api:remove"
+    distinct_self = json.loads(
+        _native.map_diff(encode(distinct_route), encode(distinct_route))
+    )
+    if any(distinct_self["sections"]["test_route_evidence"].values()):
+        raise AssertionError(distinct_self["sections"]["test_route_evidence"])
+    malformed_route = copy.deepcopy(repeated_route)
+    del malformed_route["tests"][0]["cases"][1]["route_evidence"][0]["provider"]
+    try:
+        _native.map_diff(encode(malformed_route), encode(malformed_route))
+    except _native.Error:
+        pass
+    else:
+        raise AssertionError("Diff accepted malformed repeated route evidence")
+    for group, path, provider in (
+        ("javascript", "test/api.test.js", "typescript"),
+        ("c", "test/test_api.c", "tree-sitter-c"),
+        ("r", "tests/testthat/test-api.R", "tree-sitter-r"),
+    ):
+        language_route = copy.deepcopy(before)
+        language_route["tests"][0].update(group=group, path=path)
+        language_route["tests"][0]["cases"][0]["route_evidence"][0][
+            "provider"
+        ] = provider
+        language_route = repeated_route_fixture(language_route)
+        language_self = json.loads(
+            _native.map_diff(encode(language_route), encode(language_route))
+        )
+        if any(language_self["sections"]["test_route_evidence"].values()):
+            raise AssertionError(language_self["sections"]["test_route_evidence"])
     position_only = shifted_positions(before)
     position_delta = json.loads(_native.map_diff(encode(before), encode(position_only)))
     for section in ("symbol_calls", "symbol_references", "test_route_evidence"):
@@ -212,6 +292,29 @@ def main() -> int:
                 )
         if positional_results["python"].stdout != positional_results["node"].stdout:
             raise AssertionError("positional saved Diff diverged across hosts")
+
+        assert_case(
+            root,
+            "repeated-route-self",
+            repeated_route,
+            repeated_route,
+            None,
+            0,
+            repository=repository,
+            node=node,
+            addon=addon,
+        )
+        assert_case(
+            root,
+            "repeated-route-count",
+            before,
+            repeated_route,
+            None,
+            1,
+            repository=repository,
+            node=node,
+            addon=addon,
+        )
 
         config_path = root / "archbird.json"
         config_path.write_text('{"project":"not-a-map"}\n', encoding="utf-8")
