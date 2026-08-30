@@ -218,6 +218,8 @@ does not turn it into proof.
 
 Add `--check` when automation specifically requires a proven `found` result.
 Repository-dependent examples omit it because an honest `unknown` is valid.
+Checked `unknown` and `absent` results still emit their artifact before
+returning exit status 1.
 
 ### Compare revisions or implementations
 

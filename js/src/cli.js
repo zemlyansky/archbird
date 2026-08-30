@@ -1583,13 +1583,6 @@ function pathMain(argv) {
     throw error;
   }
   const artifact = JSON.parse(pathJson);
-  if (options.check && artifact.outcome !== "found") {
-    progress.clear();
-    process.stderr.write(
-      `archbird: check failed: connection path outcome is ${artifact.outcome}\n`,
-    );
-    return 1;
-  }
   const encoded = options.format === "json"
     ? pathJson
     : archbird.renderPathMarkdown(pathJson, {
@@ -1597,6 +1590,12 @@ function pathMain(argv) {
     });
   progress.finish();
   write(encoded, options.output);
+  if (options.check && artifact.outcome !== "found") {
+    process.stderr.write(
+      `archbird: check failed: connection path outcome is ${artifact.outcome}\n`,
+    );
+    return 1;
+  }
   return 0;
 }
 

@@ -2512,15 +2512,6 @@ def _path_main(argv: Sequence[str]) -> int:
         }
         canonical = path_map_json(map_json, source, target, **options)
         artifact = json.loads(canonical)
-        if args.check:
-            if artifact.get("outcome") != "found":
-                progress.clear()
-                print(
-                    "archbird: check failed: connection path outcome is "
-                    f"{artifact.get('outcome', 'invalid')}",
-                    file=sys.stderr,
-                )
-                return 1
         if args.format == "json":
             encoded = (
                 _native.json_canonicalize(canonical, pretty=True)
@@ -2534,6 +2525,13 @@ def _path_main(argv: Sequence[str]) -> int:
             )
         progress.finish()
         _write(encoded, args.output)
+        if args.check and artifact.get("outcome") != "found":
+            print(
+                "archbird: check failed: connection path outcome is "
+                f"{artifact.get('outcome', 'invalid')}",
+                file=sys.stderr,
+            )
+            return 1
         return 0
     except _native.Error as error:
         progress.clear()

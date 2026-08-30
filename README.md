@@ -326,7 +326,8 @@ evidence, or a depth frontier remain `unknown`.
 
 Add `--check` when a script specifically requires a proven `found` result.
 Repository-dependent examples omit it because an honest `unknown` is a valid
-answer.
+answer. Checked `unknown` and `absent` results still emit their artifact before
+returning exit status 1.
 
 Rendering a saved Path validates its exact artifact shape, content digest, and
 cross-field proof invariants before producing Markdown. A `current` witness

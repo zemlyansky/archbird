@@ -600,6 +600,10 @@ fs.writeFileSync(
   "export function selected() { return 1; }\n" +
     "export function peer() { return 2; }\n",
 );
+fs.writeFileSync(
+  path.join(sourceCliFixture, "src/other.js"),
+  "export function other() { return 3; }\n",
+);
 const sourceCli = path.resolve(process.argv[3], "js/src/cli.js");
 const sourceCliStandard = spawnSync(process.execPath, [
   sourceCli, "query", sourceCliFixture,
@@ -644,6 +648,23 @@ assert.deepEqual(
   sourceCliPathArtifact.paths[0].nodes,
   ["file:src/api.js"],
 );
+const sourceCliUnknownOutput = path.join(sourceCliFixture, "unknown-path.json");
+fs.writeFileSync(sourceCliUnknownOutput, "stale output\n");
+const sourceCliUnknown = spawnSync(process.execPath, [
+  sourceCli, "path", "missing.js", "src/api.js",
+  "--map", sourceCliMap, "--relation", "imports",
+  "--format", "json", "--output", sourceCliUnknownOutput,
+  "--check", "--progress", "never",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliUnknown.status, 1, sourceCliUnknown.stderr);
+assert.equal(JSON.parse(fs.readFileSync(sourceCliUnknownOutput)).outcome, "unknown");
+const sourceCliAbsent = spawnSync(process.execPath, [
+  sourceCli, "path", "src/api.js", "src/other.js",
+  "--map", sourceCliMap, "--relation", "imports",
+  "--format", "json", "--check", "--progress", "never",
+], { encoding: "utf8", env: process.env });
+assert.equal(sourceCliAbsent.status, 1, sourceCliAbsent.stderr);
+assert.equal(JSON.parse(sourceCliAbsent.stdout).outcome, "absent");
 const sourceCliPathInvalid = spawnSync(process.execPath, [
   sourceCli, "path", "src/api.js", "src/api.js",
   "--map", sourceCliMap, "--config", "ignored.json",

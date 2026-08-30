@@ -32,6 +32,17 @@ from archbird.cli import main as cli_main  # noqa: E402
 from archbird.schema import read_schema, schema_names  # noqa: E402
 
 
+class _BinaryStdout:
+    def __init__(self) -> None:
+        self.buffer = io.BytesIO()
+
+    def write(self, value: str) -> int:
+        return len(value)
+
+    def flush(self) -> None:
+        return None
+
+
 def endpoint(patterns: list[str]) -> dict[str, object]:
     return {"kind": "file", "patterns": patterns}
 
@@ -474,10 +485,40 @@ def main() -> None:
             or json.loads(saved_path.read_bytes())["outcome"] != "found"
         ):
             raise AssertionError("live or saved-Map Path CLI failed")
-        candidate_check_status = cli_main(
+        candidate_stdout = _BinaryStdout()
+        with contextlib.redirect_stdout(candidate_stdout):
+            candidate_check_status = cli_main(
+                [
+                    "path",
+                    "a",
+                    "b",
+                    "--map",
+                    str(map_path),
+                    "--level",
+                    "symbol",
+                    "--relation",
+                    "calls",
+                    "--format",
+                    "markdown",
+                    "--progress",
+                    "never",
+                    "--check",
+                ]
+            )
+        if (
+            candidate_check_status != 1
+            or b"Outcome: `unknown` (`candidate-witnesses`)"
+            not in candidate_stdout.buffer.getvalue()
+        ):
+            raise AssertionError(
+                "candidate-only checked Markdown did not preserve its artifact"
+            )
+        unknown_path = artifacts / "checked-unknown.json"
+        unknown_path.write_bytes(b"stale output\n")
+        unknown_status = cli_main(
             [
                 "path",
-                "a",
+                "missing",
                 "b",
                 "--map",
                 str(map_path),
@@ -486,14 +527,42 @@ def main() -> None:
                 "--relation",
                 "calls",
                 "--format",
-                "markdown",
+                "json",
                 "--progress",
                 "never",
                 "--check",
+                "--output",
+                str(unknown_path),
             ]
         )
-        if candidate_check_status != 1:
-            raise AssertionError("candidate-only checked Markdown succeeded")
+        if (
+            unknown_status != 1
+            or json.loads(unknown_path.read_bytes())["outcome"] != "unknown"
+        ):
+            raise AssertionError("checked unknown Path left stale output")
+        absent_stdout = _BinaryStdout()
+        with contextlib.redirect_stdout(absent_stdout):
+            absent_status = cli_main(
+                [
+                    "path",
+                    "d.js",
+                    "a.js",
+                    "--map",
+                    str(map_path),
+                    "--relation",
+                    "imports",
+                    "--format",
+                    "json",
+                    "--progress",
+                    "never",
+                    "--check",
+                ]
+            )
+        if (
+            absent_status != 1
+            or json.loads(absent_stdout.buffer.getvalue())["outcome"] != "absent"
+        ):
+            raise AssertionError("checked absent Path did not emit its artifact")
         invalid_stderr = io.StringIO()
         with contextlib.redirect_stderr(invalid_stderr):
             invalid_status = cli_main(
