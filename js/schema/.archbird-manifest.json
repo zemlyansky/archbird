@@ -50,9 +50,9 @@
       "source": "schema/evaluation-corpus.schema.json"
     },
     {
-      "bytes": 4085,
+      "bytes": 4522,
       "path": "evaluation-protocol.schema.json",
-      "sha256": "cdf816248dc63a311f3ebeb266103d99b76aeb24e683f506ab48619fcd5fc7fa",
+      "sha256": "47d7f02f4e00d6f40f975fd344bb15500bfa1845910ee0333ce571ec71a49a51",
       "source": "schema/evaluation-protocol.schema.json"
     },
     {
@@ -74,9 +74,9 @@
       "source": "schema/evaluation-reservation.schema.json"
     },
     {
-      "bytes": 3371,
+      "bytes": 3780,
       "path": "evaluation-run.schema.json",
-      "sha256": "ee716df42d921eaaf22c5d530286fdfd577500790ec87c8f7311da97c52e20f7",
+      "sha256": "3fb35796ed09959372a6b8b9b76ea08301c15d8f73aa8f376e95be90481bf7dd",
       "source": "schema/evaluation-run.schema.json"
     },
     {

@@ -138,6 +138,56 @@ elif command == 'map':
     marker.write_text('warm')
   elif out.name == 'after-map.json':
     assert marker.read_text() == 'warm'
+  if '--view' in sys.argv:
+    assert sys.argv[sys.argv.index('--view') + 1] == 'metrics'
+    assert marker.read_text() == 'warm'
+    assert '--check' in sys.argv
+    assert sys.argv[sys.argv.index('--detail') + 1] == 'standard'
+    assert sys.argv[sys.argv.index('--max-chars') + 1] == '12000'
+    assert sys.argv[sys.argv.index('--progress') + 1] == 'never'
+    preset = out.stem.removeprefix('metrics-')
+    assert preset in ('default', 'imports')
+    if preset == 'imports':
+      assert sys.argv[sys.argv.index('--relations') + 1] == 'imports'
+    else:
+      assert '--relations' not in sys.argv
+    if variant == 'empty-metrics':
+      out.write_bytes(b'')
+      raise SystemExit(0)
+    if variant == 'oversized-metrics':
+      out.write_bytes(b'x' * 12001)
+      raise SystemExit(0)
+    if variant == 'mutating-metrics':
+      (out.parent / 'after-map.json').write_text('{}')
+    projection = ('6' if preset == 'default' else '7') * 64
+    report = '''# fixture code metrics
+
+## Declaration extent
+
+- `file:src/a.py`: max=2 lines; measured=1; unknown=1
+
+## Graph structure
+
+- `file:src/a.py`: out-neighbors=>=1; in-neighbors=>=1; out-relations=>=2; in-relations=>=2; scc-size=>=1; cyclic=yes
+- `file:src/other.py`: out-neighbors=>=1; in-neighbors=>=1; out-relations=>=1; in-relations=>=1; scc-size=>=2; cyclic=yes
+- `file:tests/test_a.py`: out-neighbors=>=0; in-neighbors=>=1; out-relations=>=0; in-relations=>=1; scc-size=>=1; cyclic=no
+- `file:tests/test_regression.py`: out-neighbors=>=0; in-neighbors=>=0; out-relations=>=0; in-relations=>=0; scc-size=>=1; cyclic=unknown (no known cycle)
+- ... 3 metric rows omitted
+
+## Group boundaries
+
+- `layer:python`: internal-relations=>=4; inbound-relations=>=0; outbound-relations=>=1
+- ... 1 group rows omitted
+
+## Metric completeness
+
+Result: files=4; indexed-symbols=2; entities=4; relations=5; diagnostics=0 (errors=0 warnings=0).
+Evidence: metrics=incomplete; exhaustive=no; unknown=2; unsupported=1; presentation-omitted=4; projection=`''' + projection + '''`.
+'''
+    if variant == 'malformed-metrics':
+      report = '# fixture code metrics\\n'
+    out.write_text(report)
+    raise SystemExit(0)
   if variant == 'fail':
     raise SystemExit(3)
   files = [
@@ -321,7 +371,14 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
             "retrieval": ["mrr", "recall_all", "recall_at_20"],
             "split_aggregation": "separate",
         },
-        "operations": {"diff": {"inputs": "saved_maps"}},
+        "operations": {
+            "diff": {"inputs": "saved_maps"},
+            "metrics": {
+                "cache_state": "warm_after_map",
+                "max_chars": 12000,
+                "presets": ["default", "imports"],
+            },
+        },
         "provenance": "asserted",
         "schema_version": 1,
         "split_policy": {
@@ -437,8 +494,15 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
         (REPOSITORY / "schema/evaluation-run.schema.json").read_text()
     )
     assert set(first).issubset(run_schema["properties"])
-    assert first["schema_version"] == 4
-    assert first["operations"] == {"diff": {"inputs": "saved_maps"}}
+    assert first["schema_version"] == 5
+    assert first["operations"] == {
+        "diff": {"inputs": "saved_maps"},
+        "metrics": {
+            "cache_state": "warm_after_map",
+            "max_chars": 12000,
+            "presets": ["default", "imports"],
+        },
+    }
     assert first["cache_policy"] == {
         "provider_cache": {
             "initial_state": "empty",
@@ -468,6 +532,38 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert diff_result["metrics"]["map_diff_map_git_content_paths_exact"] == 1.0
     assert "impact_git_file_recall_all" in diff_result["metrics"]
     assert not any(name.startswith("diff_file") for name in diff_result["metrics"])
+    metrics_operation = diff_result["operations"]["metrics"]
+    assert metrics_operation["status"] == "ok"
+    assert metrics_operation["cache_state"] == "warm_after_map"
+    assert metrics_operation["max_chars"] == 12000
+    assert set(metrics_operation["presets"]) == {"default", "imports"}
+    default_metrics = metrics_operation["presets"]["default"]["report"]
+    assert default_metrics["bytes"] <= 12000
+    assert default_metrics["completeness"] == {
+        "exhaustive": False,
+        "metrics": "incomplete",
+        "unknown": 2,
+        "unsupported": 1,
+    }
+    assert default_metrics["rows"] == {
+        "declaration": {"displayed": 1, "omitted": 0},
+        "graph": {"displayed": 4, "omitted": 3},
+        "group": {"displayed": 1, "omitted": 1},
+    }
+    assert default_metrics["cycles"] == {
+        "incomplete": 4,
+        "multi_node": 1,
+        "noncyclic": 1,
+        "singleton_cyclic": 1,
+        "unknown": 1,
+    }
+    assert (
+        diff_result["artifacts"]["metrics_default"]["sha256"]
+        == (default_metrics["sha256"])
+    )
+    assert diff_result["artifacts"]["metrics_imports"]["bytes"] <= 12000
+    assert diff_result["metrics"]["metrics_default_output_bytes"] > 0
+    assert diff_result["metrics"]["metrics_imports_output_bytes"] > 0
     path_result = next(
         row for row in first["cases"] if row["id"] == "zz-fixture-path-change"
     )
@@ -712,17 +808,26 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert row["metrics"]["relevant_file_recall_all"]["classification"] == "improved"
     assert row["metrics"]["relevant_test_recall_all"]["classification"] == "improved"
     assert row["metrics"]["verification_false_findings"]["classification"] == "improved"
-    assert row["metrics"]["verification_transition_accuracy"]["classification"] == "improved"
+    assert (
+        row["metrics"]["verification_transition_accuracy"]["classification"]
+        == "improved"
+    )
     assert comparison["summary"]["reviewed_quality"]["improved"] == 1
     second = json.loads((root / f"runs/{second_run}/result.json").read_text())
-    assert second["cases"][0]["artifacts"]["map_diff"]["sha256"] == first[
-        "cases"
-    ][0]["artifacts"]["map_diff"]["sha256"]
+    assert (
+        second["cases"][0]["artifacts"]["map_diff"]["sha256"]
+        == first["cases"][0]["artifacts"]["map_diff"]["sha256"]
+    )
+    for name in ("metrics_default", "metrics_imports"):
+        assert (
+            second["cases"][0]["artifacts"][name]["sha256"]
+            == first["cases"][0]["artifacts"][name]["sha256"]
+        )
     assert second["aggregate"]["reviewed_by_split"]["development"]["cases"] == 1
     assert second["aggregate"]["reviewed_by_split"]["held_out"]["cases"] == 0
-    assert second["aggregate"]["reviewed_by_split"]["development"][
-        "metrics_pooled"
-    ]["relevant_file"] == {
+    assert second["aggregate"]["reviewed_by_split"]["development"]["metrics_pooled"][
+        "relevant_file"
+    ] == {
         "hits_all": 1,
         "hits_at_5": 1,
         "hits_at_10": 1,
@@ -871,6 +976,86 @@ out.write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\\n')
     assert all(
         result["error"] == "public Diff mutated a saved Map input"
         for result in mutated_diff_run["cases"]
+    )
+
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "empty-metrics"
+    empty_metrics = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "empty-public-metrics",
+        environment=environment,
+        check=False,
+    )
+    assert empty_metrics.returncode == 2
+    state = json.loads((root / "state.json").read_text())
+    empty_metrics_run = json.loads(
+        (root / f"runs/{state['current_run_sha256']}/result.json").read_text()
+    )
+    assert all(
+        result["error"] == "public Metrics report is empty"
+        for result in empty_metrics_run["cases"]
+    )
+
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "oversized-metrics"
+    oversized_metrics = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "oversized-public-metrics",
+        environment=environment,
+        check=False,
+    )
+    assert oversized_metrics.returncode == 2
+    state = json.loads((root / "state.json").read_text())
+    oversized_metrics_run = json.loads(
+        (root / f"runs/{state['current_run_sha256']}/result.json").read_text()
+    )
+    assert all(
+        result["error"] == "public Metrics report exceeds max_chars (12001 > 12000)"
+        for result in oversized_metrics_run["cases"]
+    )
+
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "malformed-metrics"
+    malformed_metrics = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "malformed-public-metrics",
+        environment=environment,
+        check=False,
+    )
+    assert malformed_metrics.returncode == 2
+    state = json.loads((root / "state.json").read_text())
+    malformed_metrics_run = json.loads(
+        (root / f"runs/{state['current_run_sha256']}/result.json").read_text()
+    )
+    assert all(
+        result["error"] == "public Metrics report has no stable result tail"
+        for result in malformed_metrics_run["cases"]
+    )
+
+    environment["ARCHBIRD_EVAL_TEST_VARIANT"] = "mutating-metrics"
+    mutated_metrics = run(
+        "run",
+        "--archbird",
+        str(fake),
+        "--label",
+        "mutating-public-metrics",
+        environment=environment,
+        check=False,
+    )
+    assert mutated_metrics.returncode == 2
+    state = json.loads((root / "state.json").read_text())
+    mutated_metrics_run = json.loads(
+        (root / f"runs/{state['current_run_sha256']}/result.json").read_text()
+    )
+    assert all(
+        result["error"] == "public Metrics mutated a primary artifact"
+        for result in mutated_metrics_run["cases"]
     )
 
     failed_root = TEMPORARY / "failed-held-out-open"

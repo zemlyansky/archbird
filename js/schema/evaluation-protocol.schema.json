@@ -94,13 +94,25 @@
     "operations": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["diff"],
+      "required": ["diff", "metrics"],
       "properties": {
         "diff": {
           "type": "object",
           "additionalProperties": false,
           "required": ["inputs"],
           "properties": {"inputs": {"const": "saved_maps"}}
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cache_state", "max_chars", "presets"],
+          "properties": {
+            "cache_state": {"const": "warm_after_map"},
+            "max_chars": {"type": "integer", "minimum": 1024, "maximum": 1000000},
+            "presets": {
+              "const": ["default", "imports"]
+            }
+          }
         }
       }
     },

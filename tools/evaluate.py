@@ -25,7 +25,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
 SCHEMA_VERSION = 1
-RUN_SCHEMA_VERSION = 4
+RUN_SCHEMA_VERSION = 5
 COMPARISON_SCHEMA_VERSION = 3
 ROOT_ENV = "ARCHBIRD_EVAL_ROOT"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
@@ -617,13 +617,33 @@ def validate_protocol(
     operations = value["operations"]
     if not isinstance(operations, dict):
         raise EvaluationError(f"{where}.operations must be an object")
-    exact_keys(operations, {"diff"}, set(), f"{where}.operations")
+    exact_keys(operations, {"diff", "metrics"}, set(), f"{where}.operations")
     diff = operations["diff"]
     if not isinstance(diff, dict):
         raise EvaluationError(f"{where}.operations.diff must be an object")
     exact_keys(diff, {"inputs"}, set(), f"{where}.operations.diff")
     if diff["inputs"] != "saved_maps":
         raise EvaluationError(f"{where}.operations.diff.inputs is unsupported")
+    metrics_operation = operations["metrics"]
+    if not isinstance(metrics_operation, dict):
+        raise EvaluationError(f"{where}.operations.metrics must be an object")
+    exact_keys(
+        metrics_operation,
+        {"cache_state", "max_chars", "presets"},
+        set(),
+        f"{where}.operations.metrics",
+    )
+    if metrics_operation["cache_state"] != "warm_after_map":
+        raise EvaluationError(f"{where}.operations.metrics.cache_state is unsupported")
+    if (
+        not isinstance(metrics_operation["max_chars"], int)
+        or isinstance(metrics_operation["max_chars"], bool)
+        or metrics_operation["max_chars"] < 1024
+        or metrics_operation["max_chars"] > 1_000_000
+    ):
+        raise EvaluationError(f"{where}.operations.metrics.max_chars is invalid")
+    if metrics_operation["presets"] != ["default", "imports"]:
+        raise EvaluationError(f"{where}.operations.metrics.presets is unsupported")
 
     split_policy = value["split_policy"]
     if not isinstance(split_policy, dict):
@@ -1105,6 +1125,130 @@ def diff_section_counts(value: Mapping[str, Any]) -> Mapping[str, Any]:
             kind: len(section[kind]) for kind in ("added", "changed", "removed")
         }
     return counts
+
+
+METRICS_RESULT_RE = re.compile(
+    r"^Result: files=(\d+); indexed-symbols=(\d+); entities=(\d+); "
+    r"relations=(\d+); diagnostics=(\d+) \(errors=(\d+) warnings=(\d+)\)\.$"
+)
+METRICS_EVIDENCE_RE = re.compile(
+    r"^Evidence: metrics=(complete|incomplete|unknown); exhaustive=(yes|no); "
+    r"unknown=(\d+); unsupported=(\d+); presentation-omitted=(\d+); "
+    r"projection=`([0-9a-f]{64})`\.$"
+)
+METRICS_GRAPH_ROW_RE = re.compile(
+    r"^- `[^`]+`: .*; scc-size=(>=)?(\d+); "
+    r"cyclic=(yes|no|unknown \(no known cycle\))$"
+)
+
+
+def metrics_report_summary(path: Path, max_chars: int) -> Mapping[str, Any]:
+    try:
+        encoded = path.read_bytes()
+    except OSError as error:
+        raise EvaluationError(f"cannot read Metrics report {path}: {error}") from error
+    if not encoded:
+        raise EvaluationError("public Metrics report is empty")
+    if len(encoded) > max_chars:
+        raise EvaluationError(
+            f"public Metrics report exceeds max_chars ({len(encoded)} > {max_chars})"
+        )
+    try:
+        text = encoded.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise EvaluationError("public Metrics report is not UTF-8") from error
+    lines = text.splitlines()
+    nonblank = [line for line in lines if line]
+    if len(nonblank) < 2:
+        raise EvaluationError("public Metrics report has no stable result tail")
+    result_match = METRICS_RESULT_RE.fullmatch(nonblank[-2])
+    evidence_match = METRICS_EVIDENCE_RE.fullmatch(nonblank[-1])
+    if not result_match or not evidence_match:
+        raise EvaluationError("public Metrics report has an invalid result tail")
+
+    rows = {
+        name: {"displayed": 0, "omitted": 0}
+        for name in ("declaration", "graph", "group")
+    }
+    cycles = {
+        "incomplete": 0,
+        "multi_node": 0,
+        "noncyclic": 0,
+        "singleton_cyclic": 0,
+        "unknown": 0,
+    }
+    section: str | None = None
+    headings = {
+        "## Declaration extent": "declaration",
+        "## Graph structure": "graph",
+        "## Group boundaries": "group",
+    }
+    for line in lines:
+        if line.startswith("## "):
+            section = headings.get(line)
+            continue
+        if section is None:
+            continue
+        omitted_match = re.fullmatch(
+            r"- \.\.\. (\d+) (?:metric|group) rows omitted", line
+        )
+        if omitted_match:
+            rows[section]["omitted"] += int(omitted_match.group(1))
+            continue
+        if not line.startswith("- `"):
+            continue
+        rows[section]["displayed"] += 1
+        if section != "graph":
+            continue
+        graph_match = METRICS_GRAPH_ROW_RE.fullmatch(line)
+        if not graph_match:
+            raise EvaluationError("public Metrics graph row is malformed")
+        bounded, scc_size, cyclic = graph_match.groups()
+        size = int(scc_size)
+        if bounded or cyclic.startswith("unknown"):
+            cycles["incomplete"] += 1
+        if cyclic == "yes" and size > 1:
+            cycles["multi_node"] += 1
+        elif cyclic == "yes":
+            cycles["singleton_cyclic"] += 1
+        elif cyclic == "no":
+            cycles["noncyclic"] += 1
+        else:
+            cycles["unknown"] += 1
+
+    presentation_omitted = int(evidence_match.group(5))
+    row_omitted = sum(value["omitted"] for value in rows.values())
+    if row_omitted > presentation_omitted:
+        raise EvaluationError("public Metrics omission ledger is inconsistent")
+    return {
+        "bytes": len(encoded),
+        "completeness": {
+            "exhaustive": evidence_match.group(2) == "yes",
+            "metrics": evidence_match.group(1),
+            "unknown": int(evidence_match.group(3)),
+            "unsupported": int(evidence_match.group(4)),
+        },
+        "cycles": cycles,
+        "presentation_omitted": presentation_omitted,
+        "projection_sha256": evidence_match.group(6),
+        "result": {
+            key: int(value)
+            for key, value in zip(
+                (
+                    "files",
+                    "indexed_symbols",
+                    "entities",
+                    "relations",
+                    "diagnostics",
+                    "errors",
+                    "warnings",
+                ),
+                result_match.groups(),
+            )
+        },
+        "rows": rows,
+        "sha256": sha256_bytes(encoded),
+    }
 
 
 def corpus_document(
@@ -2824,6 +2968,147 @@ def run_case(
             "section_counts": section_counts,
             "status": "ok",
         }
+        metrics_policy = protocol["operations"]["metrics"]
+        primary_paths = {
+            "analysis": analysis_path,
+            "after_map": after_map_path,
+            "before_map": map_path,
+            "diff": diff_path,
+            "issue_query": issue_query_path,
+        }
+        primary_hashes = {
+            name: sha256_file(path) for name, path in primary_paths.items()
+        }
+        metrics_views: dict[str, Any] = {}
+        metrics_artifacts: dict[str, Any] = {}
+        for preset in metrics_policy["presets"]:
+            report_path = case_output / f"metrics-{preset}.md"
+            metrics_command = [
+                str(archbird),
+                "map",
+                str(worktree),
+                "--cache-dir",
+                str(cache_root),
+                "--cache-max-bytes",
+                str(PROVIDER_CACHE_MAX_BYTES),
+                "--config",
+                str(config_path),
+                "--view",
+                "metrics",
+                "--detail",
+                "standard",
+                "--max-chars",
+                str(metrics_policy["max_chars"]),
+                "--progress",
+                "never",
+                "--check",
+                "--output",
+                str(report_path),
+            ]
+            if preset == "imports":
+                metrics_command.extend(("--relations", "imports"))
+            observation = run_process(
+                metrics_command,
+                worktree,
+                case_output / f"metrics-{preset}.stdout",
+                case_output / f"metrics-{preset}.stderr",
+            )
+            if observation["returncode"] != 0 or not report_path.is_file():
+                return {
+                    "case_sha256": entry["case_sha256"],
+                    "error": f"public Metrics {preset} command failed",
+                    "id": case_id,
+                    "map": map_observation,
+                    "map_after": after_map_observation,
+                    "operations": {
+                        "diff": diff_operation,
+                        "metrics": {
+                            "cache_state": "warm_after_map",
+                            "presets": {
+                                **metrics_views,
+                                preset: {
+                                    "observation": observation,
+                                    "status": "error",
+                                },
+                            },
+                            "status": "error",
+                        },
+                    },
+                    analysis_kind: analysis_observation,
+                    "review_status": entry["review_status"],
+                    "split": entry["split"],
+                    "status": "error",
+                }
+            try:
+                report = metrics_report_summary(
+                    report_path, metrics_policy["max_chars"]
+                )
+            except EvaluationError as error:
+                return {
+                    "case_sha256": entry["case_sha256"],
+                    "error": str(error),
+                    "id": case_id,
+                    "map": map_observation,
+                    "map_after": after_map_observation,
+                    "operations": {
+                        "diff": diff_operation,
+                        "metrics": {
+                            "cache_state": "warm_after_map",
+                            "presets": {
+                                **metrics_views,
+                                preset: {
+                                    "observation": observation,
+                                    "status": "error",
+                                },
+                            },
+                            "status": "error",
+                        },
+                    },
+                    analysis_kind: analysis_observation,
+                    "review_status": entry["review_status"],
+                    "split": entry["split"],
+                    "status": "error",
+                }
+            if primary_hashes != {
+                name: sha256_file(path) for name, path in primary_paths.items()
+            }:
+                return {
+                    "case_sha256": entry["case_sha256"],
+                    "error": "public Metrics mutated a primary artifact",
+                    "id": case_id,
+                    "map": map_observation,
+                    "map_after": after_map_observation,
+                    "operations": {
+                        "diff": diff_operation,
+                        "metrics": {"status": "error"},
+                    },
+                    analysis_kind: analysis_observation,
+                    "review_status": entry["review_status"],
+                    "split": entry["split"],
+                    "status": "error",
+                }
+            metrics_views[preset] = {
+                "observation": observation,
+                "report": report,
+                "status": "ok",
+            }
+            metrics_artifacts[f"metrics_{preset}"] = {
+                "bytes": report["bytes"],
+                "sha256": report["sha256"],
+            }
+            metrics.update(
+                {
+                    f"metrics_{preset}_duration_ms": observation["duration_ms"],
+                    f"metrics_{preset}_max_rss_kib": observation["max_rss_kib"],
+                    f"metrics_{preset}_output_bytes": report["bytes"],
+                }
+            )
+        metrics_operation = {
+            "cache_state": metrics_policy["cache_state"],
+            "max_chars": metrics_policy["max_chars"],
+            "presets": metrics_views,
+            "status": "ok",
+        }
         checkout(
             repository,
             before_action_worktree,
@@ -2853,11 +3138,15 @@ def run_case(
                     "bytes": issue_query_path.stat().st_size,
                     "sha256": sha256_file(issue_query_path),
                 },
-                "map": {"bytes": map_path.stat().st_size, "sha256": sha256_file(map_path)},
+                "map": {
+                    "bytes": map_path.stat().st_size,
+                    "sha256": sha256_file(map_path),
+                },
                 "map_diff": {
                     "bytes": diff_path.stat().st_size,
                     "sha256": sha256_file(diff_path),
                 },
+                **metrics_artifacts,
                 analysis_kind: {
                     "bytes": analysis_path.stat().st_size,
                     "sha256": sha256_file(analysis_path),
@@ -2871,15 +3160,16 @@ def run_case(
             "map_after": after_map_observation,
             "map_tool": map_document.get("source_tool", map_document.get("tool")),
             "metrics": metrics,
-            "operations": {"diff": diff_operation},
+            "operations": {
+                "diff": diff_operation,
+                "metrics": metrics_operation,
+            },
             analysis_kind: analysis_observation,
             "review_status": entry["review_status"],
             "split": entry["split"],
             "status": "ok",
             "transition_track": verification_track,
-            "transition_observations": verification_runtime.get(
-                "observations", {}
-            ),
+            "transition_observations": verification_runtime.get("observations", {}),
         }
     finally:
         remove_checkout(repository, before_action_worktree)
