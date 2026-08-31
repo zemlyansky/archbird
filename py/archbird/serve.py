@@ -141,6 +141,7 @@ class LiveRepository:
         self,
         root: Path | str,
         *,
+        activity: Optional[Callable[[Mapping[str, object]], None]] = None,
         config: Optional[Path | str] = None,
         config_json: Optional[bytes] = None,
         no_config: bool = False,
@@ -148,7 +149,10 @@ class LiveRepository:
         poll_seconds: float = 0.35,
         debounce_seconds: float = 0.18,
     ) -> None:
+        if activity is not None and not callable(activity):
+            raise TypeError("activity must be callable or None")
         self.root = Path(root).resolve()
+        self.activity = activity
         self.config = Path(config).resolve() if config is not None else None
         self.config_json = bytes(config_json) if config_json is not None else None
         self.no_config = bool(no_config)
@@ -208,6 +212,24 @@ class LiveRepository:
                     subscriber.put_nowait(event)
                 except queue.Full:
                     self._subscribers.discard(subscriber)
+        self._activity(event_type, payload, generation)
+
+    def _activity(
+        self,
+        event: str,
+        payload: Mapping[str, object],
+        generation: Optional[str] = None,
+    ) -> None:
+        if self.activity is None:
+            return
+        record: dict[str, object] = {"event": event, **payload}
+        if generation:
+            record["generation"] = generation
+        try:
+            self.activity(record)
+        except Exception:
+            # Activity reporting must not affect repository analysis or responses.
+            pass
 
     def subscribe(self) -> queue.Queue[Optional[dict[str, object]]]:
         result: queue.Queue[Optional[dict[str, object]]] = queue.Queue(maxsize=64)
@@ -614,6 +636,74 @@ def _validate_request(value: object) -> dict[str, Any]:
     return value
 
 
+def _activity_text(value: object, limit: int = 120) -> str:
+    text = " ".join(str(value).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _operation_label(request: Mapping[str, Any]) -> Optional[str]:
+    method = request["method"]
+    payload = request["payload"]
+    if method == "projection":
+        plan = payload.get("plan")
+        plan = plan if isinstance(plan, Mapping) else {}
+        select = str(plan.get("select") or "projection")
+        if select == "metrics":
+            metric = _activity_text(plan.get("metric") or plan.get("id") or "unknown")
+            return f"metric {metric}"
+        if select == "graph":
+            grouping = str(plan.get("group_by") or "structure")
+            identity = str(plan.get("id") or "")
+            suffix = f"-{grouping}"
+            view = (
+                identity[4:-len(suffix)]
+                if identity.startswith("app-") and identity.endswith(suffix)
+                else identity.removeprefix("app-") or "architecture"
+            )
+            return f"view {view} · {grouping}"
+        identity = _activity_text(plan.get("id") or "")
+        return f"projection {select}{f' · {identity}' if identity else ''}"
+    if method == "view":
+        return f"view {payload.get('view') or 'components'}"
+    if method == "query":
+        query = payload.get("query")
+        query = query if isinstance(query, Mapping) else {}
+        for key, label in (
+            ("symbols", "symbol"),
+            ("paths", "path"),
+            ("components", "component"),
+            ("packages", "package"),
+            ("artifacts", "artifact"),
+            ("search", "search"),
+        ):
+            value = query.get(key)
+            selected = (
+                value[0]
+                if isinstance(value, Sequence)
+                and not isinstance(value, str)
+                and value
+                else value
+            )
+            if selected is not None and str(selected):
+                return f"query {label} {_activity_text(selected)}"
+        return "query"
+    if method == "source":
+        return f"source {_activity_text(payload.get('path') or 'unknown')}"
+    if method == "verification":
+        return "verification"
+    if method == "diff":
+        before = str(payload.get("before") or "unknown")[:12]
+        after = str(payload.get("after") or "unknown")[:12]
+        return f"diff {before} → {after}"
+    if method == "export":
+        view = _activity_text(payload.get("view") or "components")
+        format_name = _activity_text(payload.get("format") or "graphml")
+        return f"export {view} · {format_name}"
+    if method == "open-snapshot":
+        return f"snapshot {str(payload.get('generation') or 'unknown')[:12]}"
+    return None
+
+
 def _handler(repository: LiveRepository, static_root: Path):
     class Handler(BaseHTTPRequestHandler):
         server_version = "Archbird/1"
@@ -774,6 +864,8 @@ def _handler(repository: LiveRepository, static_root: Path):
                     raise ValueError(f"request body exceeds {BODY_LIMIT} bytes")
                 raw: object = json.loads(self.rfile.read(length))
                 request = _validate_request(raw)
+                label = _operation_label(request)
+                started = time.monotonic()
                 result = repository.request(request)
                 envelope = {
                     "generation": repository.current["generation"] if repository.current else None,
@@ -783,9 +875,30 @@ def _handler(repository: LiveRepository, static_root: Path):
                     "result": result,
                     "session": request["session"],
                 }
+                if label:
+                    repository._activity(
+                        "operation-complete",
+                        {
+                            "duration_ms": (time.monotonic() - started) * 1000,
+                            "label": label,
+                            "method": request["method"],
+                        },
+                    )
                 self._json(200, envelope)
             except Exception as error:
                 identity = locals().get("raw") if isinstance(locals().get("raw"), dict) else {}
+                label = locals().get("label")
+                started = locals().get("started")
+                if isinstance(label, str) and isinstance(started, float):
+                    repository._activity(
+                        "operation-failed",
+                        {
+                            "duration_ms": (time.monotonic() - started) * 1000,
+                            "label": label,
+                            "message": str(error),
+                            "method": identity.get("method", "unknown"),
+                        },
+                    )
                 self._json(400, {
                     "error": {"code": "host-error", "message": str(error)},
                     "id": identity.get("id", "invalid"),
@@ -821,6 +934,7 @@ class LiveServer:
 def create_live_server(
     *,
     root: Path | str = ".",
+    activity: Optional[Callable[[Mapping[str, object]], None]] = None,
     config: Optional[Path | str] = None,
     config_json: Optional[bytes] = None,
     no_config: bool = False,
@@ -833,6 +947,7 @@ def create_live_server(
         raise ValueError("live server binds only to 127.0.0.1 or ::1")
     repository = LiveRepository(
         root,
+        activity=activity,
         config=config,
         config_json=config_json,
         no_config=no_config,

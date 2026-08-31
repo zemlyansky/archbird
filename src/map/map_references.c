@@ -305,6 +305,33 @@ static const AbMapPackage *matching_package(const AbMapState *state,
   return matches == 1 ? matched : NULL;
 }
 
+static const AbMapDependency *matching_dependency(const AbMapState *state,
+                                                  const AbManifestFile *source,
+                                                  const AbString *module) {
+  AbString external;
+  if (!module->length || module->data[0] == '.' ||
+      !ab_map_language_manager(&source->language)[0])
+    return NULL;
+  external = ab_map_external_import_name(&source->language, module);
+  return ab_map_file_package_dependency(state->packages, state->package_count,
+                                        source, &external);
+}
+
+static int same_resolution_target(const AbMapReferenceResolution *left,
+                                  const AbMapReferenceResolution *right) {
+  if ((left->target != NULL) != (right->target != NULL) ||
+      (left->target_package != NULL) != (right->target_package != NULL) ||
+      !left->target_symbol || !right->target_symbol)
+    return 0;
+  if (left->target &&
+      !ab_string_equal(&left->target->path, &right->target->path))
+    return 0;
+  if (left->target_package &&
+      !ab_string_equal(left->target_package, right->target_package))
+    return 0;
+  return ab_string_equal(left->target_symbol, right->target_symbol);
+}
+
 static const AbMapExportOrigin *package_origin(const AbMapPackage *package,
                                                const AbString *name) {
   size_t index;
@@ -401,6 +428,7 @@ ArchbirdStatus ab_map_resolve_imported_reference(
   const AbString *root_module = string_attribute(fact, "root_module");
   const AbString *target_name = string_attribute(fact, "imported");
   const AbValue *steps = array_attribute(fact, "module_steps");
+  const AbMapDependency *dependency;
   const AbMapPackage *package;
   const AbManifestFile *current = NULL;
   const AbFact *namespace_symbol = NULL;
@@ -408,6 +436,7 @@ ArchbirdStatus ab_map_resolve_imported_reference(
   size_t index;
   ArchbirdStatus status;
   int at_root = 1;
+  int dependency_only;
   int inferred_receiver = string_literal(&fact->kind, "inferred-receiver-call");
   memset(out, 0, sizeof(*out));
   if (!root_module || !target_name || !steps)
@@ -425,6 +454,8 @@ ArchbirdStatus ab_map_resolve_imported_reference(
   if (status != ARCHBIRD_OK)
     return status;
   package = matching_package(state, source, root_module);
+  dependency = matching_dependency(state, source, root_module);
+  dependency_only = !current && !package && dependency;
   ab_buffer_init(&progressive, state->engine);
   status =
       ab_buffer_append(&progressive, root_module->data, root_module->length);
@@ -558,6 +589,19 @@ ArchbirdStatus ab_map_resolve_imported_reference(
     }
   }
   if (status == ARCHBIRD_OK && !out->target) {
+    if (dependency_only) {
+      out->target_package = &dependency->name;
+      out->target_symbol = target_name;
+      out->exact = 1;
+      out->relation =
+          string_literal(&fact->kind, "imported-attribute-reference")
+              ? "external-attribute-reference"
+              : (string_literal(&fact->kind, "decorator-reference")
+                     ? "external-decorator-reference"
+                     : "external-call");
+      ab_buffer_free(&progressive);
+      return status;
+    }
     if (inferred_receiver) {
       ab_buffer_free(&progressive);
       return status;
@@ -618,6 +662,7 @@ ArchbirdStatus ab_map_resolve_imported_name_reference(
   const AbString *imported = string_attribute(fact, "imported");
   const AbManifestFile *target = NULL;
   const AbMapPackage *package;
+  const AbMapDependency *dependency;
   const AbFact *symbol = NULL;
   ArchbirdStatus status;
   memset(out, 0, sizeof(*out));
@@ -625,23 +670,33 @@ ArchbirdStatus ab_map_resolve_imported_name_reference(
     return archbird_error_set(
         state->engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
         "imported-name reference requires module and imported attributes");
-  if (!imported->length)
-    return ARCHBIRD_OK;
   status = ab_map_resolve_import(state->engine, state->manifest, state->config,
                                  source, module, &target);
   if (status != ARCHBIRD_OK)
     return status;
-  if (target)
+  if (target && imported->length)
     symbol =
         named_symbol(state, target, imported->data, imported->length, NULL);
-  if (!symbol && target)
+  if (!symbol && target && imported->length)
     symbol = file_exported_symbol(state, &target, imported, 0);
-  if (!symbol) {
+  if (!symbol && imported->length) {
     package = matching_package(state, source, module);
     if (package)
       symbol = exported_symbol(state, package, imported, &target);
   }
-  if (!target)
+  if (!target) {
+    dependency = matching_dependency(state, source, module);
+    if (dependency) {
+      out->target_package = &dependency->name;
+      out->target_symbol = imported->length ? imported : &fact->name;
+      out->relation = string_literal(&fact->kind, "imported-name-call")
+                          ? "external-call"
+                          : "external-reference";
+      out->exact = 1;
+    }
+    return ARCHBIRD_OK;
+  }
+  if (!imported->length)
     return ARCHBIRD_OK;
   out->target = target;
   out->target_symbol = imported;
@@ -802,7 +857,8 @@ ArchbirdStatus ab_map_resolve_call_reference(
       continue;
     if (status != ARCHBIRD_OK)
       return status;
-    if (!candidate.target || !candidate.target_symbol)
+    if ((!candidate.target && !candidate.target_package) ||
+        !candidate.target_symbol)
       continue;
     if (!candidate.exact) {
       if (found || candidate_cardinality == CANDIDATE_AMBIGUOUS)
@@ -814,10 +870,7 @@ ArchbirdStatus ab_map_resolve_call_reference(
           *out_provider =
               ab_project_merged_fact_provider_by_path(state->project, index);
         candidate_cardinality = CANDIDATE_SINGLETON;
-      } else if (!ab_string_equal(&out->target->path,
-                                  &candidate.target->path) ||
-                 !ab_string_equal(out->target_symbol,
-                                  candidate.target_symbol)) {
+      } else if (!same_resolution_target(out, &candidate)) {
         memset(out, 0, sizeof(*out));
         *out_evidence = NULL;
         if (out_provider)
@@ -827,8 +880,7 @@ ArchbirdStatus ab_map_resolve_call_reference(
       continue;
     }
     if (found) {
-      if (!ab_string_equal(&out->target->path, &candidate.target->path) ||
-          !ab_string_equal(out->target_symbol, candidate.target_symbol)) {
+      if (!same_resolution_target(out, &candidate)) {
         memset(out, 0, sizeof(*out));
         *out_evidence = NULL;
         if (out_provider)

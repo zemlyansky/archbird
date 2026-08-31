@@ -19,8 +19,9 @@ function sessionId(): string {
   return `server-${[...bytes].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function hex(bytes: ArrayBuffer): string {
-  return [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, "0")).join("");
+function sha256Integrity(digest: string): string {
+  const bytes = digest.match(/../g)!.map((value) => Number.parseInt(value, 16));
+  return `sha256-${btoa(String.fromCharCode(...bytes))}`;
 }
 
 export class ServerHost {
@@ -106,12 +107,12 @@ export class ServerHost {
     }
     const response = await fetch(`${import.meta.env.BASE_URL}api/v1/blobs/${digest}`, {
       cache: "force-cache",
+      integrity: sha256Integrity(digest),
     });
     if (!response.ok) throw new Error(`local host artifact is unavailable (${response.status})`);
     const bytes = await response.arrayBuffer();
     if (Number(descriptor.bytes) !== bytes.byteLength) throw new Error("local host artifact size changed");
-    const actual = hex(await crypto.subtle.digest("SHA-256", bytes));
-    if (actual !== digest || response.headers.get("x-content-sha256") !== digest) {
+    if (response.headers.get("x-content-sha256") !== digest) {
       throw new Error("local host artifact digest changed in transport");
     }
     return artifactPayload({ ...descriptor, bytes });

@@ -44,14 +44,35 @@ export interface MetricBucket {
 export interface MetricSummary {
   complete: boolean;
   histogram: MetricBucket[];
+  knownMaximumLowerBound: number | null;
+  lowerBounds: number;
+  lowerWhisker: number | null;
   maximum: number | null;
   measured: number;
   median: number | null;
   metric: MetricId;
+  minimum: number | null;
+  p90: number | null;
   p95: number | null;
+  p99: number | null;
   population: number;
+  q1: number | null;
+  q3: number | null;
   rows: MetricRow[];
   unknown: number;
+  tailPoints: MetricRow[];
+  upperWhisker: number | null;
+}
+
+export type MetricScopeMode = "project" | "selection";
+
+export interface ScopedMetricSummary {
+  scope: {
+    label: string;
+    mode: MetricScopeMode;
+    paths: number;
+  };
+  summary: MetricSummary;
 }
 
 const GRAPH_RELATIONS = ["calls", "imports", "references", "tests"] as const;
@@ -107,8 +128,6 @@ export const METRIC_DEFINITIONS: readonly MetricDefinition[] = [
     unit: "node",
   },
 ] as const;
-
-export const DEFAULT_METRIC: MetricId = "source.cyclomatic_complexity";
 
 export function metricDefinition(metric: MetricId): MetricDefinition {
   const definition = METRIC_DEFINITIONS.find((row) => row.id === metric);
@@ -208,21 +227,140 @@ export function summarizeMetric(projection: ProjectionResult): MetricSummary {
     || (right.value ?? right.lowerBound ?? -1) - (left.value ?? left.lowerBound ?? -1)
     || utf8Compare(left.label, right.label)
     || utf8Compare(left.key, right.key));
+  return summarizeRows(metric, rows, projection.completeness.classification === "complete"
+    && projection.completeness.exhaustive
+    && !projection.completeness.truncated);
+}
+
+function summarizeRows(
+  metric: MetricId,
+  rows: MetricRow[],
+  complete: boolean,
+): MetricSummary {
   const values = rows.flatMap((row) => row.value === null ? [] : [row.value])
     .sort((left, right) => left - right);
+  const lowerBounds = rows.filter((row) => row.value === null && row.lowerBound !== null);
+  const knownValues = rows.flatMap((row) => {
+    const value = row.value ?? row.lowerBound;
+    return value === null ? [] : [value];
+  }).sort((left, right) => left - right);
+  const exactDistribution = complete && values.length === rows.length;
+  const q1 = exactDistribution ? quantile(values, 0.25) : null;
+  const q3 = exactDistribution ? quantile(values, 0.75) : null;
+  const p95 = exactDistribution ? quantile(values, 0.95) : null;
+  const p99 = exactDistribution ? quantile(values, 0.99) : null;
+  const minimum = values.length ? values[0] : null;
+  const maximum = values.length ? values[values.length - 1] : null;
+  // Percentile cutoffs stay interpretable for discrete, long-tailed code
+  // metrics where a Tukey fence can classify much more than 5% as outliers.
+  const tailPoints = exactDistribution && p99 !== null
+    ? rows.filter((row) => row.value !== null && row.value > p99)
+    : [];
   return {
-    complete: projection.completeness.classification === "complete"
-      && projection.completeness.exhaustive
-      && !projection.completeness.truncated,
+    complete,
     histogram: histogram(values),
-    maximum: values.length ? values[values.length - 1] : null,
+    knownMaximumLowerBound: knownValues.length ? knownValues[knownValues.length - 1] : null,
+    lowerBounds: lowerBounds.length,
+    lowerWhisker: exactDistribution ? minimum : null,
+    maximum,
     measured: values.length,
-    median: median(values),
+    median: exactDistribution ? median(values) : null,
     metric,
-    p95: quantile(values, 0.95),
+    minimum,
+    p90: exactDistribution ? quantile(values, 0.90) : null,
+    p95,
+    p99,
     population: rows.length,
+    q1,
+    q3,
     rows,
     unknown: rows.length - values.length,
+    tailPoints,
+    upperWhisker: p95,
+  };
+}
+
+function selectedPaths(
+  graph: GraphView,
+  selectedId: string,
+): { label: string; paths: Set<string>; symbol: string | null } | null {
+  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const selectedNode = nodes.get(selectedId);
+  const selectedEdge = graph.edges.find((edge) => edge.id === selectedId);
+  const paths = new Set<string>();
+  let label = "Selection";
+  let symbol: string | null = null;
+
+  function addNode(node: GraphNode | undefined): void {
+    if (!node) return;
+    label = selectedNode === node ? node.label : label;
+    const members = Array.isArray(node.attributes.member_files)
+      ? node.attributes.member_files.filter((value): value is string => typeof value === "string")
+      : [];
+    for (const path of members) paths.add(path);
+    const path = nodePath(node);
+    if (path) paths.add(path);
+    if (node.kind === "symbol") {
+      symbol = node.label;
+      const parent = node.parent ? nodes.get(node.parent) : undefined;
+      const parentPath = parent ? nodePath(parent) : null;
+      if (parentPath) paths.add(parentPath);
+    }
+  }
+
+  if (selectedNode) addNode(selectedNode);
+  else if (selectedEdge) {
+    label = `${nodes.get(selectedEdge.source)?.label || selectedEdge.source} → `
+      + `${nodes.get(selectedEdge.target)?.label || selectedEdge.target}`;
+    addNode(nodes.get(selectedEdge.source));
+    addNode(nodes.get(selectedEdge.target));
+  } else return null;
+  return { label, paths, symbol };
+}
+
+export function summarizeMetricScope(
+  projection: ProjectionResult,
+  graph: GraphView,
+  selectedId: string | null,
+  mode: MetricScopeMode,
+): ScopedMetricSummary {
+  const base = summarizeMetric(projection);
+  const selection = mode === "selection" && selectedId
+    ? selectedPaths(graph, selectedId)
+    : null;
+  if (!selection) {
+    return {
+      scope: { label: "Project", mode: "project", paths: 0 },
+      summary: base,
+    };
+  }
+  const definition = metricDefinition(base.metric);
+  const fileNodeIds = new Set(graph.nodes.flatMap((node) => {
+    const path = nodePath(node);
+    if (!path || !selection.paths.has(path)) return [];
+    return [
+      node.id,
+      node.identity,
+      ...(text(node.attributes.canonical_id) ? [String(node.attributes.canonical_id)] : []),
+    ];
+  }));
+  const rows = base.rows.filter((row) => {
+    const node = text(row.attributes.node);
+    const inSelection = Boolean(
+      (row.path && selection.paths.has(row.path))
+      || (node && fileNodeIds.has(node)),
+    );
+    if (!inSelection) return false;
+    return !selection.symbol || definition.level !== "symbol"
+      || row.symbol === selection.symbol;
+  });
+  return {
+    scope: {
+      label: selection.label,
+      mode: "selection",
+      paths: selection.paths.size,
+    },
+    summary: summarizeRows(base.metric, rows, base.complete),
   };
 }
 

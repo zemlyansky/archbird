@@ -61,21 +61,34 @@ describe("artifact workspaces", () => {
   });
 
   it("presents metric distributions and evidence-backed hotspots", async () => {
-    const root = mount(MetricsPanel, {
-      error: "",
-      loading: false,
-      projection: {
-        artifact: "projection-result",
+    const metricProjection = {
+      artifact: "projection-result",
+      completeness: { classification: "complete", exhaustive: true, truncated: false },
+      definition: {
+        id: "app-metric-source-cyclomatic-complexity",
+        level: "symbol",
+        metric: "source.cyclomatic_complexity",
+        select: "metrics",
+      },
+      fact: {
         completeness: { classification: "complete", exhaustive: true, truncated: false },
-        definition: {
-          id: "app-metric-source-cyclomatic-complexity",
-          level: "symbol",
-          metric: "source.cyclomatic_complexity",
-          select: "metrics",
-        },
-        fact: {
-          completeness: { classification: "complete", exhaustive: true, truncated: false },
-          items: [{
+        items: [
+          {
+            attributes: {
+              definition: "source.control-flow.c-v1",
+              metric: "source.cyclomatic_complexity",
+              path: "src/core.c",
+              symbol: "monster",
+              unit: "path",
+            },
+            evidence: [{ detail: "construct=switch_case", line: 90, path: "src/core.c" }],
+            key: "f:monster",
+            label: "monster",
+            message: "",
+            state: "current",
+            value: 80,
+          },
+          {
             attributes: {
               definition: "source.control-flow.c-v1",
               metric: "source.cyclomatic_complexity",
@@ -89,26 +102,200 @@ describe("artifact workspaces", () => {
             message: "",
             state: "current",
             value: 8,
-          }],
-          message: "",
-          name: "app-metric-source-cyclomatic-complexity",
-          project: "fixture",
-          shape: "values",
-          state: "current",
-        },
-        id: "app-metric-source-cyclomatic-complexity",
-        schema_version: 1,
+          },
+          {
+            attributes: {
+              metric: "source.cyclomatic_complexity",
+              path: "src/core.c",
+              symbol: "parse",
+              unit: "path",
+            },
+            evidence: [],
+            key: "f:parse",
+            label: "parse",
+            message: "",
+            state: "current",
+            value: 5,
+          },
+          {
+            attributes: {
+              metric: "source.cyclomatic_complexity",
+              path: "src/core.c",
+              symbol: "open",
+              unit: "path",
+            },
+            evidence: [],
+            key: "f:open",
+            label: "open",
+            message: "",
+            state: "current",
+            value: 2,
+          },
+          ...[
+            ...Array.from({ length: 90 }, () => 1),
+            2, 3, 4, 5, 6, 7, 20, 40,
+          ].map((value, index) => ({
+            attributes: {
+              metric: "source.cyclomatic_complexity",
+              path: "src/core.c",
+              symbol: `helper${index}`,
+              unit: "path",
+            },
+            evidence: [],
+            key: `f:helper${index}`,
+            label: `helper${index}`,
+            message: "",
+            state: "current",
+            value,
+          })),
+        ],
+        message: "",
+        name: "app-metric-source-cyclomatic-complexity",
+        project: "fixture",
+        shape: "values",
+        state: "current",
       },
-      selected: "source.cyclomatic_complexity",
+      id: "app-metric-source-cyclomatic-complexity",
+      schema_version: 1,
+    };
+    const metricGraph = {
+      artifact: "archbird-graph-view",
+      diagnostics: [],
+      edges: [],
+      nodes: [{
+        attributes: { member_files: ["src/core.c"], presentation_role: "group" },
+        evidence: [],
+        id: "group:src",
+        identity: "directory:src",
+        kind: "directory",
+        label: "src/",
+        parent: null,
+      }],
+      omissions: [],
+      project: "fixture",
+      request: { max_edge_names: 0, max_nodes: 0, view: "files" },
+      schema_version: 1,
+      source: {},
+      summary: { edges: 0, nodes: 1 },
+      tool: {},
+    };
+    const query = vi.fn();
+    const root = mount(MetricsPanel, {
+      errors: new Map(),
+      graph: metricGraph,
+      loading: new Set(),
+      onQuery: query,
+      overlay: null,
+      projections: new Map([["source.cyclomatic_complexity", metricProjection]]),
+      scope: "selection",
+      selectedId: "group:src",
     });
-    expect(root.textContent).toContain("Complexity distribution");
-    expect(root.textContent).toContain("1Measured");
-    expect(root.textContent).toContain("8P95");
-    expect(root.textContent).toContain("dispatch");
-    (root.querySelector(".metric-hotspot") as HTMLButtonElement).click();
+    expect(root.textContent).toContain("Metrics");
+    expect(root.textContent).toContain("Selection");
+    expect(root.textContent).toContain("Complexity");
+    expect(root.querySelectorAll(".metric-accordion")).toHaveLength(7);
+    const complexity = root.querySelector(
+      '[data-metric="source.cyclomatic_complexity"]',
+    ) as HTMLElement;
+    expect(complexity.querySelector(".metric-summary-copy small")).toBeNull();
+    expect(complexity.querySelector(".metric-summary-value strong")?.textContent).toBe("1");
+    expect(complexity.querySelector(".metric-summary-value")?.textContent).toContain("1 median / 80 max");
+    expect(complexity.querySelector(".metric-bar-fill")).toBeNull();
+    expect(complexity.querySelectorAll(".metric-box-plot")).toHaveLength(1);
+    expect(complexity.querySelectorAll("button.metric-plot-point")).toHaveLength(1);
+    (complexity.querySelector(".metric-summary") as HTMLButtonElement).click();
     await nextTick();
-    expect(root.textContent).toContain("src/core.c:42");
-    expect(root.textContent).toContain("construct=if_statement");
+    expect(complexity.querySelector(".metric-facts")?.textContent).toContain("Distribution");
+    expect(complexity.querySelector(".metric-facts")?.textContent).toContain("Coverage");
+    expect(complexity.querySelector(".metric-facts")?.textContent).not.toContain("Scope");
+    expect(complexity.querySelector(".metric-distribution")?.textContent).toContain("Q1");
+    expect(complexity.querySelector(".metric-distribution")?.textContent).toContain("p99 40");
+    expect(complexity.querySelectorAll(".metric-box-plot")).toHaveLength(1);
+    const extreme = complexity.querySelector("button.metric-plot-point.extreme") as HTMLButtonElement;
+    expect(extreme.title).toBe("src/core.c:monster: 80; above p99");
+    extreme.click();
+    await nextTick();
+    expect(query).toHaveBeenLastCalledWith("src/core.c", "monster");
+    (complexity.querySelector(".metric-hotspot") as HTMLButtonElement).click();
+    await nextTick();
+    expect(query).toHaveBeenLastCalledWith("src/core.c", "monster");
+    expect(root.querySelector(".metric-evidence")).toBeNull();
+    expect(root.textContent).toContain("Measurements are not quality scores");
+  });
+
+  it("presents incomplete graph metrics as known lower bounds", async () => {
+    const projection = {
+      artifact: "projection-result",
+      completeness: { classification: "incomplete", exhaustive: false, truncated: false },
+      definition: {
+        id: "app-metric-graph-out-neighbors",
+        level: "file",
+        metric: "graph.out_neighbors",
+        relations: ["calls", "imports", "references", "tests"],
+        select: "metrics",
+      },
+      fact: {
+        completeness: { classification: "incomplete", exhaustive: false, truncated: false },
+        items: [{
+          attributes: {
+            known_lower_bound: 4,
+            metric: "graph.out_neighbors",
+            node: "file:src/core.c",
+            unit: "neighbor",
+          },
+          evidence: [],
+          key: "file:src/core.c",
+          label: "src/core.c",
+          message: "graph evidence is incomplete; the exact metric value is unknown",
+          state: "unknown",
+          value: null,
+        }],
+        message: "graph evidence contains an unknown frontier",
+        name: "app-metric-graph-out-neighbors",
+        project: "fixture",
+        shape: "values",
+        state: "unknown",
+      },
+      id: "app-metric-graph-out-neighbors",
+      schema_version: 1,
+    };
+    const graph = {
+      artifact: "archbird-graph-view",
+      diagnostics: [],
+      edges: [],
+      nodes: [{
+        attributes: { path: "src/core.c" },
+        evidence: [],
+        id: "file:src/core.c",
+        identity: "src/core.c",
+        kind: "file",
+        label: "src/core.c",
+        parent: null,
+      }],
+      omissions: [],
+      project: "fixture",
+      request: { max_edge_names: 0, max_nodes: 0, view: "files" },
+      schema_version: 1,
+      source: {},
+      summary: { edges: 0, nodes: 1 },
+      tool: {},
+    };
+    const root = mount(MetricsPanel, {
+      errors: new Map(),
+      graph,
+      loading: new Set(),
+      overlay: null,
+      projections: new Map([["graph.out_neighbors", projection]]),
+      scope: "project",
+      selectedId: null,
+    });
+    const metric = root.querySelector('[data-metric="graph.out_neighbors"]') as HTMLElement;
+    expect(metric.querySelector(".metric-summary-value")?.textContent).toBe("≥4");
+    (metric.querySelector(".metric-summary") as HTMLButtonElement).click();
+    await nextTick();
+    expect(metric.querySelector(".metric-facts")?.textContent).toContain("Known maximum");
+    expect(metric.querySelector(".metric-facts")?.textContent).not.toContain("—–—");
+    expect(metric.querySelector(".metric-hotspots h3")?.textContent).toBe("Highest known lower bounds");
   });
 
   it("explains configured component dependencies with concrete file relations", () => {

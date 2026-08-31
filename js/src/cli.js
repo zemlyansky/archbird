@@ -2598,6 +2598,35 @@ function supportMain(argv) {
   return 0;
 }
 
+function serveActivityLogger() {
+  let scanStarted = null;
+  return (activity) => {
+    const now = process.hrtime.bigint();
+    let message = null;
+    if (activity.event === "scan-started") {
+      scanStarted = now;
+      message = "analysis started";
+    }
+    else if (activity.event === "snapshot-ready") {
+      const duration = scanStarted === null
+        ? ""
+        : ` (${Math.max(0, Math.round(Number(now - scanStarted) / 1e6))} ms)`;
+      scanStarted = null;
+      message = `map ready: ${activity.project} · ${activity.files} files · ${String(activity.generation).slice(0, 12)}${duration}`;
+    } else if (activity.event === "verification-ready") message = "verification ready";
+    else if (activity.event === "progress" && activity.phase === "stale") {
+      message = "source changed; Map is stale; rebuilding";
+    } else if (activity.event === "candidate-failed") {
+      message = `analysis failed; last-good Map retained: ${activity.message}`;
+    } else if (activity.event === "operation-complete") {
+      message = `${activity.label} (${Math.max(0, Math.round(activity.duration_ms))} ms)`;
+    } else if (activity.event === "operation-failed") {
+      message = `${activity.label} failed: ${activity.message}`;
+    }
+    if (message) process.stderr.write(`archbird serve: ${message}\n`);
+  };
+}
+
 async function serveMain(argv) {
   const options = parse(argv, {
     config: { aliases: ["c"], type: "string" },
@@ -2630,8 +2659,10 @@ async function serveMain(argv) {
     ...options,
     output: "-",
   });
+  process.stderr.write(`archbird serve\nProject: ${repository}\n`);
   const { createLiveServer } = require("./serve");
   const server = await createLiveServer({
+    activity: serveActivityLogger(),
     app: options.app || null,
     config: configPath,
     configJson: configPath ? null : (configJson.length ? configJson : null),
@@ -2657,6 +2688,9 @@ async function serveMain(argv) {
     typescript: !options.noTypescript,
   });
   process.stdout.write(`${server.url}\n`);
+  process.stderr.write(
+    "Watching: source and configuration changes · Ctrl-C to stop\n\n",
+  );
   let closing = false;
   const close = async () => {
     if (closing) return;

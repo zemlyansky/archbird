@@ -608,3 +608,27 @@ export function composeArchitectureGraph(
     summary: { edges: visibleEdges.length, nodes: visibleNodes.length },
   };
 }
+
+/** Mute selected nodes and their routes without changing layout topology. */
+export function withHiddenPresentation(
+  graph: GraphView,
+  hidden: ReadonlySet<string>,
+): GraphView {
+  const hiddenNodes = new Set(graph.nodes
+    .filter((node) => hidden.has(node.id))
+    .map((node) => node.id));
+  const nodes = graph.nodes.map((node) => hiddenNodes.has(node.id)
+    ? { ...node, attributes: { ...node.attributes, presentation_hidden: true } }
+    : node);
+  const edges = graph.edges.map((edge) =>
+    hidden.has(edge.id)
+      || hiddenNodes.has(edge.source)
+      || hiddenNodes.has(edge.target)
+      ? { ...edge, attributes: { ...edge.attributes, presentation_hidden: true } }
+      : edge);
+  return {
+    ...graph,
+    edges,
+    nodes,
+  };
+}

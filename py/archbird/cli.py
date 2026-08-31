@@ -19,7 +19,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from . import __version__, implementation_digest
 from . import _native
@@ -3664,6 +3664,58 @@ def _okf_main(argv: Sequence[str]) -> int:
         return 2
 
 
+def _serve_activity_logger() -> Callable[[Mapping[str, object]], None]:
+    lock = threading.Lock()
+    scan_started: Optional[float] = None
+
+    def emit(activity: Mapping[str, object]) -> None:
+        nonlocal scan_started
+        event = activity.get("event")
+        message: Optional[str] = None
+        now = time.monotonic()
+        with lock:
+            if event == "scan-started":
+                scan_started = now
+                message = "analysis started"
+            elif event == "snapshot-ready":
+                duration = (
+                    ""
+                    if scan_started is None
+                    else f" ({max(0, round((now - scan_started) * 1000))} ms)"
+                )
+                scan_started = None
+                message = (
+                    f"map ready: {activity.get('project')}"
+                    f" · {activity.get('files')} files"
+                    f" · {str(activity.get('generation'))[:12]}{duration}"
+                )
+            elif event == "verification-ready":
+                message = "verification ready"
+            elif event == "progress" and activity.get("phase") == "stale":
+                message = "source changed; Map is stale; rebuilding"
+            elif event == "candidate-failed":
+                message = (
+                    "analysis failed; last-good Map retained: "
+                    f"{activity.get('message')}"
+                )
+            elif event == "operation-complete":
+                duration = max(0, round(float(activity.get("duration_ms", 0))))
+                message = f"{activity.get('label')} ({duration} ms)"
+            elif event == "operation-failed":
+                message = (
+                    f"{activity.get('label')} failed: {activity.get('message')}"
+                )
+            if message is None:
+                return
+            print(
+                f"archbird serve: {message}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    return emit
+
+
 def _serve_main(argv: Sequence[str]) -> int:
     args = serve_parser().parse_args(argv)
     try:
@@ -3675,7 +3727,9 @@ def _serve_main(argv: Sequence[str]) -> int:
         repository, config_json, config_path = _repository_inputs(args)
         from .serve import create_live_server
 
+        print(f"archbird serve\nProject: {repository}", file=sys.stderr, flush=True)
         server = create_live_server(
+            activity=_serve_activity_logger(),
             app=args.app,
             config=config_path,
             config_json=(
@@ -3704,6 +3758,11 @@ def _serve_main(argv: Sequence[str]) -> int:
             root=repository,
         )
         print(server.url, flush=True)
+        print(
+            "Watching: source and configuration changes · Ctrl-C to stop\n",
+            file=sys.stderr,
+            flush=True,
+        )
         stopped = threading.Event()
         prior = {}
 

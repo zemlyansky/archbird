@@ -17,6 +17,7 @@ typedef struct AbSymbolCallRow {
   const AbProviderBundle *semantic_provider;
   const AbString *semantic_path;
   const AbString *semantic_symbol;
+  const AbString *external_package;
   const AbString *binding;
   size_t candidate_start;
   size_t candidate_end;
@@ -55,6 +56,16 @@ static int row_compare(const void *left_raw, const void *right_raw) {
   compared = strcmp(left->resolution, right->resolution);
   if (compared)
     return compared < 0 ? -1 : 1;
+  if (left->external_package || right->external_package) {
+    if (!left->external_package)
+      return -1;
+    if (!right->external_package)
+      return 1;
+    compared =
+        ab_string_compare(left->external_package, right->external_package);
+    if (compared)
+      return compared;
+  }
   if (left->semantic_path || right->semantic_path) {
     if (!left->semantic_path)
       return -1;
@@ -84,6 +95,9 @@ static int same_group(const AbSymbolCallRow *left,
       (left->binding != NULL) != (right->binding != NULL) ||
       (left->binding && !ab_string_equal(left->binding, right->binding)) ||
       strcmp(left->resolution, right->resolution) ||
+      (left->external_package != NULL) != (right->external_package != NULL) ||
+      (left->external_package &&
+       !ab_string_equal(left->external_package, right->external_package)) ||
       left->candidate_count != right->candidate_count)
     return 0;
   if (!left->semantic_path || !right->semantic_path)
@@ -296,6 +310,11 @@ static ArchbirdStatus render_symbol_calls(AbBuffer *buffer, AbMapState *state,
       row->resolution = exact.exact ? "unique" : "candidate";
       continue;
     }
+    if (exact_evidence && exact.target_package && exact.target_symbol) {
+      row->external_package = exact.target_package;
+      row->resolution = "external";
+      continue;
+    }
     if (row->binding && bytes_literal(row->binding, "builtin")) {
       row->resolution = "builtin";
     } else if (row->binding && (bytes_literal(row->binding, "local") ||
@@ -342,7 +361,8 @@ static ArchbirdStatus render_symbol_calls(AbBuffer *buffer, AbMapState *state,
     const AbFact *semantic_definition = NULL;
     size_t group_end = index + 1;
     size_t candidate;
-    if (!row->source && !row->candidate_count && !row->semantic) {
+    if (!row->source && !row->candidate_count && !row->semantic &&
+        !row->external_package) {
       index++;
       continue;
     }
@@ -440,6 +460,11 @@ static ArchbirdStatus render_symbol_calls(AbBuffer *buffer, AbMapState *state,
       status = ab_buffer_literal(buffer, "],\"name\":");
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, &row->call->name);
+    if (status == ARCHBIRD_OK && row->external_package) {
+      status = ab_buffer_literal(buffer, ",\"package\":");
+      if (status == ARCHBIRD_OK)
+        status = json_string(buffer, row->external_package);
+    }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"resolution\":\"");
     if (status == ARCHBIRD_OK)

@@ -1017,7 +1017,10 @@ archbird serve --root ../project
 ```
 
 `serve` starts a browser-based architecture explorer and immediately prints its
-loopback URL. Use it to expand selected components into files and selected files
+loopback URL. Stdout remains the URL alone for scripts; stderr identifies the
+project and reports analysis, published Maps, view/projection changes, queries,
+source reads, verification, exports, and diffs. Static assets and polling stay
+silent. Use it to expand selected components into files and selected files
 into symbols while the rest of the architecture stays collapsed; inspect typed
 connections and source witnesses; overlay configured constraint coverage and
 findings; run focused queries; and compare Map snapshots as the repository
@@ -1042,7 +1045,7 @@ The application provides:
 
 - useful zero-config exploration from the same exhaustive graph
   ProjectionResult used by Markdown: switch overview, architecture, tests,
-  metrics, and evidence views, then independently group by directory,
+  and evidence views, then independently group by directory,
   configured component, layer, or language; configured components and
   constraints refine the graph when `archbird.json` exists but never gate the
   zero-config path;
@@ -1053,17 +1056,23 @@ The application provides:
   never rewrite Map or Projection evidence;
 - entity-type colors, generation-matched constraint/finding overlays, keyboard
   navigation, pointer-centered normalized wheel zoom, slider zoom, layout
-  direction, evidence-class, and edge-kind controls; selecting never changes
-  the viewport, while expanding animates children from the activated node and
-  keeps that node at the same screen position; dependency arrows default to
-  provider → consumer flow and can switch explicitly to consumer → provider
-  uses;
+  direction, evidence-class, and edge-kind controls; arrange the same typed
+  graph as directional Flow, clustered Force, or selected-root Radial, then
+  render it with Compact glyphs or Architecture labels; Architecture notation
+  names Archbird entity and relation kinds but does not claim UML or SysML
+  conformance; selecting never changes the viewport, while expanding animates
+  children from the activated node and keeps that node at the same screen
+  position; dependency arrows default to provider → consumer flow and can
+  switch explicitly to consumer → provider uses;
 - compact node and edge hover details for identity, relation counts, evidence,
   and verification state; external symbol relations stay at the file frontier
   until explicitly revealed for one symbol;
-- a Metrics workspace that evaluates one typed metric projection, shows its
-  distribution and completeness, applies a neutral quantitative heatmap, and
-  opens exact source or relation contributors for any selected hotspot; metrics
+- all seven interactive Metrics in the right inspector, each showing the
+  selected region or whole project through quartiles, p95/p99 tail context,
+  every value above p99, distribution completeness, and exact
+  contributors; points and hotspot rows open focused graph context, while a
+  graph-local Back control restores the prior view and viewport;
+  one optional neutral heatmap follows the current graph perspective; metrics
   are measurements, not quality scores;
 - graph-local filtering plus focused typed or lexical Query from the current
   canonical Map;

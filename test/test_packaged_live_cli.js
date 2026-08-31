@@ -66,6 +66,10 @@ async function main() {
       const bootstrap = await (await fetch(new URL("api/v1/bootstrap", url))).json();
       return bootstrap.project === "map-base" && bootstrap.phase === "ready";
     }, "packaged live generation");
+    assert.match(stderr, /archbird serve\nProject: .*repository/);
+    assert.doesNotMatch(stderr, /Open: http:/);
+    assert.doesNotMatch(stderr, /archbird serve \[[0-9.]+s\]/);
+    assert.match(stderr, /map ready: map-base · 3 files · [0-9a-f]{12} \([0-9]+ ms\)/);
     console.log("packaged Node live CLI and offline app passed");
   } finally {
     if (child.exitCode === null) {

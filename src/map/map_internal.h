@@ -505,6 +505,10 @@ int ab_map_package_alias_matches(const AbMapPackage *package,
 int ab_map_package_dependency_matches(const AbMapPackage *package,
                                       const char *manager,
                                       const AbString *external);
+const AbMapDependency *
+ab_map_file_package_dependency(const AbMapPackage *packages,
+                               size_t package_count, const AbManifestFile *file,
+                               const AbString *external);
 
 ArchbirdStatus ab_map_analyze_packages(AbMapState *state);
 ArchbirdStatus ab_map_render_packages(AbBuffer *buffer,
@@ -532,10 +536,9 @@ ArchbirdStatus ab_map_render_symbol_calls(AbBuffer *buffer, AbMapState *state);
 ArchbirdStatus ab_map_render_symbol_calls_projection(AbBuffer *buffer,
                                                      AbMapState *state);
 ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
-                                               const AbMapState *state);
-ArchbirdStatus
-ab_map_render_symbol_references_projection(AbBuffer *buffer,
-                                           const AbMapState *state);
+                                               AbMapState *state);
+ArchbirdStatus ab_map_render_symbol_references_projection(AbBuffer *buffer,
+                                                          AbMapState *state);
 
 ArchbirdStatus ab_map_analyze_parity(AbMapState *state);
 ArchbirdStatus ab_map_render_parity(AbBuffer *buffer, const AbMapState *state);

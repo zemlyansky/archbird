@@ -1956,14 +1956,14 @@ classify_import_target(ArchbirdEngine *engine, const AbMapConfig *config,
     *out_class = IMPORT_TARGET_EXTERNAL;
     return package_target(engine, &external->package, out, out_length);
   }
-  for (package_index = 0; package_index < package_count; package_index++) {
-    const AbMapPackage *candidate = &packages[package_index];
-    if (strcmp(ab_map_package_manager(&candidate->kind), manager) != 0 ||
-        !ab_string_equal(&candidate->layer, &file->layer) ||
-        !ab_map_package_dependency_matches(candidate, manager, &package))
-      continue;
-    *out_class = IMPORT_TARGET_EXTERNAL;
-    return package_target(engine, &package, out, out_length);
+  {
+    const AbMapDependency *dependency =
+        ab_map_file_package_dependency(packages, package_count, file, &package);
+    if (dependency) {
+      package = dependency->name;
+      *out_class = IMPORT_TARGET_EXTERNAL;
+      return package_target(engine, &package, out, out_length);
+    }
   }
   if (bytes_literal(family, family_length, "javascript") ||
       bytes_literal(family, family_length, "r")) {

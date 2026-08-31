@@ -141,6 +141,92 @@ int ab_map_package_dependency_matches(const AbMapPackage *package,
   return 0;
 }
 
+static const AbMapDependency *package_dependency(const AbMapPackage *package,
+                                                 const char *manager,
+                                                 const AbString *external) {
+  size_t index;
+  for (index = 0; index < package->dependency_count; index++)
+    if (normalized_package_equal(manager, &package->dependencies[index].name,
+                                 external))
+      return &package->dependencies[index];
+  return NULL;
+}
+
+static size_t package_root_length(const AbString *manifest) {
+  size_t length = manifest->length;
+  while (length && manifest->data[length - 1] != '/')
+    length--;
+  return length;
+}
+
+/* A package owns files below its manifest directory; the deepest manifest
+ * wins in nested workspaces.  Layer is only a fallback for nonstandard trees.
+ */
+const AbMapDependency *
+ab_map_file_package_dependency(const AbMapPackage *packages,
+                               size_t package_count, const AbManifestFile *file,
+                               const AbString *external) {
+  const char *manager = ab_map_language_manager(&file->language);
+  const AbMapDependency *matched = NULL;
+  size_t owner_root = 0;
+  int has_owner = 0;
+  int ambiguous = 0;
+  size_t index;
+  /* Determine ownership before looking up a dependency.  Otherwise a parent
+   * workspace can leak its dependencies into a nested package. */
+  for (index = 0; index < package_count; index++) {
+    const AbMapPackage *package = &packages[index];
+    size_t root_length;
+    if (strcmp(ab_map_package_manager(&package->kind), manager))
+      continue;
+    root_length = package_root_length(&package->manifest);
+    if (root_length > file->path.length ||
+        (root_length &&
+         memcmp(package->manifest.data, file->path.data, root_length)))
+      continue;
+    if (!has_owner || root_length > owner_root) {
+      owner_root = root_length;
+      has_owner = 1;
+    }
+  }
+  if (has_owner) {
+    for (index = 0; index < package_count; index++) {
+      const AbMapPackage *package = &packages[index];
+      const AbMapDependency *dependency;
+      if (strcmp(ab_map_package_manager(&package->kind), manager) ||
+          package_root_length(&package->manifest) != owner_root ||
+          (owner_root &&
+           memcmp(package->manifest.data, file->path.data, owner_root)))
+        continue;
+      dependency = package_dependency(package, manager, external);
+      if (!dependency)
+        continue;
+      if (matched && !ab_string_equal(&matched->name, &dependency->name))
+        ambiguous = 1;
+      else
+        matched = dependency;
+    }
+    return ambiguous ? NULL : matched;
+  }
+  matched = NULL;
+  ambiguous = 0;
+  for (index = 0; index < package_count; index++) {
+    const AbMapPackage *package = &packages[index];
+    const AbMapDependency *dependency;
+    if (strcmp(ab_map_package_manager(&package->kind), manager) ||
+        !ab_string_equal(&package->layer, &file->layer))
+      continue;
+    dependency = package_dependency(package, manager, external);
+    if (!dependency)
+      continue;
+    if (matched && !ab_string_equal(&matched->name, &dependency->name))
+      ambiguous = 1;
+    else
+      matched = dependency;
+  }
+  return ambiguous ? NULL : matched;
+}
+
 static int string_compare(const void *left_raw, const void *right_raw) {
   return ab_string_compare((const AbString *)left_raw,
                            (const AbString *)right_raw);

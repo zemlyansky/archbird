@@ -6,6 +6,7 @@ import type { ProjectionResult } from "../src/artifacts/projection";
 import {
   applyMetricOverlay,
   metricProjectionPlan,
+  summarizeMetricScope,
   summarizeMetric,
 } from "../src/graph/metrics";
 
@@ -146,9 +147,14 @@ test("metric summaries retain completeness, evidence, and ranked values", () => 
   assert.equal(summary.population, 3);
   assert.equal(summary.measured, 2);
   assert.equal(summary.unknown, 1);
-  assert.equal(summary.median, 6);
-  assert.equal(summary.p95, 9);
+  assert.equal(summary.lowerBounds, 1);
+  assert.equal(summary.knownMaximumLowerBound, 9);
+  assert.equal(summary.median, null);
+  assert.equal(summary.q1, null);
+  assert.equal(summary.q3, null);
+  assert.equal(summary.p95, null);
   assert.equal(summary.maximum, 9);
+  assert.equal(summary.minimum, 3);
   assert.equal(summary.complete, false);
   assert.deepEqual(summary.rows.map((row) => [row.label, row.value]), [
     ["complex", 9],
@@ -160,6 +166,80 @@ test("metric summaries retain completeness, evidence, and ranked values", () => 
     summary.histogram.reduce((total, bucket) => total + bucket.count, 0),
     2,
   );
+});
+
+test("metric summaries expose only exact values above p99", () => {
+  const input = projection();
+  input.completeness = {
+    classification: "complete",
+    exhaustive: true,
+    truncated: false,
+  };
+  input.fact.completeness = {
+    classification: "complete",
+    exhaustive: true,
+    truncated: false,
+  };
+  input.fact.state = "current";
+  input.fact.message = "";
+  input.fact.items = [
+    ...Array.from({ length: 90 }, () => 1),
+    2, 3, 4, 5, 6, 7, 8, 20, 40, 80,
+  ].map((value, index) => ({
+    attributes: {
+      definition: "source.control-flow.c-v1",
+      metric: "source.cyclomatic_complexity",
+      path: `src/f${index}.c`,
+      symbol: `f${index}`,
+      unit: "path",
+    },
+    evidence: [{ detail: `complexity=${value}`, line: index + 1, path: `src/f${index}.c` }],
+    key: `f:${index}`,
+    label: `f${index}`,
+    message: "",
+    state: "current",
+    value,
+  }));
+
+  const summary = summarizeMetric(input);
+  assert.equal(summary.q1, 1);
+  assert.equal(summary.median, 1);
+  assert.equal(summary.q3, 1);
+  assert.equal(summary.p90, 1);
+  assert.equal(summary.p95, 6);
+  assert.equal(summary.p99, 40);
+  assert.equal(summary.lowerWhisker, 1);
+  assert.equal(summary.upperWhisker, 6);
+  assert.deepEqual(
+    summary.tailPoints.map((point) => point.value),
+    [80],
+  );
+});
+
+test("metric summaries follow stable selected graph regions", () => {
+  const selected = summarizeMetricScope(
+    projection(),
+    graph(),
+    "group:src",
+    "selection",
+  );
+  assert.equal(selected.scope.label, "src/");
+  assert.equal(selected.summary.population, 2);
+  assert.equal(selected.summary.minimum, 3);
+  assert.equal(selected.summary.maximum, 9);
+  assert.deepEqual(selected.summary.rows.map((row) => row.path), [
+    "src/a.c",
+    "src/b.c",
+  ]);
+
+  const project = summarizeMetricScope(
+    projection(),
+    graph(),
+    "group:src",
+    "project",
+  );
+  assert.equal(project.scope.label, "Project");
+  assert.equal(project.summary.population, 3);
 });
 
 test("metric overlays heat files and groups without changing graph identity", () => {

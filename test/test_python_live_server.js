@@ -145,6 +145,10 @@ async function main() {
     assert.equal(symbols.artifact, "archbird-graph-view");
     assert.equal(symbols.request.view, "symbols");
     assert.ok(symbols.nodes.some((row) => row.kind === "symbol" && row.label === "add"));
+    const query = JSON.parse((await artifact(url, "query", {
+      query: { depth: 0, symbols: ["add"], test_depth: 0 },
+    })).bytes);
+    assert.equal(query.artifact, "query");
     const source = await request(url, "source", { path: "js/index.js" });
     assert.match(source.result.text, /export function add/);
     assert.match((await request(url, "source", { path: "../outside" }, 400)).error.message, /escapes repository root/);
@@ -182,6 +186,16 @@ async function main() {
       after: currentGeneration,
     })).bytes);
     assert.equal(diff.artifact, "diff");
+    assert.match(stderr, /archbird serve\nProject: .*repository/);
+    assert.doesNotMatch(stderr, /Open: http:/);
+    assert.doesNotMatch(stderr, /archbird serve \[[0-9.]+s\]/);
+    assert.match(stderr, /archbird serve: analysis started/);
+    assert.match(stderr, /map ready: map-base · 3 files · [0-9a-f]{12} \([0-9]+ ms\)/);
+    assert.match(stderr, /projection component_membership · app-membership/);
+    assert.match(stderr, /view files/);
+    assert.match(stderr, /query symbol add/);
+    assert.match(stderr, /source js\/index\.js/);
+    assert.match(stderr, /diff [0-9a-f]{12} → [0-9a-f]{12}/);
     console.log("Python live server Map/view/Verification/source/watch/last-good passed");
   } finally {
     if (child.exitCode === null) {

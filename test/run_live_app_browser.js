@@ -2,6 +2,8 @@
 "use strict";
 
 const fs = require("node:fs");
+const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
@@ -14,7 +16,7 @@ const {
 if (process.argv.length < 6) {
   throw new Error(
     "usage: run_live_app_browser.js APP_ROOT FIXTURE_ROOT TEMP_ROOT SCREENSHOT "
-    + "[--empty] [--no-config] [--python]",
+    + "[--empty] [--insecure-origin] [--no-config] [--python]",
   );
 }
 
@@ -24,12 +26,13 @@ const temporaryRoot = path.resolve(process.argv[4]);
 const screenshot = path.resolve(process.argv[5]);
 const options = new Set(process.argv.slice(6));
 for (const option of options) {
-  if (!["--empty", "--no-config", "--python"].includes(option)) {
+  if (!["--empty", "--insecure-origin", "--no-config", "--python"].includes(option)) {
     throw new Error(`unsupported live-browser option: ${option}`);
   }
 }
 const noConfig = options.has("--no-config");
 const empty = options.has("--empty");
+const insecureOrigin = options.has("--insecure-origin");
 const pythonHost = options.has("--python");
 const repositoryRoot = path.join(temporaryRoot, "repository");
 
@@ -79,6 +82,48 @@ function pythonServer() {
       await new Promise((resolve) => child.once("exit", resolve));
     },
     url,
+  };
+}
+
+function networkIPv4() {
+  for (const rows of Object.values(os.networkInterfaces())) {
+    for (const row of rows || []) {
+      if (row.family === "IPv4" && !row.internal) return row.address;
+    }
+  }
+  throw new Error("insecure-origin browser test requires a non-loopback IPv4 address");
+}
+
+async function createInsecureProxy(upstreamValue) {
+  const upstream = new URL(upstreamValue);
+  let publicOrigin = "";
+  const proxy = http.createServer((request, response) => {
+    const headers = { ...request.headers, host: upstream.host };
+    if (headers.origin === publicOrigin) headers.origin = upstream.origin;
+    const forwarded = http.request(
+      new URL(request.url || "/", upstream),
+      { headers, method: request.method },
+      (incoming) => {
+        const responseHeaders = { ...incoming.headers };
+        delete responseHeaders["cross-origin-embedder-policy"];
+        delete responseHeaders["cross-origin-opener-policy"];
+        response.writeHead(incoming.statusCode || 500, responseHeaders);
+        incoming.pipe(response);
+      },
+    );
+    forwarded.on("error", (error) => response.destroy(error));
+    request.pipe(forwarded);
+  });
+  await new Promise((resolve, reject) => {
+    proxy.once("error", reject);
+    proxy.listen(0, "0.0.0.0", resolve);
+  });
+  publicOrigin = `http://${networkIPv4()}:${proxy.address().port}`;
+  return {
+    close: () => new Promise((resolve, reject) => {
+      proxy.close((error) => error ? reject(error) : resolve());
+    }),
+    url: `${publicOrigin}/`,
   };
 }
 
@@ -141,6 +186,7 @@ async function main() {
   const chromium = loadChromium();
   const executablePath = sharedChromium(chromium);
   let server;
+  let insecureProxy;
   let browser;
   let diagnostics;
   let originalCandidate;
@@ -178,6 +224,8 @@ async function main() {
         root: repositoryRoot,
       });
     }
+    insecureProxy = insecureOrigin ? await createInsecureProxy(server.url) : null;
+    const browserUrl = insecureProxy?.url || server.url;
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     page = await context.newPage();
     diagnostics = await beginBrowserDiagnostics(context, page, screenshot);
@@ -196,7 +244,7 @@ async function main() {
     page.on("request", (request) => {
       const target = new URL(request.url());
       if (target.pathname.endsWith(".wasm")) wasmRequests.push(request.url());
-      if (target.origin !== new URL(server.url).origin) {
+      if (target.origin !== new URL(browserUrl).origin) {
         remoteRequests.push(request.url());
       }
       if (target.pathname === "/api/v1/request" && request.method() === "POST") {
@@ -207,7 +255,7 @@ async function main() {
         }
       }
     });
-    await page.goto(server.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.goto(browserUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
     if (!pythonHost) {
       await page.getByRole("heading", { name: "Mapping project", exact: true })
         .waitFor({ timeout: 10_000 });
@@ -282,6 +330,30 @@ async function main() {
         `live ${noConfig ? "zero-config" : "configured"} overview is empty: `
         + `${initialNodes} nodes / ${initialEdges} edges`,
       );
+    }
+    await page.locator(".metrics-panel").waitFor({ timeout: 30_000 });
+    if (await page.locator(".metric-accordion").count() !== 7) {
+      throw new Error("live Metrics sidebar does not expose all seven metrics");
+    }
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll(".metric-summary-value")]
+        .every((node) => node.textContent !== "loading"),
+    undefined, { timeout: 30_000 });
+    if (insecureOrigin) {
+      const security = await page.evaluate(() => ({
+        secureContext: isSecureContext,
+        subtle: Boolean(globalThis.crypto?.subtle),
+      }));
+      if (security.secureContext || security.subtle) {
+        throw new Error(`insecure-origin test unexpectedly has Web Crypto: ${JSON.stringify(security)}`);
+      }
+      if (errors.length) throw new Error(errors.join("\n"));
+      if (consoleErrors.length) throw new Error(consoleErrors.join("\n"));
+      console.log(
+        `local insecure-origin live app passed without Web Crypto `
+        + `(${initialNodes} nodes, ${initialEdges} edges, ${browser.version()})`,
+      );
+      return;
     }
     if (noConfig) {
       if (!pythonHost) {
@@ -484,6 +556,7 @@ async function main() {
       LiveRepository.prototype.candidate = originalCandidate;
     }
     if (browser) await browser.close();
+    if (insecureProxy) await insecureProxy.close();
     if (server) await server.close();
   }
 }

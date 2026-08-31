@@ -1601,6 +1601,31 @@ def _assert_import_resolution_soundness() -> None:
     assert unresolved_diagnostics[0]["path"] == "app/main.py"
     assert unresolved_diagnostics[0]["span"]["start"] >= 0
     assert "ui.widget" in unresolved_diagnostics[0]["message"]
+    unresolved_graph = json.loads(
+        evaluate_projection_json(
+            json.dumps(
+                unresolved_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            {
+                "id": "unresolved-import-graph",
+                "group_by": "directory",
+                "level": "file",
+                "relations": ["imports"],
+                "select": "graph",
+            },
+        )
+    )
+    unresolved_nodes = {
+        row["attributes"]["id"]: row
+        for row in unresolved_graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "node"
+    }
+    assert "unresolved:unresolved-import" in unresolved_nodes
+    assert (
+        unresolved_nodes["unresolved:unresolved-import"]["label"]
+        == "Unresolved imports"
+    )
+    assert "external:unresolved-import" not in unresolved_nodes
 
     resolved_map, resolved_files, resolved_components, resolved_verify = evaluate(
         "resolved",
@@ -1638,6 +1663,162 @@ def _assert_import_resolution_soundness() -> None:
     assert external_components["completeness"]["classification"] == "complete"
     assert external_components["fact"]["items"] == []
     assert external_verify["constraints"][0]["status"] == "pass"
+
+    cross_layer = root / "cross-layer-external"
+    (cross_layer / "app").mkdir(parents=True)
+    (cross_layer / "nested").mkdir()
+    (cross_layer / "package_root").mkdir()
+    (cross_layer / "app/main.py").write_text(
+        "from requests import DEFAULT, get\n\n"
+        "def fetch():\n"
+        "    get('https://example.invalid')\n"
+        "    return DEFAULT\n",
+        encoding="utf-8",
+    )
+    (cross_layer / "package_root/__init__.py").write_text("", encoding="utf-8")
+    (cross_layer / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "cross-layer-external"\n'
+        'version = "1.0.0"\n'
+        'dependencies = ["requests>=2"]\n',
+        encoding="utf-8",
+    )
+    (cross_layer / "nested/main.py").write_text(
+        "import httpx\nimport requests\n", encoding="utf-8"
+    )
+    (cross_layer / "nested/pyproject.toml").write_text(
+        "[project]\n"
+        'name = "nested-package"\n'
+        'version = "1.0.0"\n'
+        'dependencies = ["httpx>=0.27"]\n',
+        encoding="utf-8",
+    )
+    cross_layer_config = {
+        "project": "cross-layer-external",
+        "layers": [
+            {
+                "globs": ["package_root/**/*.py"],
+                "language": "python",
+                "name": "package",
+            },
+            {
+                "globs": ["app/**/*.py"],
+                "language": "python",
+                "name": "application",
+            },
+            {
+                "globs": ["nested/**/*.py"],
+                "language": "python",
+                "name": "nested-application",
+            },
+        ],
+        "packages": [
+            {
+                "kind": "python",
+                "layer": "package",
+                "name": "python-package",
+                "path": "pyproject.toml",
+            },
+            {
+                "kind": "python",
+                "layer": "nested-application",
+                "name": "nested-python-package",
+                "path": "nested/pyproject.toml",
+            },
+        ],
+    }
+    cross_layer_map = json.loads(
+        Project.from_repository(
+            cross_layer,
+            config=json.dumps(cross_layer_config, separators=(",", ":")).encode(),
+            jobs=1,
+        ).map_json()
+    )
+    assert any(
+        row["kind"] == "external"
+        and row["source"] == "app/main.py"
+        and row["target"] == "package:requests"
+        for row in cross_layer_map["edges"]
+    )
+    assert not any(
+        row["code"] == "unresolved-import" and row["path"] == "app/main.py"
+        for row in cross_layer_map["diagnostics"]
+    )
+    assert any(
+        row["kind"] == "external"
+        and row["source"] == "nested/main.py"
+        and row["target"] == "package:httpx"
+        for row in cross_layer_map["edges"]
+    )
+    assert not any(
+        row["kind"] == "external"
+        and row["source"] == "nested/main.py"
+        and row["target"] == "package:requests"
+        for row in cross_layer_map["edges"]
+    )
+    assert any(
+        row["code"] == "unresolved-import"
+        and row["path"] == "nested/main.py"
+        and row["message"].endswith(": requests")
+        for row in cross_layer_map["diagnostics"]
+    )
+    external_call = next(
+        row for row in cross_layer_map["symbol_calls"] if row["name"] == "get"
+    )
+    assert external_call["resolution"] == "external"
+    assert external_call["package"] == "requests"
+    external_reference = next(
+        row
+        for row in cross_layer_map["symbol_references"]
+        if row["name"] == "DEFAULT"
+    )
+    assert external_reference["resolution"] == "external"
+    assert external_reference["package"] == "requests"
+    external_relations = json.loads(
+        evaluate_projection_json(
+            json.dumps(
+                cross_layer_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            {
+                "id": "external-relations",
+                "select": "symbol_relations",
+            },
+        )
+    )
+    projected_external = [
+        row
+        for row in external_relations["fact"]["items"]
+        if row["attributes"].get("target") == "package:requests"
+    ]
+    assert {row["attributes"]["names"][0] for row in projected_external} >= {
+        "DEFAULT",
+        "get",
+    }
+    assert all(row["state"] == "current" for row in projected_external)
+    external_graph = json.loads(
+        evaluate_projection_json(
+            json.dumps(
+                cross_layer_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            {
+                "id": "external-graph",
+                "level": "file",
+                "relations": ["calls", "references"],
+                "select": "graph",
+            },
+        )
+    )
+    assert any(
+        row["attributes"].get("record_kind") == "node"
+        and row["attributes"].get("id") == "package:requests"
+        for row in external_graph["fact"]["items"]
+    )
+    assert any(
+        row["attributes"].get("record_kind") == "relation"
+        and row["attributes"].get("target") == "package:requests"
+        and row["state"] == "current"
+        for row in external_graph["fact"]["items"]
+    )
 
     namespace = root / "namespace-package"
     (namespace / "app").mkdir(parents=True)
@@ -3284,6 +3465,77 @@ def main() -> None:
         row["attributes"]["witness_count"]
         for row in graph_records["relation"]
     )
+
+    typed_endpoint_map = json.loads(report_map)
+    typed_endpoint_map["packages"][0].update(
+        {
+            "entrypoints": {
+                "configured:0": "py/sample/__init__.py",
+                "script:sample": "sample.api:main",
+            },
+            "kind": "python",
+            "identity": "sample-distribution",
+            "name": "python",
+        }
+    )
+    typed_endpoint_map["edges"].append(
+        {
+            "kind": "package-local",
+            "names": ["sample.api"],
+            "source": "py/sample/__init__.py",
+            "target": "package:python",
+        }
+    )
+    typed_graph = json.loads(
+        evaluate_projection_json(
+            json.dumps(
+                typed_endpoint_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            graph_definition,
+        )
+    )
+    typed_nodes = {
+        row["attributes"]["id"]: row
+        for row in typed_graph["fact"]["items"]
+        if row["attributes"]["record_kind"] == "node"
+    }
+    assert "package:python" in typed_nodes
+    assert typed_nodes["package:python"]["label"] == "sample-distribution"
+    assert "package:package:python" not in typed_nodes
+    assert "external:sample.api:main" not in typed_nodes
+    assert any(
+        row["attributes"].get("relation_kind") == "script:sample"
+        and row["attributes"].get("source") == "package:python"
+        and row["attributes"].get("target") == "file:py/sample/api.py"
+        for row in typed_graph["fact"]["items"]
+    )
+
+    ambiguous_entrypoint_map = json.loads(json.dumps(typed_endpoint_map))
+    duplicate_module = next(
+        row
+        for row in ambiguous_entrypoint_map["files"]
+        if row["path"] == "py/sample/api.py"
+    ).copy()
+    duplicate_module["path"] = "alternate/sample/api.py"
+    ambiguous_entrypoint_map["files"].append(duplicate_module)
+    ambiguous_entrypoints = json.loads(
+        evaluate_projection_json(
+            json.dumps(
+                ambiguous_entrypoint_map,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode(),
+            {"id": "ambiguous-entrypoint", "select": "package_entrypoints"},
+        )
+    )
+    ambiguous_script = next(
+        row
+        for row in ambiguous_entrypoints["fact"]["items"]
+        if row["attributes"]["kind"] == "script:sample"
+    )
+    assert ambiguous_script["state"] == "unknown"
+    assert ambiguous_script["attributes"]["resolution"] == "ambiguous"
+    assert "target_path" not in ambiguous_script["attributes"]
     assert all(
         row["attributes"]["evidence_class"] in {"direct", "stale", "unknown"}
         for row in graph_records["node"] + graph_records["relation"]

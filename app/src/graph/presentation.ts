@@ -215,8 +215,11 @@ function groupNode(
   const inventory = groupBy === "inventory";
   const unassigned = groupBy === "component" && origin === "unassigned";
   const root = groupBy === "directory" && item.label === ".";
+  if (inventory) {
+    nonblank(item.attributes.inventory_kind, `${item.key}.inventory_kind`);
+  }
   const kind = inventory
-    ? nonblank(item.attributes.inventory_kind, `${item.key}.inventory_kind`)
+    ? "inventory"
     : unassigned
     ? (item.label === "." ? "root" : "directory")
     : (root ? "root" : groupBy);
@@ -275,15 +278,16 @@ function peripheralGroupNode(kind: string, members: GraphNode[]): GraphNode {
       member_count: members.length,
       member_files: [],
       member_node_ids: members.map((node) => node.id).sort(utf8Compare),
+      inventory_kind: kind,
       origin: "derived",
-      presentation_kind: kind,
+      presentation_kind: "inventory",
       presentation_role: "group",
       root_path: null,
     },
     evidence: members.flatMap((node) => node.evidence),
     id,
     identity: `peripheral:${kind}`,
-    kind,
+    kind: "inventory",
     label: labels[kind] || kind,
     parent: null,
   };

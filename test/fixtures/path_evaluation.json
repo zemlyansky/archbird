@@ -102,8 +102,8 @@
       "expected": {
         "nodes": [
           [
-            "symbol:symbol:[\"a.js\",\"a\"]",
-            "symbol:symbol:[\"b.js\",\"b\"]"
+            "symbol:[\"a.js\",\"a\"]",
+            "symbol:[\"b.js\",\"b\"]"
           ]
         ],
         "outcome": "unknown",

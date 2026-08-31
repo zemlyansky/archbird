@@ -8,6 +8,7 @@ import {
   edgePresentation,
   filePresentationId,
   graphActivation,
+  withHiddenPresentation,
 } from "../src/graph/explore";
 import { applyVerificationOverlay } from "../src/graph/verification";
 
@@ -224,16 +225,21 @@ test("selected components and files expand without flattening unrelated componen
     edge.source === externalSymbol.id && edge.target === "component-b"));
 });
 
-test("hidden presentation nodes remove their incident relations without changing source artifacts", () => {
-  const graph = composeArchitectureGraph(componentGraph, fileGraph, new Map(), {
+test("hidden presentation nodes retain anchored topology as translucent restore targets", () => {
+  const source = composeArchitectureGraph(componentGraph, fileGraph, new Map(), {
     expandedGroups: new Set(["component-a"]),
     expandedFiles: new Set(),
-    hidden: new Set(["component-b"]),
+    hidden: new Set(),
     revealedSymbols: new Set(),
   });
-  assert.equal(graph.nodes.some((row) => row.id === "component-b"), false);
-  assert.equal(graph.edges.length, 0);
+  const graph = withHiddenPresentation(source, new Set(["component-b"]));
+  const shadow = graph.nodes.find((row) => row.id === "component-b");
+  assert.equal(shadow?.attributes.presentation_hidden, true);
+  assert.equal(graph.edges.length, 1);
+  assert.equal(graph.edges[0]?.attributes?.presentation_hidden, true);
   assert.equal(componentGraph.edges.length, 1);
+  assert.equal(source.nodes.find((row) => row.id === "component-b")
+    ?.attributes.presentation_hidden, undefined);
 });
 
 test("verification overlays map relations and findings onto the visible frontier", () => {

@@ -337,6 +337,40 @@ async function main() {
     });
     await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 
+    const wordmark = page.locator('.brand-wordmark[aria-label="ǎrchbird"]');
+    await wordmark.waitFor();
+    const initial = wordmark.locator(".brand-initial");
+    if (await initial.textContent() !== "ǎ") {
+      throw new Error("application wordmark does not render the composed ǎ glyph");
+    }
+    if (!await initial.evaluate((node) =>
+      getComputedStyle(node).backgroundImage.includes("linear-gradient"))) {
+      throw new Error("application wordmark does not color the ǎ glyph by region");
+    }
+    const selectedWordmark = await wordmark.evaluate((node) => {
+      const selection = getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      const text = selection?.toString() || "";
+      selection?.removeAllRanges();
+      return text;
+    });
+    if (selectedWordmark !== "ǎrchbird") {
+      throw new Error(`application wordmark copies as ${JSON.stringify(selectedWordmark)}`);
+    }
+    if (await page.getByText("codebase explorer", { exact: true }).count()) {
+      throw new Error("obsolete application subtitle is still rendered");
+    }
+    const favicon = await page.locator('link[rel="icon"]').getAttribute("href");
+    const faviconSvg = await page.evaluate(async (href) => {
+      const response = await fetch(href);
+      return response.text();
+    }, favicon);
+    if (!faviconSvg.includes(">ǎ</text>") || faviconSvg.includes("<rect")) {
+      throw new Error("application favicon is not the plain ǎ wordmark glyph");
+    }
     await page.getByRole("heading", { name: "See how a codebase is built." }).waitFor();
     await page.getByRole("button", { name: /Project folder/ }).waitFor();
     await page.getByRole("button", { name: /Source ZIP/ }).waitFor();
@@ -354,8 +388,63 @@ async function main() {
     await result.waitFor({ timeout: 10_000 });
     await result.click();
     await page.waitForSelector(".inspector code", { timeout: 10_000 });
+    const initialZoom = zoomControl(page).locator('input[type="range"]');
+    await initialZoom.fill("300");
+    const zoomedActions = page.locator(".graph-node-actions");
+    await zoomedActions.waitFor({ timeout: 10_000 });
+    if (Number(await zoomedActions.getAttribute("data-rendered-inset")) < 14) {
+      throw new Error("node controls do not clear the scaled selected border");
+    }
+    const actionBackground = await zoomedActions.locator("button").first()
+      .evaluate((button) => getComputedStyle(button).backgroundColor);
+    if (actionBackground !== "rgb(134, 239, 172)") {
+      throw new Error(`node controls do not inherit the symbol accent: ${actionBackground}`);
+    }
+    const actionRadius = await zoomedActions.locator("button").first()
+      .evaluate((button) => getComputedStyle(button).borderRadius);
+    if (actionRadius !== "50%") {
+      throw new Error(`node controls are not circular: ${actionRadius}`);
+    }
+    const actionSize = await zoomedActions.locator("button").first().boundingBox();
+    if (!actionSize || Math.abs(actionSize.width - actionSize.height) > 0.1) {
+      throw new Error(
+        `node controls are oval: ${actionSize?.width || 0}x${actionSize?.height || 0}`,
+      );
+    }
+    await page.screenshot({
+      path: path.join(path.dirname(screenshot), "node-controls-zoomed.png"),
+      fullPage: true,
+    });
+    await initialZoom.fill("125");
+    const nodePosition = await selectedGraphPoint(page);
+    const edgeCount = await page.locator(".graph-canvas").getAttribute("data-edge-count");
+    await page.getByRole("button", { name: "Remove node from view", exact: true }).click();
+    await page.locator('.graph-canvas[data-hidden-node-count="1"][data-layout-ready="true"]')
+      .waitFor({ timeout: 30_000 });
+    if (await page.locator(".graph-canvas").getAttribute("data-edge-count") !== edgeCount) {
+      throw new Error("hiding a node removed graph topology and changed its layout");
+    }
+    if (Number(await page.locator(".graph-canvas").getAttribute("data-hidden-edge-count")) < 1) {
+      throw new Error("hiding a connected node did not mute its incident relations");
+    }
+    await page.getByRole("button", { name: "Restore node", exact: true }).click();
+    await page.locator('.graph-canvas[data-hidden-node-count="0"][data-layout-ready="true"]')
+      .waitFor({ timeout: 30_000 });
+    const restoredPosition = await selectedGraphPoint(page);
+    if (Math.hypot(
+      restoredPosition.x - nodePosition.x,
+      restoredPosition.y - nodePosition.y,
+    ) > 1) {
+      throw new Error("restoring a hidden node moved it from its presentation position");
+    }
+    await page.mouse.move(nodePosition.clientX, nodePosition.clientY);
     await page.locator(".graph-canvas").focus();
     await page.keyboard.press("Escape");
+    await page.locator(".graph-node-actions").waitFor({ timeout: 10_000 });
+    await page.screenshot({
+      path: path.join(path.dirname(screenshot), "node-controls.png"),
+      fullPage: true,
+    });
     await page.keyboard.press("ArrowDown");
     await page.waitForSelector(".inspector code", { timeout: 10_000 });
     await page.getByLabel("Evidence").selectOption("unique");
@@ -363,6 +452,25 @@ async function main() {
     await page.keyboard.press("Escape");
     await page.getByText("6 / 1", { exact: true }).waitFor({ timeout: 10_000 });
     await page.getByLabel("Evidence").selectOption("all");
+    const canvas = page.locator(".graph-canvas");
+    if (await canvas.getAttribute("data-layout-mode") !== "flow"
+      || await canvas.getAttribute("data-notation") !== "architecture") {
+      throw new Error("graph did not start in Flow/Architecture presentation");
+    }
+    for (const layout of ["force", "radial", "flow"]) {
+      await page.getByLabel("Layout").selectOption(layout);
+      await page.locator(
+        `.graph-canvas[data-layout-mode="${layout}"][data-layout-ready="true"]`,
+      ).waitFor({ timeout: 30_000 });
+    }
+    await page.getByLabel("Notation").selectOption("compact");
+    await page.locator(
+      '.graph-canvas[data-notation="compact"][data-layout-ready="true"]',
+    ).waitFor({ timeout: 30_000 });
+    await page.getByLabel("Notation").selectOption("architecture");
+    await page.locator(
+      '.graph-canvas[data-notation="architecture"][data-layout-ready="true"]',
+    ).waitFor({ timeout: 30_000 });
     const downloadedView = path.join(path.dirname(screenshot), "downloaded-view.json");
     await saveDownload(page, "Save view JSON", downloadedView);
     if (!fs.readFileSync(downloadedView).equals(fs.readFileSync(graphView))) {
@@ -388,6 +496,12 @@ async function main() {
     }
 
     await page.getByText("Focused Query", { exact: true }).click();
+    await selectGraphResult(page, "js/");
+    const mapViewport = await page.locator(".graph-canvas").evaluate((canvas) => ({
+      panX: canvas.getAttribute("data-pan-x"),
+      panY: canvas.getAttribute("data-pan-y"),
+      selectedId: canvas.getAttribute("data-selected-id"),
+    }));
     await page.locator(".query-panel input").first().fill("js/index.js:add");
     await page.getByRole("button", { name: "Run Query", exact: true }).click();
     await page.waitForFunction(
@@ -395,7 +509,20 @@ async function main() {
       undefined,
       { timeout: 30_000 },
     );
-    await page.getByRole("button", { name: "Back to Map", exact: true }).click();
+    const graphBack = page.getByRole("button", { name: "Back to previous graph", exact: true });
+    if (await page.getByRole("button", { name: "Back to Map", exact: true }).count()) {
+      throw new Error("focused graph duplicates graph-local Back with a rail Back control");
+    }
+    const [backBox, graphBox] = await Promise.all([
+      graphBack.boundingBox(),
+      page.locator(".graph-stage").boundingBox(),
+    ]);
+    if (!backBox || !graphBox || backBox.x < graphBox.x || backBox.y < graphBox.y
+      || backBox.x > graphBox.x + graphBox.width / 2
+      || backBox.y > graphBox.y + graphBox.height / 2) {
+      throw new Error(`graph Back control is not in the graph's upper-left: ${JSON.stringify({ backBox, graphBox })}`);
+    }
+    await graphBack.click();
     await page.waitForFunction(
       () => document.querySelector(".artifact-meta small")?.textContent?.includes("map ·"),
       undefined,
@@ -403,6 +530,12 @@ async function main() {
     );
     await page.locator('.graph-canvas[data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
+    await page.waitForFunction((expected) => {
+      const canvas = document.querySelector(".graph-canvas");
+      return canvas?.getAttribute("data-pan-x") === expected.panX
+        && canvas?.getAttribute("data-pan-y") === expected.panY
+        && canvas?.getAttribute("data-selected-id") === expected.selectedId;
+    }, mapViewport, { timeout: 30_000 });
     await assertDesktopWorkspaceVisible(page, "Query to Map navigation");
     await changeMapAxis(page, "component", "group-by", "component");
     const zoomBeforeSelection = await zoomControl(page).locator("output").textContent();
@@ -432,9 +565,12 @@ async function main() {
     await page.getByRole("button", { name: "Fit graph", exact: true }).click();
     await doubleClickSelected(page);
     await selectGraphResult(page, "js/");
-    await activateSelected(page, "Expand directory");
+    await page.getByRole("button", { name: "Maximize node", exact: true }).click();
+    await assertAnchoredRelayout(page);
     await selectGraphResult(page, "js/index.js");
-    await activateSelected(page, "Expand symbols");
+    await hoverSelected(page);
+    await page.locator(".graph-tooltip strong")
+      .getByText("js/index.js", { exact: true }).waitFor();
     await selectGraphResult(page, "add");
     await page.locator(".inspector h2").getByText("add", { exact: true }).waitFor();
     await clickAndWaitForGraphLayout(
@@ -488,15 +624,82 @@ async function main() {
     await page.locator('.graph-canvas[data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
     await page.getByText("Constraints", { exact: true }).waitFor({ timeout: 10_000 });
-    await page.getByRole("button", { name: "metrics", exact: true }).click();
-    await page.getByRole("heading", { name: "Complexity distribution", exact: true })
+    await page.locator(".metrics-panel").waitFor({ timeout: 30_000 });
+    if (await page.locator(".metric-accordion").count() !== 7) {
+      throw new Error("Metrics sidebar does not expose all seven interactive metrics");
+    }
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll(".metric-summary-value")]
+        .every((node) => node.textContent !== "loading"),
+    undefined, { timeout: 30_000 });
+    const complexity = page.locator(
+      '[data-metric="source.cyclomatic_complexity"]',
+    );
+    if (await complexity.locator(":scope > .metric-box-plot").count() !== 1) {
+      throw new Error("collapsed metric does not expose its quartile plot");
+    }
+    if (await complexity.locator(".metric-bar-fill").count()) {
+      throw new Error("metric retained the misleading median/maximum ratio bar");
+    }
+    await complexity.locator(".metric-summary").click();
+    await complexity.locator(".metric-distribution").waitFor();
+    if (await complexity.locator(".metric-box-plot").count() !== 1) {
+      throw new Error("expanded metric duplicated its quartile plot");
+    }
+    await complexity.getByText("Measurements are not quality scores.", { exact: true })
+      .waitFor();
+    await complexity.getByRole("button", { name: "Show on graph", exact: true }).click();
+    await complexity.getByRole("button", { name: "Remove graph overlay", exact: true })
+      .waitFor();
+    const tailPoint = page.locator("button.metric-plot-point").first();
+    if (await tailPoint.count()) {
+      const pointLabel = await tailPoint.getAttribute("aria-label");
+      if (!pointLabel || !pointLabel.includes(":")) {
+        throw new Error(`metric tail point lacks source identity: ${pointLabel}`);
+      }
+      await tailPoint.click();
+      await page.waitForFunction(
+        () => document.querySelector(".artifact-meta small")?.textContent?.includes("query ·"),
+        undefined,
+        { timeout: 30_000 },
+      );
+      await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+      await page.waitForFunction(
+        () => document.querySelector(".artifact-meta small")?.textContent?.includes("map ·"),
+        undefined,
+        { timeout: 30_000 },
+      );
+    }
+    const metricHotspot = complexity.locator(".metric-hotspot").first();
+    await metricHotspot.click();
+    await page.waitForFunction(
+      () => document.querySelector(".artifact-meta small")?.textContent?.includes("query ·"),
+      undefined,
+      { timeout: 30_000 },
+    );
+    await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+    await page.waitForFunction(
+      () => document.querySelector(".artifact-meta small")?.textContent?.includes("map ·"),
+      undefined,
+      { timeout: 30_000 },
+    );
+    await page.locator('.graph-canvas[data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
-    await page.getByText("Measurements, not quality scores.", { exact: true }).waitFor();
     await changeMapAxis(page, "component", "group-by", "component");
     const firstConstraint = page.locator(".constraint-row").first();
     await firstConstraint.click();
     await page.getByText("Architecture constraint", { exact: true }).waitFor();
     await selectGraphResult(page, "javascript");
+    await page.locator(".metric-scope")
+      .getByRole("button", { name: "Selection", exact: true }).click();
+    if (await complexity.locator(".metric-summary-copy small").count()) {
+      throw new Error("metric row repeats the shared header scope");
+    }
+    if (!await page.locator(".metric-scope")
+      .getByRole("button", { name: "Selection", exact: true })
+      .evaluate((button) => button.classList.contains("active"))) {
+      throw new Error("Metrics header did not retain selected-region scope");
+    }
     if (await firstConstraint.evaluate((row) => row.classList.contains("active"))) {
       throw new Error("graph selection left the previous constraint selected");
     }
@@ -599,8 +802,16 @@ async function main() {
     await mobile.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
     await mobile.waitForFunction(() =>
       getComputedStyle(document.body).backgroundColor === "rgb(11, 15, 20)");
-    await loadArtifact(mobile, graphView, "archbird-graph-view");
-    await mobile.locator(".search input").fill("helper");
+    await loadArtifact(mobile, map, "map");
+    await mobile.locator(".metrics-panel").waitFor({ timeout: 30_000 });
+    if (await mobile.locator(".metric-accordion").count() !== 7) {
+      throw new Error("mobile Metrics sidebar does not expose all seven metrics");
+    }
+    await mobile.waitForFunction(() =>
+      [...document.querySelectorAll(".metric-summary-value")]
+        .every((node) => node.textContent !== "loading"),
+    undefined, { timeout: 30_000 });
+    await mobile.locator(".search input").fill("js/");
     await mobile.locator(".results button").first().click();
     const geometry = await mobile.evaluate(() => {
       const graph = document.querySelector(".graph-stage")?.getBoundingClientRect();

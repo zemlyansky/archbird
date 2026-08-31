@@ -81,6 +81,7 @@ function liveAppBytes(candidate) {
 class LiveRepository {
   constructor({
     root,
+    activity = null,
     config = null,
     configJson = null,
     noConfig = false,
@@ -88,7 +89,11 @@ class LiveRepository {
     typescript = true,
     debounceMs = 180,
   }) {
+    if (activity !== null && typeof activity !== "function") {
+      throw new TypeError("activity must be a function or null");
+    }
     this.root = path.resolve(root);
+    this.activity = activity;
     this.config = config ? path.resolve(config) : null;
     this.configJson = configJson ? Buffer.from(configJson) : null;
     this.noConfig = noConfig;
@@ -156,6 +161,16 @@ class LiveRepository {
     };
     const encoded = `id: ${event.event_id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
     for (const response of this.clients) response.write(encoded);
+    this.activityEvent(type, { ...payload, ...(generation ? { generation } : {}) });
+  }
+
+  activityEvent(event, payload = {}) {
+    if (!this.activity) return;
+    try {
+      this.activity({ event, ...payload });
+    } catch {
+      // Activity reporting must not change repository analysis or host responses.
+    }
   }
 
   candidate() {
@@ -472,6 +487,58 @@ function validateRequest(value) {
   return value;
 }
 
+function activityText(value, limit = 120) {
+  const text = String(value).replace(/\s+/g, " ").trim();
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+}
+
+function operationLabel(request) {
+  const payload = request.payload || {};
+  if (request.method === "projection") {
+    const plan = payload.plan || {};
+    const select = String(plan.select || "projection");
+    if (select === "metrics") return `metric ${activityText(plan.metric || plan.id || "unknown")}`;
+    if (select === "graph") {
+      const grouping = String(plan.group_by || "structure");
+      const id = String(plan.id || "");
+      const suffix = `-${grouping}`;
+      const view = id.startsWith("app-") && id.endsWith(suffix)
+        ? id.slice(4, -suffix.length)
+        : id.replace(/^app-/, "") || "architecture";
+      return `view ${view} · ${grouping}`;
+    }
+    const identity = activityText(plan.id || "");
+    return `projection ${select}${identity ? ` · ${identity}` : ""}`;
+  }
+  if (request.method === "view") return `view ${String(payload.view || "components")}`;
+  if (request.method === "query") {
+    const query = payload.query || {};
+    for (const [key, label] of [
+      ["symbols", "symbol"], ["paths", "path"], ["components", "component"],
+      ["packages", "package"], ["artifacts", "artifact"], ["search", "search"],
+    ]) {
+      const value = query[key];
+      const selected = Array.isArray(value) ? value[0] : value;
+      if (selected !== undefined && selected !== null && String(selected)) {
+        return `query ${label} ${activityText(selected)}`;
+      }
+    }
+    return "query";
+  }
+  if (request.method === "source") return `source ${activityText(payload.path || "unknown")}`;
+  if (request.method === "verification") return "verification";
+  if (request.method === "diff") {
+    return `diff ${String(payload.before || "unknown").slice(0, 12)} → ${String(payload.after || "unknown").slice(0, 12)}`;
+  }
+  if (request.method === "export") {
+    return `export ${String(payload.view || "components")} · ${String(payload.format || "graphml")}`;
+  }
+  if (request.method === "open-snapshot") {
+    return `snapshot ${String(payload.generation || "unknown").slice(0, 12)}`;
+  }
+  return null;
+}
+
 function requestSnapshot(repository, selections, request) {
   const generation = request.payload.generation || selections.get(request.session) || null;
   return repository.snapshot(generation);
@@ -564,6 +631,7 @@ async function hostRequest(repository, selections, request) {
 
 async function createLiveServer({
   root = ".",
+  activity = null,
   config = null,
   configJson = null,
   noConfig = false,
@@ -578,6 +646,7 @@ async function createLiveServer({
   }
   const repository = new LiveRepository({
     root,
+    activity,
     config,
     configJson,
     noConfig,
@@ -651,9 +720,12 @@ async function createLiveServer({
       let envelope;
       let raw = null;
       let hostEnvelope = null;
+      let label = null;
+      const started = process.hrtime.bigint();
       try {
         raw = await readJson(request);
         hostEnvelope = validateRequest(raw);
+        label = operationLabel(hostEnvelope);
         const result = await hostRequest(repository, selections, hostEnvelope);
         envelope = {
           generation: repository.current?.generation,
@@ -663,6 +735,13 @@ async function createLiveServer({
           result,
           session: hostEnvelope.session,
         };
+        if (label) {
+          repository.activityEvent("operation-complete", {
+            duration_ms: Number(process.hrtime.bigint() - started) / 1e6,
+            label,
+            method: hostEnvelope.method,
+          });
+        }
       } catch (error) {
         const identity = hostEnvelope || raw || {};
         envelope = {
@@ -672,6 +751,14 @@ async function createLiveServer({
           protocol_version: PROTOCOL_VERSION,
           session: typeof identity.session === "string" ? identity.session : "invalid",
         };
+        if (label) {
+          repository.activityEvent("operation-failed", {
+            duration_ms: Number(process.hrtime.bigint() - started) / 1e6,
+            label,
+            message: String(error.message || error),
+            method: hostEnvelope.method,
+          });
+        }
       }
       json(response, envelope.ok ? 200 : 400, envelope);
       return;

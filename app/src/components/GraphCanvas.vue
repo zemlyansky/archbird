@@ -5,27 +5,42 @@ import cytoscape, {
 } from "cytoscape";
 import ELK from "elkjs/lib/elk-api.js";
 import ELKWorker from "elkjs/lib/elk-worker.min.js?worker";
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { GraphView } from "../artifacts/model";
-import { edgePresentation } from "../graph/explore";
+import { edgePresentation, graphActivation } from "../graph/explore";
 import {
   elkHierarchy,
+  elkLeafSize,
   elkLayoutOptions,
   elkPositions,
+  radialSpanningEdges,
+  type GraphLayoutMode,
   type ElkNode,
 } from "../graph/layout";
+import {
+  architectureNodeCard,
+  architectureNodeLabel,
+  type GraphNotation,
+} from "../graph/notation";
 
 const props = defineProps<{
+  canGoBack?: boolean;
   direction: "BT" | "LR" | "RL" | "TB";
   graph: GraphView;
+  layoutMode: GraphLayoutMode;
+  notation: GraphNotation;
   selectedId: string | null;
   spacing: number;
   theme: "dark" | "light";
 }>();
 const emit = defineEmits<{
   activate: [id: string];
+  back: [];
+  hide: [id: string];
   layoutEnd: [];
   layoutStart: [];
+  maximize: [id: string];
+  minimize: [id: string];
   select: [id: string | null];
   zoom: [percent: number];
 }>();
@@ -44,6 +59,9 @@ const layoutExtent = ref<{ height: number; width: number } | null>(null);
 const panPosition = ref<{ x: number; y: number } | null>(null);
 const selectedModel = ref<{ x: number; y: number } | null>(null);
 const selectedRendered = ref<{ x: number; y: number } | null>(null);
+const nodeActionPosition = ref<{ x: number; y: number } | null>(null);
+const nodeActionInset = ref<number | null>(null);
+const hoveredNodeId = ref<string | null>(null);
 const middlePanning = ref(false);
 const hover = ref<{
   details: string[];
@@ -57,9 +75,23 @@ let wheelDelta = 0;
 let wheelFrame = 0;
 let wheelPoint = { x: 0, y: 0 };
 let middlePanPoint: { x: number; y: number } | null = null;
+let actionHideTimer = 0;
 const elk = new ELK({
   workerFactory: () => new ELKWorker(),
 });
+const actionNodeId = computed(() => hoveredNodeId.value || props.selectedId);
+const actionNode = computed(() => actionNodeId.value
+  ? props.graph.nodes.find((node) => node.id === actionNodeId.value) || null
+  : null);
+const actionHidden = computed(() =>
+  Boolean(actionNode.value?.attributes.presentation_hidden));
+const actionActivation = computed(() =>
+  actionNode.value ? graphActivation(actionNode.value) : null);
+const actionExpanded = computed(() => Boolean(
+  actionNode.value?.kind === "symbol"
+    ? actionNode.value.attributes.relations_revealed
+    : actionNode.value?.attributes.expanded,
+));
 
 const colors: Record<string, string> = {
   component: "#7dd3fc",
@@ -67,6 +99,7 @@ const colors: Record<string, string> = {
   layer: "#f9a8d4",
   language: "#67e8f9",
   file: "#c4b5fd",
+  inventory: "#a7b6c8",
   symbol: "#86efac",
   package: "#facc15",
   build: "#fb7185",
@@ -75,6 +108,14 @@ const colors: Record<string, string> = {
   unresolved: "#fca5a5",
   unknown: "#fca5a5",
 };
+
+function nodeAccent(node: GraphView["nodes"][number]): string {
+  const status = String(node.attributes.verification_status || "");
+  if (status === "fail") return "var(--danger)";
+  if (status === "unknown") return "var(--warning)";
+  if (status === "pass") return "var(--success)";
+  return colors[node.kind] || "#94a3b8";
+}
 
 interface PreservedViewport {
   anchorId: string;
@@ -95,7 +136,10 @@ function metricColor(value: unknown): string {
   return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
 }
 
-function elements(viewport: PreservedViewport | null) {
+function elements(
+  viewport: PreservedViewport | null,
+  architectureCards: ReadonlyMap<string, string> = new Map(),
+) {
   const parents = new Set(
     props.graph.nodes.flatMap((node) => node.parent ? [node.parent] : []),
   );
@@ -108,9 +152,12 @@ function elements(viewport: PreservedViewport | null) {
         data: {
           id: node.id,
           label: node.label,
+          architectureImage: architectureCards.get(node.id) || "none",
+          architectureLabel: architectureNodeLabel(node),
           kind: node.kind,
           identity: node.identity,
           expanded: Boolean(node.attributes.expanded),
+          presentationHidden: node.attributes.presentation_hidden ? 1 : 0,
           presentationRole: String(node.attributes.presentation_role || ""),
           verificationFindings: Number(node.attributes.verification_findings || 0),
           verificationStatus: String(node.attributes.verification_status || ""),
@@ -138,6 +185,7 @@ function elements(viewport: PreservedViewport | null) {
         classification: edge.classification,
         verificationFindings: Number(edge.attributes?.verification_findings || 0),
         verificationStatus: String(edge.attributes?.verification_status || ""),
+        presentationHidden: edge.attributes?.presentation_hidden ? 1 : 0,
       },
     })),
   ];
@@ -152,29 +200,56 @@ function updateSelectedPosition() {
   if (!cy || !props.selectedId) {
     selectedModel.value = null;
     selectedRendered.value = null;
-    return;
-  }
-  const selected = cy.getElementById(props.selectedId);
-  if (selected.length && selected.isNode()) {
-    selectedModel.value = { ...selected.position() };
-    if (selected.isParent()) {
-      const bounds = selected.renderedBoundingBox({
-        includeEdges: false,
-        includeLabels: false,
-        includeNodes: true,
-        includeOverlays: false,
-      });
-      const inset = Math.max(3, Math.min(8, bounds.w / 4, bounds.h / 4));
-      selectedRendered.value = {
-        x: bounds.x1 + inset,
-        y: bounds.y1 + inset,
-      };
-    } else {
-      selectedRendered.value = { ...selected.renderedPosition() };
-    }
+    if (!cy) nodeActionPosition.value = null;
   } else {
-    selectedModel.value = null;
-    selectedRendered.value = null;
+    const selected = cy.getElementById(props.selectedId);
+    if (selected.length && selected.isNode()) {
+      selectedModel.value = { ...selected.position() };
+      if (selected.isParent()) {
+        const bounds = selected.renderedBoundingBox({
+          includeEdges: false,
+          includeLabels: false,
+          includeNodes: true,
+          includeOverlays: false,
+        });
+        const inset = Math.max(3, Math.min(8, bounds.w / 4, bounds.h / 4));
+        selectedRendered.value = {
+          x: bounds.x1 + inset,
+          y: bounds.y1 + inset,
+        };
+      } else {
+        selectedRendered.value = { ...selected.renderedPosition() };
+      }
+    } else {
+      selectedModel.value = null;
+      selectedRendered.value = null;
+    }
+  }
+  const actionId = actionNodeId.value;
+  const action = actionId ? cy?.getElementById(actionId) : null;
+  if (action?.length && action.isNode()) {
+    const actionBounds = action.renderedBoundingBox({
+      includeEdges: false,
+      includeLabels: false,
+      includeNodes: true,
+      includeOverlays: false,
+    });
+    const borderWidth = Number.parseFloat(String(action.style("border-width"))) || 1.5;
+    const inset = Math.max(5, Math.ceil(borderWidth * (cy?.zoom() || 1)) + 2);
+    nodeActionInset.value = inset;
+    nodeActionPosition.value = {
+      x: Math.max(52, Math.min(
+        (container.value?.clientWidth || 0) - 4,
+        actionBounds.x2 - inset,
+      )),
+      y: Math.max(3, Math.min(
+        (container.value?.clientHeight || 0) - 22,
+        actionBounds.y1 + inset,
+      )),
+    };
+  } else {
+    nodeActionPosition.value = null;
+    nodeActionInset.value = null;
   }
 }
 
@@ -272,13 +347,19 @@ async function layout(viewport: PreservedViewport | null) {
   try {
     const result = await elk.layout({
       id: "root",
-      layoutOptions: elkLayoutOptions(props.direction, props.spacing),
-      children: elkHierarchy(props.graph.nodes, props.spacing),
-      edges: props.graph.edges.map((edge) => ({
-        id: edge.id,
-        sources: [edge.source],
-        targets: [edge.target],
-      })),
+      layoutOptions: elkLayoutOptions(
+        props.direction,
+        props.spacing,
+        props.layoutMode,
+      ),
+      children: elkHierarchy(props.graph.nodes, props.spacing, props.notation),
+      edges: props.layoutMode === "radial"
+        ? radialSpanningEdges(props.graph, props.selectedId)
+        : props.graph.edges.map((edge) => ({
+            id: edge.id,
+            sources: [edge.source],
+            targets: [edge.target],
+          })),
     }) as { children?: ElkNode[] };
     if (cy !== instance || id !== requestId) return;
     const positions = elkPositions(result.children || []);
@@ -292,10 +373,12 @@ async function layout(viewport: PreservedViewport | null) {
     const leafPositions = Object.fromEntries(
       instance.nodes().not(":parent").map((node) => [
         node.id(),
-        {
-          x: (positions[node.id()]?.x || 0) + translation.x,
-          y: (positions[node.id()]?.y || 0) + translation.y,
-        },
+        node.data("presentationHidden") && viewport?.positions[node.id()]
+          ? viewport.positions[node.id()]
+          : {
+              x: (positions[node.id()]?.x || 0) + translation.x,
+              y: (positions[node.id()]?.y || 0) + translation.y,
+            },
       ]),
     );
     const animate = Boolean(viewport && hasCompletedLayout.value);
@@ -368,13 +451,25 @@ function render() {
   if (!viewport) hasCompletedLayout.value = false;
   layoutReady.value = false;
   hover.value = null;
+  const architecture = props.notation === "architecture";
+  const leafSize = elkLeafSize(props.spacing, props.notation);
   const tokens = getComputedStyle(document.documentElement);
   const token = (name: string, fallback: string) =>
     tokens.getPropertyValue(name).trim() || fallback;
+  const architectureCards = new Map(props.graph.nodes.map((node) => [
+    node.id,
+    architectureNodeCard(node, {
+      accent: colors[node.kind] || "#94a3b8",
+      danger: token("--danger", "#e46f6f"),
+      success: token("--success", "#49b979"),
+      text: token("--text", "#e6edf5"),
+      warning: token("--warning", "#e2ae52"),
+    }, leafSize),
+  ]));
   cy?.destroy();
   cy = cytoscape({
     container: container.value,
-    elements: elements(viewport),
+    elements: elements(viewport, architectureCards),
     layout: { name: "preset" },
     minZoom: 0.05,
     maxZoom: 3,
@@ -382,74 +477,101 @@ function render() {
       {
         selector: "node",
         style: {
-          "background-color": (element) => colors[element.data("kind")] || "#94a3b8",
-          "border-color": token("--bg", "#0b0f14"),
+          "background-color": architecture
+            ? token("--panel-strong", "#1a2431")
+            : (element) => colors[element.data("kind")] || "#94a3b8",
+          "background-fit": "none",
+          "background-height": "100%",
+          "background-height-relative-to": "inner",
+          "background-image": architecture ? "data(architectureImage)" : "none",
+          "background-image-opacity": 1,
+          "background-opacity": 1,
+          "background-position-x": "0%",
+          "background-position-y": "0%",
+          "background-width": "100%",
+          "background-width-relative-to": "inner",
+          "border-color": architecture
+            ? (element) => colors[element.data("kind")] || "#94a3b8"
+            : token("--bg", "#0b0f14"),
           "border-width": "1.5px",
           color: token("--text", "#e6edf5"),
           "font-family": "IBM Plex Mono, ui-monospace, monospace",
           "font-size": "10px",
-          label: "data(label)",
+          label: architecture ? "" : "data(label)",
           "text-background-color": token("--panel", "#141c27"),
-          "text-background-opacity": 0.92,
+          "text-background-opacity": architecture ? 0 : 0.92,
           "text-background-padding": "3px",
-          "text-margin-y": 15,
-          "text-wrap": "ellipsis",
+          "text-halign": "center",
+          "text-margin-y": architecture ? 0 : 15,
+          "text-valign": "center",
+          "text-wrap": architecture ? "wrap" : "ellipsis",
           "text-max-width": `${Math.max(
             48,
-            Math.round(150 * props.spacing / 100),
+            architecture ? leafSize.width - 12 : Math.round(150 * props.spacing / 100),
           )}px`,
-          height: "22px",
-          width: "22px",
+          height: architecture ? `${leafSize.height}px` : "22px",
+          padding: "0px",
+          shape: architecture ? "roundrectangle" : "ellipse",
+          width: architecture ? `${leafSize.width}px` : "22px",
         },
       },
       {
         selector: 'node[presentationRole = "group"]',
         style: {
           shape: "round-rectangle",
-          height: "28px",
-          width: "28px",
+          height: architecture ? `${leafSize.height}px` : "28px",
+          width: architecture ? `${leafSize.width}px` : "28px",
         },
       },
       {
         selector: 'node[kind = "file"]',
         style: {
-          shape: "rectangle",
-          height: "24px",
-          width: "20px",
+          shape: architecture ? "roundrectangle" : "rectangle",
+          height: architecture ? `${leafSize.height}px` : "24px",
+          width: architecture ? `${leafSize.width}px` : "20px",
         },
       },
       {
         selector: 'node[kind = "symbol"]',
         style: {
-          shape: "ellipse",
+          shape: architecture ? "roundrectangle" : "ellipse",
         },
       },
       {
         selector: 'node[kind = "builtin"]',
         style: {
-          shape: "diamond",
+          shape: architecture ? "roundrectangle" : "diamond",
         },
       },
       {
         selector: 'node[kind = "unresolved"]',
         style: {
-          shape: "triangle",
+          shape: architecture ? "roundrectangle" : "triangle",
         },
       },
       {
         selector: ":parent",
         style: {
+          "background-image": "none",
           "background-color": (element) => colors[element.data("kind")] || "#94a3b8",
           "background-opacity": 0.08,
           "border-color": token("--line-strong", "#43566c"),
           "border-style": "dashed",
           "font-size": "9px",
+          label: "data(label)",
           "padding": "18px",
           shape: "roundrectangle",
           "text-halign": "left",
           "text-margin-x": 8,
           "text-margin-y": 8,
           "text-valign": "top",
+        },
+      },
+      {
+        selector: "node[presentationHidden = 1]",
+        style: {
+          "border-style": "dashed",
+          opacity: 0.22,
         },
       },
       {
@@ -470,12 +592,27 @@ function render() {
       {
         selector: "edge",
         style: {
+          label: architecture ? "data(label)" : "",
+          color: token("--muted", "#98a7b8"),
           "curve-style": "bezier",
+          "font-family": "IBM Plex Mono, ui-monospace, monospace",
+          "font-size": "8px",
           "line-color": token("--line-strong", "#43566c"),
+          "min-zoomed-font-size": "8px",
           "target-arrow-color": token("--line-strong", "#43566c"),
           "target-arrow-shape": "triangle",
+          "text-background-color": token("--canvas", "#0f1621"),
+          "text-background-opacity": architecture ? 0.9 : 0,
+          "text-background-padding": "2px",
           width: "1.3px",
           "arrow-scale": 0.7,
+        },
+      },
+      {
+        selector: "edge[presentationHidden = 1]",
+        style: {
+          opacity: 0.14,
+          "text-opacity": 0.14,
         },
       },
       {
@@ -572,9 +709,17 @@ function render() {
       emit("select", null);
     }
   });
-  cy.on("mouseover mousemove", "node, edge", showHover);
-  cy.on("mouseout", "node, edge", () => {
+  cy.on("mouseover mousemove", "node, edge", (event: EventObject) => {
+    if (event.target.isNode()) {
+      if (actionHideTimer) window.clearTimeout(actionHideTimer);
+      hoveredNodeId.value = event.target.id();
+      updateSelectedPosition();
+    }
+    showHover(event);
+  });
+  cy.on("mouseout", "node, edge", (event: EventObject) => {
     hover.value = null;
+    if (event.target.isNode()) scheduleActionHide();
   });
   cy.on("pan zoom", () => {
     hover.value = null;
@@ -745,6 +890,47 @@ function setZoom(percent: number) {
   });
 }
 
+function captureViewport(): { pan: { x: number; y: number }; zoom: number } | null {
+  return cy ? { pan: { ...cy.pan() }, zoom: cy.zoom() } : null;
+}
+
+function restoreViewport(viewport: { pan: { x: number; y: number }; zoom: number }): void {
+  if (!cy) return;
+  cy.zoom(viewport.zoom);
+  cy.pan(viewport.pan);
+  updateSelectedPosition();
+}
+
+function removeSelected() {
+  if (actionNode.value && !actionHidden.value) {
+    emit("hide", actionNode.value.id);
+  }
+}
+
+function minimizeSelected() {
+  if (actionNode.value && actionActivation.value && actionExpanded.value) {
+    emit("minimize", actionNode.value.id);
+  }
+}
+
+function maximizeSelected() {
+  if (actionNode.value && (actionHidden.value || actionActivation.value)) {
+    emit("maximize", actionNode.value.id);
+  }
+}
+
+function keepActionsVisible() {
+  if (actionHideTimer) window.clearTimeout(actionHideTimer);
+}
+
+function scheduleActionHide() {
+  keepActionsVisible();
+  actionHideTimer = window.setTimeout(() => {
+    hoveredNodeId.value = null;
+    updateSelectedPosition();
+  }, 180);
+}
+
 function selectNode(offset: number) {
   if (!cy) return;
   const nodes = cy.nodes().filter((node) => !node.isParent()).toArray();
@@ -787,14 +973,23 @@ function keyboard(event: KeyboardEvent) {
 }
 
 defineExpose({
+  captureViewport,
   fit,
+  restoreViewport,
   setZoom,
   zoomIn: () => zoom(1.2),
   zoomOut: () => zoom(1 / 1.2),
 });
 
 watch(
-  [() => props.graph, () => props.direction, () => props.spacing, () => props.theme],
+  [
+    () => props.graph,
+    () => props.direction,
+    () => props.layoutMode,
+    () => props.notation,
+    () => props.spacing,
+    () => props.theme,
+  ],
   render,
   { deep: false },
 );
@@ -804,6 +999,7 @@ watch(() => props.selectedId, (id) => {
   if (!id) {
     applySelectionFocus(null);
     updateSelectedPosition();
+    if (props.layoutMode === "radial") void layout(preservedViewport());
     return;
   }
   const element = cy.getElementById(id);
@@ -812,6 +1008,7 @@ watch(() => props.selectedId, (id) => {
   }
   applySelectionFocus(id);
   updateSelectedPosition();
+  if (props.layoutMode === "radial") void layout(preservedViewport());
 });
 onMounted(() => {
   container.value?.addEventListener("wheel", wheel, {
@@ -830,6 +1027,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   emit("layoutEnd");
+  if (actionHideTimer) window.clearTimeout(actionHideTimer);
   if (wheelFrame) cancelAnimationFrame(wheelFrame);
   container.value?.removeEventListener("wheel", wheel, { capture: true });
   container.value?.removeEventListener("mousedown", startMiddlePan, {
@@ -861,8 +1059,12 @@ onBeforeUnmount(() => {
       :data-layout-width="layoutExtent === null ? undefined : layoutExtent.width.toFixed(3)"
       :data-map-view="String(graph.request.query?.view || '')"
       :data-group-by="String(graph.request.query?.grouping || '')"
+      :data-layout-mode="layoutMode"
+      :data-notation="notation"
       :data-spacing="spacing"
       :data-node-count="graph.summary.nodes"
+      :data-hidden-node-count="graph.nodes.filter((node) => node.attributes.presentation_hidden).length"
+      :data-hidden-edge-count="graph.edges.filter((edge) => edge.attributes?.presentation_hidden).length"
       :data-edge-count="graph.summary.edges"
       :data-focus-count="focusCount"
       :data-dimmed-count="dimmedCount"
@@ -870,12 +1072,74 @@ onBeforeUnmount(() => {
       :data-pan-y="panPosition === null ? undefined : panPosition.y.toFixed(3)"
       :data-selected-model-x="selectedModel === null ? undefined : selectedModel.x.toFixed(3)"
       :data-selected-model-y="selectedModel === null ? undefined : selectedModel.y.toFixed(3)"
+      :data-selected-id="selectedId || undefined"
       :data-selected-x="selectedRendered === null ? undefined : selectedRendered.x.toFixed(3)"
       :data-selected-y="selectedRendered === null ? undefined : selectedRendered.y.toFixed(3)"
       role="region"
       tabindex="0"
       @keydown="keyboard"
     ></div>
+    <button
+      v-if="canGoBack"
+      class="graph-back"
+      type="button"
+      aria-label="Back to previous graph"
+      title="Back to previous graph"
+      @click="emit('back')"
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M9.75 3.25 5 8l4.75 4.75M5.5 8h6" />
+      </svg>
+      <span>Back</span>
+    </button>
+    <div
+      v-if="actionNode && nodeActionPosition"
+      class="graph-node-actions"
+      :data-node-id="actionNode.id"
+      :data-rendered-inset="nodeActionInset"
+      :style="{
+        '--node-accent': nodeAccent(actionNode),
+        left: `${nodeActionPosition.x}px`,
+        top: `${nodeActionPosition.y}px`,
+      }"
+      @mouseenter="keepActionsVisible"
+      @mouseleave="scheduleActionHide"
+      @mousedown.stop
+    >
+      <button
+        type="button"
+        aria-label="Remove node from view"
+        title="Remove from view"
+        :disabled="actionHidden"
+        @click.stop="removeSelected"
+      >
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M2.25 2.25 9.75 9.75M9.75 2.25 2.25 9.75" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        aria-label="Minimize node"
+        title="Minimize"
+        :disabled="actionHidden || !actionActivation || !actionExpanded"
+        @click.stop="minimizeSelected"
+      >
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M2 8.5h8" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        :aria-label="actionHidden ? 'Restore node' : 'Maximize node'"
+        :title="actionHidden ? 'Restore' : 'Expand subtree'"
+        :disabled="!actionHidden && !actionActivation"
+        @click.stop="maximizeSelected"
+      >
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M2 5V2h3M7 2h3v3M10 7v3H7M5 10H2V7" />
+        </svg>
+      </button>
+    </div>
     <slot />
     <aside
       v-if="hover"

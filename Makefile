@@ -140,6 +140,12 @@ app-browser-test: app-test build-js
 	ARCHBIRD_ENGINE=native \
 	ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
 		$(NODE) test/run_live_app_browser.js app/dist test/fixtures/map_base \
+		$(APP_BROWSER_SMOKE)/live-insecure-origin \
+		$(APP_BROWSER_SMOKE)/live-insecure-origin-app.png \
+		--no-config --insecure-origin
+	ARCHBIRD_ENGINE=native \
+	ARCHBIRD_NATIVE_ADDON=$(NODE_NATIVE) \
+		$(NODE) test/run_live_app_browser.js app/dist test/fixtures/map_base \
 		$(APP_BROWSER_SMOKE)/live-empty \
 		$(APP_BROWSER_SMOKE)/live-empty-app.png --no-config --empty
 	PYTHON=$(PYTHON) \

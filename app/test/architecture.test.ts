@@ -505,7 +505,7 @@ test("peripheral inventories collapse into expandable typed groups", () => {
     }),
   ]), "overview");
   const packages = presentation.overview.nodes.find((row) =>
-    row.kind === "package" && row.attributes.presentation_role === "group");
+    row.kind === "inventory" && row.attributes.inventory_kind === "package");
   assert.ok(packages);
   assert.equal(packages.label, "Packages");
   assert.deepEqual(packages.attributes.member_node_ids, ["package:yyjson"]);

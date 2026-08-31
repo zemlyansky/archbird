@@ -1,4 +1,13 @@
 import type { GraphView } from "../artifacts/model";
+import type { GraphNotation } from "./notation";
+
+export type GraphLayoutMode = "flow" | "force" | "radial";
+
+export interface ElkEdge {
+  id: string;
+  sources: string[];
+  targets: string[];
+}
 
 export interface ElkNode {
   children?: ElkNode[];
@@ -17,10 +26,19 @@ function scaled(value: number, spacingPercent: number, minimum: number): number 
   return Math.max(minimum, Math.round(value * spacingPercent / 100));
 }
 
-export function elkLeafSize(spacingPercent: number): {
+export function elkLeafSize(
+  spacingPercent: number,
+  notation: GraphNotation = "compact",
+): {
   height: number;
   width: number;
 } {
+  if (notation === "architecture") {
+    return {
+      height: scaled(40, spacingPercent, 28),
+      width: scaled(186, spacingPercent, 112),
+    };
+  }
   return {
     height: scaled(LEAF_HEIGHT, spacingPercent, 30),
     width: scaled(LEAF_WIDTH, spacingPercent, 40),
@@ -30,7 +48,30 @@ export function elkLeafSize(spacingPercent: number): {
 export function elkLayoutOptions(
   direction: "BT" | "LR" | "RL" | "TB",
   spacingPercent: number,
+  mode: GraphLayoutMode = "flow",
 ): Record<string, string> {
+  const nodeSpacing = String(scaled(44, spacingPercent, 2));
+  const componentSpacing = String(scaled(80, spacingPercent, 8));
+  if (mode === "force") {
+    return {
+      "elk.algorithm": "force",
+      "elk.force.iterations": "300",
+      "elk.randomSeed": "1",
+      "elk.spacing.componentComponent": componentSpacing,
+      "elk.spacing.nodeNode": nodeSpacing,
+    };
+  }
+  if (mode === "radial") {
+    return {
+      "elk.algorithm": "radial",
+      "elk.radial.centerOnRoot": "true",
+      "elk.radial.radius": String(scaled(90, spacingPercent, 12)),
+      "elk.radial.sorter": "ID",
+      "elk.randomSeed": "1",
+      "elk.spacing.componentComponent": componentSpacing,
+      "elk.spacing.nodeNode": nodeSpacing,
+    };
+  }
   return {
     "elk.algorithm": "layered",
     "elk.direction": {
@@ -43,13 +84,69 @@ export function elkLayoutOptions(
     "elk.hierarchyHandling": "INCLUDE_CHILDREN",
     "elk.layered.spacing.nodeNodeBetweenLayers":
       String(scaled(90, spacingPercent, 6)),
-    "elk.spacing.nodeNode": String(scaled(44, spacingPercent, 2)),
+    "elk.spacing.nodeNode": nodeSpacing,
   };
+}
+
+function stableCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Build a deterministic tree because radial layout requires rooted structure. */
+export function radialSpanningEdges(
+  graph: GraphView,
+  preferredRoot: string | null,
+): ElkEdge[] {
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const adjacency = new Map<string, { edge: string; neighbor: string }[]>(
+    graph.nodes.map((node) => [node.id, []]),
+  );
+  for (const edge of graph.edges) {
+    if (edge.source === edge.target
+      || !nodeIds.has(edge.source)
+      || !nodeIds.has(edge.target)) continue;
+    adjacency.get(edge.source)?.push({ edge: edge.id, neighbor: edge.target });
+    adjacency.get(edge.target)?.push({ edge: edge.id, neighbor: edge.source });
+  }
+  for (const entries of adjacency.values()) {
+    entries.sort((left, right) =>
+      stableCompare(left.neighbor, right.neighbor)
+      || stableCompare(left.edge, right.edge));
+  }
+  const roots = [...nodeIds].sort((left, right) =>
+    (adjacency.get(right)?.length || 0) - (adjacency.get(left)?.length || 0)
+    || stableCompare(left, right));
+  if (preferredRoot && nodeIds.has(preferredRoot)) {
+    roots.splice(roots.indexOf(preferredRoot), 1);
+    roots.unshift(preferredRoot);
+  }
+  const visited = new Set<string>();
+  const result: ElkEdge[] = [];
+  for (const root of roots) {
+    if (visited.has(root)) continue;
+    visited.add(root);
+    const queue = [root];
+    for (let index = 0; index < queue.length; index += 1) {
+      const source = queue[index];
+      for (const candidate of adjacency.get(source) || []) {
+        if (visited.has(candidate.neighbor)) continue;
+        visited.add(candidate.neighbor);
+        queue.push(candidate.neighbor);
+        result.push({
+          id: `radial:${candidate.edge}`,
+          sources: [source],
+          targets: [candidate.neighbor],
+        });
+      }
+    }
+  }
+  return result;
 }
 
 export function elkHierarchy(
   nodes: GraphView["nodes"],
   spacingPercent = 100,
+  notation: GraphNotation = "compact",
 ): ElkNode[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const children = new Map<string, string[]>();
@@ -64,7 +161,7 @@ export function elkHierarchy(
   function build(id: string): ElkNode {
     const descendants = children.get(id) || [];
     if (!descendants.length) {
-      return { ...elkLeafSize(spacingPercent), id };
+      return { ...elkLeafSize(spacingPercent, notation), id };
     }
     return {
       children: descendants.map(build),

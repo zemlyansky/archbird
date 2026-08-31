@@ -480,6 +480,9 @@ static const char *peripheral_kind(const AbString *identity) {
     return "builtin";
   if (string_starts(identity, "unresolved:"))
     return "unresolved";
+  if (string_is(identity, "unresolved-import") ||
+      string_is(identity, "ambiguous-import"))
+    return "unresolved";
   return "external";
 }
 
@@ -501,6 +504,11 @@ static ArchbirdStatus node_id(ArchbirdEngine *engine, const char *kind,
                               const AbString *identity, AbString *out) {
   AbBuffer buffer;
   ArchbirdStatus status;
+  size_t kind_length = strlen(kind);
+  if (identity->length > kind_length &&
+      !memcmp(identity->data, kind, kind_length) &&
+      identity->data[kind_length] == ':')
+    return ab_string_copy(engine, out, identity->data, identity->length);
   ab_buffer_init(&buffer, engine);
   status = ab_buffer_literal(&buffer, kind);
   if (status == ARCHBIRD_OK)
@@ -838,11 +846,35 @@ static ArchbirdStatus endpoints_for_path(AbProjectionContext *context,
   return ARCHBIRD_OK;
 }
 
+/* Prefer the distribution identity while retaining the configured package ID.
+ */
+static const AbString *package_display_label(AbProjectionContext *context,
+                                             const AbString *name) {
+  const AbValue *packages = ab_value_member(context->map, "packages");
+  size_t index;
+  if (!packages || packages->kind != AB_VALUE_ARRAY)
+    return NULL;
+  for (index = 0; index < packages->as.array.count; index++) {
+    const AbValue *package = &packages->as.array.items[index];
+    const AbValue *candidate = ab_value_member(package, "name");
+    const AbValue *identity = ab_value_member(package, "identity");
+    if (candidate && candidate->kind == AB_VALUE_STRING &&
+        ab_string_equal(&candidate->as.text, name) && identity &&
+        identity->kind == AB_VALUE_STRING && identity->as.text.length)
+      return &identity->as.text;
+  }
+  return NULL;
+}
+
 static ArchbirdStatus ensure_endpoint_node(AbProjectionContext *context,
                                            AbProjectionData *graph,
                                            const AbString *id,
                                            const AbString *label,
                                            const AbProjectionItem *source) {
+  static const AbString ambiguous_import_label = {(char *)"Ambiguous imports",
+                                                  17};
+  static const AbString unresolved_import_label = {(char *)"Unresolved imports",
+                                                   18};
   const char *colon = memchr(id->data, ':', id->length);
   AbString kind;
   AbString identity;
@@ -871,6 +903,20 @@ static ArchbirdStatus ensure_endpoint_node(AbProjectionContext *context,
     known_kind = "unresolved";
   else
     known_kind = "external";
+  if (!strcmp(known_kind, "unresolved") &&
+      string_is(&identity, "unresolved-import"))
+    label = &unresolved_import_label;
+  else if (!strcmp(known_kind, "unresolved") &&
+           string_is(&identity, "ambiguous-import"))
+    label = &ambiguous_import_label;
+  if (!strcmp(known_kind, "package")) {
+    const AbString *display = package_display_label(context, &identity);
+    if (display)
+      label = display;
+    else if (ab_string_equal(id, label))
+      label = &identity;
+  } else if (ab_string_equal(id, label))
+    label = &identity;
   return add_node(
       context, graph, known_kind, &identity, label, NULL,
       (!strcmp(known_kind, "file") || !strcmp(known_kind, "symbol") ||
@@ -2485,6 +2531,8 @@ static ArchbirdStatus add_package_entrypoints(AbProjectionContext *context,
     const AbValue *kind = attribute(row, "kind");
     const AbValue *source = attribute(row, "source");
     const AbValue *target = attribute(row, "target");
+    const AbValue *target_path = attribute(row, "target_path");
+    const AbString *endpoint;
     AbString source_id = {0};
     AbGraphEndpoints targets = {0};
     size_t target_index;
@@ -2492,18 +2540,20 @@ static ArchbirdStatus add_package_entrypoints(AbProjectionContext *context,
     if (!kind || !source || !target || kind->kind != AB_VALUE_STRING ||
         source->kind != AB_VALUE_STRING || target->kind != AB_VALUE_STRING)
       return ARCHBIRD_INVALID_SCHEMA;
+    if (target_path && target_path->kind != AB_VALUE_STRING)
+      return ARCHBIRD_INVALID_SCHEMA;
+    endpoint = target_path ? &target_path->as.text : &target->as.text;
     status = node_id(context->engine, "package", &source->as.text, &source_id);
     if (status == ARCHBIRD_OK)
       status = ensure_endpoint_node(context, graph, &source_id,
                                     &source->as.text, row);
     if (status == ARCHBIRD_OK)
-      status =
-          endpoints_for_path(context, plan, inputs, &target->as.text, &targets);
+      status = endpoints_for_path(context, plan, inputs, endpoint, &targets);
     for (target_index = 0;
          status == ARCHBIRD_OK && target_index < targets.count;
          target_index++) {
       status = ensure_endpoint_node(
-          context, graph, &targets.values[target_index], &target->as.text, row);
+          context, graph, &targets.values[target_index], endpoint, row);
       if (status == ARCHBIRD_OK)
         status = add_relation(context, plan, graph, "packages", &kind->as.text,
                               &source_id, &targets.values[target_index], row,

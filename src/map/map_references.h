@@ -8,6 +8,7 @@ typedef struct AbMapReferenceResolution {
   const AbFact *target_fact;
   const AbFact *callable_fact;
   const AbString *target_symbol;
+  const AbString *target_package;
   const char *relation;
   int exact;
 } AbMapReferenceResolution;

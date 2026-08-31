@@ -2423,12 +2423,32 @@ static ArchbirdStatus special_symbol_identity(ArchbirdEngine *engine,
   return status;
 }
 
+static ArchbirdStatus typed_endpoint_identity(ArchbirdEngine *engine,
+                                              const char *kind,
+                                              const AbString *name,
+                                              AbString *out) {
+  AbBuffer buffer;
+  ArchbirdStatus status;
+  ab_buffer_init(&buffer, engine);
+  status = ab_buffer_literal(&buffer, kind);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, ":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&buffer, name->data, name->length);
+  if (status == ARCHBIRD_OK)
+    status =
+        ab_string_copy(engine, out, (const char *)buffer.data, buffer.length);
+  ab_buffer_free(&buffer);
+  return status;
+}
+
 static int valid_symbol_relation_row(const AbValue *row) {
   const AbValue *source = ab_value_member(row, "source");
   const AbValue *candidates = ab_value_member(row, "candidates");
   const AbValue *evidence = ab_value_member(row, "evidence");
   const AbValue *resolution = ab_value_member(row, "resolution");
   const AbValue *name = ab_value_member(row, "name");
+  const AbValue *package = ab_value_member(row, "package");
   const AbValue *binding = ab_value_member(row, "binding");
   size_t index;
   if (!row || row->kind != AB_VALUE_OBJECT || !source ||
@@ -2439,6 +2459,9 @@ static int valid_symbol_relation_row(const AbValue *row) {
       !candidates || candidates->kind != AB_VALUE_ARRAY || !evidence ||
       evidence->kind != AB_VALUE_ARRAY || !ab_projection_nonblank(resolution) ||
       !ab_projection_nonblank(name) ||
+      (package && !ab_projection_nonblank(package)) ||
+      (ab_projection_value_is(resolution, "external") != (package != NULL)) ||
+      (package && candidates->as.array.count) ||
       (binding && !ab_projection_value_is(binding, "builtin") &&
        !ab_projection_value_is(binding, "imported") &&
        !ab_projection_value_is(binding, "local") &&
@@ -2487,6 +2510,7 @@ static ArchbirdStatus add_symbol_relation_projection_item(
   const AbValue *source_symbol = ab_value_member(source, "symbol");
   const AbValue *name = ab_value_member(row, "name");
   const AbValue *resolution = ab_value_member(row, "resolution");
+  const AbValue *package = ab_value_member(row, "package");
   const AbValue *multiplicity_value =
       candidate ? ab_value_member(candidate, "multiplicity") : NULL;
   AbString source_identity = {0};
@@ -2514,6 +2538,9 @@ static ArchbirdStatus add_symbol_relation_projection_item(
     status = symbol_entity_key(
         context->engine, &ab_value_member(candidate, "path")->as.text,
         &ab_value_member(candidate, "symbol")->as.text, &target_identity);
+  else if (status == ARCHBIRD_OK && package)
+    status = typed_endpoint_identity(context->engine, "package",
+                                     &package->as.text, &target_identity);
   else if (status == ARCHBIRD_OK)
     status = special_symbol_identity(
         context->engine,
@@ -3582,6 +3609,72 @@ static int package_matches(const AbValue *package, const AbValue *patterns) {
   return 0;
 }
 
+static int python_module_path_matches(const AbString *path,
+                                      const AbString *module,
+                                      int package_init) {
+  static const char init_suffix[] = "/__init__.py";
+  static const char module_suffix[] = ".py";
+  const char *suffix = package_init ? init_suffix : module_suffix;
+  size_t suffix_length =
+      package_init ? sizeof(init_suffix) - 1 : sizeof(module_suffix) - 1;
+  size_t candidate_length = module->length + suffix_length;
+  size_t candidate_start;
+  size_t index;
+  if (!module->length || path->length < candidate_length)
+    return 0;
+  candidate_start = path->length - candidate_length;
+  if (candidate_start && path->data[candidate_start - 1] != '/')
+    return 0;
+  for (index = 0; index < module->length; index++) {
+    char expected = module->data[index] == '.' ? '/' : module->data[index];
+    if (path->data[candidate_start + index] != expected)
+      return 0;
+  }
+  return !memcmp(path->data + candidate_start + module->length, suffix,
+                 suffix_length);
+}
+
+/* Resolve a Python console-script module only when one mapped file matches. */
+static size_t python_script_target(AbProjectionContext *context,
+                                   const AbString *route,
+                                   const AbString *target,
+                                   const AbString **out_path,
+                                   AbString *out_symbol) {
+  static const char script_prefix[] = "script:";
+  const char *colon;
+  AbString module;
+  size_t index;
+  size_t matches = 0;
+  *out_path = NULL;
+  memset(out_symbol, 0, sizeof(*out_symbol));
+  if (route->length <= sizeof(script_prefix) - 1 ||
+      memcmp(route->data, script_prefix, sizeof(script_prefix) - 1))
+    return 0;
+  colon = memchr(target->data, ':', target->length);
+  if (!colon || colon == target->data ||
+      (size_t)(colon - target->data + 1) >= target->length)
+    return 0;
+  module.data = target->data;
+  module.length = (size_t)(colon - target->data);
+  out_symbol->data = (char *)colon + 1;
+  out_symbol->length = target->length - module.length - 1;
+  for (index = 0; index < context->files->as.array.count; index++) {
+    const AbValue *file = &context->files->as.array.items[index];
+    const AbValue *language = ab_value_member(file, "language");
+    const AbValue *path = ab_value_member(file, "path");
+    if (!path || path->kind != AB_VALUE_STRING ||
+        !ab_projection_value_is(language, "python") ||
+        (!python_module_path_matches(&path->as.text, &module, 0) &&
+         !python_module_path_matches(&path->as.text, &module, 1)))
+      continue;
+    *out_path = &path->as.text;
+    matches++;
+  }
+  if (matches != 1)
+    *out_path = NULL;
+  return matches;
+}
+
 static ArchbirdStatus extract_package_entrypoints(AbProjectionContext *context,
                                                   const AbProjectionPlan *plan,
                                                   AbProjectionData *fact) {
@@ -3593,6 +3686,7 @@ static ArchbirdStatus extract_package_entrypoints(AbProjectionContext *context,
   const AbValue *route_patterns = ab_value_member(spec, "routes");
   const AbValue *target_patterns = ab_value_member(spec, "target_paths");
   size_t package_index;
+  uint64_t unresolved = 0;
   ArchbirdStatus status =
       ab_projection_data_init(context->engine, fact, &plan->id, "relation",
                               "derived", &project_name->as.text);
@@ -3624,10 +3718,30 @@ static ArchbirdStatus extract_package_entrypoints(AbProjectionContext *context,
          route_index++) {
       const AbObjectField *route = &entrypoints->as.object.fields[route_index];
       AbProjectionEvidence evidence = {0};
+      AbProjectionItem *item = NULL;
+      const AbString *target_path = NULL;
+      AbString target_symbol = {0};
+      size_t target_matches =
+          python_script_target(context, &route->name, &route->value.as.text,
+                               &target_path, &target_symbol);
+      const AbString *selected_target =
+          target_path ? target_path : &route->value.as.text;
+      const char *state = target_matches == 1 ? "current" : "unknown";
+      const char *message =
+          target_matches == 1
+              ? ""
+              : (target_matches ? "Python script module is ambiguous"
+                                : "Python script module is not mapped");
+      int python_script =
+          route->name.length > 7 && !memcmp(route->name.data, "script:", 7);
       AbBuffer detail;
       if ((route_patterns && !patterns_match(route_patterns, &route->name)) ||
-          !path_matches(&route->value.as.text, target_patterns))
+          !path_matches(selected_target, target_patterns))
         continue;
+      if (!python_script) {
+        state = "current";
+        message = "";
+      }
       ab_buffer_init(&detail, context->engine);
       status = ab_buffer_literal(&detail, "package entrypoint ");
       if (status == ARCHBIRD_OK)
@@ -3638,9 +3752,26 @@ static ArchbirdStatus extract_package_entrypoints(AbProjectionContext *context,
             context->engine, &project_name->as.text, &manifest->as.text, 0,
             file_sha(context, &manifest->as.text), &detail, &evidence);
       if (status == ARCHBIRD_OK)
-        status =
-            add_relation_item(context->engine, fact, &name->as.text,
-                              &route->name, &route->value.as.text, &evidence);
+        status = add_relation_item_state(context->engine, fact, &name->as.text,
+                                         &route->name, &route->value.as.text,
+                                         &evidence, state, message, &item);
+      if (status == ARCHBIRD_OK && item && target_path)
+        status = item_add_string_attribute(context->engine, item, "target_path",
+                                           target_path);
+      if (status == ARCHBIRD_OK && item && target_path)
+        status = item_add_string_attribute(context->engine, item,
+                                           "target_symbol", &target_symbol);
+      if (status == ARCHBIRD_OK && item && python_script) {
+        AbString resolution = {
+            (char *)(target_matches == 1
+                         ? "unique"
+                         : (target_matches ? "ambiguous" : "unresolved")),
+            target_matches == 1 ? 6 : (target_matches ? 9 : 10)};
+        status = item_add_string_attribute(context->engine, item, "resolution",
+                                           &resolution);
+      }
+      if (status == ARCHBIRD_OK && python_script && target_matches != 1)
+        unresolved++;
       ab_buffer_free(&detail);
       ab_projection_evidence_free(context->engine, &evidence);
     }
@@ -3648,7 +3779,7 @@ static ArchbirdStatus extract_package_entrypoints(AbProjectionContext *context,
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_completeness_exact(
         context->engine, fact, "package_entrypoint", (uint64_t)fact->item_count,
-        (uint64_t)fact->item_count, 0, 0, 0);
+        (uint64_t)fact->item_count, 0, unresolved, 0);
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(context->engine, fact);
   if (status != ARCHBIRD_OK)

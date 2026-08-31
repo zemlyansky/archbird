@@ -1,14 +1,23 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { GraphEdge, GraphNode, GraphView } from "../artifacts/model";
+import type { ProjectionResult } from "../artifacts/projection";
 import { edgePresentation } from "../graph/explore";
 import type { ComponentDetails } from "../graph/explore";
+import type { MetricId, MetricScopeMode } from "../graph/metrics";
 import type { VerificationConstraint } from "../graph/verification";
+import MetricsPanel from "./MetricsPanel.vue";
 
 const props = defineProps<{
   constraint: VerificationConstraint | null;
   graph: GraphView;
   fileGraph: GraphView | null;
+  metricsEnabled?: boolean;
+  metricErrors?: ReadonlyMap<MetricId, string>;
+  metricLoading?: ReadonlySet<MetricId>;
+  metricOverlay?: MetricId | null;
+  metricProjections?: ReadonlyMap<MetricId, ProjectionResult>;
+  metricScope?: MetricScopeMode;
   selectedId: string | null;
   source: Record<string, unknown> | null;
   sourcePath: string | null;
@@ -17,8 +26,16 @@ const emit = defineEmits<{
   activate: [id: string];
   close: [];
   hide: [id: string];
+  metricOverlay: [metric: MetricId | null];
+  metricQuery: [path: string, symbol: string | null];
+  metricScope: [scope: MetricScopeMode];
+  restore: [id: string];
   source: [path: string];
 }>();
+
+const emptyMetricErrors = new Map<MetricId, string>();
+const emptyMetricLoading = new Set<MetricId>();
+const emptyMetricProjections = new Map<MetricId, ProjectionResult>();
 
 const selected = computed<GraphNode | GraphEdge | null>(() => {
   if (!props.selectedId) return null;
@@ -30,6 +47,8 @@ const selectedNode = computed(() =>
   selected.value && "identity" in selected.value ? selected.value : null);
 const selectedEdge = computed(() =>
   selected.value && !("identity" in selected.value) ? selected.value : null);
+const selectedHidden = computed(() =>
+  Boolean(selectedNode.value?.attributes.presentation_hidden));
 const nodeById = computed(() =>
   new Map(props.graph.nodes.map((node) => [node.id, node])));
 const edgeEndpoints = computed(() => {
@@ -94,11 +113,13 @@ const attributes = computed(() => Object.entries(selectedNode.value?.attributes 
     !name.startsWith("presentation_")
     && !name.startsWith("verification_")
     && !["canonical_id", "canonical_path", "member_files", "expanded"].includes(name)));
-const canActivate = computed(() =>
-  selectedNode.value?.attributes.presentation_role === "group"
-  || selectedNode.value?.kind === "file"
-  || (selectedNode.value?.kind === "symbol"
-    && Number(selectedNode.value.attributes.external_relations || 0) > 0));
+const canActivate = computed(() => {
+  if (selectedHidden.value) return false;
+  return selectedNode.value?.attributes.presentation_role === "group"
+    || selectedNode.value?.kind === "file"
+    || (selectedNode.value?.kind === "symbol"
+      && Number(selectedNode.value.attributes.external_relations || 0) > 0);
+});
 const verificationConstraints = computed(() => {
   const value = selectedNode.value?.attributes.verification_constraints
     || selectedEdge.value?.attributes?.verification_constraints;
@@ -169,6 +190,10 @@ function relatedLabel(edge: GraphEdge, direction: "incoming" | "outgoing"): stri
   const id = direction === "incoming" ? edge.source : edge.target;
   return nodeById.value.get(id)?.label || id;
 }
+
+function forwardMetricQuery(path: string, symbol: string | null): void {
+  emit("metricQuery", path, symbol);
+}
 </script>
 
 <template>
@@ -176,6 +201,20 @@ function relatedLabel(edge: GraphEdge, direction: "incoming" | "outgoing"): stri
     <button class="inspector-close" type="button" aria-label="Close inspector" @click="emit('close')">
       Close
     </button>
+    <MetricsPanel
+      v-if="metricsEnabled"
+      :errors="metricErrors || emptyMetricErrors"
+      :graph="graph"
+      :loading="metricLoading || emptyMetricLoading"
+      :overlay="metricOverlay || null"
+      :projections="metricProjections || emptyMetricProjections"
+      :scope="metricScope || 'selection'"
+      :selected-id="selectedId"
+      @overlay="emit('metricOverlay', $event)"
+      @query="forwardMetricQuery"
+      @scope="emit('metricScope', $event)"
+    />
+    <div v-if="metricsEnabled" class="inspector-section-separator"></div>
     <template v-if="selected">
       <div class="eyebrow">{{
         selectedNode
@@ -211,11 +250,17 @@ function relatedLabel(edge: GraphEdge, direction: "incoming" | "outgoing"): stri
               : 'Expand symbols'
       }}</button>
       <button
-        v-if="selectedNode"
+        v-if="selectedNode && !selectedHidden"
         class="source-button"
         type="button"
         @click="emit('hide', selectedNode.id)"
       >Hide from view</button>
+      <button
+        v-if="selectedNode && selectedHidden"
+        class="source-button"
+        type="button"
+        @click="emit('restore', selectedNode.id)"
+      >Restore to view</button>
       <button
         v-if="selectedEdge"
         class="source-button"

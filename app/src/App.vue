@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   computed,
+  nextTick,
   onBeforeUnmount,
   onMounted,
   ref,
@@ -37,7 +38,6 @@ import ConstraintPanel from "./components/ConstraintPanel.vue";
 import DocumentPanel from "./components/DocumentPanel.vue";
 import GraphCanvas from "./components/GraphCanvas.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
-import MetricsPanel from "./components/MetricsPanel.vue";
 import VerificationEditor from "./components/VerificationEditor.vue";
 import {
   mapGraphProjectionPlan,
@@ -49,8 +49,11 @@ import {
 import { exportPresentedGraph } from "./graph/export";
 import {
   composeArchitectureGraph,
+  directoryPresentationId,
+  filePresentationId,
   graphActivation,
   orientGraphEdges,
+  withHiddenPresentation,
   type GraphEdgeFlow,
 } from "./graph/explore";
 import {
@@ -59,19 +62,60 @@ import {
 } from "./graph/verification";
 import {
   applyMetricOverlay,
-  DEFAULT_METRIC,
+  METRIC_DEFINITIONS,
   metricProjectionPlan,
   type MetricId,
+  type MetricScopeMode,
 } from "./graph/metrics";
+import type { GraphLayoutMode } from "./graph/layout";
+import type { GraphNotation } from "./graph/notation";
 
 type Theme = "dark" | "light" | "system";
 type TransportMode = "browser" | "none" | "server";
 type WorkspaceMode = "live" | "saved" | "snapshot";
 type GraphCanvasApi = {
+  captureViewport(): GraphViewport | null;
   fit(): void;
+  restoreViewport(viewport: GraphViewport): void;
   setZoom(value: number): void;
   zoomIn(): void;
   zoomOut(): void;
+};
+type GraphViewport = { pan: { x: number; y: number }; zoom: number };
+const GRAPH_HISTORY_LIMIT = 16;
+type GraphNavigationEntry = {
+  artifact: WorkspaceArtifact;
+  currentView: GraphViewName;
+  direction: GraphDirection;
+  edgeClassification: string;
+  edgeFlow: GraphEdgeFlow;
+  edgeKind: string;
+  expandedFiles: ReadonlySet<string>;
+  expandedGroups: ReadonlySet<string>;
+  fileGraph: GraphView | null;
+  graph: GraphView;
+  graphBytes: Uint8Array | null;
+  graphGrouping: GraphGrouping;
+  graphLayout: GraphLayoutMode;
+  graphNotation: GraphNotation;
+  graphSpacing: number;
+  hiddenElements: ReadonlySet<string>;
+  inspectorOpen: boolean;
+  mapView: MapView;
+  metricOverlay: MetricId | null;
+  metricScope: MetricScopeMode;
+  queryDepth: number;
+  queryDirection: "both" | "downstream" | "upstream";
+  queryKind: "component" | "path" | "search" | "symbol";
+  queryTestDepth: number;
+  queryValue: string;
+  revealedSymbols: ReadonlySet<string>;
+  search: string;
+  selectedConstraintId: string | null;
+  selectedId: string | null;
+  source: Record<string, unknown> | null;
+  viewport: GraphViewport | null;
+  zoomPercent: number;
 };
 
 const serverDocument = document.querySelector<HTMLMetaElement>(
@@ -98,6 +142,8 @@ const currentView = ref<GraphViewName>("components");
 const mapView = ref<MapView>("overview");
 const graphGrouping = ref<GraphGrouping>("directory");
 const direction = ref<GraphDirection>("LR");
+const graphLayout = ref<GraphLayoutMode>("flow");
+const graphNotation = ref<GraphNotation>("architecture");
 const edgeFlow = ref<GraphEdgeFlow>("flow");
 const edgeKind = ref("all");
 const edgeClassification = ref("all");
@@ -128,17 +174,19 @@ const selectedConstraintId = ref<string | null>(null);
 const zoomPercent = ref(100);
 const graphSpacing = ref(60);
 const baseGeneration = ref<string | null>(null);
-const selectedMetric = ref<MetricId>(DEFAULT_METRIC);
-const metricProjection = shallowRef<ProjectionResult | null>(null);
+const metricScope = ref<MetricScopeMode>("selection");
+const metricOverlay = ref<MetricId | null>(null);
 const metricCache = shallowRef<ReadonlyMap<MetricId, ProjectionResult>>(new Map());
-const metricLoading = ref(false);
-const metricError = ref("");
+const metricLoading = shallowRef<ReadonlySet<MetricId>>(new Set());
+const metricErrors = shallowRef<ReadonlyMap<MetricId, string>>(new Map());
+const graphHistory = shallowRef<readonly GraphNavigationEntry[]>([]);
 
 let liveHost: BrowserHost | ServerHost | null = null;
 let unsubscribe: (() => void) | null = null;
 let operationId = 0;
 let operationStartedAt = 0;
-let metricRequestId = 0;
+let metricGeneration = 0;
+let pendingGraphViewport: GraphViewport | null = null;
 let themeMedia: MediaQueryList | null = null;
 
 const availableViews = computed(() => {
@@ -168,7 +216,6 @@ const mapViews: readonly MapView[] = [
   "architecture",
   "tests",
   "evidence",
-  "metrics",
 ];
 function graphPresentationKey(
   view: MapView = mapView.value,
@@ -229,7 +276,7 @@ const explorationGraph = computed<GraphView | null>(() => {
     {
       expandedGroups: expandedGroups.value,
       expandedFiles: expandedFiles.value,
-      hidden: hiddenElements.value,
+      hidden: new Set(),
       revealedSymbols: revealedSymbols.value,
     },
   );
@@ -243,9 +290,15 @@ const overlay = computed(() => explorationGraph.value
   : null);
 const presentedGraph = computed(() => overlay.value?.graph || null);
 const measuredGraph = computed(() =>
-  mapView.value === "metrics" && presentedGraph.value && metricProjection.value
-    ? applyMetricOverlay(presentedGraph.value, metricProjection.value)
+  metricOverlay.value && presentedGraph.value && metricCache.value.get(metricOverlay.value)
+    ? applyMetricOverlay(
+      presentedGraph.value,
+      metricCache.value.get(metricOverlay.value)!,
+    )
     : presentedGraph.value);
+const shadowedGraph = computed(() => measuredGraph.value
+  ? withHiddenPresentation(measuredGraph.value, hiddenElements.value)
+  : null);
 const constraintRows = computed(() => verificationConstraints(verification.value));
 const selectedConstraint = computed(() =>
   constraintRows.value.find((row) => row.id === selectedConstraintId.value) || null);
@@ -254,14 +307,14 @@ const edgeKinds = computed(() =>
 const edgeClassifications = computed(() =>
   [...new Set((measuredGraph.value?.edges || []).map((edge) => edge.classification))].sort());
 const visibleGraph = computed<GraphView | null>(() => {
-  if (!measuredGraph.value) return null;
-  const edges = measuredGraph.value.edges.filter((edge) =>
+  if (!shadowedGraph.value) return null;
+  const edges = shadowedGraph.value.edges.filter((edge) =>
     (edgeKind.value === "all" || edge.kind === edgeKind.value) &&
     (edgeClassification.value === "all" || edge.classification === edgeClassification.value));
   return orientGraphEdges({
-    ...measuredGraph.value,
+    ...shadowedGraph.value,
     edges,
-    summary: { edges: edges.length, nodes: measuredGraph.value.nodes.length },
+    summary: { edges: edges.length, nodes: shadowedGraph.value.nodes.length },
   }, edgeFlow.value);
 });
 const searchResults = computed(() => {
@@ -325,15 +378,103 @@ function resetGraphState() {
 }
 
 function resetMapProjections() {
-  metricRequestId += 1;
+  metricGeneration += 1;
   graphPresentations.value = null;
   fileGraph.value = null;
   symbolGraphs.value = new Map();
   verification.value = null;
-  metricProjection.value = null;
+  metricOverlay.value = null;
   metricCache.value = new Map();
-  metricLoading.value = false;
-  metricError.value = "";
+  metricLoading.value = new Set();
+  metricErrors.value = new Map();
+  graphHistory.value = [];
+  pendingGraphViewport = null;
+}
+
+// App retains semantic view state; GraphCanvas owns its raw viewport snapshot.
+function captureGraphNavigation(): GraphNavigationEntry | null {
+  if (!artifact.value || !graph.value) return null;
+  return {
+    artifact: artifact.value,
+    currentView: currentView.value,
+    direction: direction.value,
+    edgeClassification: edgeClassification.value,
+    edgeFlow: edgeFlow.value,
+    edgeKind: edgeKind.value,
+    expandedFiles: new Set(expandedFiles.value),
+    expandedGroups: new Set(expandedGroups.value),
+    fileGraph: fileGraph.value,
+    graph: graph.value,
+    graphBytes: graphBytes.value,
+    graphGrouping: graphGrouping.value,
+    graphLayout: graphLayout.value,
+    graphNotation: graphNotation.value,
+    graphSpacing: graphSpacing.value,
+    hiddenElements: new Set(hiddenElements.value),
+    inspectorOpen: inspectorOpen.value,
+    mapView: mapView.value,
+    metricOverlay: metricOverlay.value,
+    metricScope: metricScope.value,
+    queryDepth: queryDepth.value,
+    queryDirection: queryDirection.value,
+    queryKind: queryKind.value,
+    queryTestDepth: queryTestDepth.value,
+    queryValue: queryValue.value,
+    revealedSymbols: new Set(revealedSymbols.value),
+    search: search.value,
+    selectedConstraintId: selectedConstraintId.value,
+    selectedId: selectedId.value,
+    source: source.value,
+    viewport: graphCanvas.value?.captureViewport() || null,
+    zoomPercent: zoomPercent.value,
+  };
+}
+
+async function backToPreviousGraph(): Promise<void> {
+  const previous = graphHistory.value.at(-1);
+  if (!previous) return;
+  graphHistory.value = graphHistory.value.slice(0, -1);
+  artifact.value = previous.artifact;
+  currentView.value = previous.currentView;
+  direction.value = previous.direction;
+  edgeClassification.value = previous.edgeClassification;
+  edgeFlow.value = previous.edgeFlow;
+  edgeKind.value = previous.edgeKind;
+  expandedFiles.value = previous.expandedFiles;
+  expandedGroups.value = previous.expandedGroups;
+  fileGraph.value = previous.fileGraph;
+  graph.value = previous.graph;
+  graphBytes.value = previous.graphBytes;
+  graphGrouping.value = previous.graphGrouping;
+  graphLayout.value = previous.graphLayout;
+  graphNotation.value = previous.graphNotation;
+  graphSpacing.value = previous.graphSpacing;
+  hiddenElements.value = previous.hiddenElements;
+  inspectorOpen.value = previous.inspectorOpen;
+  mapView.value = previous.mapView;
+  metricOverlay.value = previous.metricOverlay;
+  metricScope.value = previous.metricScope;
+  queryDepth.value = previous.queryDepth;
+  queryDirection.value = previous.queryDirection;
+  queryKind.value = previous.queryKind;
+  queryTestDepth.value = previous.queryTestDepth;
+  queryValue.value = previous.queryValue;
+  revealedSymbols.value = previous.revealedSymbols;
+  search.value = previous.search;
+  selectedConstraintId.value = previous.selectedConstraintId;
+  selectedId.value = previous.selectedId;
+  source.value = previous.source;
+  zoomPercent.value = previous.zoomPercent;
+  pendingGraphViewport = previous.viewport;
+  await nextTick();
+}
+
+function graphLayoutEnded(): void {
+  graphLayoutBusy.value = false;
+  if (!pendingGraphViewport) return;
+  const viewport = pendingGraphViewport;
+  pendingGraphViewport = null;
+  requestAnimationFrame(() => graphCanvas.value?.restoreViewport(viewport));
 }
 
 function selectGraphElement(id: string | null) {
@@ -499,6 +640,9 @@ function installMapPresentation(
   fileGraph.value = presentation.files;
   graph.value = presentation.overview;
   graphBytes.value = new TextEncoder().encode(JSON.stringify(graph.value));
+  queueMicrotask(() => {
+    if (baseMap.value === loaded) void loadAllMetrics();
+  });
 }
 
 function liveMapReference(state: Record<string, unknown>): LiveMapReference {
@@ -546,9 +690,11 @@ function requireFileGraph(): GraphView {
   throw new Error("file projection is unavailable for the selected Map");
 }
 
-async function ensureSymbolGraph(path: string): Promise<GraphView> {
-  const cached = symbolGraphs.value.get(path);
-  if (cached) return cached;
+async function ensureSymbolGraphs(paths: readonly string[]): Promise<void> {
+  const missing = [...new Set(paths)]
+    .filter((path) => !symbolGraphs.value.has(path))
+    .sort();
+  if (!missing.length) return;
   if (!baseMap.value) throw new Error("symbol projection requires a Map");
   const options = {
     artifacts: [],
@@ -557,7 +703,7 @@ async function ensureSymbolGraph(path: string): Promise<GraphView> {
     direction: "both",
     focus: [],
     packages: [],
-    paths: [path],
+    paths: missing,
     search: [],
     searchLimit: 8,
     symbols: [],
@@ -574,11 +720,17 @@ async function ensureSymbolGraph(path: string): Promise<GraphView> {
       nativeQueryRequest(options),
     )
       .then((query) => projectArtifact(query, "symbols"));
-  if (!projection) throw new Error(`symbol projection is unavailable for ${path}`);
+  if (!projection) throw new Error("symbol projection is unavailable");
   const next = new Map(symbolGraphs.value);
-  next.set(path, projection.graph);
+  for (const path of missing) next.set(path, projection.graph);
   symbolGraphs.value = next;
-  return projection.graph;
+}
+
+async function ensureSymbolGraph(path: string): Promise<GraphView> {
+  await ensureSymbolGraphs([path]);
+  const graph = symbolGraphs.value.get(path);
+  if (!graph) throw new Error(`symbol projection is unavailable for ${path}`);
+  return graph;
 }
 
 async function activateGraphElement(id: string) {
@@ -636,9 +788,123 @@ async function activateGraphElement(id: string) {
   }
 }
 
+function minimizeGraphElement(id: string) {
+  const graph = visibleGraph.value;
+  if (!graph) return;
+  const descendants = new Set([id]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of graph.nodes) {
+      if (node.parent && descendants.has(node.parent) && !descendants.has(node.id)) {
+        descendants.add(node.id);
+        changed = true;
+      }
+    }
+  }
+  expandedGroups.value = new Set(
+    [...expandedGroups.value].filter((value) => !descendants.has(value)),
+  );
+  expandedFiles.value = new Set(
+    [...expandedFiles.value].filter((value) => !descendants.has(value)),
+  );
+  revealedSymbols.value = new Set(
+    [...revealedSymbols.value].filter((value) => !descendants.has(value)),
+  );
+}
+
+async function maximizeGraphElement(id: string) {
+  const node = visibleGraph.value?.nodes.find((row) => row.id === id);
+  if (!node) return;
+  if (node.attributes.presentation_hidden) {
+    restoreGraphElement(id);
+    return;
+  }
+  const activation = graphActivation(node);
+  if (activation === "symbol") {
+    revealedSymbols.value = replaceSet(revealedSymbols.value, id, true);
+    return;
+  }
+  if (activation === "file") {
+    const path = typeof node.attributes.canonical_path === "string"
+      ? node.attributes.canonical_path
+      : node.identity;
+    const operation = beginOperation();
+    progress.value = { phase: `loading symbols for ${path}` };
+    try {
+      await ensureSymbolGraph(path);
+      if (ownsOperation(operation)) {
+        expandedFiles.value = replaceSet(expandedFiles.value, id, true);
+        progress.value = null;
+      }
+    } catch (cause) {
+      if (ownsOperation(operation)) reportOperationError(cause);
+    } finally {
+      finishOperation(operation);
+    }
+    return;
+  }
+  if (activation !== "group") return;
+  const operation = beginOperation();
+  progress.value = { phase: `expanding ${node.label}` };
+  try {
+    requireFileGraph();
+    const rootGroup = typeof node.attributes.root_group === "string"
+      ? node.attributes.root_group
+      : node.id;
+    const selectedPath = typeof node.attributes.path === "string"
+      ? node.attributes.path
+      : null;
+    const rootPath = selectedPath || (typeof node.attributes.root_path === "string"
+      ? node.attributes.root_path
+      : null);
+    const memberFiles = Array.isArray(node.attributes.member_files)
+      ? node.attributes.member_files.filter(
+        (value): value is string => typeof value === "string",
+      )
+      : [];
+    const expanded = new Set(expandedGroups.value);
+    const expandedFileIds = new Set(expandedFiles.value);
+    expanded.add(id);
+    for (const file of memberFiles) {
+      const segments = file.split("/");
+      let prefix = "";
+      for (const segment of segments.slice(0, -1)) {
+        prefix = prefix ? `${prefix}/${segment}` : segment;
+        if (rootPath && prefix !== rootPath && !prefix.startsWith(`${rootPath}/`)) {
+          continue;
+        }
+        if (prefix !== rootPath || selectedPath) {
+          expanded.add(directoryPresentationId(rootGroup, prefix));
+        }
+      }
+    }
+    await ensureSymbolGraphs(memberFiles);
+    const canonicalGroup = graph.value?.nodes.find((row) => row.id === rootGroup);
+    const instanceGroup = canonicalGroup?.kind === "component"
+      ? canonicalGroup.label
+      : rootGroup;
+    for (const file of memberFiles) {
+      expandedFileIds.add(filePresentationId(instanceGroup, file));
+    }
+    if (ownsOperation(operation)) {
+      expandedGroups.value = expanded;
+      expandedFiles.value = expandedFileIds;
+      progress.value = null;
+    }
+  } catch (cause) {
+    if (ownsOperation(operation)) reportOperationError(cause);
+  } finally {
+    finishOperation(operation);
+  }
+}
+
 function hideGraphElement(id: string) {
   hiddenElements.value = replaceSet(hiddenElements.value, id, true);
-  if (selectedId.value === id) selectedId.value = null;
+}
+
+function restoreGraphElement(id: string) {
+  hiddenElements.value = replaceSet(hiddenElements.value, id, false);
 }
 
 function restoreHiddenElements() {
@@ -708,7 +974,6 @@ async function changeMapPresentation(
 
 async function changeMapView(view: MapView) {
   await changeMapPresentation(view, graphGrouping.value);
-  if (mapView.value === "metrics") await loadMetric(selectedMetric.value);
 }
 
 async function changeGraphGrouping(grouping: GraphGrouping) {
@@ -716,17 +981,14 @@ async function changeGraphGrouping(grouping: GraphGrouping) {
 }
 
 async function loadMetric(metric: MetricId) {
-  selectedMetric.value = metric;
-  metricError.value = "";
-  const cached = metricCache.value.get(metric);
-  if (cached) {
-    metricProjection.value = cached;
+  if (metricCache.value.has(metric) || metricLoading.value.has(metric) || !baseMap.value) {
     return;
   }
-  if (!baseMap.value) return;
-  metricProjection.value = null;
-  const request = ++metricRequestId;
-  metricLoading.value = true;
+  const generation = metricGeneration;
+  metricLoading.value = new Set(metricLoading.value).add(metric);
+  const errors = new Map(metricErrors.value);
+  errors.delete(metric);
+  metricErrors.value = errors;
   try {
     const plan = metricProjectionPlan(metric);
     const host = workspaceMode.value !== "saved" && liveHost
@@ -739,16 +1001,30 @@ async function loadMetric(metric: MetricId) {
         requireParsedArtifact(baseMap.value, "local Metrics projection"),
         plan,
       ).then((bytes) => parseProjectionResult(bytes, "metrics"));
-    if (request !== metricRequestId) return;
+    if (generation !== metricGeneration) return;
     metricCache.value = new Map(metricCache.value).set(metric, projection);
-    metricProjection.value = projection;
   } catch (cause) {
-    if (request === metricRequestId) {
-      metricError.value = cause instanceof Error ? cause.message : String(cause);
+    if (generation === metricGeneration) {
+      metricErrors.value = new Map(metricErrors.value).set(
+        metric,
+        cause instanceof Error ? cause.message : String(cause),
+      );
     }
   } finally {
-    if (request === metricRequestId) metricLoading.value = false;
+    if (generation === metricGeneration) {
+      const loading = new Set(metricLoading.value);
+      loading.delete(metric);
+      metricLoading.value = loading;
+    }
   }
+}
+
+async function loadAllMetrics(): Promise<void> {
+  await Promise.all(METRIC_DEFINITIONS.map(({ id }) => loadMetric(id)));
+}
+
+function setMetricOverlay(metric: MetricId | null): void {
+  metricOverlay.value = metric;
 }
 
 function openMetricContext(path: string, symbol: string | null) {
@@ -1020,6 +1296,7 @@ function nativeQueryRequest(options: Record<string, unknown>): Record<string, un
 
 async function runQuery() {
   if (!baseMap.value) return;
+  const previous = captureGraphNavigation();
   const id = beginOperation();
   error.value = "";
   resetGraphState();
@@ -1057,6 +1334,12 @@ async function runQuery() {
     currentView.value = "symbols";
     graph.value = projection?.graph || null;
     graphBytes.value = projection?.bytes || null;
+    if (previous) {
+      graphHistory.value = [
+        ...graphHistory.value.slice(-(GRAPH_HISTORY_LIMIT - 1)),
+        previous,
+      ];
+    }
   } catch (cause) {
     if (ownsOperation(id)) error.value = (cause as Error).message;
   } finally {
@@ -1257,10 +1540,10 @@ onMounted(async () => {
   <main>
     <header class="topbar" :class="{ 'source-empty': !artifact && !busy && !error }">
       <div class="brand">
-        <span class="bird">A</span>
         <div>
-          <strong>Archbird</strong>
-          <small>codebase explorer</small>
+          <strong class="brand-wordmark" aria-label="ǎrchbird">
+            <span aria-hidden="true"><span class="brand-initial">ǎ</span>rchbird</span>
+          </strong>
         </div>
       </div>
       <ArtifactDrop
@@ -1341,7 +1624,11 @@ onMounted(async () => {
 
         <div class="primary-actions">
           <button v-if="canReturnLive" type="button" @click="returnToLive">Return to live Map</button>
-          <button v-if="baseMap && artifact !== baseMap" type="button" @click="showBaseMap">Back to Map</button>
+          <button
+            v-if="baseMap && artifact !== baseMap && !graphHistory.length"
+            type="button"
+            @click="showBaseMap"
+          >Back to Map</button>
           <button v-if="artifact" type="button" @click="saveArtifact">Save canonical artifact</button>
         </div>
 
@@ -1428,8 +1715,21 @@ onMounted(async () => {
             <output>{{ graphSpacing }}%</output>
           </label>
           <div class="graph-options">
+            <label>Layout
+              <select v-model="graphLayout">
+                <option value="flow">Flow</option>
+                <option value="force">Force</option>
+                <option value="radial">Radial</option>
+              </select>
+            </label>
+            <label>Notation
+              <select v-model="graphNotation">
+                <option value="architecture">Architecture</option>
+                <option value="compact">Compact</option>
+              </select>
+            </label>
             <label>Direction
-              <select v-model="direction">
+              <select v-model="direction" :disabled="graphLayout !== 'flow'">
                 <option value="LR">Left to right</option>
                 <option value="TB">Top to bottom</option>
                 <option value="RL">Right to left</option>
@@ -1596,39 +1896,46 @@ onMounted(async () => {
         <GraphCanvas
           v-else
           ref="graphCanvas"
+          :can-go-back="Boolean(graphHistory.length)"
           :direction="direction"
           :graph="visibleGraph"
+          :layout-mode="graphLayout"
+          :notation="graphNotation"
           :selected-id="selectedId"
           :spacing="graphSpacing"
           :theme="resolvedTheme"
           @activate="activateGraphElement"
-          @layout-end="graphLayoutBusy = false"
+          @back="backToPreviousGraph"
+          @hide="hideGraphElement"
+          @layout-end="graphLayoutEnded"
           @layout-start="graphLayoutBusy = true"
+          @maximize="maximizeGraphElement"
+          @minimize="minimizeGraphElement"
           @select="selectGraphElement"
           @zoom="zoomPercent = $event"
-        >
-          <MetricsPanel
-            v-if="mapView === 'metrics'"
-            :error="metricError"
-            :loading="metricLoading"
-            :projection="metricProjection"
-            :selected="selectedMetric"
-            @change="loadMetric"
-            @query="openMetricContext"
-          />
-        </GraphCanvas>
+        />
         <InspectorPanel
           v-if="!emptyMappedScope"
           v-show="inspectorOpen"
           :constraint="selectedConstraint"
           :file-graph="fileGraph"
           :graph="visibleGraph"
+          :metric-errors="metricErrors"
+          :metrics-enabled="Boolean(baseMap)"
+          :metric-loading="metricLoading"
+          :metric-overlay="metricOverlay"
+          :metric-projections="metricCache"
+          :metric-scope="metricScope"
           :selected-id="selectedId"
           :source="source"
           :source-path="sourcePath"
           @activate="activateGraphElement"
           @close="inspectorOpen = false"
           @hide="hideGraphElement"
+          @metric-overlay="setMetricOverlay"
+          @metric-query="openMetricContext"
+          @metric-scope="metricScope = $event"
+          @restore="restoreGraphElement"
           @source="openSource"
         />
       </template>

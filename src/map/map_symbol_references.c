@@ -1,4 +1,5 @@
 #include "map/map_internal.h"
+#include "map/map_references.h"
 
 #include "base/archbird_internal.h"
 
@@ -17,6 +18,7 @@ typedef struct AbSymbolReferenceRow {
   const AbProviderBundle *semantic_provider;
   const AbString *semantic_path;
   const AbString *semantic_symbol;
+  const AbString *external_package;
   struct AbSymbolReferenceCandidate *candidates;
   size_t candidate_count;
   size_t candidate_capacity;
@@ -125,6 +127,10 @@ static int row_compare(const void *left_raw, const void *right_raw) {
       optional_string_compare(left->semantic_symbol, right->semantic_symbol);
   if (compared)
     return compared;
+  compared =
+      optional_string_compare(left->external_package, right->external_package);
+  if (compared)
+    return compared;
   if (left->occurrence->span_start != right->occurrence->span_start)
     return left->occurrence->span_start < right->occurrence->span_start ? -1
                                                                         : 1;
@@ -143,6 +149,8 @@ static int same_group(const AbSymbolReferenceRow *left,
       optional_string_compare(left->container, right->container) ||
       !ab_string_equal(&left->occurrence->name, &right->occurrence->name) ||
       strcmp(left->resolution, right->resolution) ||
+      optional_string_compare(left->external_package,
+                              right->external_package) ||
       !candidate_lists_equal(left, right))
     return 0;
   if (!left->semantic_path || !right->semantic_path)
@@ -399,11 +407,12 @@ static ArchbirdStatus render_evidence(AbBuffer *buffer, const AbFact *fact,
   return status;
 }
 
-static ArchbirdStatus render_symbol_references(AbBuffer *buffer,
-                                               const AbMapState *state,
-                                               int projection) {
+static ArchbirdStatus
+render_symbol_references(AbBuffer *buffer, AbMapState *state, int projection) {
   static const AbString declaration_context = {(char *)"declaration", 11};
+  static const AbString imported_binding = {(char *)"imported", 8};
   static const AbString semantic_context = {(char *)"semantic", 8};
+  static const AbString value_context = {(char *)"value", 5};
   size_t total = ab_project_merged_fact_count(state->project);
   AbMapSymbolReference *symbols = NULL;
   AbSymbolReferenceRow *rows = NULL;
@@ -496,6 +505,41 @@ static ArchbirdStatus render_symbol_references(AbBuffer *buffer,
         rows[row_count].relation = "declaration-definition";
         row_count++;
       }
+    } else if (fact->has_name && string_literal(&fact->domain, "name-uses") &&
+               (string_literal(&fact->kind, "imported-name-use") ||
+                string_literal(&fact->kind, "imported-module-use") ||
+                string_literal(&fact->kind, "imported-attribute-reference") ||
+                string_literal(&fact->kind, "decorator-reference"))) {
+      const AbProviderBundle *provider =
+          ab_project_merged_fact_provider(state->project, index);
+      const AbManifestFile *source_file =
+          manifest_file(state->manifest, &fact->path);
+      const AbString *context = ab_map_fact_string_attribute(fact, "enclosing");
+      AbMapReferenceResolution resolution;
+      if (!provider || !source_file)
+        continue;
+      if (string_literal(&fact->kind, "imported-name-use") ||
+          string_literal(&fact->kind, "imported-module-use"))
+        status = ab_map_resolve_imported_name_reference(state, source_file,
+                                                        fact, &resolution);
+      else
+        status = ab_map_resolve_imported_reference(state, source_file, fact,
+                                                   &resolution);
+      if (status != ARCHBIRD_OK)
+        goto done;
+      if (!resolution.target_package)
+        continue;
+      rows[row_count].occurrence = fact;
+      rows[row_count].provider = provider;
+      rows[row_count].source = ab_map_enclosing_symbol(state->project, fact);
+      rows[row_count].source_file = source_file;
+      rows[row_count].context =
+          context && context->length ? context : &value_context;
+      rows[row_count].binding = &imported_binding;
+      rows[row_count].external_package = resolution.target_package;
+      rows[row_count].relation = resolution.relation;
+      rows[row_count].resolution = "external";
+      row_count++;
     }
   }
   if (symbol_count > 1)
@@ -510,6 +554,8 @@ static ArchbirdStatus render_symbol_references(AbBuffer *buffer,
     size_t candidate;
     size_t local_candidate_count = 0;
     const AbMapSymbolReference *local_candidate = NULL;
+    if (row->external_package)
+      continue;
     row->semantic =
         string_literal(&row->occurrence->kind, "declaration") ||
                 (evidence_state && !string_literal(evidence_state, "current"))
@@ -655,7 +701,7 @@ static ArchbirdStatus render_symbol_references(AbBuffer *buffer,
       if (row->candidate_count > 1)
         qsort(row->candidates, row->candidate_count, sizeof(*row->candidates),
               candidate_compare);
-      if (!row->semantic)
+      if (!row->semantic && !row->external_package)
         row->resolution =
             row->candidate_count == 0
                 ? "unresolved"
@@ -679,7 +725,8 @@ static ArchbirdStatus render_symbol_references(AbBuffer *buffer,
     size_t candidate;
     while (group_end < row_count && same_group(row, &rows[group_end]))
       group_end++;
-    if (!row->candidate_count && !reports_unresolved_project_reference(row)) {
+    if (!row->candidate_count && !row->external_package &&
+        !reports_unresolved_project_reference(row)) {
       index = group_end;
       continue;
     }
@@ -753,6 +800,11 @@ static ArchbirdStatus render_symbol_references(AbBuffer *buffer,
       status = ab_buffer_literal(buffer, "],\"name\":");
     if (status == ARCHBIRD_OK)
       status = render_string(buffer, &row->occurrence->name);
+    if (status == ARCHBIRD_OK && row->external_package) {
+      status = ab_buffer_literal(buffer, ",\"package\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer, row->external_package);
+    }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"relation\":\"");
     if (status == ARCHBIRD_OK)
@@ -800,12 +852,11 @@ done:
 }
 
 ArchbirdStatus ab_map_render_symbol_references(AbBuffer *buffer,
-                                               const AbMapState *state) {
+                                               AbMapState *state) {
   return render_symbol_references(buffer, state, 0);
 }
 
-ArchbirdStatus
-ab_map_render_symbol_references_projection(AbBuffer *buffer,
-                                           const AbMapState *state) {
+ArchbirdStatus ab_map_render_symbol_references_projection(AbBuffer *buffer,
+                                                          AbMapState *state) {
   return render_symbol_references(buffer, state, 1);
 }

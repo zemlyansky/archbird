@@ -658,16 +658,27 @@ participate in Verify.
 archbird serve
 ```
 
-`serve` prints a loopback URL immediately. The local application presents the
-Map, source witnesses, architecture graph, focused queries, constraints,
+`serve` prints only its loopback URL to stdout for scripts. Stderr identifies
+the project and reports analysis, published Maps, view/projection changes,
+queries, source reads, verification, exports, and diffs; static assets and
+polling stay silent. The local application presents the Map, source witnesses,
+architecture graph, focused queries, constraints,
 snapshots, and diffs while a background worker watches the repository. Only a
 valid new generation replaces the last good Map. The page uses the native
 Python host for analysis; it does not download the canonical Map unless the
 user explicitly saves it.
 
-The Metrics workspace shows exhaustive typed metric distributions,
-completeness, neutral heatmaps, and exact contributors. Values are measurements,
-not quality scores; selecting a hotspot opens its focused evidence.
+The right inspector shows all seven interactive Metrics together. They follow the
+selected graph region or stay fixed to the whole project; quartile plots show
+every value above p99 as a selectable evidence point.
+Selecting a dot or hotspot opens its focused graph context; Back restores the
+previous graph and viewport. Expand a metric for completeness and contributors,
+or apply it as a neutral graph overlay. Values
+are measurements, not quality scores.
+Arrange the same typed graph as directional Flow, clustered Force, or
+selected-root Radial, independently of Compact or Architecture notation.
+Architecture labels Archbird entity and relation kinds; it is not UML or SysML
+conformance.
 
 ### Reuse saved evidence safely
 

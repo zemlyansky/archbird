@@ -70,7 +70,13 @@ async function main() {
     return candidate.call(this);
   };
   const started = Date.now();
-  const server = await createLiveServer({ app: appRoot, port: 0, root: repositoryRoot });
+  const activities = [];
+  const server = await createLiveServer({
+    activity: (event) => activities.push(event),
+    app: appRoot,
+    port: 0,
+    root: repositoryRoot,
+  });
   assert.ok(Date.now() - started < 250, "live server waited for initial Map analysis");
   assert.equal(server.repository.current, null);
   const events = [];
@@ -96,6 +102,9 @@ async function main() {
     assert.equal(bootstrap.project, null);
     assert.match(bootstrap.phase, /^(waiting|analyzing)$/);
     await waitFor(() => server.repository.current !== null, "initial live generation");
+    assert.ok(activities.some((row) => row.event === "scan-started"));
+    assert.ok(activities.some((row) =>
+      row.event === "snapshot-ready" && row.project === "map-base" && row.files === 3));
     const readyState = server.repository.state();
     assert.ok(Number.isSafeInteger(readyState.schema_version));
     const transportedState = (await request(server, "state")).result;
@@ -142,6 +151,8 @@ async function main() {
 
     const view = await artifact(server, "view", { max_edge_names: 3, max_nodes: 0, view: "files" });
     assert.equal(JSON.parse(view.bytes).artifact, "archbird-graph-view");
+    assert.ok(activities.some((row) =>
+      row.event === "operation-complete" && row.label === "view files"));
     const symbols = JSON.parse((await artifact(server, "view", {
       max_edge_names: 3,
       max_nodes: 0,
@@ -151,10 +162,18 @@ async function main() {
     assert.equal(symbols.artifact, "archbird-graph-view");
     assert.equal(symbols.request.view, "symbols");
     assert.ok(symbols.nodes.some((row) => row.kind === "symbol" && row.label === "add"));
+    const query = JSON.parse((await artifact(server, "query", {
+      query: { depth: 0, symbols: ["add"], test_depth: 0 },
+    })).bytes);
+    assert.equal(query.artifact, "query");
+    assert.ok(activities.some((row) =>
+      row.event === "operation-complete" && row.label === "query symbol add"));
 
     const source = await request(server, "source", { path: "js/index.js" });
     assert.equal(source.result.encoding, "utf-8");
     assert.match(source.result.text, /export function add/);
+    assert.ok(activities.some((row) =>
+      row.event === "operation-complete" && row.label === "source js/index.js"));
     const escape = await request(server, "source", { path: "../outside" }, { ok: false });
     assert.match(escape.error.message, /escapes repository root/);
 
