@@ -475,11 +475,6 @@ ab_map_graph_add_edge_site(ArchbirdEngine *engine, AbMapGraph *graph,
                            const char *target, size_t target_length,
                            const AbString *name, const AbString *fact_id,
                            uint64_t line, size_t span_start, size_t span_end);
-ArchbirdStatus ab_map_graph_add_edge_evidence(
-    ArchbirdEngine *engine, AbMapGraph *graph, const char *kind,
-    const AbString *source, const char *target, size_t target_length,
-    const AbString *name, const char *evidence_basis,
-    const AbString *evidence_provider, const AbString *evidence_state);
 ArchbirdStatus ab_map_graph_add_edge_evidence_site(
     ArchbirdEngine *engine, AbMapGraph *graph, const char *kind,
     const AbString *source, const char *target, size_t target_length,
@@ -502,9 +497,6 @@ AbString ab_map_external_import_name(const AbString *language,
                                      const AbString *imported);
 int ab_map_package_alias_matches(const AbMapPackage *package,
                                  const char *manager, const AbString *external);
-int ab_map_package_dependency_matches(const AbMapPackage *package,
-                                      const char *manager,
-                                      const AbString *external);
 const AbMapDependency *
 ab_map_file_package_dependency(const AbMapPackage *packages,
                                size_t package_count, const AbManifestFile *file,

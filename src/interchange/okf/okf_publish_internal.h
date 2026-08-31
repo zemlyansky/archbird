@@ -102,9 +102,6 @@ ArchbirdStatus ab_okf_pub_buffer_string(AbOkfPublication *pub,
                                         const AbBuffer *buffer, AbString *out);
 ArchbirdStatus ab_okf_pub_sha256(const uint8_t *data, size_t length,
                                  char output[65]);
-ArchbirdStatus ab_okf_pub_value_digest(AbOkfPublication *pub,
-                                       const AbValue *value, char output[65]);
-
 ArchbirdStatus ab_okf_pub_one_line(AbOkfPublication *pub, const AbString *value,
                                    AbString *out);
 ArchbirdStatus ab_okf_pub_body(AbOkfPublication *pub, const AbBuffer *value,
@@ -122,10 +119,6 @@ ArchbirdStatus ab_okf_pub_relative_link(AbBuffer *buffer,
                                         const char *source_path,
                                         const char *target_path,
                                         const AbString *label);
-ArchbirdStatus ab_okf_pub_external_link(AbBuffer *buffer,
-                                        const AbString *target,
-                                        const AbString *label);
-
 void ab_okf_pub_relations_free(AbOkfPublication *pub,
                                AbOkfPubRelationList *relations);
 ArchbirdStatus ab_okf_pub_relation(AbOkfPublication *pub,
@@ -143,13 +136,8 @@ ArchbirdStatus ab_okf_pub_json_literal(AbOkfPublication *pub, AbString *out,
                                        const char *value);
 ArchbirdStatus ab_okf_pub_json_u64(AbOkfPublication *pub, AbString *out,
                                    uint64_t value);
-ArchbirdStatus ab_okf_pub_json_bool(AbOkfPublication *pub, AbString *out,
-                                    int value);
 ArchbirdStatus ab_okf_pub_json_value(AbOkfPublication *pub, AbString *out,
                                      const AbValue *value);
-ArchbirdStatus ab_okf_pub_json_string_array(AbOkfPublication *pub,
-                                            AbString *out,
-                                            const AbValue *values);
 
 ArchbirdStatus ab_okf_pub_add_concept(AbOkfPublication *pub,
                                       const AbOkfConceptSpec *spec);

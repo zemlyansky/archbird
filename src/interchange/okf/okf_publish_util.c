@@ -60,18 +60,6 @@ ArchbirdStatus ab_okf_pub_sha256(const uint8_t *data, size_t length,
   return status;
 }
 
-ArchbirdStatus ab_okf_pub_value_digest(AbOkfPublication *pub,
-                                       const AbValue *value, char output[65]) {
-  AbBuffer buffer;
-  ArchbirdStatus status;
-  ab_buffer_init(&buffer, pub->engine);
-  status = ab_value_render(&buffer, value);
-  if (status == ARCHBIRD_OK)
-    status = ab_okf_pub_sha256(buffer.data, buffer.length, output);
-  ab_buffer_free(&buffer);
-  return status;
-}
-
 static int utf8_next(const unsigned char *data, size_t length, size_t *index,
                      uint32_t *codepoint, size_t *start) {
   unsigned char first;
@@ -462,16 +450,6 @@ ArchbirdStatus ab_okf_pub_relative_link(AbBuffer *buffer,
   return ab_buffer_literal(buffer, ")");
 }
 
-ArchbirdStatus ab_okf_pub_external_link(AbBuffer *buffer,
-                                        const AbString *target,
-                                        const AbString *label) {
-  PUB_TRY(ab_buffer_literal(buffer, "["));
-  PUB_TRY(ab_okf_pub_plain(buffer, label));
-  PUB_TRY(ab_buffer_literal(buffer, "]("));
-  PUB_TRY(ab_okf_pub_url(buffer, target));
-  return ab_buffer_literal(buffer, ")");
-}
-
 static int field_compare(const void *left, const void *right) {
   return strcmp(((const AbOkfPubField *)left)->name,
                 ((const AbOkfPubField *)right)->name);
@@ -616,49 +594,12 @@ ArchbirdStatus ab_okf_pub_json_u64(AbOkfPublication *pub, AbString *out,
   return status;
 }
 
-ArchbirdStatus ab_okf_pub_json_bool(AbOkfPublication *pub, AbString *out,
-                                    int value) {
-  return ab_okf_pub_literal(pub, out, value ? "true" : "false");
-}
-
 ArchbirdStatus ab_okf_pub_json_value(AbOkfPublication *pub, AbString *out,
                                      const AbValue *value) {
   AbBuffer buffer;
   ArchbirdStatus status;
   ab_buffer_init(&buffer, pub->engine);
   status = ab_value_render(&buffer, value);
-  if (status == ARCHBIRD_OK)
-    status = ab_okf_pub_buffer_string(pub, &buffer, out);
-  ab_buffer_free(&buffer);
-  return status;
-}
-
-ArchbirdStatus ab_okf_pub_json_string_array(AbOkfPublication *pub,
-                                            AbString *out,
-                                            const AbValue *values) {
-  size_t index;
-  AbBuffer buffer;
-  ArchbirdStatus status = ARCHBIRD_OK;
-  if (!values || values->kind != AB_VALUE_ARRAY)
-    return ab_okf_pub_error(pub, "expected string array in OKF publication");
-  ab_buffer_init(&buffer, pub->engine);
-  status = ab_buffer_literal(&buffer, "[");
-  for (index = 0; status == ARCHBIRD_OK && index < values->as.array.count;
-       index++) {
-    const AbValue *value = &values->as.array.items[index];
-    if (value->kind != AB_VALUE_STRING) {
-      status =
-          ab_okf_pub_error(pub, "expected string in OKF publication array");
-      break;
-    }
-    if (index)
-      status = ab_buffer_literal(&buffer, ",");
-    if (status == ARCHBIRD_OK)
-      status = ab_buffer_json_string(&buffer, value->as.text.data,
-                                     value->as.text.length);
-  }
-  if (status == ARCHBIRD_OK)
-    status = ab_buffer_literal(&buffer, "]");
   if (status == ARCHBIRD_OK)
     status = ab_okf_pub_buffer_string(pub, &buffer, out);
   ab_buffer_free(&buffer);

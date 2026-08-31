@@ -31,21 +31,11 @@ const AbValue *
 ab_verification_artifact_constraint(const AbVerificationArtifact *artifact,
                                     const AbString *id);
 const AbValue *
-ab_verification_artifact_finding(const AbVerificationArtifact *artifact,
-                                 const AbString *fingerprint,
-                                 const AbValue **out_check);
-const AbValue *
 ab_verification_artifact_fact_value(const AbVerificationArtifact *artifact,
                                     const AbString *name,
                                     const AbProjectionData **out_fact);
 const AbValue *ab_verification_artifact_operand_definition(
     const AbVerificationArtifact *artifact, const AbString *name);
-const AbValue *
-ab_verification_artifact_mapping(const AbVerificationArtifact *artifact,
-                                 const AbString *name);
-const AbValue *
-ab_verification_artifact_observation(const AbVerificationArtifact *artifact,
-                                     const AbString *name);
 ArchbirdStatus ab_verification_finding_validate(ArchbirdEngine *engine,
                                                 const AbValue *row);
 

@@ -13,11 +13,6 @@ ArchbirdStatus ab_map_report_markdown_view(ArchbirdEngine *engine,
                                            ArchbirdReportDetail detail,
                                            size_t max_chars, AbBuffer *out);
 
-ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,
-                                        const AbValue *map,
-                                        const AbValue *query, size_t max_chars,
-                                        AbBuffer *out);
-
 ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,
                                              const AbValue *map,
                                              const AbValue *query,

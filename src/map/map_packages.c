@@ -129,18 +129,6 @@ int ab_map_package_alias_matches(const AbMapPackage *package,
   return 0;
 }
 
-int ab_map_package_dependency_matches(const AbMapPackage *package,
-                                      const char *manager,
-                                      const AbString *external) {
-  size_t index;
-  for (index = 0; index < package->dependency_count; index++) {
-    if (normalized_package_equal(manager, &package->dependencies[index].name,
-                                 external))
-      return 1;
-  }
-  return 0;
-}
-
 static const AbMapDependency *package_dependency(const AbMapPackage *package,
                                                  const char *manager,
                                                  const AbString *external) {

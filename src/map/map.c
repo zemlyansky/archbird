@@ -380,16 +380,6 @@ ab_map_graph_add_edge_site(ArchbirdEngine *engine, MapGraph *graph,
       span_start, span_end, NULL, NULL, NULL);
 }
 
-ArchbirdStatus ab_map_graph_add_edge_evidence(
-    ArchbirdEngine *engine, MapGraph *graph, const char *kind,
-    const AbString *source, const char *target, size_t target_length,
-    const AbString *name, const char *evidence_basis,
-    const AbString *evidence_provider, const AbString *evidence_state) {
-  return ab_map_graph_add_edge_evidence_site(
-      engine, graph, kind, source, target, target_length, name, NULL, 0, 0, 0,
-      evidence_basis, evidence_provider, evidence_state);
-}
-
 ArchbirdStatus ab_map_graph_add_edge_evidence_site(
     ArchbirdEngine *engine, MapGraph *graph, const char *kind,
     const AbString *source, const char *target, size_t target_length,

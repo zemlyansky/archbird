@@ -115,10 +115,6 @@ function topLevelUsage() {
   );
 }
 
-function camel(flag) {
-  return flag.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
-}
-
 function parse(argv, definitions, { positionals = 0 } = {}) {
   const byFlag = new Map();
   const result = { _: [] };

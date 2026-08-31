@@ -134,18 +134,6 @@ ArchbirdStatus ab_bundle_builder_init_file(
                       configuration_sha256);
 }
 
-ArchbirdStatus ab_bundle_builder_init_file_manifest(
-    AbBundleBuilder *builder, ArchbirdEngine *engine,
-    const AbSourceManifest *manifest, const AbManifestFile *file,
-    const uint8_t source_manifest_sha256[32], const char *producer_name,
-    const char *producer_version, const uint8_t implementation_sha256[32],
-    const uint8_t configuration_sha256[32]) {
-  return builder_init(builder, engine, manifest, file, "file",
-                      source_manifest_sha256, 0, producer_name,
-                      producer_version, implementation_sha256,
-                      configuration_sha256);
-}
-
 ArchbirdStatus ab_bundle_builder_init_file_sources(
     AbBundleBuilder *builder, ArchbirdEngine *engine,
     const AbSourceManifest *manifest, const AbManifestFile *file,

@@ -25,7 +25,7 @@ import sys
 import tokenize
 import unicodedata
 import warnings
-from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 
 _DOMAINS = (

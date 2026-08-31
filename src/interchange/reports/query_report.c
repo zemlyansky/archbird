@@ -3361,12 +3361,3 @@ ArchbirdStatus ab_query_report_markdown_view_with_verification(
   return render_query_once(engine, map, query, verification, best_count, view,
                            detail, out);
 }
-
-ArchbirdStatus ab_query_report_markdown(ArchbirdEngine *engine,
-                                        const AbValue *map,
-                                        const AbValue *query, size_t max_chars,
-                                        AbBuffer *out) {
-  return ab_query_report_markdown_view(
-      engine, map, query, ARCHBIRD_QUERY_VIEW_FOCUSED,
-      ARCHBIRD_REPORT_DETAIL_STANDARD, max_chars, out);
-}

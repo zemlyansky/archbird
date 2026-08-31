@@ -2738,17 +2738,6 @@ def freeze_constraints_json(
     )
 
 
-def _strict_document(raw: bytes, label: str) -> Mapping[str, object]:
-    try:
-        canonical = _native.json_canonicalize(raw)
-        value = json.loads(canonical)
-    except (RuntimeError, ValueError, json.JSONDecodeError) as error:
-        raise ConfigError(f"invalid {label}: {error}") from error
-    if not isinstance(value, dict):
-        raise ConfigError(f"invalid {label}: expected object")
-    return value
-
-
 def _inventory_state(
     config_json: bytes,
     root: Path,

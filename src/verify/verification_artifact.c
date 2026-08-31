@@ -500,37 +500,6 @@ ab_verification_artifact_constraint(const AbVerificationArtifact *artifact,
 }
 
 const AbValue *
-ab_verification_artifact_finding(const AbVerificationArtifact *artifact,
-                                 const AbString *fingerprint,
-                                 const AbValue **out_check) {
-  const AbValue *match = NULL;
-  size_t check_index;
-  size_t matches = 0;
-  if (out_check)
-    *out_check = NULL;
-  if (!artifact || !fingerprint)
-    return NULL;
-  for (check_index = 0; check_index < artifact->constraints->as.array.count;
-       check_index++) {
-    const AbValue *check = &artifact->constraints->as.array.items[check_index];
-    const AbValue *findings = ab_value_member(check, "findings");
-    size_t finding_index;
-    for (finding_index = 0; finding_index < findings->as.array.count;
-         finding_index++) {
-      const AbValue *finding = &findings->as.array.items[finding_index];
-      const AbValue *value = ab_value_member(finding, "fingerprint");
-      if (value && ab_string_equal(&value->as.text, fingerprint)) {
-        match = finding;
-        matches++;
-        if (out_check)
-          *out_check = check;
-      }
-    }
-  }
-  return matches == 1 ? match : NULL;
-}
-
-const AbValue *
 ab_verification_artifact_fact_value(const AbVerificationArtifact *artifact,
                                     const AbString *name,
                                     const AbProjectionData **out_fact) {
@@ -549,20 +518,8 @@ ab_verification_artifact_fact_value(const AbVerificationArtifact *artifact,
   return NULL;
 }
 
-const AbValue *
-ab_verification_artifact_mapping(const AbVerificationArtifact *artifact,
-                                 const AbString *name) {
-  return named_object_value(artifact ? artifact->mappings : NULL, name);
-}
-
 const AbValue *ab_verification_artifact_operand_definition(
     const AbVerificationArtifact *artifact, const AbString *name) {
   return named_object_value(artifact ? artifact->operand_definitions : NULL,
                             name);
-}
-
-const AbValue *
-ab_verification_artifact_observation(const AbVerificationArtifact *artifact,
-                                     const AbString *name) {
-  return named_row(artifact ? artifact->observations : NULL, "id", name);
 }

@@ -89,27 +89,6 @@ static int valid_component(const AbValue *row, const AbValue **out_name,
   return 1;
 }
 
-const AbProjectionMembershipComponent *
-ab_projection_membership_component(const AbProjectionMembershipIndex *index,
-                                   const AbString *name, size_t *out_index) {
-  size_t low = 0;
-  size_t high = index ? index->component_count : 0;
-  while (low < high) {
-    size_t middle = low + (high - low) / 2;
-    int compared = ab_string_compare(index->components[middle].name, name);
-    if (compared < 0)
-      low = middle + 1;
-    else if (compared > 0)
-      high = middle;
-    else {
-      if (out_index)
-        *out_index = middle;
-      return &index->components[middle];
-    }
-  }
-  return NULL;
-}
-
 const AbProjectionMembershipFile *
 ab_projection_membership_file(const AbProjectionMembershipIndex *index,
                               const AbString *path) {

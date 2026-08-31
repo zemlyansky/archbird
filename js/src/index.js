@@ -1647,19 +1647,6 @@ function fsSourceIdentity() {
   return fs.readFileSync(__filename);
 }
 
-function strictDocument(raw, label) {
-  let value;
-  try {
-    value = JSON.parse(native.jsonCanonicalize(Buffer.from(raw)).toString("utf8"));
-  } catch (error) {
-    throw new Error(`invalid ${label}: ${error.message}`);
-  }
-  if (!value || Array.isArray(value) || typeof value !== "object") {
-    throw new Error(`invalid ${label}: expected object`);
-  }
-  return value;
-}
-
 function discoveryPlan(configJson, paths, { pretty = false } = {}) {
   return native.discoveryPlan(Buffer.from(configJson), [...paths], pretty);
 }

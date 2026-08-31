@@ -45,10 +45,6 @@ ab_projection_membership_index_build(ArchbirdEngine *engine, const AbValue *map,
 void ab_projection_membership_index_free(ArchbirdEngine *engine,
                                          AbProjectionMembershipIndex *index);
 
-const AbProjectionMembershipComponent *
-ab_projection_membership_component(const AbProjectionMembershipIndex *index,
-                                   const AbString *name, size_t *out_index);
-
 const AbProjectionMembershipFile *
 ab_projection_membership_file(const AbProjectionMembershipIndex *index,
                               const AbString *path);
