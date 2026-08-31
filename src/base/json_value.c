@@ -12,6 +12,13 @@ static int object_field_compare(const void *left_raw, const void *right_raw) {
   return ab_string_compare(&left->name, &right->name);
 }
 
+void ab_value_object_sort(AbValue *object) {
+  if (!object || object->kind != AB_VALUE_OBJECT || object->as.object.count < 2)
+    return;
+  qsort(object->as.object.fields, object->as.object.count,
+        sizeof(*object->as.object.fields), object_field_compare);
+}
+
 static ArchbirdStatus decode_node(ArchbirdEngine *engine, yyjson_val *node,
                                   AbValue *out) {
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -94,9 +101,8 @@ static ArchbirdStatus decode_node(ArchbirdEngine *engine, yyjson_val *node,
         status =
             decode_node(engine, yyjson_obj_iter_get_val(key), &field->value);
     }
-    if (status == ARCHBIRD_OK && out->as.object.count > 1)
-      qsort(out->as.object.fields, out->as.object.count,
-            sizeof(*out->as.object.fields), object_field_compare);
+    if (status == ARCHBIRD_OK)
+      ab_value_object_sort(out);
   } else {
     status =
         archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,

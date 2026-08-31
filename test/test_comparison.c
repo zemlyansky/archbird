@@ -77,6 +77,21 @@ static int test_sectioned_correspondence_diff(void) {
       "\"tool\":{\"implementation_sha256\":"
       "\"0000000000000000000000000000000000000000000000000000000000000000\","
       "\"name\":\"archbird\",\"version\":\"test\"}}";
+  static const char reordered_map[] =
+      "{\"tool\":{\"version\":\"test\",\"name\":\"archbird\","
+      "\"implementation_sha256\":"
+      "\"0000000000000000000000000000000000000000000000000000000000000000\"},"
+      "\"tests\":[],\"symbol_references\":[],\"symbol_calls\":[],"
+      "\"surfaces\":[],\"schema_version\":13,\"project\":\"sectioned\","
+      "\"parity\":[],\"packages\":[],\"named_entries\":{},\"limits\":{},"
+      "\"layers\":[],\"inputs\":[],\"indexes\":[],\"files\":[],"
+      "\"facts\":[],\"evidence\":{\"input_sha256\":"
+      "\"0000000000000000000000000000000000000000000000000000000000000000\","
+      "\"config_sha256\":"
+      "\"0000000000000000000000000000000000000000000000000000000000000000\"},"
+      "\"edges\":[],\"diagnostics\":[0,1,2,3,4,5,6,7],"
+      "\"components\":[],\"call_resolutions\":[],\"builds\":[],"
+      "\"artifacts\":[],\"artifact\":\"map\"}";
   static const char request[] =
       "{\"after\":{\"container\":\"rules.c:rules\","
       "\"id\":\"after-rules\",\"select\":\"ordered_rows\"},"
@@ -116,9 +131,20 @@ static int test_sectioned_correspondence_diff(void) {
     archbird_engine_destroy(engine);
     return 0;
   }
+  written = 0;
+  status = archbird_diff(
+      engine, (const uint8_t *)reordered_map, sizeof(reordered_map) - 1, NULL,
+      0, (const uint8_t *)reordered_map, sizeof(reordered_map) - 1, NULL, 0,
+      (const uint8_t *)general_request, sizeof(general_request) - 1, 0,
+      discard_write, &written);
+  if (status != ARCHBIRD_OK) {
+    expect(0, archbird_engine_error(engine));
+    archbird_engine_destroy(engine);
+    return 0;
+  }
   archbird_engine_destroy(engine);
   return expect(written > 0,
-                "sectioned correspondence Diff produced no artifact");
+                "reordered correspondence Diff produced no artifact");
 }
 
 static int test_identity(ArchbirdEngine *engine) {

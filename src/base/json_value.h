@@ -7,6 +7,7 @@
 ArchbirdStatus ab_json_value_decode(ArchbirdEngine *engine, const uint8_t *json,
                                     size_t json_length, AbValue *out);
 
+void ab_value_object_sort(AbValue *object);
 const AbValue *ab_value_member(const AbValue *object, const char *name);
 int ab_value_u64(const AbValue *value, uint64_t *out);
 int ab_value_string_is(const AbValue *value, const char *literal);

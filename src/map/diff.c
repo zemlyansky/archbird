@@ -2204,6 +2204,8 @@ ArchbirdStatus ab_diff_map_select(ArchbirdEngine *engine, const uint8_t *json,
   out->kind = AB_VALUE_OBJECT;
   status =
       map_fields_visit(&context, json, length, map_select_field, &selection);
+  if (status == ARCHBIRD_OK)
+    ab_value_object_sort(out);
   if (status != ARCHBIRD_OK)
     ab_value_free(engine, out);
   return status;
