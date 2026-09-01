@@ -674,6 +674,7 @@ the project and reports analysis, published Maps, view/projection changes,
 queries, source reads, verification, exports, and diffs; static assets and
 polling stay silent. It analyzes in a worker, publishes only valid generations,
 and retains the last good Map when a later candidate fails.
+Recent Maps, derived artifacts, and response blobs are count- and byte-bounded.
 Live Map, projection, Query, Verify, and source work runs in the native Node
 host; the page receives typed ProjectionResults and does not load browser Wasm.
 Normal exploration does not download the canonical Map; saving it is explicit.

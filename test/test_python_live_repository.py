@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+import hashlib
 import shutil
 import sys
 import threading
@@ -77,6 +79,40 @@ def main() -> int:
             raise AssertionError("equivalent projection requests changed artifact bytes")
         if len(server.repository.current["derived"]) != 1:
             raise AssertionError("equivalent projection plans were evaluated more than once")
+
+        cache = LiveRepository(root=repository)
+        cache.snapshot_byte_limit = 10
+        cache.blob_byte_limit = 10
+        first_snapshot = {
+            "derived": OrderedDict(),
+            "generation": "1" * 64,
+            "map": b"123456",
+            "project": "cache",
+            "verification": b"",
+        }
+        second_snapshot = {
+            "derived": OrderedDict(),
+            "generation": "2" * 64,
+            "map": b"abcdef",
+            "project": "cache",
+            "verification": b"",
+        }
+        cache.current = first_snapshot
+        cache._retain_snapshot(first_snapshot)
+        cache.current = second_snapshot
+        cache._retain_snapshot(second_snapshot)
+        if tuple(cache.snapshots) != (second_snapshot["generation"],):
+            raise AssertionError("Python live snapshots exceeded their byte budget")
+        if cache.derived(second_snapshot, "probe", {}, lambda: b"12345678") != b"12345678":
+            raise AssertionError("uncached Python derived result changed")
+        if second_snapshot["derived"]:
+            raise AssertionError("oversize Python derived result was cached")
+        first_blob = b"123456"
+        second_blob = b"abcdef"
+        cache.artifact(second_snapshot, first_blob)
+        cache.artifact(second_snapshot, second_blob)
+        if tuple(cache.blobs) != (hashlib.sha256(second_blob).hexdigest(),):
+            raise AssertionError("Python live blobs exceeded their byte budget")
         time.sleep(0.8)
         if candidate_calls != 1:
             raise AssertionError(

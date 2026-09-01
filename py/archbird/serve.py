@@ -33,6 +33,8 @@ SERVER_HOST_MARKER = b'name="archbird-host" content="server"'
 SNAPSHOT_LIMIT = 4
 DERIVED_LIMIT = 16
 BLOB_LIMIT = 32
+SNAPSHOT_BYTE_LIMIT = 512 * 1024 * 1024
+BLOB_BYTE_LIMIT = 256 * 1024 * 1024
 BODY_LIMIT = 2 * 1024 * 1024
 TEXT_LIMIT = 256 * 1024
 HEX_LIMIT = 64 * 1024
@@ -163,6 +165,8 @@ class LiveRepository:
         self.current: Optional[dict[str, Any]] = None
         self.snapshots: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
         self.blobs: "OrderedDict[str, bytes]" = OrderedDict()
+        self.snapshot_byte_limit = SNAPSHOT_BYTE_LIMIT
+        self.blob_byte_limit = BLOB_BYTE_LIMIT
         self._selections: dict[str, str] = {}
         self._subscribers: set[queue.Queue[Optional[dict[str, object]]]] = set()
         self._event_id = 0
@@ -352,10 +356,7 @@ class LiveRepository:
             with self._lock:
                 changed = self.current is None or candidate["generation"] != current_generation
                 self.current = candidate
-                self.snapshots.pop(candidate["generation"], None)
-                self.snapshots[candidate["generation"]] = candidate
-                while len(self.snapshots) > SNAPSHOT_LIMIT:
-                    self.snapshots.popitem(last=False)
+                self._retain_snapshot(candidate)
                 self._sync_watch_paths(candidate["files"])
                 self._watch_state = self._signature()
                 self._phase = "ready"
@@ -447,12 +448,60 @@ class LiveRepository:
         with self._lock:
             return tuple(self.snapshots.values())
 
+    @staticmethod
+    def _snapshot_bytes(snapshot: Mapping[str, Any]) -> int:
+        return (
+            len(snapshot["map"])
+            + len(snapshot.get("verification") or b"")
+            + sum(len(value) for value in snapshot["derived"].values())
+        )
+
+    def _prune_snapshots(self) -> None:
+        while self.snapshots:
+            retained_bytes = sum(
+                self._snapshot_bytes(snapshot)
+                for snapshot in self.snapshots.values()
+            )
+            over_count = len(self.snapshots) > SNAPSHOT_LIMIT
+            over_bytes = retained_bytes > self.snapshot_byte_limit
+            if not over_count and not over_bytes:
+                return
+            current_generation = self.current["generation"] if self.current else None
+            removable = next(
+                (
+                    generation
+                    for generation in self.snapshots
+                    if generation != current_generation
+                ),
+                None,
+            )
+            if removable is not None:
+                self.snapshots.pop(removable)
+                continue
+            current = self.current
+            if over_bytes and current is not None and current["derived"]:
+                current["derived"].popitem(last=False)
+                continue
+            return
+
+    def _retain_snapshot(self, snapshot: dict[str, Any]) -> None:
+        """Retain recent evidence without multiplying one large generation."""
+
+        with self._lock:
+            self.snapshots.pop(snapshot["generation"], None)
+            self.snapshots[snapshot["generation"]] = snapshot
+            self._prune_snapshots()
+
     def artifact(self, snapshot: Mapping[str, Any], data: bytes) -> dict[str, object]:
         digest = hashlib.sha256(data).hexdigest()
         with self._lock:
             self.blobs.pop(digest, None)
-            self.blobs[digest] = bytes(data)
-            while len(self.blobs) > BLOB_LIMIT:
+            self.blobs[digest] = data if isinstance(data, bytes) else bytes(data)
+            while len(self.blobs) > 1 and (
+                len(self.blobs) > BLOB_LIMIT
+                or sum(len(value) for value in self.blobs.values())
+                > self.blob_byte_limit
+            ):
                 self.blobs.popitem(last=False)
         return {
             "blob_sha256": digest,
@@ -479,10 +528,19 @@ class LiveRepository:
         with self._lock:
             cache = snapshot["derived"]
             existing = cache.pop(key, None)
-            cache[key] = existing if existing is not None else data
+            if existing is not None:
+                cache[key] = existing
+                return existing
+            base_bytes = len(snapshot["map"]) + len(
+                snapshot.get("verification") or b""
+            )
+            if len(data) > max(0, self.snapshot_byte_limit - base_bytes):
+                return data
+            cache[key] = data
             while len(cache) > DERIVED_LIMIT:
                 cache.popitem(last=False)
-            return cache[key]
+            self._prune_snapshots()
+            return data
 
     def source(self, snapshot: Mapping[str, Any], source_path: object) -> dict[str, object]:
         allowed = {str(row["path"]): row for row in snapshot["files"]}

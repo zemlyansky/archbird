@@ -108,7 +108,7 @@ async function main() {
     const firstBootstrap = await (await fetch(new URL("api/v1/bootstrap", url))).json();
     assert.equal(firstBootstrap.protocol_version, 1);
     assert.deepEqual(firstBootstrap.capabilities, [
-      "map", "projection", "view", "export", "query", "diff", "source",
+      "map", "projection", "projections", "view", "export", "query", "diff", "source",
       "verification", "snapshots", "events",
     ]);
     assert.match(firstBootstrap.phase, /^(waiting|analyzing|ready)$/);

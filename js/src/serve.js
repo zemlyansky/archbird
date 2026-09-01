@@ -19,6 +19,9 @@ const STATIC_HOST_MARKER = 'name="archbird-host" content="static"';
 const SERVER_HOST_MARKER = 'name="archbird-host" content="server"';
 const SNAPSHOT_LIMIT = 4;
 const DERIVED_LIMIT = 16;
+const BLOB_LIMIT = 32;
+const SNAPSHOT_BYTE_LIMIT = 512 * 1024 * 1024;
+const BLOB_BYTE_LIMIT = 256 * 1024 * 1024;
 const BODY_LIMIT = 2 * 1024 * 1024;
 const CAPABILITIES = [
   "map", "projection", "projections", "view", "export", "query", "diff", "source",
@@ -104,6 +107,8 @@ class LiveRepository {
     this.current = null;
     this.snapshots = new Map();
     this.blobs = new Map();
+    this.snapshotByteLimit = SNAPSHOT_BYTE_LIMIT;
+    this.blobByteLimit = BLOB_BYTE_LIMIT;
     this.watchers = new Map();
     this.clients = new Set();
     this.eventId = 0;
@@ -223,10 +228,7 @@ class LiveRepository {
     this.building = this.candidate().then((snapshot) => {
       if (this.closed) return;
       this.current = snapshot;
-      this.snapshots.set(snapshot.generation, snapshot);
-      const ordered = [...this.snapshots.values()]
-        .sort((left, right) => right.stored_at - left.stored_at || utf8Compare(left.generation, right.generation));
-      for (const expired of ordered.slice(SNAPSHOT_LIMIT)) this.snapshots.delete(expired.generation);
+      this.retainSnapshot(snapshot);
       this.syncWatchers(snapshot.files);
       this.watchState = this.inputSignature();
       this.phase = "ready";
@@ -352,12 +354,51 @@ class LiveRepository {
     return selected;
   }
 
+  snapshotBytes(snapshot) {
+    return snapshot.map.length
+      + (snapshot.verification?.length || 0)
+      + [...snapshot.derived.values()].reduce((total, value) => total + value.length, 0);
+  }
+
+  pruneSnapshots() {
+    while (this.snapshots.size) {
+      const retainedBytes = [...this.snapshots.values()]
+        .reduce((total, snapshot) => total + this.snapshotBytes(snapshot), 0);
+      const overCount = this.snapshots.size > SNAPSHOT_LIMIT;
+      const overBytes = retainedBytes > this.snapshotByteLimit;
+      if (!overCount && !overBytes) return;
+      const removable = [...this.snapshots.keys()]
+        .find((generation) => generation !== this.current?.generation);
+      if (removable) {
+        this.snapshots.delete(removable);
+        continue;
+      }
+      if (overBytes && this.current?.derived.size) {
+        this.current.derived.delete(this.current.derived.keys().next().value);
+        continue;
+      }
+      return;
+    }
+  }
+
+  retainSnapshot(snapshot) {
+    // Keep recent generations without multiplying one large Map in memory.
+    this.snapshots.delete(snapshot.generation);
+    this.snapshots.set(snapshot.generation, snapshot);
+    this.pruneSnapshots();
+  }
+
   artifact(snapshot, bytes) {
-    const encoded = Buffer.from(bytes);
+    const encoded = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
     const sha256 = crypto.createHash("sha256").update(encoded).digest("hex");
     this.blobs.delete(sha256);
     this.blobs.set(sha256, encoded);
-    while (this.blobs.size > 32) this.blobs.delete(this.blobs.keys().next().value);
+    const blobBytes = () => [...this.blobs.values()]
+      .reduce((total, value) => total + value.length, 0);
+    while (
+      this.blobs.size > 1
+      && (this.blobs.size > BLOB_LIMIT || blobBytes() > this.blobByteLimit)
+    ) this.blobs.delete(this.blobs.keys().next().value);
     return {
       blob_sha256: sha256,
       bytes: encoded.length,
@@ -377,10 +418,13 @@ class LiveRepository {
       return cached;
     }
     const bytes = Buffer.from(evaluate());
+    const baseBytes = snapshot.map.length + (snapshot.verification?.length || 0);
+    if (bytes.length > Math.max(0, this.snapshotByteLimit - baseBytes)) return bytes;
     snapshot.derived.set(key, bytes);
     while (snapshot.derived.size > DERIVED_LIMIT) {
       snapshot.derived.delete(snapshot.derived.keys().next().value);
     }
+    this.pruneSnapshots();
     return bytes;
   }
 

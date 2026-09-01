@@ -96,7 +96,7 @@ async function main() {
     const bootstrap = await bootstrapResponse.json();
     assert.equal(bootstrap.protocol_version, 1);
     assert.deepEqual(bootstrap.capabilities, [
-      "map", "projection", "view", "export", "query", "diff", "source",
+      "map", "projection", "projections", "view", "export", "query", "diff", "source",
       "verification", "snapshots", "events",
     ]);
     assert.equal(bootstrap.project, null);
@@ -147,6 +147,52 @@ async function main() {
       server.repository.current.derived.size,
       1,
       "equivalent projection plans were evaluated more than once",
+    );
+
+    const cache = new LiveRepository({ root: repositoryRoot });
+    cache.snapshotByteLimit = 10;
+    cache.blobByteLimit = 10;
+    const firstSnapshot = {
+      derived: new Map(),
+      generation: "1".repeat(64),
+      map: Buffer.from("123456"),
+      project: "cache",
+      verification: null,
+    };
+    const secondSnapshot = {
+      derived: new Map(),
+      generation: "2".repeat(64),
+      map: Buffer.from("abcdef"),
+      project: "cache",
+      verification: null,
+    };
+    cache.current = firstSnapshot;
+    cache.retainSnapshot(firstSnapshot);
+    cache.current = secondSnapshot;
+    cache.retainSnapshot(secondSnapshot);
+    assert.deepEqual(
+      [...cache.snapshots.keys()],
+      [secondSnapshot.generation],
+      "Node live snapshots exceeded their byte budget",
+    );
+    assert.deepEqual(
+      cache.derived(secondSnapshot, "probe", {}, () => Buffer.from("12345678")),
+      Buffer.from("12345678"),
+    );
+    assert.equal(secondSnapshot.derived.size, 0, "oversize Node derived result was cached");
+    const firstBlob = Buffer.from("123456");
+    const secondBlob = Buffer.from("abcdef");
+    cache.artifact(secondSnapshot, firstBlob);
+    const secondDescriptor = cache.artifact(secondSnapshot, secondBlob);
+    assert.deepEqual(
+      [...cache.blobs.keys()],
+      [secondDescriptor.blob_sha256],
+      "Node live blobs exceeded their byte budget",
+    );
+    assert.strictEqual(
+      cache.blobs.get(secondDescriptor.blob_sha256),
+      secondBlob,
+      "Node live artifact copied an existing Buffer",
     );
 
     const view = await artifact(server, "view", { max_edge_names: 3, max_nodes: 0, view: "files" });
