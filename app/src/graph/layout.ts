@@ -19,8 +19,14 @@ export interface ElkNode {
   y?: number;
 }
 
+export interface ElkLayoutGraph {
+  children: ElkNode[];
+  edges: ElkEdge[];
+}
+
 const LEAF_HEIGHT = 52;
 const LEAF_WIDTH = 170;
+const PACKED_COMPOUND_MIN_CHILDREN = 16;
 
 function scaled(value: number, spacingPercent: number, minimum: number): number {
   return Math.max(minimum, Math.round(value * spacingPercent / 100));
@@ -147,6 +153,7 @@ export function elkHierarchy(
   nodes: GraphView["nodes"],
   spacingPercent = 100,
   notation: GraphNotation = "compact",
+  packedCompounds: ReadonlySet<string> = new Set(),
 ): ElkNode[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const children = new Map<string, string[]>();
@@ -167,6 +174,11 @@ export function elkHierarchy(
       children: descendants.map(build),
       id,
       layoutOptions: {
+        ...(packedCompounds.has(id) ? {
+          "elk.algorithm": "rectpacking",
+          "elk.aspectRatio": "1.6",
+          "elk.spacing.nodeNode": String(scaled(44, spacingPercent, 2)),
+        } : {}),
         "elk.padding": `[top=${scaled(48, spacingPercent, 18)},`
           + `left=${scaled(24, spacingPercent, 4)},`
           + `bottom=${scaled(24, spacingPercent, 4)},`
@@ -178,6 +190,78 @@ export function elkHierarchy(
   return nodes
     .filter((node) => !node.parent || !byId.has(node.parent))
     .map((node) => build(node.id));
+}
+
+/** Pack large groups locally; aggregate boundary routes only for positioning. */
+export function elkLayoutGraph(
+  graph: GraphView,
+  spacingPercent: number,
+  notation: GraphNotation,
+  mode: GraphLayoutMode,
+  preferredRoot: string | null,
+): ElkLayoutGraph {
+  if (mode === "radial") {
+    return {
+      children: elkHierarchy(graph.nodes, spacingPercent, notation),
+      edges: radialSpanningEdges(graph, preferredRoot),
+    };
+  }
+  if (mode !== "flow") {
+    return {
+      children: elkHierarchy(graph.nodes, spacingPercent, notation),
+      edges: graph.edges.map((edge) => ({
+        id: edge.id,
+        sources: [edge.source],
+        targets: [edge.target],
+      })),
+    };
+  }
+
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+  const childCounts = new Map<string, number>();
+  for (const node of graph.nodes) {
+    if (node.parent && byId.has(node.parent)) {
+      childCounts.set(node.parent, (childCounts.get(node.parent) || 0) + 1);
+    }
+  }
+  const packed = new Set([...childCounts]
+    .filter(([id, count]) =>
+      count >= PACKED_COMPOUND_MIN_CHILDREN
+      && byId.get(id)?.attributes.presentation_role === "group")
+    .map(([id]) => id));
+
+  function packedBoundary(id: string): string {
+    let node = byId.get(id);
+    let boundary = id;
+    while (node) {
+      if (packed.has(node.id)) boundary = node.id;
+      node = node.parent ? byId.get(node.parent) : undefined;
+    }
+    return boundary;
+  }
+
+  const edges: ElkEdge[] = [];
+  const boundaryPairs = new Set<string>();
+  for (const edge of graph.edges) {
+    const source = packedBoundary(edge.source);
+    const target = packedBoundary(edge.target);
+    if (source === target) continue;
+    const replaced = source !== edge.source || target !== edge.target;
+    if (replaced) {
+      const pair = JSON.stringify([source, target]);
+      if (boundaryPairs.has(pair)) continue;
+      boundaryPairs.add(pair);
+    }
+    edges.push({
+      id: replaced ? `layout:${edges.length}` : edge.id,
+      sources: [source],
+      targets: [target],
+    });
+  }
+  return {
+    children: elkHierarchy(graph.nodes, spacingPercent, notation, packed),
+    edges,
+  };
 }
 
 export function elkPositions(

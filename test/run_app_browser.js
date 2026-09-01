@@ -427,7 +427,7 @@ async function main() {
     if (Number(await page.locator(".graph-canvas").getAttribute("data-hidden-edge-count")) < 1) {
       throw new Error("hiding a connected node did not mute its incident relations");
     }
-    await page.getByRole("button", { name: "Restore node", exact: true }).click();
+    await page.mouse.dblclick(nodePosition.clientX, nodePosition.clientY, { delay: 70 });
     await page.locator('.graph-canvas[data-hidden-node-count="0"][data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
     const restoredPosition = await selectedGraphPoint(page);
@@ -705,6 +705,27 @@ async function main() {
     }
     await activateSelected(page, "Expand member files");
     await selectGraphResult(page, "js/");
+    await activateSelected(page, "Expand directory");
+    const expandedDirectoryNodes = Number(
+      await page.locator(".graph-canvas").getAttribute("data-node-count"),
+    );
+    await page.getByRole("button", { name: "Remove node from view", exact: true }).click();
+    await page.locator('.graph-canvas[data-hidden-node-count="1"][data-layout-ready="true"]')
+      .waitFor({ timeout: 30_000 });
+    const hiddenDirectoryNodes = Number(
+      await page.locator(".graph-canvas").getAttribute("data-node-count"),
+    );
+    if (hiddenDirectoryNodes >= expandedDirectoryNodes) {
+      throw new Error(
+        `hiding expanded directory did not collapse it: ${expandedDirectoryNodes} -> ${hiddenDirectoryNodes}`,
+      );
+    }
+    if (await page.locator(".graph-canvas").getAttribute("data-hidden-edge-opacity") !== "0") {
+      throw new Error("hidden incident relations are not fully transparent");
+    }
+    await page.getByRole("button", { name: "Restore node", exact: true }).click();
+    await page.locator('.graph-canvas[data-hidden-node-count="0"][data-layout-ready="true"]')
+      .waitFor({ timeout: 30_000 });
     await activateSelected(page, "Expand directory");
     await selectGraphResult(page, "js/index.js");
     await page.getByRole("button", { name: "Open js/index.js", exact: true }).click();

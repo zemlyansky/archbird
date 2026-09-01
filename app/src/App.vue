@@ -754,8 +754,13 @@ async function ensureSymbolGraph(path: string): Promise<GraphView> {
 
 async function activateGraphElement(id: string) {
   const node = visibleGraph.value?.nodes.find((row) => row.id === id);
-  const activation = node ? graphActivation(node) : null;
-  if (!node || !activation) return;
+  if (!node) return;
+  if (node.attributes.presentation_hidden) {
+    restoreGraphElement(id);
+    return;
+  }
+  const activation = graphActivation(node);
+  if (!activation) return;
   const expanding = !Boolean(node.attributes.expanded);
   if (activation === "symbol") {
     revealedSymbols.value = replaceSet(
@@ -919,6 +924,7 @@ async function maximizeGraphElement(id: string) {
 }
 
 function hideGraphElement(id: string) {
+  minimizeGraphElement(id);
   hiddenElements.value = replaceSet(hiddenElements.value, id, true);
 }
 

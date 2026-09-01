@@ -9,11 +9,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { GraphView } from "../artifacts/model";
 import { edgePresentation, graphActivation } from "../graph/explore";
 import {
-  elkHierarchy,
   elkLeafSize,
+  elkLayoutGraph,
   elkLayoutOptions,
   elkPositions,
-  radialSpanningEdges,
   type GraphLayoutMode,
   type ElkNode,
 } from "../graph/layout";
@@ -108,6 +107,7 @@ const colors: Record<string, string> = {
   unresolved: "#fca5a5",
   unknown: "#fca5a5",
 };
+const hiddenEdgeOpacity = 0;
 
 function nodeAccent(node: GraphView["nodes"][number]): string {
   const status = String(node.attributes.verification_status || "");
@@ -345,6 +345,13 @@ async function layout(viewport: PreservedViewport | null) {
   let anchorFrame = 0;
   let pinning = false;
   try {
+    const layoutGraph = elkLayoutGraph(
+      props.graph,
+      props.spacing,
+      props.notation,
+      props.layoutMode,
+      props.selectedId,
+    );
     const result = await elk.layout({
       id: "root",
       layoutOptions: elkLayoutOptions(
@@ -352,14 +359,7 @@ async function layout(viewport: PreservedViewport | null) {
         props.spacing,
         props.layoutMode,
       ),
-      children: elkHierarchy(props.graph.nodes, props.spacing, props.notation),
-      edges: props.layoutMode === "radial"
-        ? radialSpanningEdges(props.graph, props.selectedId)
-        : props.graph.edges.map((edge) => ({
-            id: edge.id,
-            sources: [edge.source],
-            targets: [edge.target],
-          })),
+      ...layoutGraph,
     }) as { children?: ElkNode[] };
     if (cy !== instance || id !== requestId) return;
     const positions = elkPositions(result.children || []);
@@ -611,8 +611,8 @@ function render() {
       {
         selector: "edge[presentationHidden = 1]",
         style: {
-          opacity: 0.14,
-          "text-opacity": 0.14,
+          opacity: hiddenEdgeOpacity,
+          "text-opacity": hiddenEdgeOpacity,
         },
       },
       {
@@ -1065,6 +1065,7 @@ onBeforeUnmount(() => {
       :data-node-count="graph.summary.nodes"
       :data-hidden-node-count="graph.nodes.filter((node) => node.attributes.presentation_hidden).length"
       :data-hidden-edge-count="graph.edges.filter((edge) => edge.attributes?.presentation_hidden).length"
+      :data-hidden-edge-opacity="hiddenEdgeOpacity"
       :data-edge-count="graph.summary.edges"
       :data-focus-count="focusCount"
       :data-dimmed-count="dimmedCount"

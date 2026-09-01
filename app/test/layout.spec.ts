@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import ELK from "elkjs/lib/elk.bundled.js";
 import type { GraphView } from "../src/artifacts/model";
 import {
   elkHierarchy,
   elkLeafSize,
+  elkLayoutGraph,
   elkLayoutOptions,
   elkPositions,
   radialSpanningEdges,
@@ -136,6 +138,91 @@ describe("compound graph layout", () => {
     ], 5)[0].layoutOptions).toEqual({
       "elk.padding": "[top=18,left=4,bottom=4,right=4]",
     });
+  });
+
+  it("packs high-cardinality compounds without laying out every boundary edge", async () => {
+    const files = Array.from({ length: 48 }, (_, index) => ({
+      attributes: {},
+      evidence: [],
+      id: `file-${index}`,
+      identity: `tests/test-${index}.py`,
+      kind: "file",
+      label: `test-${index}.py`,
+      parent: "tests",
+    }));
+    const graph: GraphView = {
+      artifact: "archbird-graph-view",
+      diagnostics: [],
+      edges: files.map((file, index) => ({
+        attributes: {},
+        classification: "direct",
+        evidence: [],
+        id: `edge-${index}`,
+        kind: "import",
+        names: [],
+        omitted_names: 0,
+        source: file.id,
+        target: index % 2 ? "runtime" : "testing",
+      })),
+      nodes: [
+        {
+          attributes: { presentation_role: "group" },
+          evidence: [],
+          id: "tests",
+          identity: "tests/",
+          kind: "directory",
+          label: "tests/",
+          parent: null,
+        },
+        ...files,
+        ...["runtime", "testing"].map((id) => ({
+          attributes: {}, evidence: [], id, identity: `package:${id}`,
+          kind: "package", label: id, parent: null,
+        })),
+      ],
+      omissions: [],
+      project: "fixture",
+      request: { max_edge_names: 0, max_nodes: 0, view: "files" },
+      schema_version: 1,
+      source: {},
+      summary: { edges: 48, nodes: 51 },
+      tool: {},
+    };
+    const input = elkLayoutGraph(graph, 60, "architecture", "flow", null);
+    expect(input.edges).toHaveLength(2);
+    expect(graph.edges).toHaveLength(48);
+    const expandedFile = {
+      ...graph,
+      nodes: graph.nodes.map((node) => node.id === "tests"
+        ? { ...node, attributes: {}, kind: "file" }
+        : node),
+    };
+    expect(elkLayoutGraph(
+      expandedFile,
+      60,
+      "architecture",
+      "flow",
+      null,
+    ).edges).toHaveLength(48);
+
+    const result = await new ELK().layout({
+      id: "root",
+      layoutOptions: elkLayoutOptions("LR", 60),
+      ...input,
+    });
+    const group = result.children?.find((node) => node.id === "tests");
+    expect(new Set(group?.children?.map((node) => node.x))).not.toHaveLength(1);
+    expect(group?.width).toBeGreaterThan(group?.height || 0);
+
+    const compact = await new ELK().layout({
+      id: "root",
+      layoutOptions: elkLayoutOptions("LR", 5),
+      ...elkLayoutGraph(graph, 5, "architecture", "flow", null),
+    });
+    const compactGroup = compact.children?.find((node) => node.id === "tests");
+    expect((compactGroup?.width || 0) * (compactGroup?.height || 0)).toBeLessThan(
+      (group?.width || 0) * (group?.height || 0) * 0.8,
+    );
   });
 
   it("orients a deterministic radial spanning forest from the selected node", () => {
