@@ -113,6 +113,50 @@ def main() -> int:
         cache.artifact(second_snapshot, second_blob)
         if tuple(cache.blobs) != (hashlib.sha256(second_blob).hexdigest(),):
             raise AssertionError("Python live blobs exceeded their byte budget")
+
+        poller = LiveRepository(root=repository, poll_seconds=0.01)
+        poller.max_poll_seconds = 0.08
+        signature_calls = 0
+
+        def unchanged_signature():
+            nonlocal signature_calls
+            signature_calls += 1
+            return ()
+
+        poller._signature = unchanged_signature
+        poller.start_watching()
+        time.sleep(0.23)
+        poller.close()
+        if signature_calls > 7:
+            raise AssertionError(
+                f"idle Python watcher did not back off: {signature_calls} scans"
+            )
+
+        changing = LiveRepository(
+            root=repository, poll_seconds=0.01, debounce_seconds=0.01
+        )
+        changing.max_poll_seconds = 0.08
+        changed_value = 0
+        changing_calls = 0
+        rebuild_started = threading.Event()
+
+        def changing_signature():
+            nonlocal changing_calls
+            changing_calls += 1
+            return (("fixture", changed_value),)
+
+        changing._signature = changing_signature
+        changing.start_rebuild = rebuild_started.set
+        changing.start_watching()
+        time.sleep(0.12)
+        changed_value = 1
+        if not rebuild_started.wait(0.2):
+            raise AssertionError("backed-off Python watcher missed a source change")
+        calls_at_rebuild = changing_calls
+        time.sleep(0.04)
+        changing.close()
+        if changing_calls - calls_at_rebuild < 2:
+            raise AssertionError("Python watcher did not reset after a change")
         time.sleep(0.8)
         if candidate_calls != 1:
             raise AssertionError(

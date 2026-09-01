@@ -1038,6 +1038,8 @@ archbird serve --root ../project
 `serve` prints a loopback URL immediately, analyzes in a worker, publishes only
 valid generations, and retains the last good Map when a later candidate fails.
 Recent Maps, derived artifacts, and response blobs are count- and byte-bounded.
+Python's exact filesystem polling backs off to three seconds while idle and
+returns to 350 ms after a detected change.
 Live Map, Query, projection, Verify, and graph-view work runs in the server's
 native Archbird core; the page does not fetch browser Wasm for live repository
 exploration. Wasm is reserved for the static app's local folder/ZIP and saved

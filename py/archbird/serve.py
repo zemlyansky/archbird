@@ -161,6 +161,7 @@ class LiveRepository:
         self.no_config = bool(no_config)
         self.project_options = dict(project_options or {})
         self.poll_seconds = poll_seconds
+        self.max_poll_seconds = max(3.0, poll_seconds)
         self.debounce_seconds = debounce_seconds
         self.current: Optional[dict[str, Any]] = None
         self.snapshots: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
@@ -411,10 +412,13 @@ class LiveRepository:
         self._watch_state = self._signature()
 
         def watch() -> None:
-            while not self._closed.wait(self.poll_seconds):
+            interval = self.poll_seconds
+            while not self._closed.wait(interval):
                 observed = self._signature()
                 if observed == self._watch_state:
+                    interval = min(self.max_poll_seconds, interval * 2)
                     continue
+                interval = self.poll_seconds
                 self._set_phase("stale")
                 self._event(
                     "progress",

@@ -668,6 +668,8 @@ valid new generation replaces the last good Map. The page uses the native
 Python host for analysis; it does not download the canonical Map unless the
 user explicitly saves it.
 Recent Maps, derived artifacts, and response blobs are count- and byte-bounded.
+Exact filesystem polling backs off to three seconds while idle and returns to
+350 ms after a detected change.
 
 The right inspector shows all seven interactive Metrics together. They follow the
 selected graph region or stay fixed to the whole project; quartile plots show
