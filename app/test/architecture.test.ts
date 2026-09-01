@@ -3,7 +3,11 @@ import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
 
-import { parseProjectionResult, type ProjectionResult } from "../src/artifacts/projection";
+import {
+  parseProjectionResult,
+  parseProjectionResults,
+  type ProjectionResult,
+} from "../src/artifacts/projection";
 import {
   mapGraphProjectionPlan,
   presentGraphProjection,
@@ -645,6 +649,12 @@ test("ProjectionResult parsing rejects duplicate items and mismatched selectors"
   ]);
   const bytes = new TextEncoder().encode(JSON.stringify(projection));
   assert.equal(parseProjectionResult(bytes, "graph").id, "app-directory");
+  const batch = new TextEncoder().encode(JSON.stringify([projection]));
+  assert.equal(parseProjectionResults(batch, ["graph"])[0].id, "app-directory");
+  assert.throws(
+    () => parseProjectionResults(batch, ["graph", "graph"]),
+    /batch length/,
+  );
   assert.throws(
     () => parseProjectionResult(bytes, "file_edges"),
     /expected file_edges projection/,

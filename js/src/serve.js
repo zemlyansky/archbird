@@ -8,6 +8,7 @@ const { Worker } = require("node:worker_threads");
 const {
   diffMaps,
   evaluateProjection,
+  evaluateProjections,
   exportGraph,
   jsonCanonicalize,
   queryMap,
@@ -20,7 +21,7 @@ const SNAPSHOT_LIMIT = 4;
 const DERIVED_LIMIT = 16;
 const BODY_LIMIT = 2 * 1024 * 1024;
 const CAPABILITIES = [
-  "map", "projection", "view", "export", "query", "diff", "source",
+  "map", "projection", "projections", "view", "export", "query", "diff", "source",
   "verification", "snapshots", "events",
 ];
 const DEFAULT_SKIPPED_DIRECTORIES = new Set([
@@ -510,6 +511,9 @@ function operationLabel(request) {
     const identity = activityText(plan.id || "");
     return `projection ${select}${identity ? ` · ${identity}` : ""}`;
   }
+  if (request.method === "projections") {
+    return `projections ${Array.isArray(payload.plans) ? payload.plans.length : 0}`;
+  }
   if (request.method === "view") return `view ${String(payload.view || "components")}`;
   if (request.method === "query") {
     const query = payload.query || {};
@@ -581,6 +585,18 @@ async function hostRequest(repository, selections, request) {
       snapshot,
       repository.derived(snapshot, "projection", plan, () =>
         evaluateProjection(snapshot.map, Buffer.from(JSON.stringify(plan)))),
+    );
+  }
+  if (request.method === "projections") {
+    const plans = request.payload.plans;
+    if (!Array.isArray(plans) || plans.some((plan) =>
+      !plan || typeof plan !== "object" || Array.isArray(plan))) {
+      throw new Error("projections request requires plan objects");
+    }
+    return repository.artifact(
+      snapshot,
+      repository.derived(snapshot, "projections", plans, () =>
+        evaluateProjections(snapshot.map, Buffer.from(JSON.stringify(plans)))),
     );
   }
   if (request.method === "view") {

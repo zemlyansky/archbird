@@ -21,6 +21,7 @@ from urllib.parse import unquote_to_bytes, urlsplit
 from .native import (
     diff_maps_json,
     evaluate_projection_json,
+    evaluate_projections_json,
     export_graph,
     query_map_json,
 )
@@ -36,7 +37,7 @@ BODY_LIMIT = 2 * 1024 * 1024
 TEXT_LIMIT = 256 * 1024
 HEX_LIMIT = 64 * 1024
 CAPABILITIES = [
-    "map", "projection", "view", "export", "query", "diff", "source",
+    "map", "projection", "projections", "view", "export", "query", "diff", "source",
     "verification", "snapshots", "events",
 ]
 MIME = {
@@ -546,6 +547,21 @@ class LiveRepository:
                     lambda: evaluate_projection_json(snapshot["map"], plan),
                 ),
             )
+        if method == "projections":
+            plans = payload.get("plans")
+            if not isinstance(plans, list) or not all(
+                isinstance(plan, dict) for plan in plans
+            ):
+                raise ValueError("projections request requires plan objects")
+            return self.artifact(
+                snapshot,
+                self.derived(
+                    snapshot,
+                    "projections",
+                    plans,
+                    lambda: evaluate_projections_json(snapshot["map"], plans),
+                ),
+            )
         if method == "view":
             view = str(payload.get("view") or "components")
             source = (
@@ -663,6 +679,10 @@ def _operation_label(request: Mapping[str, Any]) -> Optional[str]:
             return f"view {view} · {grouping}"
         identity = _activity_text(plan.get("id") or "")
         return f"projection {select}{f' · {identity}' if identity else ''}"
+    if method == "projections":
+        plans = payload.get("plans")
+        count = len(plans) if isinstance(plans, list) else 0
+        return f"projections {count}"
     if method == "view":
         return f"view {payload.get('view') or 'components'}"
     if method == "query":

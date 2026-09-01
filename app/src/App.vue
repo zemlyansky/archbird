@@ -12,6 +12,7 @@ import { BrowserHost, type BrowserSource } from "./adapters/browser-host";
 import type { HostEvent, SnapshotSummary } from "./adapters/protocol";
 import {
   evaluateArtifactProjection,
+  evaluateArtifactProjections,
   projectArtifact,
   queryArtifact,
   type GraphDirection,
@@ -31,6 +32,7 @@ import {
 } from "./artifacts/model";
 import {
   parseProjectionResult,
+  parseProjectionResults,
   type ProjectionResult,
 } from "./artifacts/projection";
 import ArtifactDrop from "./components/ArtifactDrop.vue";
@@ -589,6 +591,23 @@ async function hostFactProjection(
   );
 }
 
+async function hostFactProjections(
+  host: BrowserHost | ServerHost,
+  plans: Record<string, unknown>[],
+  generation?: string,
+): Promise<ProjectionResult[]> {
+  const payload = await host.projections(plans, generation);
+  if (generation && payload.generation !== generation) {
+    throw new Error(
+      `projection generation changed: expected ${generation}, got ${payload.generation}`,
+    );
+  }
+  return parseProjectionResults(
+    new Uint8Array(payload.bytes),
+    plans.map((plan) => String(plan.select)),
+  );
+}
+
 async function mapPresentation(
   loaded: WorkspaceArtifact,
   host: BrowserHost | ServerHost | null,
@@ -1020,7 +1039,48 @@ async function loadMetric(metric: MetricId) {
 }
 
 async function loadAllMetrics(): Promise<void> {
-  await Promise.all(METRIC_DEFINITIONS.map(({ id }) => loadMetric(id)));
+  if (!baseMap.value) return;
+  const pending = METRIC_DEFINITIONS
+    .map(({ id }) => id)
+    .filter((metric) =>
+      !metricCache.value.has(metric) && !metricLoading.value.has(metric));
+  if (!pending.length) return;
+  const generation = metricGeneration;
+  metricLoading.value = new Set([...metricLoading.value, ...pending]);
+  const errors = new Map(metricErrors.value);
+  for (const metric of pending) errors.delete(metric);
+  metricErrors.value = errors;
+  try {
+    const plans = pending.map((metric) => metricProjectionPlan(metric));
+    const host = workspaceMode.value !== "saved" && liveHost
+      && !(workspaceMode.value === "snapshot" && liveHost instanceof BrowserHost)
+      ? liveHost
+      : null;
+    const projections = host
+      ? await hostFactProjections(host, plans, baseGeneration.value || undefined)
+      : await evaluateArtifactProjections(
+        requireParsedArtifact(baseMap.value, "local Metrics projection"),
+        plans,
+      ).then((bytes) =>
+        parseProjectionResults(bytes, plans.map(() => "metrics")));
+    if (generation !== metricGeneration) return;
+    const cache = new Map(metricCache.value);
+    pending.forEach((metric, index) => cache.set(metric, projections[index]));
+    metricCache.value = cache;
+  } catch (cause) {
+    if (generation === metricGeneration) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const next = new Map(metricErrors.value);
+      for (const metric of pending) next.set(metric, message);
+      metricErrors.value = next;
+    }
+  } finally {
+    if (generation === metricGeneration) {
+      const loading = new Set(metricLoading.value);
+      for (const metric of pending) loading.delete(metric);
+      metricLoading.value = loading;
+    }
+  }
 }
 
 function setMetricOverlay(metric: MetricId | null): void {

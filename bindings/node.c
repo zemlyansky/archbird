@@ -2346,6 +2346,40 @@ static napi_value projection_evaluate(napi_env env, napi_callback_info info) {
   return result;
 }
 
+static napi_value projections_evaluate(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4];
+  const uint8_t *map;
+  const uint8_t *resolution;
+  const uint8_t *projections;
+  size_t map_length;
+  size_t resolution_length;
+  size_t projections_length;
+  int pretty;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  NodeOutput output = {0};
+  napi_value result;
+  NAPI_TRY(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  if (argc < 3 || !get_buffer(env, argv[0], &map, &map_length) ||
+      !get_buffer(env, argv[1], &resolution, &resolution_length) ||
+      !get_buffer(env, argv[2], &projections, &projections_length) ||
+      !get_optional_bool(env, argc, argv, 3, 0, &pretty))
+    return NULL;
+  status = saved_artifact_engine(
+      larger_input(larger_input(map_length, resolution_length),
+                   projections_length),
+      &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projections_evaluate(
+        engine, map, map_length, resolution_length ? resolution : NULL,
+        resolution_length, projections, projections_length,
+        pretty ? ARCHBIRD_JSON_PRETTY : 0, output_write, &output);
+  result = render_result(env, engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static napi_value projection_render_markdown(napi_env env,
                                              napi_callback_info info) {
   size_t argc = 5;
@@ -2623,6 +2657,8 @@ static napi_value init(napi_env env, napi_value exports) {
       {"queryPlanCompile", NULL, query_plan_compile, NULL, NULL, NULL,
        napi_default, NULL},
       {"projectionEvaluate", NULL, projection_evaluate, NULL, NULL, NULL,
+       napi_default, NULL},
+      {"projectionsEvaluate", NULL, projections_evaluate, NULL, NULL, NULL,
        napi_default, NULL},
       {"projectionRenderMarkdown", NULL, projection_render_markdown, NULL, NULL,
        NULL, napi_default, NULL},

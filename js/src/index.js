@@ -1942,6 +1942,19 @@ function evaluateProjection(
   );
 }
 
+function evaluateProjections(
+  mapJson,
+  projectionsJson,
+  { resolutionJson = Buffer.alloc(0), pretty = false } = {},
+) {
+  return native.projectionsEvaluate(
+    Buffer.from(mapJson),
+    Buffer.from(resolutionJson),
+    Buffer.from(projectionsJson),
+    pretty,
+  );
+}
+
 function compileQueryPlan(
   configJson,
   queryId,
@@ -2238,6 +2251,7 @@ module.exports = {
   diff,
   evaluateConstraints,
   evaluateProjection,
+  evaluateProjections,
   exportGraph,
   queryMap,
   queryMapMarkdown,

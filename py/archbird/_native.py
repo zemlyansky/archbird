@@ -879,6 +879,27 @@ def projection_evaluate(
     )
 
 
+def projections_evaluate(
+    map_json: bytes,
+    projections_json: bytes,
+    *,
+    resolution_json: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    """Evaluate several projections through one decoded Map context."""
+
+    return _simple_render(
+        "archbird_projections_evaluate",
+        [
+            _bytes(map_json, "Map"),
+            _bytes(resolution_json),
+            _bytes(projections_json, "projection definitions"),
+        ],
+        flags=_json_flags(pretty),
+        saved_artifact=True,
+    )
+
+
 def projection_render_markdown(
     map_json: bytes,
     projection_json: bytes,

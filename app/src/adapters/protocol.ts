@@ -6,6 +6,7 @@ export type HostMethod =
   | "state"
   | "map"
   | "projection"
+  | "projections"
   | "view"
   | "export"
   | "query"

@@ -118,6 +118,16 @@ export class BrowserHost {
     }));
   }
 
+  async projections(
+    plans: Record<string, unknown>[],
+    generation?: string,
+  ): Promise<ArtifactPayload> {
+    return artifactPayload(await this.request("projections", {
+      ...(generation ? { generation } : {}),
+      plans,
+    }));
+  }
+
   async view(
     view: GraphViewName,
     query: Record<string, unknown> = {},

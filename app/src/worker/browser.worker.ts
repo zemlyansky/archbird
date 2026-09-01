@@ -47,6 +47,12 @@ interface BrowserRuntime {
       projection: Uint8Array,
       pretty?: boolean,
     ): Uint8Array;
+    projectionsEvaluate(
+      map: Uint8Array,
+      resolution: Uint8Array,
+      projections: Uint8Array,
+      pretty?: boolean,
+    ): Uint8Array;
     sha256(bytes: Uint8Array): string;
   };
 }
@@ -414,6 +420,24 @@ async function handle(request: HostRequest): Promise<unknown> {
         generation.map,
         new Uint8Array(),
         new TextEncoder().encode(JSON.stringify(plan)),
+        false,
+      ),
+      generation,
+    );
+  }
+  if (request.method === "projections") {
+    const generation = requireCurrent(String(request.payload.generation || ""));
+    const plans = request.payload.plans;
+    if (!Array.isArray(plans) || plans.some((plan) =>
+      !plan || typeof plan !== "object" || Array.isArray(plan))) {
+      throw new Error("projections request requires plan objects");
+    }
+    const runtime = await requireRuntime();
+    return artifact(
+      runtime.core.projectionsEvaluate(
+        generation.map,
+        new Uint8Array(),
+        new TextEncoder().encode(JSON.stringify(plans)),
         false,
       ),
       generation,

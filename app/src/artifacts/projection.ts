@@ -60,17 +60,12 @@ function completeness(value: unknown, label: string): ProjectionCompleteness {
   return row as unknown as ProjectionCompleteness;
 }
 
-export function parseProjectionResult(
-  bytes: Uint8Array,
+function projectionResult(
+  value: unknown,
   expectedSelect: string,
+  label = "ProjectionResult",
 ): ProjectionResult {
-  let value: unknown;
-  try {
-    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  } catch (error) {
-    throw new Error(`ProjectionResult is not valid UTF-8 JSON: ${(error as Error).message}`);
-  }
-  const document = object(value, "ProjectionResult");
+  const document = object(value, label);
   if (document.artifact !== "projection-result" || document.schema_version !== 1) {
     throw new Error("expected projection-result schema version 1");
   }
@@ -107,4 +102,31 @@ export function parseProjectionResult(
     throw new Error("ProjectionResult completeness summaries disagree");
   }
   return document as unknown as ProjectionResult;
+}
+
+function decode(bytes: Uint8Array, label: string): unknown {
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (error) {
+    throw new Error(`${label} is not valid UTF-8 JSON: ${(error as Error).message}`);
+  }
+}
+
+export function parseProjectionResult(
+  bytes: Uint8Array,
+  expectedSelect: string,
+): ProjectionResult {
+  return projectionResult(decode(bytes, "ProjectionResult"), expectedSelect);
+}
+
+export function parseProjectionResults(
+  bytes: Uint8Array,
+  expectedSelects: string[],
+): ProjectionResult[] {
+  const values = decode(bytes, "ProjectionResult batch");
+  if (!Array.isArray(values) || values.length !== expectedSelects.length) {
+    throw new Error("ProjectionResult batch length does not match its plans");
+  }
+  return values.map((value, index) =>
+    projectionResult(value, expectedSelects[index], `ProjectionResult batch[${index}]`));
 }

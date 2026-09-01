@@ -50,6 +50,22 @@ export async function evaluateArtifactProjection(
   );
 }
 
+export async function evaluateArtifactProjections(
+  artifact: ParsedArtifact,
+  plans: Record<string, unknown>[],
+): Promise<Uint8Array> {
+  if (artifact.artifact !== "map") {
+    throw new Error("projection evaluation requires a canonical Map");
+  }
+  const archbird = await core();
+  return archbird.projectionsEvaluate(
+    artifact.bytes,
+    new Uint8Array(),
+    new TextEncoder().encode(JSON.stringify(plans)),
+    false,
+  );
+}
+
 export async function projectArtifact(
   artifact: ParsedArtifact,
   requestedView?: GraphViewName,

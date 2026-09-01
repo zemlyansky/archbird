@@ -2348,6 +2348,44 @@ static PyObject *py_projection_evaluate(PyObject *self, PyObject *args,
   return result;
 }
 
+static PyObject *py_projections_evaluate(PyObject *self, PyObject *args,
+                                         PyObject *kwargs) {
+  static char *keywords[] = {"map_json", "projections_json", "resolution_json",
+                             "pretty", NULL};
+  const char *map;
+  const char *projections;
+  const char *resolution = "";
+  Py_ssize_t map_length;
+  Py_ssize_t projections_length;
+  Py_ssize_t resolution_length = 0;
+  int pretty = 0;
+  ArchbirdEngine *engine = NULL;
+  PyOutput output = {0};
+  ArchbirdStatus status;
+  PyObject *result;
+  size_t budget;
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "y#y#|y#p:projections_evaluate", keywords, &map,
+          &map_length, &projections, &projections_length, &resolution,
+          &resolution_length, &pretty))
+    return NULL;
+  budget =
+      larger_input(larger_input((size_t)map_length, (size_t)resolution_length),
+                   (size_t)projections_length);
+  status = saved_artifact_engine(budget, &engine);
+  if (status == ARCHBIRD_OK)
+    status = archbird_projections_evaluate(
+        engine, (const uint8_t *)map, (size_t)map_length,
+        resolution_length ? (const uint8_t *)resolution : NULL,
+        (size_t)resolution_length, (const uint8_t *)projections,
+        (size_t)projections_length, pretty ? ARCHBIRD_JSON_PRETTY : 0,
+        output_write, &output);
+  result = render_result(engine, status, &output);
+  archbird_engine_destroy(engine);
+  return result;
+}
+
 static PyObject *py_projection_render_markdown(PyObject *self, PyObject *args,
                                                PyObject *kwargs) {
   static char *keywords[] = {"map_json", "projection_json", "resolution_json",
@@ -2641,6 +2679,8 @@ static PyMethodDef archbird_methods[] = {
      METH_VARARGS | METH_KEYWORDS, "Compile one named query."},
     {"projection_evaluate", (PyCFunction)py_projection_evaluate,
      METH_VARARGS | METH_KEYWORDS, "Evaluate one exhaustive projection."},
+    {"projections_evaluate", (PyCFunction)py_projections_evaluate,
+     METH_VARARGS | METH_KEYWORDS, "Evaluate exhaustive projections."},
     {"projection_render_markdown", (PyCFunction)py_projection_render_markdown,
      METH_VARARGS | METH_KEYWORDS, "Render one graph projection as Markdown."},
     {"project_configuration_compile",

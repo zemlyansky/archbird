@@ -97,6 +97,11 @@ def projection_context_violations(root: Path) -> list[str]:
         violations.append("Query projections do not initialize one shared context")
     if "ab_projection_plan_evaluate_context(" not in query:
         violations.append("Query projections do not use their shared context")
+    projection_header = (
+        root / "src/projection/projection_internal.h"
+    ).read_text(encoding="utf-8")
+    if "metric_graph_definition_sha256" not in projection_header:
+        violations.append("compatible graph metrics do not share graph evaluation")
     return violations
 
 

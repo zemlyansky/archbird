@@ -26,6 +26,7 @@ const {
   diffMaps,
   evaluateConstraints,
   evaluateProjection,
+  evaluateProjections,
   exportGraph,
   freezeConstraints,
   IMPLEMENTATION_SHA256,
@@ -1041,6 +1042,15 @@ const repositoryEdges = JSON.parse(evaluateProjection(
   repositoryMapJson,
   Buffer.from(JSON.stringify({ id: "file-edge-names", select: "file_edges" })),
 ));
+assert.deepEqual(
+  JSON.parse(evaluateProjections(
+    repositoryMapJson,
+    Buffer.from(JSON.stringify([
+      { id: "file-edge-names", select: "file_edges" },
+    ])),
+  )),
+  [repositoryEdges],
+);
 assert.deepEqual(
   repositoryEdges.fact.items[0].attributes,
   {

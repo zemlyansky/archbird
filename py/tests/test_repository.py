@@ -46,6 +46,8 @@ def main() -> int:
         diff_json,
         diff_maps_json,
         evaluate_constraints_json,
+        evaluate_projection_json,
+        evaluate_projections_json,
         export_graph,
         publish_okf_bundle,
         query_map_json,
@@ -142,6 +144,19 @@ def main() -> int:
         b"+new\n"
     ):
         raise AssertionError("native Python unified-diff binding diverged")
+    projection_map = (repository / "test/fixtures/report_map.json").read_bytes()
+    projection_definitions = [
+        {"id": "symbols", "select": "symbols"},
+        {"id": "file-edges", "select": "file_edges"},
+    ]
+    projection_batch = json.loads(
+        evaluate_projections_json(projection_map, projection_definitions)
+    )
+    if projection_batch != [
+        json.loads(evaluate_projection_json(projection_map, definition))
+        for definition in projection_definitions
+    ]:
+        raise AssertionError("native Python plural projection binding diverged")
     json_source = (
         b'{\n  "exports": {\n    ".": "./old.js"\n  }\n}\n'
     )

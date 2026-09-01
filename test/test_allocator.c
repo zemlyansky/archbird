@@ -1096,6 +1096,37 @@ static void test_path_writer_failures(void) {
   archbird_engine_destroy(engine);
 }
 
+static void test_projection_writer_failures(void) {
+  static const char projection[] =
+      "{\"id\":\"symbols\",\"select\":\"symbols\"}";
+  static const char projections[] =
+      "[{\"id\":\"symbols\",\"select\":\"symbols\"}]";
+  ArchbirdEngineOptions options;
+  ArchbirdEngine *engine = NULL;
+  ArchbirdStatus status;
+  archbird_engine_options_init(&options);
+  status = archbird_engine_create(&options, &engine);
+  if (status != ARCHBIRD_OK) {
+    fail("projection-writer-failure", "cannot create engine");
+    return;
+  }
+  status = archbird_projection_evaluate(engine, report_map, report_map_length,
+                                        NULL, 0, (const uint8_t *)projection,
+                                        sizeof(projection) - 1, 0, reject_write,
+                                        NULL);
+  if (status != ARCHBIRD_WRITE_FAILED)
+    fail("projection-writer-failure",
+         "singular projection did not report ARCHBIRD_WRITE_FAILED");
+  status = archbird_projections_evaluate(engine, report_map, report_map_length,
+                                         NULL, 0, (const uint8_t *)projections,
+                                         sizeof(projections) - 1, 0,
+                                         reject_write, NULL);
+  if (status != ARCHBIRD_WRITE_FAILED)
+    fail("projections-writer-failure",
+         "plural projections did not report ARCHBIRD_WRITE_FAILED");
+  archbird_engine_destroy(engine);
+}
+
 int main(void) {
   if (!load_fixture(ARCHBIRD_ALLOCATOR_REPORT_MAP, &report_map,
                     &report_map_length) ||
@@ -1109,6 +1140,7 @@ int main(void) {
   test_invalid_options();
   test_invalid_okf_layer_cleanup();
   test_path_writer_failures();
+  test_projection_writer_failures();
   test_provider_merge_retry();
   run_failure_sweep("json-every-n", exercise_json);
   run_failure_sweep("json-pointer-edit-every-n", exercise_json_pointer_edit);

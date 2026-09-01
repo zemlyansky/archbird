@@ -3391,6 +3391,32 @@ def main() -> None:
     assert reordered_projection["projection_result_sha256"] == first_projection[
         "projection_result_sha256"
     ]
+    batch_definitions = [
+        {"id": "first", "paths": ["include/**"], "select": "symbols"},
+        {"id": "file-edge-names", "select": "file_edges"},
+    ]
+    batch = json.loads(
+        _native.projections_evaluate(
+            modern_map,
+            json.dumps(batch_definitions, separators=(",", ":")).encode(),
+        )
+    )
+    assert batch == [
+        first_projection,
+        json.loads(
+            evaluate_projection_json(modern_map, batch_definitions[1])
+        ),
+    ]
+    for invalid_definitions in ({}, [None]):
+        try:
+            _native.projections_evaluate(
+                modern_map,
+                json.dumps(invalid_definitions, separators=(",", ":")).encode(),
+            )
+        except RuntimeError as error:
+            assert "status=8" in str(error)
+        else:
+            raise AssertionError("invalid projection batch was accepted")
     exact_symbol_projection = json.loads(
         evaluate_projection_json(
             modern_map,

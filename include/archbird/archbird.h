@@ -402,6 +402,16 @@ ARCHBIRD_API ArchbirdStatus archbird_projection_evaluate(
     const uint8_t *projection_json, size_t projection_length,
     uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
 
+/* Evaluate several projections over one decoded Map and shared index context.
+ * projections_json is an array of ordinary projection definitions. The result
+ * is an array containing the same canonical ProjectionResult objects returned
+ * by archbird_projection_evaluate. */
+ARCHBIRD_API ArchbirdStatus archbird_projections_evaluate(
+    ArchbirdEngine *engine, const uint8_t *map_json, size_t map_length,
+    const uint8_t *resolution_json, size_t resolution_length,
+    const uint8_t *projections_json, size_t projections_length,
+    uint32_t json_flags, ArchbirdWriteFn write_fn, void *user_data);
+
 /* Compile a Map-independent QueryPlan. The plan contains normalized operations
  * and executable projection definitions, but never Map-bound projection
  * results. A non-empty id selects a named Query from project

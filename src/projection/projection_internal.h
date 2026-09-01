@@ -25,6 +25,9 @@ typedef struct AbProjectionContext {
   const AbValue *inputs;
   size_t *input_slots;
   size_t input_slot_count;
+  AbProjectionData metric_graph;
+  char metric_graph_definition_sha256[65];
+  int metric_graph_valid;
 } AbProjectionContext;
 
 typedef enum AbProjectionKind {

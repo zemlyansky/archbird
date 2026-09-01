@@ -2464,6 +2464,23 @@ def evaluate_projection_json(
     )
 
 
+def evaluate_projections_json(
+    map_json: bytes,
+    projections: Iterable[Mapping[str, object]],
+    *,
+    resolution_json: bytes = b"",
+    pretty: bool = False,
+) -> bytes:
+    """Evaluate several projections while decoding the Map once."""
+
+    return _native.projections_evaluate(
+        map_json,
+        _canonical(list(projections)),
+        resolution_json=resolution_json,
+        pretty=pretty,
+    )
+
+
 def compile_query_plan_json(
     config_json: bytes,
     query_id: str = "",
@@ -3444,6 +3461,7 @@ __all__ = [
     "diff_maps_json",
     "evaluate_constraints_json",
     "evaluate_projection_json",
+    "evaluate_projections_json",
     "export_graph",
     "export_okf_bundle",
     "freeze_constraints_json",

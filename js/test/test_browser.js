@@ -368,6 +368,19 @@ function markedNames(relative, name) {
     "target-rules",
     "src/rules.c:build/rules",
   );
+  assert.deepEqual(
+    JSON.parse(archbird.core.projectionsEvaluate(
+      orderedMap,
+      Buffer.alloc(0),
+      Buffer.from(JSON.stringify([{
+        id: "source-rules",
+        select: "ordered_rows",
+        container: "src/rules.c:source_rules",
+      }])),
+      false,
+    )),
+    [orderedExpected],
+  );
   assert.equal(orderedExpected.completeness.classification, "complete");
   assert.equal(orderedActual.completeness.classification, "complete");
   const byFirstOrdinal = (left, right) => (

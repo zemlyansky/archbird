@@ -136,6 +136,16 @@ export class ServerHost {
     });
   }
 
+  projections(
+    plans: Record<string, unknown>[],
+    generation?: string,
+  ): Promise<ArtifactPayload> {
+    return this.artifact("projections", {
+      ...(generation ? { generation } : {}),
+      plans,
+    });
+  }
+
   view(
     view: GraphViewName,
     query: Record<string, unknown> = {},

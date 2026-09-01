@@ -27,6 +27,12 @@ declare module "archbird/wasm" {
       projection: Uint8Array,
       pretty?: boolean,
     ): Uint8Array;
+    projectionsEvaluate(
+      map: Uint8Array,
+      resolution: Uint8Array,
+      projections: Uint8Array,
+      pretty?: boolean,
+    ): Uint8Array;
   };
 
   const wasm: {

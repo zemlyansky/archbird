@@ -7417,7 +7417,7 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
   const char *definition = NULL;
   const char *unit = NULL;
   AbProjectionPlan graph_plan = {0};
-  AbProjectionData graph = {0};
+  const AbProjectionData *graph = NULL;
   size_t node_count = 0;
   size_t item_index;
   int complete;
@@ -7482,27 +7482,44 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
   }
   if (status == ARCHBIRD_OK)
     status = metric_graph_plan(context, plan, &graph_plan);
+  if (status == ARCHBIRD_OK &&
+      (!context->metric_graph_valid ||
+       memcmp(context->metric_graph_definition_sha256,
+              graph_plan.definition_sha256, 65) != 0)) {
+    ab_projection_data_free(context->engine, &context->metric_graph);
+    context->metric_graph_valid = 0;
+    status = ab_projection_extract_graph(context, &graph_plan,
+                                         &context->metric_graph);
+    if (status == ARCHBIRD_OK) {
+      memcpy(context->metric_graph_definition_sha256,
+             graph_plan.definition_sha256, 65);
+      context->metric_graph_valid = 1;
+    }
+  }
   if (status == ARCHBIRD_OK)
-    status = ab_projection_extract_graph(context, &graph_plan, &graph);
-  for (item_index = 0; status == ARCHBIRD_OK && item_index < graph.item_count;
+    graph = &context->metric_graph;
+  for (item_index = 0;
+       status == ARCHBIRD_OK && graph && item_index < graph->item_count;
        item_index++) {
     const AbValue *record =
-        projection_item_attribute(&graph.items[item_index], "record_kind");
+        projection_item_attribute(&graph->items[item_index], "record_kind");
     const AbValue *group_by =
-        projection_item_attribute(&graph.items[item_index], "group_by");
+        projection_item_attribute(&graph->items[item_index], "group_by");
     if (ab_projection_value_is(record, wanted_group_by ? "group" : "node") &&
         (!wanted_group_by ||
          (group_by && group_by->kind == AB_VALUE_STRING &&
           ab_string_equal(&group_by->as.text, &wanted_group_by->as.text))))
       node_count++;
   }
-  complete = !strcmp(ab_projection_data_classification(&graph), "complete");
+  complete =
+      graph && !strcmp(ab_projection_data_classification(graph), "complete");
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_init(context->engine, fact, &plan->id, "values",
                                      "derived", &project->as.text);
-  for (item_index = 0; status == ARCHBIRD_OK && item_index < graph.item_count;
+  for (item_index = 0;
+       status == ARCHBIRD_OK && graph && item_index < graph->item_count;
        item_index++) {
-    const AbProjectionItem *node = &graph.items[item_index];
+    const AbProjectionItem *node = &graph->items[item_index];
     const AbValue *record = projection_item_attribute(node, "record_kind");
     const AbValue *id = projection_item_attribute(node, "id");
     const AbValue *kind = projection_item_attribute(node, "entity_kind");
@@ -7562,7 +7579,6 @@ static ArchbirdStatus extract_graph_metrics(AbProjectionContext *context,
         (uint64_t)node_count, (uint64_t)node_count, 0, 0, 0);
   if (status == ARCHBIRD_OK)
     status = ab_projection_data_finish(context->engine, fact);
-  ab_projection_data_free(context->engine, &graph);
   ab_projection_plan_free(context->engine, &graph_plan);
   if (status != ARCHBIRD_OK)
     ab_projection_data_free(context->engine, fact);
@@ -8127,6 +8143,7 @@ ArchbirdStatus ab_projection_context_init(AbProjectionContext *context,
 void ab_projection_context_free(AbProjectionContext *context) {
   if (!context)
     return;
+  ab_projection_data_free(context->engine, &context->metric_graph);
   ab_free(context->engine, context->file_slots);
   ab_free(context->engine, context->input_slots);
   memset(context, 0, sizeof(*context));

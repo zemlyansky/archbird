@@ -52,6 +52,7 @@ _NATIVE_EXPORTS = (
     "diff_maps_json",
     "evaluate_constraints_json",
     "evaluate_projection_json",
+    "evaluate_projections_json",
     "export_graph",
     "export_okf_bundle",
     "freeze_constraints_json",

@@ -883,6 +883,21 @@ function createWasmFacade(module, { mode = "wasm" } = {}) {
           )),
       );
     },
+    projectionsEvaluate(map, resolution, projections, pretty = false) {
+      return withInputs(
+        [map, resolution, projections],
+        ([mapInput, resolutionInput, projectionsInput]) =>
+          result(module._ab_wasm_projections_evaluate(
+            mapInput.pointer,
+            mapInput.length,
+            resolutionInput.pointer,
+            resolutionInput.length,
+            projectionsInput.pointer,
+            projectionsInput.length,
+            boolFlags(pretty),
+          )),
+      );
+    },
     projectionRenderMarkdown(
       map,
       resolution,
