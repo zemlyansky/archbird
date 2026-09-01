@@ -92,6 +92,7 @@ static ArchbirdProject *create_project(ArchbirdEngine *engine,
 #ifdef ARCHBIRD_TEST_TREE_SITTER_C
 static void test_composed_c_evidence(ArchbirdEngine *engine) {
   static const char source[] = "#include \"api.h\"\n"
+                               "/** @file Sample C module. */\n"
                                "/** Detached documentation. */\n\n"
                                "static int helper(int x) { return x; }\n"
                                "/** Run the helper. */\n"
@@ -132,7 +133,7 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
   summary.struct_size = sizeof(summary);
   expect("syntax-summary", archbird_project_merge_summary(project, &summary),
          ARCHBIRD_OK);
-  if (summary.providers != 2 || summary.selected_facts != 8 ||
+  if (summary.providers != 2 || summary.selected_facts != 9 ||
       summary.enriched != 3 || summary.conflicts != 0) {
     fprintf(stderr,
             "FAIL syntax composition summary: providers=%zu facts=%zu "
@@ -151,6 +152,7 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
       !strstr(facts.bytes, "\"source_metrics\":") ||
       !strstr(facts.bytes, "\"source.cyclomatic_complexity\":1") ||
       !strstr(facts.bytes, "\"documentation\":{\"kind\":\"doxygen\"") ||
+      !strstr(facts.bytes, "\"text\":\"Sample C module.\"") ||
       !strstr(facts.bytes, "\"text\":\"Run the helper.\"") ||
       strstr(facts.bytes, "Detached documentation.") ||
       !strstr(facts.bytes, "\"extent\":{\"end\":") ||
@@ -705,6 +707,12 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
     failures++;
   }
   if (strcmp(name, "python-pack") == 0 &&
+      (!strstr(first.bytes, "\"domain\":\"file-documentation\"") ||
+       !strstr(first.bytes, "\"documentation\":\"Sample Python module.\""))) {
+    fputs("FAIL Python module documentation evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "python-pack") == 0 &&
       !strstr(first.bytes, "\"kind\":\"variable\",\"name\":\"VALUE\"")) {
     fputs("FAIL Python module variable syntax symbol is absent\n", stderr);
     failures++;
@@ -730,10 +738,23 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
     fputs("FAIL JavaScript object method name is not qualified\n", stderr);
     failures++;
   }
+  if (strcmp(name, "cpp-pack") == 0 &&
+      (!strstr(first.bytes, "\"domain\":\"file-documentation\"") ||
+       !strstr(first.bytes, "\"documentation\":\"Sample C++ module.\""))) {
+    fputs("FAIL C++ file documentation evidence is absent\n", stderr);
+    failures++;
+  }
   if (strcmp(name, "javascript-pack") == 0 &&
       (!strstr(first.bytes, "\"documentation\":\"Run the box.\"") ||
        !strstr(first.bytes, "\"documentation_kind\":\"jsdoc\""))) {
     fputs("FAIL JavaScript JSDoc evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "javascript-pack") == 0 &&
+      (!strstr(first.bytes, "\"domain\":\"file-documentation\"") ||
+       !strstr(first.bytes,
+               "\"documentation\":\"Sample JavaScript module.\""))) {
+    fputs("FAIL JavaScript file documentation evidence is absent\n", stderr);
     failures++;
   }
   if (strcmp(name, "javascript-pack") == 0 &&
@@ -759,6 +780,19 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
     failures++;
   }
   if (strcmp(name, "typescript-pack") == 0 &&
+      (!strstr(first.bytes, "\"domain\":\"file-documentation\"") ||
+       !strstr(first.bytes,
+               "\"documentation\":\"Sample TypeScript module.\""))) {
+    fputs("FAIL TypeScript file documentation evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "tsx-pack") == 0 &&
+      (!strstr(first.bytes, "\"domain\":\"file-documentation\"") ||
+       !strstr(first.bytes, "\"documentation\":\"Sample TSX module.\""))) {
+    fputs("FAIL TSX file documentation evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "typescript-pack") == 0 &&
       (!strstr(first.bytes, "\"documentation\":\"Parse a value.\"") ||
        !strstr(first.bytes, "\"documentation_kind\":\"jsdoc\""))) {
     fputs("FAIL TypeScript JSDoc evidence is absent\n", stderr);
@@ -774,6 +808,12 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
       (!strstr(first.bytes, "\"documentation\":\"Run helper.\"") ||
        !strstr(first.bytes, "\"documentation_kind\":\"roxygen\""))) {
     fputs("FAIL R roxygen evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "r-pack") == 0 &&
+      (!strstr(first.bytes, "\"domain\":\"file-documentation\"") ||
+       !strstr(first.bytes, "\"documentation\":\"Sample R module.\""))) {
+    fputs("FAIL R file documentation evidence is absent\n", stderr);
     failures++;
   }
   if (strcmp(name, "typescript-pack") == 0 &&
@@ -807,7 +847,8 @@ int main(void) {
 #ifdef ARCHBIRD_TEST_TREE_SITTER_CPP
     test_language_pack(
         engine, "cpp-pack", "syntax:tree-sitter:cpp", "cpp", "src/sample.cpp",
-        "#include <vector>\nnamespace demo { class Box { public: "
+        "/** @file Sample C++ module. */\n#include <vector>\n"
+        "namespace demo { class Box { public: "
         "/** Run the box. */ int run() "
         "{ return helper(); } }; int helper() { return 1; } }\nnamespace { "
         "int hidden() { return 2; } }\nvoid recovered() { value.; }\n",
@@ -819,7 +860,8 @@ int main(void) {
     test_language_pack(
         engine, "python-pack", "syntax:tree-sitter:python", "python",
         "pkg/sample.py",
-        "import os\nVALUE = helper()\nclass Box:\n  def run(self):\n    "
+        "\"\"\"Sample Python module.\"\"\"\nimport os\nVALUE = helper()\n"
+        "class Box:\n  def run(self):\n    "
         "\"\"\"Run the box.\"\"\"\n    return helper()\n",
         "\"name\":\"Box.run\"", "\"name\":\"helper\"", "\"name\":\"os\"");
 #endif
@@ -828,6 +870,8 @@ int main(void) {
     test_language_pack(
         engine, "javascript-pack", "syntax:tree-sitter:javascript",
         "javascript", "src/sample.js",
+        "/** Copyright example. */\n"
+        "/** @fileoverview Sample JavaScript module. */\n"
         "import value from './dep.js';\nexport default function main() {}\n"
         "class Box { /** Run the box. */ run() { return helper(); } "
         "}\nconst ops = { nested: { mul() { return helper(); } } };\n"
@@ -841,6 +885,7 @@ int main(void) {
     test_language_pack(
         engine, "typescript-pack", "syntax:tree-sitter:typescript",
         "typescript", "src/sample.ts",
+        "/** @fileoverview Sample TypeScript module. */\n"
         "import {Value} from './dep.js';\nclass Box { run(x: Value) { return "
         "helper(x); } }\nconst api: any = {}; api.run = (x: Value) => "
         "helper(x);\nexport abstract class AbstractBox { /** Parse a value. */ "
@@ -852,6 +897,7 @@ int main(void) {
     test_tsx_class_scopes(engine);
     test_language_pack(engine, "tsx-pack", "syntax:tree-sitter:tsx",
                        "typescript", "src/sample.tsx",
+                       "/** @file Sample TSX module. */\n"
                        "import React from 'react';\nexport const Box = () => "
                        "<div>{helper()}</div>;\n",
                        "\"name\":\"Box\"", "\"name\":\"helper\"",
@@ -860,6 +906,7 @@ int main(void) {
 #ifdef ARCHBIRD_TEST_TREE_SITTER_R
     test_language_pack(engine, "r-pack", "syntax:tree-sitter:r", "r",
                        "R/sample.R",
+                       "#' @file Sample R module.\n"
                        "helper <- function(x) { x }\n#' Run helper.\n"
                        "run <- function() { helper(1) }\n",
                        "\"name\":\"run\"", "\"name\":\"helper\"", NULL);

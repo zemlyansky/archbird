@@ -36,6 +36,7 @@ _DOMAINS = (
     "decorators",
     "export-origins",
     "exports",
+    "file-documentation",
     "imported-name-groups",
     "imported-names",
     "imports",
@@ -2491,6 +2492,18 @@ def python_ast_provider_facts(
                 tree,
                 ordered_containers,
             )
+            module_documentation = visitor._documentation(tree)
+            if module_documentation:
+                literal = tree.body[0].value
+                assert isinstance(literal, ast.Constant)
+                facts.add(
+                    "file-documentation",
+                    "file",
+                    _absolute_span(literal, starts),
+                    "file",
+                    path,
+                    module_documentation,
+                )
             visitor.visit(tree)
             selected, origins, origin_names, export_spans, imported = (
                 _top_level_exports(tree, path, starts, source_tokens)

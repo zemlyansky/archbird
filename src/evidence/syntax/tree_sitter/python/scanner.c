@@ -343,6 +343,7 @@ ArchbirdStatus ab_scan_tree_sitter_python_file(
     const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle) {
   static const AbTreeSitterCapabilitySpec capabilities[] = {
       {"calls", "direct identifier call nodes; no dynamic target resolution"},
+      {"file-documentation", "module docstrings"},
       {"imports", "statically named import and from-import module nodes"},
       {"method-calls",
        "attribute call member names; receiver identity remains unresolved"},

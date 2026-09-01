@@ -254,6 +254,8 @@ def main() -> int:
         raise AssertionError(extension.project_counts(project))
 
     documentation_source = '''\
+"""Document the sample module."""
+
 class Documented:
     """Run deterministic model inference.
 
@@ -301,6 +303,22 @@ def undocumented():
         for row in json.loads(documentation_provider)["facts"]
         if row["domain"] == "symbols"
     }
+    module_documentation = [
+        row
+        for row in json.loads(documentation_provider)["facts"]
+        if row["domain"] == "file-documentation"
+    ]
+    module_start = documentation_raw.index(b'"""Document the sample')
+    module_end = module_start + len(b'"""Document the sample module."""')
+    if len(module_documentation) != 1 or module_documentation[0].get(
+        "attributes"
+    ) != {
+        "documentation": "Document the sample module.",
+        "documentation_end": module_end,
+        "documentation_kind": "docstring",
+        "documentation_start": module_start,
+    }:
+        raise AssertionError(module_documentation)
     class_start = documentation_raw.index(b'"""Run deterministic')
     class_end = documentation_raw.index(b'"""\n\n    def run') + 3
     method_start = documentation_raw.index(b'"""Return the forwarded')
@@ -349,6 +367,12 @@ def undocumented():
     documented_symbols = {
         symbol["name"]: symbol for symbol in documented_file["symbols"]
     }
+    if documented_file.get("documentation") != {
+        "kind": "docstring",
+        "span": {"end": module_end, "start": module_start},
+        "text": "Document the sample module.",
+    }:
+        raise AssertionError(documented_file)
     if documented_symbols["Documented"].get("documentation") != {
         "kind": "docstring",
         "span": {"end": class_end, "start": class_start},

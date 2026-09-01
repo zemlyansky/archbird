@@ -1074,7 +1074,9 @@ freshness. Provider conflicts and unresolved targets remain explicit.
 Recognized Python docstrings, JSDoc, Doxygen, roxygen, and SCIP documentation
 remain attached to declarations. Provider text and source spans are preserved
 where available; Archbird does not generate summaries or use declaration prose
-as an unreviewed Query seed.
+as an unreviewed Query seed. Python module docstrings and explicit `@file` or
+`@fileoverview` comments similarly document file nodes. Ordinary leading
+comments are not promoted.
 
 Per-file provider facts and materialized complete unchanged Maps are
 content-addressed and revalidated against the native core, configuration,

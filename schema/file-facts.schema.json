@@ -13,7 +13,7 @@
     "files"
   ],
   "properties": {
-    "schema_version": {"const": 2},
+    "schema_version": {"const": 3},
     "artifact": {"const": "archbird-file-facts"},
     "project": {"$ref": "#/$defs/id"},
     "source_manifest_sha256": {"$ref": "#/$defs/sha256"},
@@ -201,6 +201,7 @@
         "layer": {"type": "string"},
         "language": {"type": "string"},
         "bytes": {"type": "integer", "minimum": 0},
+        "documentation": {"$ref": "#/$defs/documentation"},
         "sha256": {"$ref": "#/$defs/sha256"},
         "symbols": {
           "type": "array",

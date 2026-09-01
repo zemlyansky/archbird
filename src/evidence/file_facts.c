@@ -15,6 +15,13 @@ typedef struct FactRefs {
   size_t count;
 } FactRefs;
 
+static ArchbirdStatus collect_facts(ArchbirdEngine *engine,
+                                    const ArchbirdProject *project,
+                                    const AbManifestFile *file,
+                                    const char *domain, const char *kind,
+                                    FactRefs *out);
+static void fact_refs_free(FactRefs *refs);
+
 #define RENDER_TRY(expression)                                                 \
   do {                                                                         \
     status = (expression);                                                     \
@@ -82,10 +89,10 @@ static const AbString *string_attribute(const AbFact *fact, const char *name) {
   return &field->value.as.text;
 }
 
-static ArchbirdStatus render_symbol_documentation(AbBuffer *buffer,
-                                                  ArchbirdEngine *engine,
-                                                  const AbFact *fact,
-                                                  const AbManifestFile *file) {
+static ArchbirdStatus render_documentation(AbBuffer *buffer,
+                                           ArchbirdEngine *engine,
+                                           const AbFact *fact,
+                                           const AbManifestFile *file) {
   const AbString *text = string_attribute(fact, "documentation");
   const AbString *kind = string_attribute(fact, "documentation_kind");
   const AbObjectField *start_field = attribute(fact, "documentation_start");
@@ -97,20 +104,20 @@ static ArchbirdStatus render_symbol_documentation(AbBuffer *buffer,
     if (kind || start_field || end_field)
       return archbird_error_set(
           engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
-          "symbol documentation metadata has no documentation text");
+          "documentation metadata has no documentation text");
     return ARCHBIRD_OK;
   }
   if (!text->length || !kind || !kind->length ||
       ((start_field != NULL) != (end_field != NULL)))
     return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                               ARCHBIRD_NO_OFFSET,
-                              "symbol documentation metadata is invalid");
+                              "documentation metadata is invalid");
   if (start_field &&
       (!integer_field(start_field, &start) || !integer_field(end_field, &end) ||
        start >= end || end > file->byte_length))
     return archbird_error_set(engine, ARCHBIRD_INVALID_SCHEMA,
                               ARCHBIRD_NO_OFFSET,
-                              "symbol documentation span is invalid");
+                              "documentation span is invalid");
   status = ab_buffer_literal(buffer, ",\"documentation\":{\"kind\":");
   if (status == ARCHBIRD_OK)
     status = json_string(buffer, kind);
@@ -130,6 +137,25 @@ static ArchbirdStatus render_symbol_documentation(AbBuffer *buffer,
     status = json_string(buffer, text);
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, "}");
+  return status;
+}
+
+static ArchbirdStatus render_file_documentation(AbBuffer *buffer,
+                                                ArchbirdEngine *engine,
+                                                const ArchbirdProject *project,
+                                                const AbManifestFile *file) {
+  FactRefs refs;
+  ArchbirdStatus status =
+      collect_facts(engine, project, file, "file-documentation", "file", &refs);
+  if (status != ARCHBIRD_OK)
+    return status;
+  if (refs.count > 1)
+    status = archbird_error_set(
+        engine, ARCHBIRD_CONFLICT, ARCHBIRD_NO_OFFSET,
+        "file has multiple incompatible documentation facts");
+  if (status == ARCHBIRD_OK && refs.count)
+    status = render_documentation(buffer, engine, refs.items[0], file);
+  fact_refs_free(&refs);
   return status;
 }
 
@@ -791,7 +817,7 @@ static ArchbirdStatus render_symbols(AbBuffer *buffer, ArchbirdEngine *engine,
     if (status == ARCHBIRD_OK)
       status = json_string(buffer, signature ? signature : &empty);
     if (status == ARCHBIRD_OK)
-      status = render_symbol_documentation(buffer, engine, fact, file);
+      status = render_documentation(buffer, engine, fact, file);
     if (status == ARCHBIRD_OK && fact->span_end > fact->span_start &&
         fact->span_end <= file->byte_length) {
       status = ab_buffer_literal(buffer, ",\"span\":{\"end\":");
@@ -996,6 +1022,7 @@ static ArchbirdStatus render_file_facts_row(AbBuffer *buffer,
   FILE_TRY(render_count_map(buffer, engine, project, file, "calls"));
   FILE_TRY(ab_buffer_literal(buffer, ",\"calls\":"));
   FILE_TRY(render_named_array(buffer, engine, project, file, "calls", NULL));
+  FILE_TRY(render_file_documentation(buffer, engine, project, file));
   FILE_TRY(ab_buffer_literal(buffer, ",\"export_origins\":"));
   FILE_TRY(render_string_map(buffer, engine, project, file, "export-origins",
                              "origin"));
@@ -1114,7 +1141,7 @@ ArchbirdStatus archbird_project_render_file_facts(
   RENDER_TRY(ab_buffer_literal(&buffer, "],\"project\":"));
   RENDER_TRY(json_string(&buffer, &manifest->project));
   RENDER_TRY(ab_buffer_literal(
-      &buffer, ",\"schema_version\":2,\"source_manifest_sha256\":"));
+      &buffer, ",\"schema_version\":3,\"source_manifest_sha256\":"));
   RENDER_TRY(json_sha(&buffer, ab_project_manifest_sha256_bytes(project)));
   RENDER_TRY(ab_buffer_literal(&buffer, "}"));
   status = archbird_json_canonicalize(engine, buffer.data, buffer.length,

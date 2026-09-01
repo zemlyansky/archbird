@@ -167,6 +167,7 @@ ArchbirdStatus ab_scan_tree_sitter_r_file(
     const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle) {
   static const AbTreeSitterCapabilitySpec capabilities[] = {
       {"calls", "direct identifier call nodes; no dynamic target resolution"},
+      {"file-documentation", "explicit roxygen @file documentation"},
       {"source-metric-contributors",
        "exact R branch and control syntax inside named functions"},
       {"source-metrics",

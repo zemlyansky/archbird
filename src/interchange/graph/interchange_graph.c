@@ -198,6 +198,7 @@ static ArchbirdStatus buffer_to_string(GraphData *graph, AbBuffer *buffer,
 
 static ArchbirdStatus file_attributes(GraphData *graph, const AbValue *row,
                                       AbString *out) {
+  const AbValue *documentation = ab_value_member(row, "documentation");
   const AbString *language = required_text(graph, row, "language", "map.files");
   const AbString *layer = required_text(graph, row, "layer", "map.files");
   const AbString *sha256 = required_text(graph, row, "sha256", "map.files");
@@ -207,7 +208,17 @@ static ArchbirdStatus file_attributes(GraphData *graph, const AbValue *row,
   if (!language || !layer || !sha256 || !symbols)
     return ARCHBIRD_INVALID_SCHEMA;
   ab_buffer_init(&buffer, graph->engine);
-  status = ab_buffer_literal(&buffer, "{\"language\":");
+  status = ab_buffer_literal(&buffer, "{");
+  if (status == ARCHBIRD_OK && documentation &&
+      documentation->kind == AB_VALUE_OBJECT) {
+    status = ab_buffer_literal(&buffer, "\"documentation\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&buffer, documentation);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&buffer, ",");
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(&buffer, "\"language\":");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_json_string(&buffer, language->data, language->length);
   if (status == ARCHBIRD_OK)
@@ -713,6 +724,7 @@ static ArchbirdStatus value_json(GraphData *graph, const AbValue *value,
 
 static ArchbirdStatus query_file_attributes(GraphData *graph,
                                             const AbValue *row, AbString *out) {
+  const AbValue *documentation = ab_value_member(row, "documentation");
   const AbString *language =
       required_text(graph, row, "language", "query.files");
   const AbString *layer = required_text(graph, row, "layer", "query.files");
@@ -729,6 +741,12 @@ static ArchbirdStatus query_file_attributes(GraphData *graph,
   status = ab_buffer_literal(&buffer, "{\"distance\":");
   if (status == ARCHBIRD_OK)
     status = ab_buffer_u64(&buffer, distance);
+  if (status == ARCHBIRD_OK && documentation &&
+      documentation->kind == AB_VALUE_OBJECT) {
+    status = ab_buffer_literal(&buffer, ",\"documentation\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(&buffer, documentation);
+  }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(&buffer, ",\"language\":");
   if (status == ARCHBIRD_OK)
@@ -973,13 +991,31 @@ static ArchbirdStatus build_symbol_graph(GraphData *graph,
   for (index = 0; status == ARCHBIRD_OK && index < files->as.array.count;
        index++) {
     const AbValue *file = &files->as.array.items[index];
+    const AbValue *symbols;
     const AbString *path;
+    size_t symbol_index;
     if (file->kind != AB_VALUE_OBJECT)
       return graph_error(graph, "query.files entries must be objects");
     path = required_text(graph, file, "path", "query.files");
-    if (!path)
+    symbols = required_array(graph, file, "symbols", "query.files");
+    if (!path || !symbols)
       return ARCHBIRD_INVALID_SCHEMA;
     status = ensure_file_node(graph, path, file);
+    for (symbol_index = 0;
+         status == ARCHBIRD_OK && symbol_index < symbols->as.array.count;
+         symbol_index++) {
+      const AbValue *symbol = &symbols->as.array.items[symbol_index];
+      const AbString *name;
+      AbString identity = {0};
+      if (symbol->kind != AB_VALUE_OBJECT)
+        return graph_error(graph,
+                           "query.files symbols entries must be objects");
+      name = required_text(graph, symbol, "name", "query.files.symbols");
+      if (!name)
+        return ARCHBIRD_INVALID_SCHEMA;
+      status = ensure_symbol_node(graph, path, name, symbol, &identity);
+      ab_string_free(graph->engine, &identity);
+    }
   }
   for (index = 0; status == ARCHBIRD_OK && index < matched->as.array.count;
        index++) {

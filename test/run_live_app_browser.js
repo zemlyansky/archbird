@@ -171,6 +171,34 @@ async function waitForInitialMap(page, timeout = 30_000) {
   ]);
 }
 
+async function expectSelectedDocumentation(page, label, text) {
+  await page.locator(".inspector h2").getByText(label, { exact: true }).waitFor();
+  await page.getByText("Documentation · jsdoc", { exact: true }).waitFor();
+  const canvas = page.locator(".graph-canvas");
+  const box = await canvas.boundingBox();
+  const x = Number(await canvas.getAttribute("data-selected-x"));
+  const y = Number(await canvas.getAttribute("data-selected-y"));
+  if (!box || !Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error(`selected ${label} node has no rendered hover position`);
+  }
+  const tooltip = page.locator(".graph-tooltip p")
+    .getByText(text, { exact: true });
+  await page.mouse.move(box.x + 2, box.y + 2);
+  for (const [dx, dy] of [[0, 0], [-12, 0], [12, 0], [0, -8], [0, 8]]) {
+    await page.mouse.move(box.x + x + dx, box.y + y + dy, { steps: 5 });
+    if (await tooltip.isVisible()) return;
+  }
+  const target = await page.evaluate(
+    ([left, top]) => document.elementFromPoint(left, top)?.outerHTML || "none",
+    [box.x + x, box.y + y],
+  );
+  throw new Error(`documented ${label} node hover missed (${x}, ${y}; ${target})`);
+}
+
+async function expectDocumentedAdd(page) {
+  await expectSelectedDocumentation(page, "add", "Add two values.");
+}
+
 async function main() {
   fs.rmSync(temporaryRoot, { force: true, recursive: true });
   fs.mkdirSync(temporaryRoot, { recursive: true });
@@ -178,6 +206,13 @@ async function main() {
   if (empty) {
     fs.rmSync(repositoryRoot, { force: true, recursive: true });
     fs.mkdirSync(repositoryRoot, { recursive: true });
+  } else {
+    const documentedSource = path.join(repositoryRoot, "js/index.js");
+    fs.writeFileSync(
+      documentedSource,
+      `/** @fileoverview Fixture arithmetic module. */\n`
+        + `/** Add two values. */\n${fs.readFileSync(documentedSource, "utf8")}`,
+    );
   }
   // Keep Chromium's Unix-domain socket paths below the platform limit; the
   // repository fixture itself remains isolated under temporaryRoot.
@@ -428,12 +463,17 @@ async function main() {
         .waitFor({ timeout: 30_000 });
       await page.locator(".search input").fill("js/index.js");
       await page.locator(".results button").first().click();
+      await expectSelectedDocumentation(
+        page,
+        "js/index.js",
+        "Fixture arithmetic module.",
+      );
       await page.getByRole("button", { name: "Expand symbols", exact: true }).click();
       await page.locator('.graph-canvas[data-layout-ready="true"]')
         .waitFor({ timeout: 30_000 });
       await page.locator(".search input").fill("add");
       await page.locator(".results button").first().click();
-      await page.locator(".inspector h2").getByText("add", { exact: true }).waitFor();
+      await expectDocumentedAdd(page);
       await page.locator(".search input").fill("js/index.js");
       await page.locator(".results button").first().click();
       await page.getByRole("button", { name: "Open js/index.js", exact: true }).click();
@@ -487,12 +527,17 @@ async function main() {
       .waitFor({ timeout: 30_000 });
     await page.locator(".search input").fill("js/index.js");
     await page.locator(".results button").first().click();
+    await expectSelectedDocumentation(
+      page,
+      "js/index.js",
+      "Fixture arithmetic module.",
+    );
     await page.getByRole("button", { name: "Expand symbols", exact: true }).click();
     await page.locator('.graph-canvas[data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
     await page.locator(".search input").fill("add");
     await page.locator(".results button").first().click();
-    await page.locator(".inspector h2").getByText("add", { exact: true }).waitFor();
+    await expectDocumentedAdd(page);
     await page.locator(".search input").fill("js/index.js");
     await page.locator(".results button").first().click();
     await page.getByRole("button", { name: "Open js/index.js", exact: true }).click();

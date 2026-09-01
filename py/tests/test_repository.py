@@ -185,6 +185,7 @@ def main() -> int:
         [
             Source(
                 "pkg/api.py",
+                b'"""Client package API."""\n\n'
                 b'class Client:\n    """Open configured services.\n\n'
                 b'    The caller owns disposal.\n    """\n\n'
                 b'    def open(self):\n'
@@ -212,12 +213,25 @@ def main() -> int:
     )
     documentation_project.scan()
     documentation_map = json.loads(documentation_project.map_json())
+    documentation_file = documentation_map["files"][0]
+    if documentation_file.get("documentation") != {
+        "kind": "docstring",
+        "span": {"end": 25, "start": 0},
+        "text": "Client package API.",
+    }:
+        raise AssertionError(documentation_file)
     documentation_symbols = {
-        row["name"]: row for row in documentation_map["files"][0]["symbols"]
+        row["name"]: row for row in documentation_file["symbols"]
     }
+    client_start = documentation_project.sources[0].data.index(
+        b'"""Open configured'
+    )
+    client_end = documentation_project.sources[0].data.index(
+        b'"""\n\n    def open'
+    ) + 3
     if documentation_symbols["Client"]["documentation"] != {
         "kind": "docstring",
-        "span": {"end": 85, "start": 18},
+        "span": {"end": client_end, "start": client_start},
         "text": "Open configured services.\n\nThe caller owns disposal.",
     }:
         raise AssertionError(documentation_symbols["Client"])
@@ -233,12 +247,39 @@ def main() -> int:
             test_depth=0,
         )
     )
-    if documentation_query["schema_version"] != 8:
+    if documentation_query["schema_version"] != 9:
         raise AssertionError(documentation_query["schema_version"])
     if documentation_query["matched_symbols"][0]["documentation"] != (
         documentation_symbols["Client"]["documentation"]
     ):
         raise AssertionError(documentation_query["matched_symbols"])
+    if documentation_query["files"][0].get("documentation") != (
+        documentation_file["documentation"]
+    ):
+        raise AssertionError(documentation_query["files"])
+    documentation_graph = json.loads(
+        evaluate_projection_json(
+            documentation_project.map_json(),
+            {
+                "id": "documentation-file-graph",
+                "select": "graph",
+                "group_by": "directory",
+                "level": "file",
+                "relations": ["imports"],
+            },
+        )
+    )
+    documentation_graph_file = next(
+        row
+        for row in documentation_graph["fact"]["items"]
+        if row["attributes"].get("record_kind") == "node"
+        and row["attributes"].get("entity_kind") == "file"
+        and row["label"] == "pkg/api.py"
+    )
+    if documentation_graph_file["attributes"].get("documentation") != (
+        documentation_file["documentation"]
+    ):
+        raise AssertionError(documentation_graph_file)
     try:
         query_map_json(
             documentation_project.map_json(),

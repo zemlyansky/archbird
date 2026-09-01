@@ -431,15 +431,16 @@ def _assert_metrics_projection() -> None:
     complexity_map = _fixture_map(ROOT / "test/fixtures/source_complexity")
     complexity_document = json.loads(complexity_map)
     unsupported_complexity = dict(complexity_document)
-    unsupported_complexity["schema_version"] = 17
+    unsupported_complexity["schema_version"] = 18
     try:
         query_map_markdown(
             json.dumps(unsupported_complexity, separators=(",", ":")).encode(),
             symbols=["jsFlow"],
         )
     except RuntimeError as error:
-        assert "schema 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, or 16" in str(
-            error
+        assert (
+            "schema 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, or 17"
+            in str(error)
         )
     else:
         raise AssertionError("unsupported Map schema was accepted")
@@ -4323,8 +4324,8 @@ def main() -> None:
     reference_map = _fixture_map(reference_root)
     subject_document = json.loads(subject_map)
     reference_document = json.loads(reference_map)
-    assert subject_document["schema_version"] == 16
-    assert reference_document["schema_version"] == 16
+    assert subject_document["schema_version"] == 17
+    assert reference_document["schema_version"] == 17
     assert {row["domain"] for row in subject_document["facts"]} == {
         "constant-values",
         "export-origins",

@@ -50,7 +50,9 @@ Recognized docstrings, JSDoc, Doxygen, roxygen, and SCIP documentation remain
 attached to their declarations. Symbol hover shows the first paragraph; the
 inspector preserves the complete text and opens its exact source span. Archbird
 does not generate documentation summaries or use declaration prose as an
-unreviewed Query seed.
+unreviewed Query seed. Python module docstrings and explicit `@file` or
+`@fileoverview` comments similarly document file nodes. Ordinary leading
+comments, including license headers, are not promoted.
 
 ## Stages
 

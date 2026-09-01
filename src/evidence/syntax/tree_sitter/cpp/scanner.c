@@ -274,6 +274,7 @@ ArchbirdStatus ab_scan_tree_sitter_cpp_file(
     const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle) {
   static const AbTreeSitterCapabilitySpec capabilities[] = {
       {"calls", "direct and qualified call names without overload resolution"},
+      {"file-documentation", "explicit Doxygen @file documentation"},
       {"imports", "preprocessor include paths without include search"},
       {"method-calls", "field call names without receiver type resolution"},
       {"source-metric-contributors",

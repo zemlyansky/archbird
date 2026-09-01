@@ -633,6 +633,7 @@ ArchbirdStatus ab_scan_tree_sitter_c_file(
       {"calls",
        "direct identifier call_expression nodes; no preprocessing, function-"
        "pointer resolution, or semantic target"},
+      {"file-documentation", "explicit Doxygen @file documentation"},
       {"imports",
        "preproc_include path nodes; no include search or conditional-"
        "preprocessor evaluation"},

@@ -85,6 +85,12 @@ async function main() {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
   fs.mkdirSync(temporaryRoot, { recursive: true });
   fs.cpSync(fixtureRoot, repositoryRoot, { recursive: true });
+  const documentedSource = path.join(repositoryRoot, "js/index.js");
+  fs.writeFileSync(
+    documentedSource,
+    `/** @fileoverview Fixture arithmetic module. */\n`
+      + `/** Add two values. */\n${fs.readFileSync(documentedSource, "utf8")}`,
+  );
   const childArguments = ["-m", "archbird", "serve", "--root", repositoryRoot, "--port", "0"];
   if (!packagedApp) childArguments.push("--app", appRoot);
   const child = spawn(python, childArguments, { stdio: ["ignore", "pipe", "pipe"] });
@@ -144,7 +150,15 @@ async function main() {
     })).bytes);
     assert.equal(symbols.artifact, "archbird-graph-view");
     assert.equal(symbols.request.view, "symbols");
-    assert.ok(symbols.nodes.some((row) => row.kind === "symbol" && row.label === "add"));
+    const add = symbols.nodes.find((row) => row.kind === "symbol" && row.label === "add");
+    assert.equal(add.attributes.documentation.text, "Add two values.");
+    const documentedFile = symbols.nodes.find(
+      (row) => row.kind === "file" && row.label === "js/index.js",
+    );
+    assert.equal(
+      documentedFile.attributes.documentation.text,
+      "Fixture arithmetic module.",
+    );
     const query = JSON.parse((await artifact(url, "query", {
       query: { depth: 0, symbols: ["add"], test_depth: 0 },
     })).bytes);

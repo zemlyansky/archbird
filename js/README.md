@@ -1084,6 +1084,8 @@ Recognized JSDoc, Doxygen, roxygen, simple Python docstrings, and SCIP
 documentation remain attached to declarations. The app shows the first
 paragraph on hover and opens the exact source span from the inspector; it does
 not generate summaries or use declaration prose as an unreviewed Query seed.
+Python module docstrings and explicit `@file` or `@fileoverview` comments
+similarly document file nodes. Ordinary leading comments are not promoted.
 
 Node's per-file provider facts and materialized complete unchanged Maps are
 content-addressed and revalidated against the native/Wasm core, configuration,

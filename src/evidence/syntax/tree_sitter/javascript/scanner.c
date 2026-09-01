@@ -12,6 +12,8 @@ ArchbirdStatus ab_scan_tree_sitter_javascript_file(
     const uint8_t implementation_sha256[32], AbProviderBundle *out_bundle) {
   static const AbTreeSitterCapabilitySpec capabilities[] = {
       {"calls", "direct identifier call_expression nodes"},
+      {"file-documentation",
+       "explicit JSDoc @file or @fileoverview documentation"},
       {"export-bindings",
        "exact local/origin identifiers associated with static exports"},
       {"exports", "statically named ESM and bounded CommonJS properties"},

@@ -3646,12 +3646,19 @@ static ArchbirdStatus render_file_rows(AbBuffer *buffer,
   ArchbirdStatus status = ab_buffer_literal(buffer, "[");
   for (index = 0; status == ARCHBIRD_OK && index < order_count; index++) {
     const QueryFile *file = order[index].file;
+    const AbValue *documentation = ab_value_member(file->row, "documentation");
     if (index)
       status = ab_buffer_literal(buffer, ",");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, "{\"distance\":");
     if (status == ARCHBIRD_OK)
       status = ab_buffer_u64(buffer, file->distance);
+    if (status == ARCHBIRD_OK && documentation &&
+        documentation->kind == AB_VALUE_OBJECT) {
+      status = ab_buffer_literal(buffer, ",\"documentation\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_value_render(buffer, documentation);
+    }
     if (status == ARCHBIRD_OK)
       status = ab_buffer_literal(buffer, ",\"language\":");
     if (status == ARCHBIRD_OK)

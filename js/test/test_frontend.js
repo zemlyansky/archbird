@@ -897,7 +897,7 @@ assert.deepEqual(documentedTarget.documentation, {
 const documentedTargetQuery = JSON.parse(queryMap(semanticProject.mapJson(), {
   symbols: ["src/defs.ts:target"], depth: 0, testDepth: 0,
 }));
-assert.equal(documentedTargetQuery.schema_version, 8);
+assert.equal(documentedTargetQuery.schema_version, 9);
 assert.deepEqual(documentedTargetQuery.matched_symbols[0].documentation, {
   kind: "jsdoc",
   span: { end: 85, start: 0 },

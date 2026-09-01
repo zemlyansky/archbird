@@ -58,6 +58,26 @@ def main() -> int:
         assert len(ids) == len(document["nodes"])
         assert all(edge["source"] in ids and edge["target"] in ids for edge in document["edges"])
 
+    documented_map = json.loads(map_json)
+    documented_map["files"][0]["documentation"] = {
+        "kind": "doxygen",
+        "span": {"end": 24, "start": 0},
+        "text": "Document the mapped file.",
+    }
+    documented_file_graph = json.loads(
+        run(binary, json.dumps(documented_map), "json", "files")
+    )
+    documented_file_nodes = [
+        node
+        for node in documented_file_graph["nodes"]
+        if node["kind"] == "file"
+        and node["label"] == documented_map["files"][0]["path"]
+    ]
+    assert len(documented_file_nodes) == 1
+    assert documented_file_nodes[0]["attributes"]["documentation"] == (
+        documented_map["files"][0]["documentation"]
+    )
+
     query_json = (Path(__file__).parent / "fixtures/report_query.json").read_text()
     first = run(binary, query_json, "json", "symbols")
     second = run(binary, query_json, "json", "symbols")
@@ -84,6 +104,44 @@ def main() -> int:
     assert all(
         node["parent"] is None or node["parent"] in {row["id"] for row in files}
         for node in document["nodes"]
+    )
+
+    # Path queries carry declarations in files[].symbols without exact matches.
+    path_query = json.loads(query_json)
+    path_query["matched_symbols"] = []
+    path_query["symbol_calls"] = []
+    path_query["symbol_references"] = []
+    documented = path_query["files"][0]["symbols"][0]
+    path_query["files"][0]["documentation"] = {
+        "kind": "doxygen",
+        "span": {"end": 24, "start": 0},
+        "text": "Core arithmetic module.",
+    }
+    documented["documentation"] = {
+        "kind": "doxygen",
+        "span": {"end": 25, "start": 0},
+        "text": "Multiply two core values.",
+    }
+    path_document = json.loads(
+        run(binary, json.dumps(path_query), "json", "symbols")
+    )
+    documented_nodes = [
+        node
+        for node in path_document["nodes"]
+        if node["kind"] == "symbol" and node["label"] == "core_mul"
+    ]
+    assert len(documented_nodes) == 1
+    assert documented_nodes[0]["attributes"]["documentation"] == documented[
+        "documentation"
+    ]
+    documented_files = [
+        node
+        for node in path_document["nodes"]
+        if node["kind"] == "file" and node["label"] == path_query["files"][0]["path"]
+    ]
+    assert len(documented_files) == 1
+    assert documented_files[0]["attributes"]["documentation"] == (
+        path_query["files"][0]["documentation"]
     )
     print("native GraphML/Mermaid/JSON graph projections passed")
     return 0

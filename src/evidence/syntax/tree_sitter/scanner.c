@@ -759,7 +759,9 @@ static ArchbirdStatus normalize_documentation_comment(AbBuffer *text,
 
 static int python_docstring_node(const AbTreeSitterScan *scan,
                                  TSNode declaration, TSNode *out_string) {
-  TSNode body = ab_tree_sitter_child(declaration, "body");
+  TSNode body = ab_tree_sitter_node_type(declaration, "module")
+                    ? declaration
+                    : ab_tree_sitter_child(declaration, "body");
   TSNode statement;
   TSNode string;
   if (ts_node_is_null(body) || !ts_node_named_child_count(body))
@@ -838,6 +840,134 @@ static ArchbirdStatus normalize_python_docstring(AbBuffer *text,
   return status;
 }
 
+static int file_documentation_directive(const uint8_t *text, size_t length,
+                                        size_t *out_content) {
+  static const char overview[] = "@fileoverview";
+  static const char file[] = "@file";
+  size_t index;
+  for (index = 0; index < length; index++) {
+    const char *tag = NULL;
+    size_t tag_length = 0;
+    if (index + sizeof(overview) - 1 <= length &&
+        !memcmp(text + index, overview, sizeof(overview) - 1)) {
+      tag = overview;
+      tag_length = sizeof(overview) - 1;
+    } else if (index + sizeof(file) - 1 <= length &&
+               !memcmp(text + index, file, sizeof(file) - 1)) {
+      tag = file;
+      tag_length = sizeof(file) - 1;
+    }
+    if (!tag ||
+        (index && text[index - 1] != ' ' && text[index - 1] != '\t' &&
+         text[index - 1] != '\n' && text[index - 1] != '\r' &&
+         text[index - 1] != '*') ||
+        (index + tag_length < length && text[index + tag_length] != ' ' &&
+         text[index + tag_length] != '\t' && text[index + tag_length] != '\n' &&
+         text[index + tag_length] != '\r'))
+      continue;
+    index += tag_length;
+    while (index < length && (text[index] == ' ' || text[index] == '\t' ||
+                              text[index] == '\n' || text[index] == '\r'))
+      index++;
+    *out_content = index;
+    return 1;
+  }
+  return 0;
+}
+
+static int explicit_file_documentation_comment(const AbTreeSitterScan *scan,
+                                               TSNode node) {
+  size_t start;
+  size_t end;
+  size_t ignored;
+  return documentation_comment(scan, node, &start, &end) &&
+         file_documentation_directive(scan->source + start, end - start,
+                                      &ignored);
+}
+
+static ArchbirdStatus add_file_documentation(AbTreeSitterScan *scan,
+                                             TSNode root) {
+  AbBuffer text;
+  TSNode source_node = (TSNode){0};
+  const char *kind = NULL;
+  size_t start = 0;
+  size_t end = 0;
+  size_t content = 0;
+  int has_text = 0;
+  int pending_blank = 0;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  ab_buffer_init(&text, scan->engine);
+  if (!strcmp(scan->descriptor->language_name, "python")) {
+    if (python_docstring_node(scan, root, &source_node) &&
+        ab_tree_sitter_node_slice(scan, source_node, &start, &end)) {
+      status =
+          normalize_python_docstring(&text, scan->source + start, end - start);
+      kind = text.length ? "docstring" : NULL;
+    }
+  } else {
+    uint32_t index;
+    uint32_t count = ts_node_named_child_count(root);
+    for (index = 0; index < count; index++) {
+      TSNode child = ts_node_named_child(root, index);
+      if (!ab_tree_sitter_node_type(child, "comment"))
+        continue;
+      if (!explicit_file_documentation_comment(scan, child))
+        continue;
+      source_node = child;
+      if (!ab_tree_sitter_node_slice(scan, child, &start, &end))
+        break;
+      status = normalize_documentation_comment(
+          &text, scan->source + start, end - start, &has_text, &pending_blank);
+      if (status == ARCHBIRD_OK &&
+          file_documentation_directive((const uint8_t *)text.data, text.length,
+                                       &content)) {
+        size_t remaining = text.length - content;
+        memmove(text.data, text.data + content, remaining);
+        text.length = remaining;
+        while (text.length && (text.data[text.length - 1] == ' ' ||
+                               text.data[text.length - 1] == '\t' ||
+                               text.data[text.length - 1] == '\n' ||
+                               text.data[text.length - 1] == '\r'))
+          text.length--;
+      }
+      if (text.length) {
+        const char *language = scan->descriptor->language_name;
+        kind = !strcmp(language, "r") ? "roxygen"
+               : (!strcmp(language, "c") || !strcmp(language, "cpp"))
+                   ? "doxygen"
+                   : "jsdoc";
+      }
+      break;
+    }
+  }
+  if (status == ARCHBIRD_OK && kind) {
+    AbFact *fact = NULL;
+    static const uint8_t key[] = "file";
+    status = ab_bundle_builder_add_fact(
+        scan->builder, "file-documentation", "file", "syntax-structure", start,
+        end, key, sizeof(key) - 1, (const uint8_t *)scan->file->path.data,
+        scan->file->path.length, &fact);
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_fact_add_string_attribute(scan->engine, fact, "documentation",
+                                       (const uint8_t *)text.data, text.length);
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_fact_add_string_attribute(scan->engine, fact, "documentation_kind",
+                                       (const uint8_t *)kind, strlen(kind));
+    if (status == ARCHBIRD_OK)
+      status = ab_fact_add_u64_attribute(
+          scan->engine, fact, "documentation_start", (uint64_t)start);
+    if (status == ARCHBIRD_OK)
+      status = ab_fact_add_u64_attribute(scan->engine, fact,
+                                         "documentation_end", (uint64_t)end);
+    if (status == ARCHBIRD_OK)
+      status = ab_tree_sitter_track_fact_region(scan, fact, source_node);
+  }
+  ab_buffer_free(&text);
+  return status;
+}
+
 static ArchbirdStatus add_symbol_documentation(AbTreeSitterScan *scan,
                                                AbFact *fact, TSNode declaration,
                                                TSNode extent) {
@@ -864,6 +994,7 @@ static ArchbirdStatus add_symbol_documentation(AbTreeSitterScan *scan,
     size_t current_start;
     size_t current_end;
     while (documentation_comment(scan, current, &current_start, &current_end) &&
+           !explicit_file_documentation_comment(scan, current) &&
            documentation_gap(scan, current_end, boundary)) {
       earliest = current;
       start = current_start;
@@ -1140,6 +1271,9 @@ static ArchbirdStatus parse_and_extract(void *user_data) {
     goto done;
   }
   root = ts_tree_root_node(tree);
+  status = add_file_documentation(scan, root);
+  if (status != ARCHBIRD_OK)
+    goto done;
   status = grow_frames(scan, &frames, &frame_capacity, 1);
   if (status != ARCHBIRD_OK)
     goto done;

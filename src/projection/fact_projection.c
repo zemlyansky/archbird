@@ -3117,6 +3117,7 @@ static ArchbirdStatus extract_component_membership(AbProjectionContext *context,
     const AbValue *sha = ab_value_member(file->row, "sha256");
     const AbValue *layer = ab_value_member(file->row, "layer");
     const AbValue *language = ab_value_member(file->row, "language");
+    const AbValue *documentation = ab_value_member(file->row, "documentation");
     const AbValue *source_metrics = ab_value_member(file->row, "metrics");
     const AbValue *bytes = ab_value_member(file->row, "bytes");
     const AbValue *symbols = ab_value_member(file->row, "symbols");
@@ -3224,6 +3225,10 @@ static ArchbirdStatus extract_component_membership(AbProjectionContext *context,
         layer_role->kind == AB_VALUE_STRING)
       status = item_add_string_attribute(context->engine, &item, "layer_role",
                                          &layer_role->as.text);
+    if (status == ARCHBIRD_OK && documentation &&
+        documentation->kind == AB_VALUE_OBJECT)
+      status = item_add_value_attribute(context->engine, &item, "documentation",
+                                        documentation);
     if (status == ARCHBIRD_OK && source_metrics &&
         source_metrics->kind == AB_VALUE_OBJECT)
       status = item_add_value_attribute(context->engine, &item,
