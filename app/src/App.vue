@@ -35,6 +35,10 @@ import {
   parseProjectionResults,
   type ProjectionResult,
 } from "./artifacts/projection";
+import {
+  queryRetrievalHits,
+  type QueryRetrievalHit,
+} from "./artifacts/query";
 import ArtifactDrop from "./components/ArtifactDrop.vue";
 import ConstraintPanel from "./components/ConstraintPanel.vue";
 import DocumentPanel from "./components/DocumentPanel.vue";
@@ -78,6 +82,7 @@ type TransportMode = "browser" | "none" | "server";
 type WorkspaceMode = "live" | "saved" | "snapshot";
 type GraphCanvasApi = {
   captureViewport(): GraphViewport | null;
+  center(id: string): void;
   fit(): void;
   restoreViewport(viewport: GraphViewport): void;
   setZoom(value: number): void;
@@ -113,7 +118,6 @@ type GraphNavigationEntry = {
   queryTestDepth: number;
   queryValue: string;
   revealedSymbols: ReadonlySet<string>;
-  search: string;
   selectedConstraintId: string | null;
   selectedId: string | null;
   source: Record<string, unknown> | null;
@@ -139,7 +143,13 @@ const source = shallowRef<Record<string, unknown> | null>(null);
 const sourceSelection = shallowRef<SourceSelection | null>(null);
 const graphCanvas = ref<GraphCanvasApi | null>(null);
 const selectedId = ref<string | null>(null);
-const search = ref("");
+const entitySearchRoot = ref<HTMLElement | null>(null);
+const entitySearch = ref("");
+const entitySearchHits = shallowRef<readonly QueryRetrievalHit[]>([]);
+const entitySearchError = ref("");
+const entitySearchLoading = ref(false);
+const entitySearchOpen = ref(false);
+const entitySearchActiveIndex = ref(0);
 const error = ref("");
 const errorOrigin = ref<"candidate" | "operation">("operation");
 const busy = ref(serverDocument);
@@ -191,6 +201,8 @@ let unsubscribe: (() => void) | null = null;
 let operationId = 0;
 let operationStartedAt = 0;
 let metricGeneration = 0;
+let entitySearchGeneration = 0;
+let entitySearchTimer: number | null = null;
 let pendingGraphViewport: GraphViewport | null = null;
 let themeMedia: MediaQueryList | null = null;
 
@@ -322,13 +334,6 @@ const visibleGraph = computed<GraphView | null>(() => {
     summary: { edges: edges.length, nodes: shadowedGraph.value.nodes.length },
   }, edgeFlow.value);
 });
-const searchResults = computed(() => {
-  const needle = search.value.trim().toLocaleLowerCase();
-  if (!visibleGraph.value || !needle) return [];
-  return visibleGraph.value.nodes.filter((node) =>
-    `${node.label}\n${node.identity}\n${node.kind}`.toLocaleLowerCase().includes(needle),
-  ).slice(0, 30);
-});
 const sourcePath = computed(() => {
   if (!visibleGraph.value || !selectedId.value || !sourceAvailable.value) return null;
   const selected = visibleGraph.value.nodes.find((node) => node.id === selectedId.value);
@@ -371,7 +376,6 @@ function resetGraphState() {
   selectedId.value = null;
   source.value = null;
   sourceSelection.value = null;
-  search.value = "";
   edgeKind.value = "all";
   edgeClassification.value = "all";
   inspectorOpen.value = true;
@@ -384,6 +388,14 @@ function resetGraphState() {
 }
 
 function resetMapProjections() {
+  if (entitySearchTimer !== null) window.clearTimeout(entitySearchTimer);
+  entitySearchTimer = null;
+  entitySearchGeneration += 1;
+  entitySearchHits.value = [];
+  entitySearchError.value = "";
+  entitySearchLoading.value = false;
+  entitySearchOpen.value = false;
+  entitySearchActiveIndex.value = 0;
   metricGeneration += 1;
   graphPresentations.value = null;
   fileGraph.value = null;
@@ -427,7 +439,6 @@ function captureGraphNavigation(): GraphNavigationEntry | null {
     queryTestDepth: queryTestDepth.value,
     queryValue: queryValue.value,
     revealedSymbols: new Set(revealedSymbols.value),
-    search: search.value,
     selectedConstraintId: selectedConstraintId.value,
     selectedId: selectedId.value,
     source: source.value,
@@ -467,7 +478,6 @@ async function backToPreviousGraph(): Promise<void> {
   queryTestDepth.value = previous.queryTestDepth;
   queryValue.value = previous.queryValue;
   revealedSymbols.value = previous.revealedSymbols;
-  search.value = previous.search;
   selectedConstraintId.value = previous.selectedConstraintId;
   selectedId.value = previous.selectedId;
   source.value = previous.source;
@@ -667,6 +677,9 @@ function installMapPresentation(
   graphBytes.value = new TextEncoder().encode(JSON.stringify(graph.value));
   queueMicrotask(() => {
     if (baseMap.value === loaded) void loadAllMetrics();
+    if (baseMap.value === loaded && entitySearch.value.trim()) {
+      scheduleEntitySearch(entitySearch.value);
+    }
   });
 }
 
@@ -1350,7 +1363,7 @@ function queryOptions(): Record<string, unknown> {
 }
 
 function nativeQueryRequest(options: Record<string, unknown>): Record<string, unknown> {
-  return {
+  const request: Record<string, unknown> = {
     artifacts: options.artifacts,
     components: options.components,
     depth: options.depth,
@@ -1364,20 +1377,127 @@ function nativeQueryRequest(options: Record<string, unknown>): Record<string, un
     symbols: options.symbols,
     test_depth: options.testDepth,
   };
+  if (Array.isArray(options.searchFields) && options.searchFields.length) {
+    request.search_fields = options.searchFields;
+  }
+  return request;
 }
 
-async function runQuery() {
+function queryHost(): BrowserHost | ServerHost | null {
+  return workspaceMode.value !== "saved" && liveHost
+    && !(workspaceMode.value === "snapshot" && liveHost instanceof BrowserHost)
+    ? liveHost
+    : null;
+}
+
+function entitySearchOptions(value: string): Record<string, unknown> {
+  return {
+    artifacts: [],
+    components: [],
+    depth: 0,
+    direction: "both",
+    focus: [],
+    packages: [],
+    paths: [],
+    search: [value],
+    searchFields: ["default", "documentation", "type"],
+    searchLimit: 30,
+    symbols: [],
+    testDepth: 0,
+  };
+}
+
+async function loadEntitySearch(value: string, generation: number) {
+  if (!baseMap.value || generation !== entitySearchGeneration) return;
+  entitySearchLoading.value = true;
+  entitySearchError.value = "";
+  try {
+    const options = entitySearchOptions(value);
+    const host = queryHost();
+    const loaded = host
+      ? parseArtifact(
+        new Uint8Array((await host.query(
+          options,
+          baseGeneration.value || undefined,
+        )).bytes),
+        `${artifactProject.value}.search.query.json`,
+      )
+      : await queryArtifact(
+        requireParsedArtifact(baseMap.value, "local entity search"),
+        nativeQueryRequest(options),
+      );
+    if (generation !== entitySearchGeneration) return;
+    entitySearchHits.value = queryRetrievalHits(loaded.document);
+    entitySearchActiveIndex.value = 0;
+  } catch (cause) {
+    if (generation !== entitySearchGeneration) return;
+    entitySearchHits.value = [];
+    entitySearchError.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    if (generation === entitySearchGeneration) entitySearchLoading.value = false;
+  }
+}
+
+function scheduleEntitySearch(value: string) {
+  if (entitySearchTimer !== null) window.clearTimeout(entitySearchTimer);
+  const generation = ++entitySearchGeneration;
+  entitySearchHits.value = [];
+  entitySearchError.value = "";
+  entitySearchLoading.value = false;
+  const query = value.trim();
+  entitySearchOpen.value = Boolean(query && baseMap.value);
+  entitySearchActiveIndex.value = 0;
+  if (!query || !baseMap.value) return;
+  entitySearchTimer = window.setTimeout(() => {
+    entitySearchTimer = null;
+    void loadEntitySearch(query, generation);
+  }, 180);
+}
+
+function queryOptionsForHit(hit: QueryRetrievalHit): Record<string, unknown> {
+  const options = entitySearchOptions("");
+  options.search = [];
+  options.searchFields = [];
+  if (hit.kind === "symbol") {
+    if (!hit.path) throw new Error("symbol retrieval hit has no source path");
+    options.symbols = [`${hit.path}:${hit.name}`];
+  } else if (hit.kind === "file") {
+    if (!hit.path) throw new Error("file retrieval hit has no source path");
+    options.paths = [hit.path];
+  }
+  else if (hit.kind === "component") options.components = [hit.name];
+  else if (hit.kind === "package") options.packages = [hit.name];
+  else if (hit.kind === "artifact") options.artifacts = [hit.name];
+  else throw new Error(`unsupported Query retrieval kind: ${hit.kind}`);
+  return options;
+}
+
+function resultNode(view: GraphView, hit: QueryRetrievalHit) {
+  if (hit.kind === "symbol") {
+    return view.nodes.find((node) => {
+      if (node.kind !== "symbol" || node.label !== hit.name || !node.parent) return false;
+      if (hit.line !== undefined && node.attributes.line !== hit.line) return false;
+      if (hit.symbolKind && node.attributes.kind !== hit.symbolKind) return false;
+      return view.nodes.find((parent) => parent.id === node.parent)?.identity === hit.path;
+    });
+  }
+  return view.nodes.find((node) => node.kind === hit.kind && (
+    (hit.path !== undefined && node.identity === hit.path) || node.label === hit.name
+  )) || view.nodes.find((node) =>
+    node.kind === "file" && hit.path !== undefined && node.identity === hit.path);
+}
+
+async function runQueryOptions(
+  options: Record<string, unknown>,
+  hit: QueryRetrievalHit | null = null,
+) {
   if (!baseMap.value) return;
   const previous = captureGraphNavigation();
   const id = beginOperation();
   error.value = "";
   resetGraphState();
   try {
-    const options = queryOptions();
-    const host = workspaceMode.value !== "saved" && liveHost &&
-      !(workspaceMode.value === "snapshot" && liveHost instanceof BrowserHost)
-      ? liveHost
-      : null;
+    const host = queryHost();
     let loaded: ParsedArtifact;
     let projection;
     if (host) {
@@ -1412,11 +1532,71 @@ async function runQuery() {
         previous,
       ];
     }
+    if (hit && projection?.graph) {
+      const selected = resultNode(projection.graph, hit);
+      if (selected) {
+        selectGraphElement(selected.id);
+        await nextTick();
+        requestAnimationFrame(() => graphCanvas.value?.center(selected.id));
+      }
+    }
   } catch (cause) {
     if (ownsOperation(id)) error.value = (cause as Error).message;
   } finally {
     finishOperation(id);
   }
+}
+
+async function runQuery() {
+  await runQueryOptions(queryOptions());
+}
+
+async function openEntitySearchHit(hit: QueryRetrievalHit) {
+  entitySearchOpen.value = false;
+  entitySearchHits.value = [];
+  await runQueryOptions(queryOptionsForHit(hit), hit);
+}
+
+function openFirstEntitySearchHit() {
+  const hit = entitySearchHits.value[entitySearchActiveIndex.value];
+  if (entitySearchOpen.value && hit) void openEntitySearchHit(hit);
+}
+
+function openEntitySearch() {
+  if (entitySearch.value.trim()) entitySearchOpen.value = true;
+  scheduleEntitySearch(entitySearch.value);
+}
+
+function closeEntitySearch() {
+  entitySearchOpen.value = false;
+}
+
+function moveEntitySearchSelection(offset: number) {
+  if (!entitySearchHits.value.length) return;
+  entitySearchOpen.value = true;
+  entitySearchActiveIndex.value = (
+    entitySearchActiveIndex.value + offset + entitySearchHits.value.length
+  ) % entitySearchHits.value.length;
+}
+
+function dismissEntitySearchOutside(event: PointerEvent) {
+  if (!entitySearchRoot.value?.contains(event.target as Node)) {
+    closeEntitySearch();
+  }
+}
+
+function entitySearchOptionId(index: number): string {
+  return `entity-search-option-${index}`;
+}
+
+function entitySearchResultType(hit: QueryRetrievalHit): string {
+  return hit.symbolKind || hit.kind;
+}
+
+function entitySearchResultReason(hit: QueryRetrievalHit): string {
+  const reason = hit.reasons[0];
+  if (!reason) return "retrieval match";
+  return `${reason.field.split(".").at(-1)} · ${reason.match}`;
 }
 
 async function runDiff() {
@@ -1564,8 +1744,11 @@ watch(graph, () => {
   edgeKind.value = "all";
   edgeClassification.value = "all";
 });
+watch(entitySearch, scheduleEntitySearch);
 
 onBeforeUnmount(() => {
+  if (entitySearchTimer !== null) window.clearTimeout(entitySearchTimer);
+  document.removeEventListener("pointerdown", dismissEntitySearchOutside);
   unsubscribe?.();
   themeMedia?.removeEventListener("change", systemThemeChanged);
   void liveHost?.dispose();
@@ -1576,6 +1759,7 @@ function systemThemeChanged(event: MediaQueryListEvent) {
 }
 
 onMounted(async () => {
+  document.addEventListener("pointerdown", dismissEntitySearchOutside);
   themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
   systemDark.value = themeMedia.matches;
   themeMedia.addEventListener("change", systemThemeChanged);
@@ -1626,10 +1810,55 @@ onMounted(async () => {
         @directory="openLive({ kind: 'directory', files: $event })"
         @zip="openLive({ kind: 'zip', file: $event })"
       />
-      <label v-if="artifact" class="search">
-        <span>Filter current graph</span>
-        <input v-model="search" :disabled="!graph" placeholder="symbol, file, component…" />
-      </label>
+      <div v-if="artifact" ref="entitySearchRoot" class="search entity-search">
+        <label>
+          <span>Search project map</span>
+          <input
+            v-model="entitySearch"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls="entity-search-results"
+            :aria-expanded="entitySearchOpen"
+            :aria-activedescendant="entitySearchOpen && entitySearchHits.length
+              ? entitySearchOptionId(entitySearchActiveIndex)
+              : undefined"
+            :disabled="!baseMap"
+            placeholder="name, type, or documentation…"
+            type="search"
+            @focus="openEntitySearch"
+            @keydown.down.prevent="moveEntitySearchSelection(1)"
+            @keydown.up.prevent="moveEntitySearchSelection(-1)"
+            @keydown.enter.prevent="openFirstEntitySearchHit"
+            @keydown.esc.stop.prevent="closeEntitySearch"
+          />
+        </label>
+        <div
+          v-if="entitySearchOpen && entitySearch.trim()"
+          id="entity-search-results"
+          class="entity-search-results"
+          aria-label="Project Map search results"
+          role="listbox"
+        >
+          <p v-if="entitySearchLoading">Searching Map…</p>
+          <button
+            v-for="(hit, index) in entitySearchHits"
+            :id="entitySearchOptionId(index)"
+            :key="`${hit.kind}:${hit.path || ''}:${hit.name}:${hit.line || 0}`"
+            :aria-selected="index === entitySearchActiveIndex"
+            :class="{ active: index === entitySearchActiveIndex }"
+            role="option"
+            tabindex="-1"
+            type="button"
+            @click="openEntitySearchHit(hit)"
+            @pointerenter="entitySearchActiveIndex = index"
+          >
+            <span>{{ hit.name }}</span>
+            <small>{{ entitySearchResultType(hit) }}<template v-if="hit.path"> · {{ hit.path }}</template><template v-if="hit.line">:{{ hit.line }}</template></small>
+            <small>{{ entitySearchResultReason(hit) }}</small>
+          </button>
+          <p v-if="!entitySearchLoading && entitySearchError">{{ entitySearchError }}</p>
+        </div>
+      </div>
       <label class="theme-control">
         <span>Theme</span>
         <select :value="theme" @change="applyTheme(($event.target as HTMLSelectElement).value as Theme)">
@@ -1928,17 +2157,6 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div v-if="searchResults.length" class="results" aria-label="Graph filter results">
-          <button
-            v-for="node in searchResults"
-            :key="node.id"
-            type="button"
-            @click="selectGraphElement(node.id)"
-          >
-            <span>{{ node.label }}</span>
-            <small>{{ node.kind }}</small>
-          </button>
-        </div>
       </nav>
 
       <div v-if="error && !graph" class="error-card">

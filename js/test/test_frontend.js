@@ -925,6 +925,21 @@ assert.throws(
   ),
   /query selectors matched no indexed evidence/,
 );
+const documentationSearch = JSON.parse(queryMap(
+  semanticProject.mapJson(),
+  {
+    search: ["available inspectors"],
+    searchFields: ["default", "documentation"],
+    searchLimit: 4,
+    depth: 0,
+    testDepth: 0,
+  },
+)).query.retrieval;
+assert.deepEqual(documentationSearch.fields, ["default", "documentation"]);
+assert.equal(documentationSearch.hits[0].name, "target");
+assert.ok(documentationSearch.hits[0].reasons.some(
+  (reason) => reason.field === "symbol.documentation",
+));
 assert.ok(
   semanticMap.edges.some(
     (edge) =>
@@ -1143,7 +1158,7 @@ assert.equal(currentProducerQuery.query.producer_compatibility, "current");
 const retrievalQuery = JSON.parse(queryMap(repositoryMapJson, {
   search: ["twce javascript"], searchLimit: 4, depth: 0, testDepth: 0,
 }));
-assert.equal(retrievalQuery.query.retrieval.contract, "archbird-lexical-ranking-v3");
+assert.equal(retrievalQuery.query.retrieval.contract, "archbird-lexical-ranking-v4");
 assert.equal(retrievalQuery.query.retrieval.confidence, "candidate");
 assert.equal(retrievalQuery.query.retrieval.hits.length, 4);
 assert.equal(retrievalQuery.query.retrieval.hits[0].path, "js/index.js");

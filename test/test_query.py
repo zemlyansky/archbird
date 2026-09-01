@@ -291,6 +291,57 @@ def main() -> int:
     if retrieval_first != retrieval_second:
         raise AssertionError("deterministic retrieval bytes are not repeatable")
     retrieval = json.loads(retrieval_first)["query"]["retrieval"]
+    explicit_default_request = dict(retrieval_request)
+    explicit_default_request["search_fields"] = ["default"]
+    explicit_default = json.loads(
+        extension.map_query(
+            canonical(retrieval_map), canonical(explicit_default_request)
+        )
+    )["query"]["retrieval"]
+    if "fields" in retrieval or explicit_default.get("fields") != ["default"]:
+        raise AssertionError("optional retrieval fields changed the default artifact")
+    if retrieval["hits"] != explicit_default["hits"]:
+        raise AssertionError("explicit default retrieval changed ranking or witnesses")
+    filename_map = copy.deepcopy(retrieval_map)
+    exact_file = copy.deepcopy(filename_map["files"][0])
+    exact_file["path"] = "software_control/llm.py"
+    exact_file["symbols"] = []
+    competing_test = copy.deepcopy(filename_map["files"][0])
+    competing_test["path"] = "software_control/tests/test_llm.py"
+    competing_test["symbols"] = [
+        {
+            "kind": "function",
+            "line": 1,
+            "name": "llm",
+            "scope": "function",
+            "signature": "llm()",
+        }
+    ]
+    filename_map["files"].extend((exact_file, competing_test))
+    filename_map["files"].sort(key=lambda row: row["path"])
+    filename_retrieval = json.loads(
+        extension.map_query(
+            canonical(filename_map),
+            canonical(
+                {
+                    "search": ["llm.py"],
+                    "search_limit": 5,
+                    "direction": "both",
+                    "depth": 0,
+                    "test_depth": 0,
+                }
+            ),
+        )
+    )["query"]["retrieval"]
+    if (
+        filename_retrieval["hits"][0]["kind"] != "file"
+        or filename_retrieval["hits"][0]["path"]
+        != "software_control/llm.py"
+    ):
+        raise AssertionError(
+            f"exact filename did not outrank incidental test matches: "
+            f"{filename_retrieval!r}"
+        )
     if (
         retrieval["hits"][0]["kind"] != "package"
         or retrieval["hits"][0]["name"] != "sample"
@@ -350,7 +401,7 @@ def main() -> int:
         )
     )["query"]["retrieval"]
     if (
-        coverage_retrieval["contract"] != "archbird-lexical-ranking-v3"
+        coverage_retrieval["contract"] != "archbird-lexical-ranking-v4"
         or coverage_retrieval["hits"][0]["kind"] != "component"
         or coverage_retrieval["hits"][0]["name"] != "quasar-runtime"
     ):
@@ -424,6 +475,20 @@ def main() -> int:
         {
             "search": ["sample"],
             "search_limit": 101,
+            "direction": "both",
+            "depth": 0,
+            "test_depth": 0,
+        },
+        {
+            "search": ["sample"],
+            "search_fields": ["semantic"],
+            "direction": "both",
+            "depth": 0,
+            "test_depth": 0,
+        },
+        {
+            "search": ["sample"],
+            "search_fields": [],
             "direction": "both",
             "depth": 0,
             "test_depth": 0,

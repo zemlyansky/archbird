@@ -221,7 +221,7 @@ textarea { min-height: 76px; resize: vertical; }
   font-size: 0.73rem;
 }
 
-.search span, .theme-control span {
+.search > label > span, .theme-control span {
   display: block;
   margin-bottom: 3px;
   color: var(--muted);
@@ -232,6 +232,41 @@ textarea { min-height: 76px; resize: vertical; }
 }
 .search input { height: 36px; }
 .theme-control select { height: 36px; }
+.entity-search { position: relative; min-width: 0; }
+.entity-search-results {
+  position: absolute;
+  z-index: 14;
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  max-height: min(440px, calc(100vh - 100px));
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--bg) 72%, transparent);
+}
+.entity-search-results button {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+  text-align: left;
+}
+.entity-search-results button.active {
+  background: var(--accent-soft);
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.entity-search-results span,
+.entity-search-results small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.entity-search-results small { color: var(--muted); font-size: 0.68rem; }
+.entity-search-results p { margin: 5px 7px; color: var(--muted); font-size: 0.72rem; }
 
 .welcome {
   min-height: 100vh;
@@ -475,16 +510,6 @@ textarea { min-height: 76px; resize: vertical; }
 }
 .diff-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 7px; }
 .diff-controls button { grid-column: 1 / -1; }
-
-.results { display: grid; gap: 5px; margin-top: 14px; }
-.results button { min-width: 0; padding: 7px; text-align: left; }
-.results span, .results small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.results small { color: var(--muted); }
 
 .graph-stage { position: relative; min-width: 0; background: var(--canvas); }
 .graph-back {

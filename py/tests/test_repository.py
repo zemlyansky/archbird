@@ -293,6 +293,92 @@ def main() -> int:
         raise AssertionError(
             "declaration prose became an unreviewed lexical seed"
         )
+    documentation_retrieval = json.loads(
+        query_map_json(
+            documentation_project.map_json(),
+            search=["caller disposal"],
+            search_fields=["default", "documentation"],
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    if (
+        documentation_retrieval["fields"] != ["default", "documentation"]
+        or documentation_retrieval["hits"][0]["name"] != "Client"
+        or not any(
+            reason["field"] == "symbol.documentation"
+            for reason in documentation_retrieval["hits"][0]["reasons"]
+        )
+    ):
+        raise AssertionError(documentation_retrieval)
+    type_retrieval = json.loads(
+        query_map_json(
+            documentation_project.map_json(),
+            search=["file"],
+            search_fields=["type"],
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    if (
+        type_retrieval["hits"][0]["kind"] != "file"
+        or type_retrieval["hits"][0]["path"] != "pkg/api.py"
+        or type_retrieval["hits"][0]["reasons"][0]["field"] != "entity.type"
+    ):
+        raise AssertionError(type_retrieval)
+    default_retrieval = json.loads(
+        query_map_json(
+            documentation_project.map_json(),
+            search=["Client"],
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    explicit_default_retrieval = json.loads(
+        query_map_json(
+            documentation_project.map_json(),
+            search=["Client"],
+            search_fields=["default"],
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    if (
+        "fields" in default_retrieval
+        or explicit_default_retrieval.get("fields") != ["default"]
+        or default_retrieval["hits"] != explicit_default_retrieval["hits"]
+    ):
+        raise AssertionError("explicit default retrieval changed ranked evidence")
+    normalized_fields = json.loads(
+        query_map_json(
+            documentation_project.map_json(),
+            search=["Client"],
+            search_fields=["type", "default"],
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]["fields"]
+    if normalized_fields != ["default", "type"]:
+        raise AssertionError(f"search_fields were not normalized: {normalized_fields!r}")
+    for invalid_fields in ([], ["semantic"]):
+        try:
+            _native.map_query(
+                documentation_project.map_json(),
+                json.dumps(
+                    {
+                        "depth": 0,
+                        "direction": "both",
+                        "search": ["Client"],
+                        "search_fields": invalid_fields,
+                        "test_depth": 0,
+                    },
+                    separators=(",", ":"),
+                ).encode(),
+            )
+        except Exception:
+            pass
+        else:
+            raise AssertionError(f"invalid search_fields accepted: {invalid_fields!r}")
 
     conflict_project = Project(
         "merge-conflict",
@@ -2108,7 +2194,7 @@ writer.commit()
     )
     retrieval = retrieval_query["query"]["retrieval"]
     if (
-        retrieval["contract"] != "archbird-lexical-ranking-v3"
+        retrieval["contract"] != "archbird-lexical-ranking-v4"
         or retrieval["confidence"] != "candidate"
         or len(retrieval["hits"]) != 4
         or retrieval["hits"][0]["path"] != "py/pkg/api.py"
@@ -2151,6 +2237,43 @@ writer.commit()
     ):
         raise AssertionError(
             f"package metadata retrieval lost its witness: {package_retrieval!r}"
+        )
+    filename_map = json.loads(report_map_json)
+    exact_file = copy.deepcopy(filename_map["files"][0])
+    exact_file["path"] = "software_control/llm.py"
+    exact_file["symbols"] = []
+    competing_test = copy.deepcopy(filename_map["files"][0])
+    competing_test["path"] = "software_control/tests/test_llm.py"
+    competing_test["symbols"] = [
+        {
+            "kind": "function",
+            "line": 1,
+            "name": "llm",
+            "scope": "function",
+            "signature": "llm()",
+        }
+    ]
+    filename_map["files"].extend((exact_file, competing_test))
+    filename_map["files"].sort(key=lambda row: row["path"])
+    filename_retrieval = json.loads(
+        query_map_json(
+            json.dumps(
+                filename_map, sort_keys=True, separators=(",", ":")
+            ).encode(),
+            search=["llm.py"],
+            search_limit=5,
+            depth=0,
+            test_depth=0,
+        )
+    )["query"]["retrieval"]
+    if (
+        filename_retrieval["hits"][0]["kind"] != "file"
+        or filename_retrieval["hits"][0]["path"]
+        != "software_control/llm.py"
+    ):
+        raise AssertionError(
+            "exact filename did not outrank incidental test matches: "
+            f"{filename_retrieval!r}"
         )
     coverage_map = json.loads(report_map_json)
     coverage_file = next(

@@ -266,9 +266,9 @@ static ArchbirdStatus merge_objects(ArchbirdEngine *engine, const AbValue *base,
 
 static int override_allowed(const AbString *name) {
   static const char *const allowed[] = {
-      "artifacts", "components",   "context",  "depth",
-      "direction", "focus",        "packages", "paths",
-      "search",    "search_limit", "symbols",  "test_depth",
+      "artifacts",    "components", "context",    "depth",  "direction",
+      "focus",        "packages",   "paths",      "search", "search_fields",
+      "search_limit", "symbols",    "test_depth",
   };
   size_t index;
   for (index = 0; index < sizeof(allowed) / sizeof(allowed[0]); index++)
@@ -293,11 +293,14 @@ static ArchbirdStatus build_options(ArchbirdEngine *engine,
                  {"test_depth", "8", 1}};
   size_t index;
   size_t output = 0;
+  int has_search_fields =
+      ab_value_member(definition, "search_fields") != NULL ||
+      ab_value_member(overrides, "search_fields") != NULL;
   ArchbirdStatus status;
   for (index = 0; index < overrides->as.object.count; index++)
     if (!override_allowed(&overrides->as.object.fields[index].name))
       return invalid(engine, "runtime overrides contain an unknown field");
-  status = object_init(engine, out, 12);
+  status = object_init(engine, out, 12 + (size_t)has_search_fields);
   for (index = 0;
        status == ARCHBIRD_OK && index < sizeof(arrays) / sizeof(arrays[0]);
        index++) {
@@ -307,6 +310,14 @@ static ArchbirdStatus build_options(ArchbirdEngine *engine,
       status = normalized_string_union(
           engine, ab_value_member(definition, arrays[index]),
           ab_value_member(overrides, arrays[index]), &field->value);
+  }
+  if (status == ARCHBIRD_OK && has_search_fields) {
+    AbObjectField *field = &out->as.object.fields[output++];
+    status = field_name(engine, field, "search_fields");
+    if (status == ARCHBIRD_OK)
+      status = normalized_string_union(
+          engine, ab_value_member(definition, "search_fields"),
+          ab_value_member(overrides, "search_fields"), &field->value);
   }
   if (status == ARCHBIRD_OK) {
     AbObjectField *field = &out->as.object.fields[output++];
@@ -373,13 +384,23 @@ static ArchbirdStatus build_plan_sections(ArchbirdEngine *engine,
       "artifacts", "components", "focus", "packages", "paths", "symbols"};
   static const char *const operation_fields[] = {
       "context", "depth", "direction", "search", "search_limit", "test_depth"};
+  static const char *const operation_fields_with_search_fields[] = {
+      "context",       "depth",        "direction", "search",
+      "search_fields", "search_limit", "test_depth"};
+  const char *const *effective_operation_fields = operation_fields;
+  size_t operation_field_count =
+      sizeof(operation_fields) / sizeof(operation_fields[0]);
   ArchbirdStatus status = copy_selected_fields(
       engine, options, selection_fields,
       sizeof(selection_fields) / sizeof(selection_fields[0]), selection);
+  if (ab_value_member(options, "search_fields")) {
+    effective_operation_fields = operation_fields_with_search_fields;
+    operation_field_count = sizeof(operation_fields_with_search_fields) /
+                            sizeof(operation_fields_with_search_fields[0]);
+  }
   if (status == ARCHBIRD_OK)
-    status = copy_selected_fields(
-        engine, options, operation_fields,
-        sizeof(operation_fields) / sizeof(operation_fields[0]), operations);
+    status = copy_selected_fields(engine, options, effective_operation_fields,
+                                  operation_field_count, operations);
   if (status != ARCHBIRD_OK)
     ab_value_free(engine, selection);
   return status;

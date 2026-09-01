@@ -170,6 +170,11 @@ semantic search. Use concise repository vocabulary, then switch to an exact
 `--symbol`, `--path`, `--component`, or `--test` selector. Candidate and
 conservative test routes are navigation evidence, not proof that a test ran.
 
+The Python Query API can set `search_fields` to a sorted subset of `default`,
+`documentation`, and `type`. Omit it to preserve the CLI ranking. The local
+application enables all three for Map-wide entity search and opens a selected
+hit through an exact typed Query.
+
 Render hash-checked source from the same selection:
 
 <!-- archbird-example: tested-pass python-source covers=source -->
@@ -738,6 +743,12 @@ context = project.query_markdown(
 )
 selection = project.query_json(
     symbols=["src/runtime.c:runtime_start"], depth=0
+)
+matches = project.query_json(
+    search=["provider registry"],
+    search_fields=["default", "documentation", "type"],
+    depth=0,
+    test_depth=0,
 )
 source = project.source_markdown(
     artifact_json=selection

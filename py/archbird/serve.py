@@ -56,12 +56,14 @@ def _query_options(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise ValueError("query payload must be an object")
     aliases = {
+        "searchFields": "search_fields",
         "searchLimit": "search_limit",
         "testDepth": "test_depth",
     }
     allowed = {
         "focus", "paths", "symbols", "components", "packages", "artifacts",
-        "search", "search_limit", "direction", "depth", "test_depth",
+        "search", "search_fields", "search_limit", "direction", "depth",
+        "test_depth",
     }
     options: dict[str, object] = {}
     for key, item in value.items():

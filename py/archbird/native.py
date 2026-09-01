@@ -1266,6 +1266,7 @@ class Project:
         packages: Sequence[str] = (),
         artifacts: Sequence[str] = (),
         search: Sequence[str] = (),
+        search_fields: Sequence[str] = (),
         search_limit: int = 8,
         change_set: Optional[Mapping[str, object]] = None,
         context: Optional[Mapping[str, object]] = None,
@@ -1283,6 +1284,7 @@ class Project:
             packages=packages,
             artifacts=artifacts,
             search=search,
+            search_fields=search_fields,
             search_limit=search_limit,
             change_set=change_set,
             context=context,
@@ -1412,6 +1414,7 @@ class Project:
         packages: Sequence[str] = (),
         artifacts: Sequence[str] = (),
         search: Sequence[str] = (),
+        search_fields: Sequence[str] = (),
         search_limit: int = 8,
         change_set: Optional[Mapping[str, object]] = None,
         context: Optional[Mapping[str, object]] = None,
@@ -1435,6 +1438,7 @@ class Project:
             packages=packages,
             artifacts=artifacts,
             search=search,
+            search_fields=search_fields,
             search_limit=search_limit,
             change_set=change_set,
             context=context,
@@ -1558,6 +1562,7 @@ def _query_request(
     packages: Sequence[str] = (),
     artifacts: Sequence[str] = (),
     search: Sequence[str] = (),
+    search_fields: Sequence[str] = (),
     search_limit: int = 8,
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
@@ -1576,6 +1581,7 @@ def _query_request(
             or packages
             or artifacts
             or search
+            or search_fields
             or context is not None
             or search_limit != 8
             or direction != "both"
@@ -1607,6 +1613,8 @@ def _query_request(
         "symbols": list(symbols),
         "test_depth": test_depth,
     }
+    if search_fields:
+        request["search_fields"] = sorted(set(search_fields))
     if context is not None:
         request["context"] = dict(context)
     if change_set is not None:
@@ -1624,6 +1632,7 @@ def query_map_json(
     packages: Sequence[str] = (),
     artifacts: Sequence[str] = (),
     search: Sequence[str] = (),
+    search_fields: Sequence[str] = (),
     search_limit: int = 8,
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
@@ -1645,6 +1654,7 @@ def query_map_json(
         packages=packages,
         artifacts=artifacts,
         search=search,
+        search_fields=search_fields,
         search_limit=search_limit,
         change_set=change_set,
         direction=direction,
@@ -1901,6 +1911,7 @@ def query_map_markdown(
     packages: Sequence[str] = (),
     artifacts: Sequence[str] = (),
     search: Sequence[str] = (),
+    search_fields: Sequence[str] = (),
     search_limit: int = 8,
     change_set: Optional[Mapping[str, object]] = None,
     context: Optional[Mapping[str, object]] = None,
@@ -1944,6 +1955,7 @@ def query_map_markdown(
         packages=packages,
         artifacts=artifacts,
         search=search,
+        search_fields=search_fields,
         search_limit=search_limit,
         change_set=change_set,
         direction=direction,

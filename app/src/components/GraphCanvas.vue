@@ -993,6 +993,10 @@ function keyboard(event: KeyboardEvent) {
 
 defineExpose({
   captureViewport,
+  center: (id: string) => {
+    const element = cy?.getElementById(id);
+    if (element?.length) cy?.animate({ center: { eles: element }, duration: 180 });
+  },
   fit,
   restoreViewport,
   setZoom,

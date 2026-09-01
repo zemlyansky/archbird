@@ -1660,6 +1660,7 @@ function queryRequest(
     packages = [],
     artifacts = [],
     search = [],
+    searchFields = [],
     searchLimit = 8,
     changeSet = null,
     context = null,
@@ -1674,7 +1675,8 @@ function queryRequest(
     if (
       focus.length || paths.length || symbols.length || components.length ||
       packages.length || artifacts.length || search.length || context !== null ||
-      searchLimit !== 8 || direction !== "both" || depth !== 1 || testDepth !== 8
+      searchFields.length || searchLimit !== 8 || direction !== "both" ||
+      depth !== 1 || testDepth !== 8
     ) {
       throw new TypeError(
         "QueryPlan execution accepts only changeSet and producerPolicy; " +
@@ -1699,6 +1701,7 @@ function queryRequest(
     symbols,
     test_depth: testDepth,
   };
+  if (searchFields.length) request.search_fields = [...new Set(searchFields)].sort();
   if (changeSet !== null) request.change_set = changeSet;
   if (context !== null) request.context = context;
   return canonicalForDigest(request);

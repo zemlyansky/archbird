@@ -6,6 +6,12 @@
 
 #define AB_RETRIEVAL_MAX_TERMS 16
 
+enum {
+  AB_RETRIEVAL_FIELDS_DEFAULT = 1u << 0,
+  AB_RETRIEVAL_FIELDS_DOCUMENTATION = 1u << 1,
+  AB_RETRIEVAL_FIELDS_TYPE = 1u << 2
+};
+
 typedef enum AbRetrievalKind {
   AB_RETRIEVAL_FILE = 0,
   AB_RETRIEVAL_SYMBOL = 1,
@@ -39,6 +45,7 @@ typedef struct AbRetrievalHit {
 } AbRetrievalHit;
 
 typedef struct AbRetrievalResult {
+  const AbValue *queries;
   AbString terms[AB_RETRIEVAL_MAX_TERMS];
   size_t document_frequency[AB_RETRIEVAL_MAX_TERMS];
   size_t term_count;
@@ -51,8 +58,8 @@ typedef struct AbRetrievalResult {
 
 ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
                                  const AbProjectionData *domain,
-                                 const AbValue *queries, size_t limit,
-                                 AbRetrievalResult *out);
+                                 const AbValue *queries, unsigned fields,
+                                 size_t limit, AbRetrievalResult *out);
 void ab_query_retrieval_free(ArchbirdEngine *engine, AbRetrievalResult *result);
 const char *ab_query_retrieval_kind_name(AbRetrievalKind kind);
 uint64_t ab_query_retrieval_text_score(const AbRetrievalResult *result,

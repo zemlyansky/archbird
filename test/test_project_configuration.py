@@ -3289,6 +3289,12 @@ def main() -> None:
                 "direction": "upstream",
                 "projection": ["public-api", "core-engine"],
             },
+            "documented-search": {
+                "depth": 0,
+                "search": ["architecture"],
+                "search_fields": ["default", "documentation", "type"],
+                "test_depth": 0,
+            },
             "inferred-impact": {
                 "artifacts": ["browser-bundle"],
                 "components": ["base"],
@@ -3358,6 +3364,17 @@ def main() -> None:
     assert compiled["map_overlay"]["layers"] == modern["layers"]
     assert "queries" not in compiled["map_overlay"]
     assert "constraints" not in compiled["map_overlay"]
+    for invalid_fields in ([], ["semantic"], ["default", "default"]):
+        invalid = json.loads(json.dumps(modern))
+        invalid["queries"]["documented-search"]["search_fields"] = invalid_fields
+        try:
+            compile_project_configuration(
+                json.dumps(invalid, sort_keys=True, separators=(",", ":")).encode()
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"invalid query search_fields accepted: {invalid_fields}")
 
     modern_map = _map(modern)
 
@@ -3986,6 +4003,12 @@ def main() -> None:
         "projection_result_sha256" not in row
         for row in query_plan["projections"]
     )
+    documented_search_plan = compile_named_query(config_json, "documented-search")
+    assert documented_search_plan["operations"]["search_fields"] == [
+        "default",
+        "documentation",
+        "type",
+    ]
     public_query_plan = json.loads(
         compile_query_plan_json(config_json, "api-impact")
     )

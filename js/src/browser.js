@@ -59,6 +59,9 @@ function queryRequest(options = {}) {
     symbols: options.symbols || [],
     test_depth: options.testDepth ?? 8,
   };
+  if (options.searchFields?.length) {
+    request.search_fields = [...new Set(options.searchFields)].sort();
+  }
   if (options.context !== undefined && options.context !== null) {
     request.context = options.context;
   }

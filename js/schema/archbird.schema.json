@@ -479,6 +479,13 @@
         "packages": {"$ref": "#/$defs/strings"},
         "artifacts": {"$ref": "#/$defs/strings"},
         "search": {"$ref": "#/$defs/strings"},
+        "search_fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"enum": ["default", "documentation", "type"]}
+        },
         "search_limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "direction": {"enum": ["upstream", "downstream", "both"]},
         "depth": {"type": "integer", "minimum": 0},

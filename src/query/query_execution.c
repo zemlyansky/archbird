@@ -22,6 +22,7 @@ typedef struct QueryRequest {
   const AbValue *packages;
   const AbValue *artifacts;
   const AbValue *search;
+  const AbValue *search_fields;
   const AbValue *change_set;
   const AbValue *context;
   const AbString *direction;
@@ -519,6 +520,43 @@ static int string_array_valid(const AbValue *value) {
   return 1;
 }
 
+static int search_fields_valid(const AbValue *value) {
+  size_t index;
+  if (!value)
+    return 1;
+  if (!string_array_valid(value) || !value->as.array.count ||
+      value->as.array.count > 3)
+    return 0;
+  for (index = 0; index < value->as.array.count; index++) {
+    const AbString *field = &value->as.array.items[index].as.text;
+    if (!string_literal(field, "default") &&
+        !string_literal(field, "documentation") &&
+        !string_literal(field, "type"))
+      return 0;
+    if (index && ab_string_compare(&value->as.array.items[index - 1].as.text,
+                                   field) >= 0)
+      return 0;
+  }
+  return 1;
+}
+
+static unsigned search_field_flags(const AbValue *value) {
+  size_t index;
+  unsigned fields = 0;
+  if (!value || !value->as.array.count)
+    return AB_RETRIEVAL_FIELDS_DEFAULT;
+  for (index = 0; index < value->as.array.count; index++) {
+    const AbString *field = &value->as.array.items[index].as.text;
+    if (string_literal(field, "default"))
+      fields |= AB_RETRIEVAL_FIELDS_DEFAULT;
+    else if (string_literal(field, "documentation"))
+      fields |= AB_RETRIEVAL_FIELDS_DOCUMENTATION;
+    else if (string_literal(field, "type"))
+      fields |= AB_RETRIEVAL_FIELDS_TYPE;
+  }
+  return fields;
+}
+
 static int repository_path_valid(const AbString *path) {
   size_t segment = 0;
   size_t index;
@@ -666,10 +704,10 @@ static ArchbirdStatus decode_request(QueryContext *context, const AbValue *plan,
   static const AbString compatible = {(char *)"compatible", 10};
   const AbValue *producer_policy;
   static const char *const allowed[] = {
-      "artifacts", "change_set",      "components", "context",
-      "depth",     "direction",       "focus",      "packages",
-      "paths",     "producer_policy", "search",     "search_limit",
-      "symbols",   "test_depth",
+      "artifacts",    "change_set",      "components", "context",
+      "depth",        "direction",       "focus",      "packages",
+      "paths",        "producer_policy", "search",     "search_fields",
+      "search_limit", "symbols",         "test_depth",
   };
   static const char *const saved_allowed[] = {"change_set", "plan",
                                               "producer_policy"};
@@ -690,6 +728,7 @@ static ArchbirdStatus decode_request(QueryContext *context, const AbValue *plan,
   context->request.packages = optional_array(selection, "packages");
   context->request.artifacts = optional_array(selection, "artifacts");
   context->request.search = optional_array(operations, "search");
+  context->request.search_fields = ab_value_member(operations, "search_fields");
   context->request.change_set = ab_value_member(request, "change_set");
   if (!string_array_valid(context->request.focus) ||
       !string_array_valid(context->request.paths) ||
@@ -699,6 +738,9 @@ static ArchbirdStatus decode_request(QueryContext *context, const AbValue *plan,
       !string_array_valid(context->request.artifacts) ||
       !string_array_valid(context->request.search))
     return query_error(context, "query selectors must be arrays of strings");
+  if (!search_fields_valid(context->request.search_fields))
+    return query_error(context, "query.search_fields must be a sorted unique "
+                                "subset of default, documentation, type");
   if (validate_change_set(context, context->request.change_set) != ARCHBIRD_OK)
     return ARCHBIRD_INVALID_SCHEMA;
   if (validate_context_request(
@@ -1535,6 +1577,7 @@ static ArchbirdStatus select_retrieval(QueryContext *context) {
                        "search query has no exhaustive search projection");
   status = ab_query_retrieve(
       context->engine, context->map, domain, context->request.search,
+      search_field_flags(context->request.search_fields),
       context->request.search_limit, &context->retrieval);
   if (status != ARCHBIRD_OK)
     return status;
@@ -4760,7 +4803,14 @@ static ArchbirdStatus render_retrieval(AbBuffer *buffer,
   if (status == ARCHBIRD_OK)
     status =
         ab_buffer_literal(buffer, ",\"confidence\":\"candidate\",\"contract\":"
-                                  "\"archbird-lexical-ranking-v3\",\"hits\":[");
+                                  "\"archbird-lexical-ranking-v4\"");
+  if (status == ARCHBIRD_OK && context->request.search_fields) {
+    status = ab_buffer_literal(buffer, ",\"fields\":");
+    if (status == ARCHBIRD_OK)
+      status = ab_value_render(buffer, context->request.search_fields);
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(buffer, ",\"hits\":[");
   for (index = 0; status == ARCHBIRD_OK && index < context->retrieval.hit_count;
        index++) {
     const AbRetrievalHit *hit = &context->retrieval.hits[index];

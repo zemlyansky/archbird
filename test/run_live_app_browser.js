@@ -199,6 +199,70 @@ async function expectDocumentedAdd(page) {
   await expectSelectedDocumentation(page, "add", "Add two values.");
 }
 
+async function expectDragHidesNodeOverlays(page) {
+  const canvas = page.locator(".graph-canvas");
+  const box = await canvas.boundingBox();
+  const x = Number(await canvas.getAttribute("data-selected-x"));
+  const y = Number(await canvas.getAttribute("data-selected-y"));
+  if (!box || !Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error("selected graph node has no draggable position");
+  }
+  await page.mouse.move(box.x + x, box.y + y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + x + 48, box.y + y + 32, { steps: 6 });
+  await page.locator('.graph-canvas[data-dragging-node="true"]').waitFor();
+  if (await page.locator(".graph-node-actions").count()
+      || await page.locator(".graph-tooltip").count()) {
+    throw new Error("node overlays remained visible while dragging");
+  }
+  await page.mouse.up();
+  await page.locator('.graph-canvas[data-dragging-node="false"]').waitFor();
+}
+
+async function expectEntitySearch(page) {
+  const input = page.getByRole("combobox", { name: "Search project map" });
+  await input.fill("js/index.js");
+  const exactFile = page.locator(".entity-search-results button").first();
+  await exactFile.getByText("js/index.js", { exact: true }).first()
+    .waitFor({ timeout: 10_000 });
+  await page.locator(".brand").click();
+  await page.locator(".entity-search-results").waitFor({ state: "detached" });
+  if (await input.inputValue() !== "js/index.js") {
+    throw new Error("outside-click dismissal cleared the search query");
+  }
+  await input.focus();
+  await page.locator(".entity-search-results").waitFor({ timeout: 10_000 });
+  await input.press("Escape");
+  await page.locator(".entity-search-results").waitFor({ state: "detached" });
+  if (await input.inputValue() !== "js/index.js") {
+    throw new Error("Escape dismissal cleared the search query");
+  }
+  await input.fill("function");
+  const typedResult = page.locator(".entity-search-results button").first();
+  await typedResult.getByText(/^function · /).waitFor({ timeout: 10_000 });
+  await typedResult.getByText("kind · exact-field", { exact: true }).waitFor();
+  await input.fill("Fixture arithmetic");
+  const result = page.locator(".entity-search-results button").first();
+  await result.getByText("js/index.js", { exact: true }).waitFor({ timeout: 10_000 });
+  await result.getByText("documentation", { exact: false }).waitFor();
+  await result.click();
+  await page.locator(".entity-search-results").waitFor({ state: "detached" });
+  await expectSelectedDocumentation(page, "js/index.js", "Fixture arithmetic module.");
+  await expectDragHidesNodeOverlays(page);
+  await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+  await input.fill("");
+}
+
+async function openEntitySearchResult(page, search, name) {
+  const input = page.getByRole("combobox", { name: "Search project map" });
+  await input.fill(search);
+  const result = page.locator(".entity-search-results button").filter({
+    has: page.getByText(name, { exact: true }),
+  }).first();
+  await result.waitFor({ timeout: 10_000 });
+  await result.click();
+}
+
 async function main() {
   fs.rmSync(temporaryRoot, { force: true, recursive: true });
   fs.mkdirSync(temporaryRoot, { recursive: true });
@@ -374,6 +438,7 @@ async function main() {
       [...document.querySelectorAll(".metric-summary-value")]
         .every((node) => node.textContent !== "loading"),
     undefined, { timeout: 30_000 });
+    await expectEntitySearch(page);
     if (insecureOrigin) {
       const security = await page.evaluate(() => ({
         secureContext: isSecureContext,
@@ -451,31 +516,18 @@ async function main() {
       }
       await changeMapAxis(page, "layer", "group-by", "layer");
       await page.locator(".inspector").getByText("layer", { exact: true }).first().waitFor();
-      await page.locator(".search input").fill("JavaScript");
-      await page.locator(".results button").first().click();
-      await page.getByText("inferred layer group", { exact: true }).waitFor();
       await changeMapAxis(page, "directory", "group-by", "directory");
-      await page.locator(".search input").fill("js/");
-      await page.locator(".results button").first().click();
-      await page.getByText("inferred directory group", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Expand area", exact: true }).click();
-      await page.locator('.graph-canvas[data-layout-ready="true"]')
-        .waitFor({ timeout: 30_000 });
-      await page.locator(".search input").fill("js/index.js");
-      await page.locator(".results button").first().click();
+      await openEntitySearchResult(page, "js/index.js", "js/index.js");
       await expectSelectedDocumentation(
         page,
         "js/index.js",
         "Fixture arithmetic module.",
       );
-      await page.getByRole("button", { name: "Expand symbols", exact: true }).click();
-      await page.locator('.graph-canvas[data-layout-ready="true"]')
-        .waitFor({ timeout: 30_000 });
-      await page.locator(".search input").fill("add");
-      await page.locator(".results button").first().click();
+      await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+      await openEntitySearchResult(page, "Add two values", "add");
       await expectDocumentedAdd(page);
-      await page.locator(".search input").fill("js/index.js");
-      await page.locator(".results button").first().click();
+      await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+      await openEntitySearchResult(page, "js/index.js", "js/index.js");
       await page.getByRole("button", { name: "Open js/index.js", exact: true }).click();
       await page.getByText("Source · utf-8").waitFor();
       await page.screenshot({ path: screenshot, fullPage: true });
@@ -492,7 +544,8 @@ async function main() {
           `live exploration downloaded the canonical Map: ${hostMethods.join(", ")}`,
         );
       }
-      if (!hostMethods.includes("projection") || !hostMethods.includes("source")) {
+      if (!hostMethods.includes("projection") || !hostMethods.includes("query")
+          || !hostMethods.includes("source")) {
         throw new Error(
           `live exploration missed typed server operations: ${hostMethods.join(", ")}`,
         );
@@ -515,31 +568,17 @@ async function main() {
     await page.getByRole("button", { name: "layer", exact: true }).waitFor();
     await page.getByRole("button", { name: "language", exact: true }).waitFor();
     await changeMapAxis(page, "component", "group-by", "component");
-    await page.locator(".search input").fill("javascript");
-    await page.locator(".results button").first().click();
-    await page.getByRole("button", { name: "Expand member files", exact: true }).click();
-    await page.locator('.graph-canvas[data-layout-ready="true"]')
-      .waitFor({ timeout: 30_000 });
-    await page.locator(".search input").fill("js/");
-    await page.locator(".results button").first().click();
-    await page.getByRole("button", { name: "Expand directory", exact: true }).click();
-    await page.locator('.graph-canvas[data-layout-ready="true"]')
-      .waitFor({ timeout: 30_000 });
-    await page.locator(".search input").fill("js/index.js");
-    await page.locator(".results button").first().click();
+    await openEntitySearchResult(page, "js/index.js", "js/index.js");
     await expectSelectedDocumentation(
       page,
       "js/index.js",
       "Fixture arithmetic module.",
     );
-    await page.getByRole("button", { name: "Expand symbols", exact: true }).click();
-    await page.locator('.graph-canvas[data-layout-ready="true"]')
-      .waitFor({ timeout: 30_000 });
-    await page.locator(".search input").fill("add");
-    await page.locator(".results button").first().click();
+    await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+    await openEntitySearchResult(page, "Add two values", "add");
     await expectDocumentedAdd(page);
-    await page.locator(".search input").fill("js/index.js");
-    await page.locator(".results button").first().click();
+    await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+    await openEntitySearchResult(page, "js/index.js", "js/index.js");
     await page.getByRole("button", { name: "Open js/index.js", exact: true }).click();
     await page.getByText("Source · utf-8").waitFor();
 

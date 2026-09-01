@@ -268,6 +268,21 @@ static int strings_unique(const AbValue *value) {
   return 1;
 }
 
+static int query_search_fields_value(const AbValue *value) {
+  size_t index;
+  if (!value)
+    return 1;
+  if (!strings_unique(value) || !value->as.array.count ||
+      value->as.array.count > 3)
+    return 0;
+  for (index = 0; index < value->as.array.count; index++)
+    if (!string_value_in(
+            &value->as.array.items[index],
+            (const char *const[]){"default", "documentation", "type"}, 3))
+      return 0;
+  return 1;
+}
+
 static ArchbirdStatus validate_ordered_containers(ArchbirdEngine *engine,
                                                   const AbValue *selections) {
   static const char *const fields[] = {"language", "names", "paths"};
@@ -420,9 +435,9 @@ static ArchbirdStatus validate_query_definitions(ArchbirdEngine *engine,
                                                  const AbValue *queries,
                                                  const AbValue *projections) {
   static const char *const allowed[] = {
-      "artifacts", "components",   "context",  "depth",     "description",
-      "direction", "focus",        "packages", "paths",     "projection",
-      "search",    "search_limit", "symbols",  "test_depth"};
+      "artifacts", "components",    "context",      "depth",   "description",
+      "direction", "focus",         "packages",     "paths",   "projection",
+      "search",    "search_fields", "search_limit", "symbols", "test_depth"};
   static const char *const arrays[] = {"artifacts", "components", "focus",
                                        "packages",  "paths",      "search",
                                        "symbols"};
@@ -462,6 +477,10 @@ static ArchbirdStatus validate_query_definitions(ArchbirdEngine *engine,
             value, (const char *const[]){"both", "downstream", "upstream"}, 3))
       return collection_error(engine, "queries", &query->name,
                               "has an invalid direction");
+    value = ab_value_member(&query->value, "search_fields");
+    if (!query_search_fields_value(value))
+      return collection_error(engine, "queries", &query->name,
+                              "has invalid search_fields");
     for (field = 0; field < 3; field++) {
       const char *name =
           (const char *const[]){"depth", "search_limit", "test_depth"}[field];

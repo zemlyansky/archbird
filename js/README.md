@@ -133,6 +133,11 @@ or semantic search. Use concise repository vocabulary such as
 `provider registry`; every candidate records the matched field and match type.
 Prefer a typed selector such as `--symbol` or `--path` once the target is known.
 
+The Node and browser Query APIs can set `searchFields` to a sorted subset of
+`default`, `documentation`, and `type`. Omit it to preserve the CLI ranking.
+The application enables all three for Map-wide entity search and opens a
+selected hit through an exact typed Query.
+
 `query --view changes` presents the same complete Query artifact as a coding
 packet. It groups change seeds, affected code, strongest routes, ranked tests,
 packages/builds/artifacts, uncertainty, and collapsed evidence without
@@ -773,6 +778,12 @@ try {
   const selectionJson = project.queryJson({
     symbols: ["src/runtime.c:runtime_start"],
     depth: 0,
+  });
+  const matchesJson = project.queryJson({
+    search: ["provider registry"],
+    searchFields: ["default", "documentation", "type"],
+    depth: 0,
+    testDepth: 0,
   });
   console.log(project.sourceMarkdown({
     artifactJson: selectionJson,

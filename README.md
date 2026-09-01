@@ -199,6 +199,11 @@ Prefer `--symbol`, `--path`, or another typed selector once you know the target.
 Symbol neighbors reached only from advisory seeds do not strengthen a static
 test route.
 
+Query APIs and saved queries may set `search_fields` to a sorted subset of
+`default`, `documentation`, and `type`. Omitting it preserves the reviewed CLI
+ranking. The application enables all three for Map-wide entity search, then
+opens the chosen hit through an exact typed Query.
+
 Focused test routes keep file distance and symbol-hop distance separate. A
 case that calls a wrapper reached from the requested symbol is labeled with
 that wrapper and its hop distance; another case in the same file is not
@@ -1084,8 +1089,9 @@ The application provides:
   graph-local Back control restores the prior view and viewport;
   one optional neutral heatmap follows the current graph perspective; metrics
   are measurements, not quality scores;
-- graph-local filtering plus focused typed or lexical Query from the current
-  canonical Map;
+- Map-wide entity search by name, type, or attached documentation, using
+  Query's ranked retrieval and match witnesses; selecting a hit opens an exact
+  focused Query, and Back restores the previous graph;
 - exact source witnesses for live repositories, retained last-good evidence,
   repository snapshots, and structural comparison between saved generations;
 - canonical artifact and graph-view JSON downloads plus GraphML and Mermaid
@@ -1199,6 +1205,12 @@ map_json = project.map_json(pretty=True)
 print(project.map_markdown(max_chars=12_000).decode())
 print(project.query_markdown(symbols=["runtime_start"], depth=1).decode())
 selection = project.query_json(symbols=["runtime_start"], depth=0)
+matches = project.query_json(
+    search=["provider registry"],
+    search_fields=["default", "documentation", "type"],
+    depth=0,
+    test_depth=0,
+)
 print(project.source_markdown(
     artifact_json=selection
 ).decode())

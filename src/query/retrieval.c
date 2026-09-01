@@ -14,6 +14,7 @@ typedef struct RetrievalField {
 
 typedef struct RetrievalCandidate {
   AbRetrievalHit hit;
+  int exact_identity;
   unsigned strengths[AB_RETRIEVAL_MAX_TERMS];
   unsigned weights[AB_RETRIEVAL_MAX_TERMS];
 } RetrievalCandidate;
@@ -380,6 +381,52 @@ static ArchbirdStatus grow_candidates(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
+static int query_identity_equal(const AbString *identity,
+                                const AbString *query) {
+  size_t start = 0;
+  size_t end;
+  if (!identity || !query)
+    return 0;
+  end = query->length;
+  while (start < end &&
+         (query->data[start] == ' ' || query->data[start] == '\t' ||
+          query->data[start] == '\r' || query->data[start] == '\n'))
+    start++;
+  while (end > start &&
+         (query->data[end - 1] == ' ' || query->data[end - 1] == '\t' ||
+          query->data[end - 1] == '\r' || query->data[end - 1] == '\n'))
+    end--;
+  return slice_equal(identity->data, identity->length, query->data + start,
+                     end - start);
+}
+
+static int candidate_identity_exact(const AbRetrievalResult *result,
+                                    AbRetrievalKind kind, const AbString *path,
+                                    const AbString *name) {
+  size_t query_index;
+  if (!result->queries || result->queries->kind != AB_VALUE_ARRAY)
+    return 0;
+  for (query_index = 0; query_index < result->queries->as.array.count;
+       query_index++) {
+    const AbString *query =
+        &result->queries->as.array.items[query_index].as.text;
+    if (kind == AB_RETRIEVAL_FILE && path) {
+      AbString basename = *path;
+      size_t start = path->length;
+      while (start && path->data[start - 1] != '/')
+        start--;
+      basename.data += start;
+      basename.length -= start;
+      if (query_identity_equal(path, query) ||
+          query_identity_equal(&basename, query))
+        return 1;
+    } else if (query_identity_equal(name, query)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static void consider_candidate_field(RetrievalCandidate *candidate,
                                      const AbRetrievalResult *result,
                                      const RetrievalField *field) {
@@ -435,6 +482,8 @@ add_candidate(ArchbirdEngine *engine, const AbRetrievalResult *result,
   candidate->hit.symbol_kind = symbol_kind;
   candidate->hit.line = line;
   candidate->hit.source_index = source_index;
+  candidate->exact_identity =
+      candidate_identity_exact(result, kind, path, name);
   for (field_index = 0; field_index < field_count; field_index++)
     consider_candidate_field(candidate, result, &fields[field_index]);
   return ARCHBIRD_OK;
@@ -443,6 +492,13 @@ add_candidate(ArchbirdEngine *engine, const AbRetrievalResult *result,
 static const AbString *text_member(const AbValue *object, const char *name) {
   const AbValue *value = ab_value_member(object, name);
   return value && value->kind == AB_VALUE_STRING ? &value->as.text : NULL;
+}
+
+static const AbString *documentation_text(const AbValue *object) {
+  const AbValue *documentation = ab_value_member(object, "documentation");
+  return documentation && documentation->kind == AB_VALUE_OBJECT
+             ? text_member(documentation, "text")
+             : NULL;
 }
 
 static const AbValue *optional_array_member(const AbValue *object,
@@ -477,12 +533,16 @@ static ArchbirdStatus projection_index(ArchbirdEngine *engine,
   return ARCHBIRD_OK;
 }
 
-static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
-                                         const AbValue *map,
-                                         const AbProjectionData *domain,
-                                         const AbRetrievalResult *result,
-                                         RetrievalCandidate **out,
-                                         size_t *out_count) {
+static ArchbirdStatus
+collect_candidates(ArchbirdEngine *engine, const AbValue *map,
+                   const AbProjectionData *domain,
+                   const AbRetrievalResult *result, unsigned fields,
+                   RetrievalCandidate **out, size_t *out_count) {
+  static const AbString artifact_type = {(char *)"artifact", 8};
+  static const AbString component_type = {(char *)"component", 9};
+  static const AbString file_type = {(char *)"file", 4};
+  static const AbString package_type = {(char *)"package", 7};
+  static const AbString symbol_type = {(char *)"symbol", 6};
   RetrievalCandidate *items = NULL;
   size_t count = 0;
   size_t capacity = 0;
@@ -628,7 +688,9 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     const AbString *layer = text_member(file, "layer");
     const AbString *language = text_member(file, "language");
     const AbValue *symbols = ab_value_member(file, "symbols");
-    RetrievalField file_fields[3];
+    const AbString *file_documentation = documentation_text(file);
+    RetrievalField file_fields[5];
+    size_t file_field_count = 0;
     size_t symbol_index;
     if (!path || !layer || !language || !symbols ||
         symbols->kind != AB_VALUE_ARRAY) {
@@ -637,14 +699,25 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                   "retrieval input Map file is invalid");
       break;
     }
-    file_fields[0] = (RetrievalField){"file.path", path, 10};
-    file_fields[1] = (RetrievalField){"file.layer", layer, 3};
-    file_fields[2] = (RetrievalField){"file.language", language, 2};
+    if (fields & AB_RETRIEVAL_FIELDS_DEFAULT) {
+      file_fields[file_field_count++] = (RetrievalField){"file.path", path, 10};
+      file_fields[file_field_count++] =
+          (RetrievalField){"file.layer", layer, 3};
+      file_fields[file_field_count++] =
+          (RetrievalField){"file.language", language, 2};
+    }
+    if (fields & AB_RETRIEVAL_FIELDS_TYPE)
+      file_fields[file_field_count++] =
+          (RetrievalField){"entity.type", &file_type, 8};
+    if ((fields & AB_RETRIEVAL_FIELDS_DOCUMENTATION) && file_documentation)
+      file_fields[file_field_count++] =
+          (RetrievalField){"file.documentation", file_documentation, 3};
     if (file_selected[index])
       status = add_candidate(engine, result, &items, &count, &capacity,
                              AB_RETRIEVAL_FILE, file, path, path, NULL, NULL,
-                             NULL, 0, index, file_fields, 3);
+                             NULL, 0, index, file_fields, file_field_count);
     while (status == ARCHBIRD_OK && file_selected[index] &&
+           (fields & AB_RETRIEVAL_FIELDS_DEFAULT) &&
            call_index < calls->as.array.count) {
       const AbValue *call = &calls->as.array.items[call_index];
       const AbString *source = text_member(call, "source");
@@ -678,8 +751,9 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
       const AbString *signature = text_member(symbol, "signature");
       const AbValue *line_value = ab_value_member(symbol, "line");
       uint64_t line;
-      RetrievalField fields[7];
-      size_t field_count = 0;
+      const AbString *symbol_documentation = documentation_text(symbol);
+      RetrievalField symbol_fields[10];
+      size_t symbol_field_count = 0;
       if (!symbol_selected[symbol_offsets[index] + symbol_index])
         continue;
       if (!name || !kind || !scope || !line_value ||
@@ -689,19 +763,36 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                     "retrieval input Map symbol is invalid");
         break;
       }
-      fields[field_count++] = (RetrievalField){"symbol.name", name, 14};
-      fields[field_count++] = (RetrievalField){"symbol.kind", kind, 2};
-      fields[field_count++] = (RetrievalField){"symbol.scope", scope, 1};
-      fields[field_count++] = (RetrievalField){"file.path", path, 6};
-      fields[field_count++] = (RetrievalField){"file.layer", layer, 3};
-      fields[field_count++] = (RetrievalField){"file.language", language, 3};
-      if (signature)
-        fields[field_count++] =
+      if (fields & AB_RETRIEVAL_FIELDS_DEFAULT) {
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"symbol.name", name, 14};
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"symbol.kind", kind, 2};
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"symbol.scope", scope, 1};
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"file.path", path, 6};
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"file.layer", layer, 3};
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"file.language", language, 3};
+      }
+      if ((fields & AB_RETRIEVAL_FIELDS_DEFAULT) && signature)
+        symbol_fields[symbol_field_count++] =
             (RetrievalField){"symbol.signature", signature, 4};
+      if (fields & AB_RETRIEVAL_FIELDS_TYPE) {
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"entity.type", &symbol_type, 8};
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"symbol.kind", kind, 8};
+      }
+      if ((fields & AB_RETRIEVAL_FIELDS_DOCUMENTATION) && symbol_documentation)
+        symbol_fields[symbol_field_count++] =
+            (RetrievalField){"symbol.documentation", symbol_documentation, 3};
       status = add_candidate(engine, result, &items, &count, &capacity,
                              AB_RETRIEVAL_SYMBOL, symbol, path, name, scope,
-                             signature, kind, (size_t)line, index, fields,
-                             field_count);
+                             signature, kind, (size_t)line, index,
+                             symbol_fields, symbol_field_count);
     }
   }
   for (index = 0; status == ARCHBIRD_OK && index < components->as.array.count;
@@ -709,7 +800,7 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     const AbValue *row = &components->as.array.items[index];
     const AbString *name = text_member(row, "name");
     const AbString *description = text_member(row, "description");
-    RetrievalField fields[2];
+    RetrievalField component_fields[3];
     size_t field_count = 0;
     if (!component_selected[index])
       continue;
@@ -719,13 +810,18 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                   "retrieval input Map component is invalid");
       break;
     }
-    fields[field_count++] = (RetrievalField){"component.name", name, 12};
-    if (description)
-      fields[field_count++] =
+    if (fields & AB_RETRIEVAL_FIELDS_DEFAULT)
+      component_fields[field_count++] =
+          (RetrievalField){"component.name", name, 12};
+    if ((fields & AB_RETRIEVAL_FIELDS_DEFAULT) && description)
+      component_fields[field_count++] =
           (RetrievalField){"component.description", description, 5};
+    if (fields & AB_RETRIEVAL_FIELDS_TYPE)
+      component_fields[field_count++] =
+          (RetrievalField){"entity.type", &component_type, 8};
     status = add_candidate(engine, result, &items, &count, &capacity,
                            AB_RETRIEVAL_COMPONENT, row, NULL, name, NULL, NULL,
-                           NULL, 0, index, fields, field_count);
+                           NULL, 0, index, component_fields, field_count);
   }
   for (index = 0; status == ARCHBIRD_OK && index < packages->as.array.count;
        index++) {
@@ -733,7 +829,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     const AbString *name = text_member(row, "name");
     const AbString *identity = text_member(row, "identity");
     const AbString *manifest = text_member(row, "manifest");
-    RetrievalField fields[3];
+    const AbString *kind = text_member(row, "kind");
+    RetrievalField package_fields[5];
     size_t field_count = 0;
     const AbValue *aliases;
     const AbValue *dependencies;
@@ -747,12 +844,24 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                   "retrieval input Map package is invalid");
       break;
     }
-    fields[field_count++] = (RetrievalField){"package.name", name, 12};
-    fields[field_count++] = (RetrievalField){"package.identity", identity, 12};
-    fields[field_count++] = (RetrievalField){"package.manifest", manifest, 5};
+    if (fields & AB_RETRIEVAL_FIELDS_DEFAULT) {
+      package_fields[field_count++] =
+          (RetrievalField){"package.name", name, 12};
+      package_fields[field_count++] =
+          (RetrievalField){"package.identity", identity, 12};
+      package_fields[field_count++] =
+          (RetrievalField){"package.manifest", manifest, 5};
+    }
+    if (fields & AB_RETRIEVAL_FIELDS_TYPE) {
+      package_fields[field_count++] =
+          (RetrievalField){"entity.type", &package_type, 8};
+      if (kind)
+        package_fields[field_count++] =
+            (RetrievalField){"package.kind", kind, 7};
+    }
     status = add_candidate(engine, result, &items, &count, &capacity,
                            AB_RETRIEVAL_PACKAGE, row, manifest, identity, NULL,
-                           NULL, NULL, 0, index, fields, field_count);
+                           NULL, NULL, 0, index, package_fields, field_count);
     if (status != ARCHBIRD_OK)
       break;
     aliases = optional_array_member(row, "aliases");
@@ -775,8 +884,10 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                     "retrieval package alias is invalid");
         break;
       }
-      field = (RetrievalField){"package.alias", &value->as.text, 10};
-      consider_candidate_field(&items[count - 1], result, &field);
+      if (fields & AB_RETRIEVAL_FIELDS_DEFAULT) {
+        field = (RetrievalField){"package.alias", &value->as.text, 10};
+        consider_candidate_field(&items[count - 1], result, &field);
+      }
     }
     for (item_index = 0;
          status == ARCHBIRD_OK && item_index < dependencies->as.array.count;
@@ -790,8 +901,10 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                     "retrieval package dependency is invalid");
         break;
       }
-      field = (RetrievalField){"package.dependency", dependency, 4};
-      consider_candidate_field(&items[count - 1], result, &field);
+      if (fields & AB_RETRIEVAL_FIELDS_DEFAULT) {
+        field = (RetrievalField){"package.dependency", dependency, 4};
+        consider_candidate_field(&items[count - 1], result, &field);
+      }
     }
     for (item_index = 0;
          status == ARCHBIRD_OK && item_index < exports->as.array.count;
@@ -804,8 +917,10 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                     "retrieval package export is invalid");
         break;
       }
-      field = (RetrievalField){"package.export", &value->as.text, 7};
-      consider_candidate_field(&items[count - 1], result, &field);
+      if (fields & AB_RETRIEVAL_FIELDS_DEFAULT) {
+        field = (RetrievalField){"package.export", &value->as.text, 7};
+        consider_candidate_field(&items[count - 1], result, &field);
+      }
     }
   }
   for (index = 0; status == ARCHBIRD_OK && index < artifacts->as.array.count;
@@ -813,7 +928,8 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
     const AbValue *row = &artifacts->as.array.items[index];
     const AbString *name = text_member(row, "name");
     const AbString *output = text_member(row, "output");
-    RetrievalField fields[2];
+    RetrievalField artifact_fields[3];
+    size_t field_count = 0;
     if (!artifact_selected[index])
       continue;
     if (!name || !output) {
@@ -822,11 +938,18 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
                                   "retrieval input Map artifact is invalid");
       break;
     }
-    fields[0] = (RetrievalField){"artifact.name", name, 12};
-    fields[1] = (RetrievalField){"artifact.output", output, 8};
+    if (fields & AB_RETRIEVAL_FIELDS_DEFAULT) {
+      artifact_fields[field_count++] =
+          (RetrievalField){"artifact.name", name, 12};
+      artifact_fields[field_count++] =
+          (RetrievalField){"artifact.output", output, 8};
+    }
+    if (fields & AB_RETRIEVAL_FIELDS_TYPE)
+      artifact_fields[field_count++] =
+          (RetrievalField){"entity.type", &artifact_type, 8};
     status = add_candidate(engine, result, &items, &count, &capacity,
                            AB_RETRIEVAL_ARTIFACT, row, output, name, NULL, NULL,
-                           NULL, 0, index, fields, 2);
+                           NULL, 0, index, artifact_fields, field_count);
   }
 cleanup:
   ab_free(engine, artifact_selected);
@@ -960,16 +1083,17 @@ static ArchbirdStatus diversify_hits(ArchbirdEngine *engine,
 
 ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
                                  const AbProjectionData *domain,
-                                 const AbValue *queries, size_t limit,
-                                 AbRetrievalResult *out) {
+                                 const AbValue *queries, unsigned fields,
+                                 size_t limit, AbRetrievalResult *out) {
   RetrievalCandidate *candidates = NULL;
   size_t candidate_count = 0;
   size_t index;
   size_t term_index;
   ArchbirdStatus status = ARCHBIRD_OK;
   memset(out, 0, sizeof(*out));
+  out->queries = queries;
   out->limit = limit;
-  if (!domain || !queries || queries->kind != AB_VALUE_ARRAY ||
+  if (!domain || !queries || queries->kind != AB_VALUE_ARRAY || !fields ||
       !queries->as.array.count || !limit)
     return archbird_error_set(
         engine, ARCHBIRD_INVALID_SCHEMA, ARCHBIRD_NO_OFFSET,
@@ -994,7 +1118,7 @@ ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
                            "retrieval query contains no searchable terms");
     goto cleanup;
   }
-  status = collect_candidates(engine, map, domain, out, &candidates,
+  status = collect_candidates(engine, map, domain, out, fields, &candidates,
                               &candidate_count);
   if (status != ARCHBIRD_OK)
     goto cleanup;
@@ -1003,28 +1127,42 @@ ArchbirdStatus ab_query_retrieve(ArchbirdEngine *engine, const AbValue *map,
     for (term_index = 0; term_index < out->term_count; term_index++)
       if (candidates[index].strengths[term_index])
         out->document_frequency[term_index]++;
-  for (index = 0; index < candidate_count; index++) {
-    RetrievalCandidate *candidate = &candidates[index];
-    uint64_t coverage_strength = 0;
-    for (term_index = 0; term_index < out->term_count; term_index++) {
-      uint64_t rarity;
-      uint64_t contribution;
-      if (!candidate->strengths[term_index])
-        continue;
-      coverage_strength += query_coverage_strength(
-          candidate->strengths[term_index], candidate->weights[term_index]);
-      rarity = 64 + (((uint64_t)candidate_count + 1) * 256) /
-                        (out->document_frequency[term_index] + 1);
-      if (rarity > 2048)
-        rarity = 2048;
-      contribution = (uint64_t)candidate->strengths[term_index] *
-                     candidate->weights[term_index] * rarity;
-      if (out->term_count > 1 && candidate->strengths[term_index] < 44)
-        contribution /= 4;
-      candidate->hit.score += contribution;
+  {
+    uint64_t maximum_score = 0;
+    for (index = 0; index < candidate_count; index++) {
+      RetrievalCandidate *candidate = &candidates[index];
+      uint64_t coverage_strength = 0;
+      for (term_index = 0; term_index < out->term_count; term_index++) {
+        uint64_t rarity;
+        uint64_t contribution;
+        if (!candidate->strengths[term_index])
+          continue;
+        coverage_strength += query_coverage_strength(
+            candidate->strengths[term_index], candidate->weights[term_index]);
+        rarity = 64 + (((uint64_t)candidate_count + 1) * 256) /
+                          (out->document_frequency[term_index] + 1);
+        if (rarity > 2048)
+          rarity = 2048;
+        contribution = (uint64_t)candidate->strengths[term_index] *
+                       candidate->weights[term_index] * rarity;
+        if (out->term_count > 1 && candidate->strengths[term_index] < 44)
+          contribution /= 4;
+        candidate->hit.score += contribution;
+      }
+      candidate->hit.score =
+          apply_query_coverage(candidate->hit.score, coverage_strength);
+      if (candidate->hit.score > maximum_score)
+        maximum_score = candidate->hit.score;
     }
-    candidate->hit.score =
-        apply_query_coverage(candidate->hit.score, coverage_strength);
+    if (maximum_score < UINT64_MAX) {
+      uint64_t exact_bonus = maximum_score + 1;
+      for (index = 0; index < candidate_count; index++)
+        if (candidates[index].exact_identity)
+          candidates[index].hit.score =
+              candidates[index].hit.score > UINT64_MAX - exact_bonus
+                  ? UINT64_MAX
+                  : candidates[index].hit.score + exact_bonus;
+    }
   }
   for (index = 0; index < candidate_count; index++)
     if (candidates[index].hit.score)
