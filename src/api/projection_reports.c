@@ -1,6 +1,7 @@
 #include <archbird/archbird.h>
 
 #include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
 #include "base/json_value.h"
 #include "base/render_internal.h"
 #include "interchange/reports/projection_reports.h"
@@ -9,18 +10,7 @@
 #include <string.h>
 
 static int stable_id(const AbString *value) {
-  size_t index;
-  if (!value || !value->length)
-    return 0;
-  for (index = 0; index < value->length; index++) {
-    unsigned char byte = (unsigned char)value->data[index];
-    if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
-          (byte >= '0' && byte <= '9') ||
-          (index &&
-           (byte == '_' || byte == '.' || byte == ':' || byte == '-'))))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_stable_id_string(value);
 }
 
 static ArchbirdStatus invalid(ArchbirdEngine *engine, const char *message) {

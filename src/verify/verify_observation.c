@@ -1,5 +1,6 @@
 #include "verify/verify_runtime.h"
 
+#include "base/artifact_validation.h"
 #include "base/json_number.h"
 #include "base/sha256.h"
 
@@ -59,15 +60,7 @@ static ArchbirdStatus object_fields(ObservationParser *parser,
 }
 
 static int lowercase_sha256(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < 64; index++) {
-    char byte = value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 static int value_nonblank_string(const AbValue *value) {

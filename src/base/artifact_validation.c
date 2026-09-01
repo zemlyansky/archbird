@@ -27,25 +27,28 @@ int ab_artifact_bounded_text(const AbValue *value, size_t maximum,
          value->as.text.length <= maximum;
 }
 
-int ab_artifact_sha256(const AbValue *value) {
+int ab_artifact_sha256_string(const AbString *value) {
   size_t index;
-  if (!ab_artifact_bounded_text(value, 64, 1) || value->as.text.length != 64)
+  if (!value || value->length != 64)
     return 0;
   for (index = 0; index < 64; index++)
-    if (!((value->as.text.data[index] >= '0' &&
-           value->as.text.data[index] <= '9') ||
-          (value->as.text.data[index] >= 'a' &&
-           value->as.text.data[index] <= 'f')))
+    if (!((value->data[index] >= '0' && value->data[index] <= '9') ||
+          (value->data[index] >= 'a' && value->data[index] <= 'f')))
       return 0;
   return 1;
 }
 
-int ab_artifact_stable_id(const AbValue *value) {
+int ab_artifact_sha256(const AbValue *value) {
+  return value && value->kind == AB_VALUE_STRING &&
+         ab_artifact_sha256_string(&value->as.text);
+}
+
+int ab_artifact_stable_id_string(const AbString *value) {
   size_t index;
-  if (!ab_artifact_bounded_text(value, 256, 1))
+  if (!value || !value->length || value->length > AB_ARTIFACT_STABLE_ID_MAX)
     return 0;
-  for (index = 0; index < value->as.text.length; index++) {
-    unsigned char byte = (unsigned char)value->as.text.data[index];
+  for (index = 0; index < value->length; index++) {
+    unsigned char byte = (unsigned char)value->data[index];
     if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
           (byte >= '0' && byte <= '9') ||
           (index &&
@@ -55,48 +58,60 @@ int ab_artifact_stable_id(const AbValue *value) {
   return 1;
 }
 
-int ab_artifact_repository_path(const AbValue *value) {
+int ab_artifact_stable_id(const AbValue *value) {
+  return value && value->kind == AB_VALUE_STRING &&
+         ab_artifact_stable_id_string(&value->as.text);
+}
+
+int ab_artifact_repository_path_string(const AbString *value) {
   size_t index;
   size_t segment = 0;
-  if (!ab_artifact_bounded_text(value, 4096, 1) ||
-      value->as.text.data[0] == '/' || value->as.text.data[0] == '\\')
+  if (!value || !value->length ||
+      value->length > AB_ARTIFACT_REPOSITORY_PATH_MAX ||
+      value->data[0] == '/' || value->data[0] == '\\')
     return 0;
-  if (value->as.text.length >= 2 &&
-      ((value->as.text.data[0] >= 'A' && value->as.text.data[0] <= 'Z') ||
-       (value->as.text.data[0] >= 'a' && value->as.text.data[0] <= 'z')) &&
-      value->as.text.data[1] == ':')
+  if (value->length >= 2 &&
+      ((value->data[0] >= 'A' && value->data[0] <= 'Z') ||
+       (value->data[0] >= 'a' && value->data[0] <= 'z')) &&
+      value->data[1] == ':')
     return 0;
-  for (index = 0; index <= value->as.text.length; index++) {
-    unsigned char byte = index < value->as.text.length
-                             ? (unsigned char)value->as.text.data[index]
-                             : 0;
-    int end =
-        index == value->as.text.length || value->as.text.data[index] == '/';
-    if (!end &&
-        (value->as.text.data[index] == '\\' || byte < 0x20 || byte == 0x7f))
+  for (index = 0; index <= value->length; index++) {
+    unsigned char byte =
+        index < value->length ? (unsigned char)value->data[index] : 0;
+    int end = index == value->length || value->data[index] == '/';
+    if (!end && (value->data[index] == '\\' || byte < 0x20 || byte == 0x7f))
       return 0;
     if (!end)
       continue;
     if (index == segment ||
-        (index - segment == 1 && value->as.text.data[segment] == '.') ||
-        (index - segment == 2 && value->as.text.data[segment] == '.' &&
-         value->as.text.data[segment + 1] == '.'))
+        (index - segment == 1 && value->data[segment] == '.') ||
+        (index - segment == 2 && value->data[segment] == '.' &&
+         value->data[segment + 1] == '.'))
       return 0;
     segment = index + 1;
   }
   return 1;
 }
 
-int ab_artifact_repository_literal_path(const AbValue *value) {
+int ab_artifact_repository_path(const AbValue *value) {
+  return value && value->kind == AB_VALUE_STRING &&
+         ab_artifact_repository_path_string(&value->as.text);
+}
+
+int ab_artifact_repository_literal_path_string(const AbString *value) {
   static const char pattern_bytes[] = "*?[]{}";
   size_t index;
-  if (!ab_artifact_repository_path(value))
+  if (!ab_artifact_repository_path_string(value))
     return 0;
-  for (index = 0; index < value->as.text.length; index++)
-    if (memchr(pattern_bytes, value->as.text.data[index],
-               sizeof(pattern_bytes) - 1))
+  for (index = 0; index < value->length; index++)
+    if (memchr(pattern_bytes, value->data[index], sizeof(pattern_bytes) - 1))
       return 0;
   return 1;
+}
+
+int ab_artifact_repository_literal_path(const AbValue *value) {
+  return value && value->kind == AB_VALUE_STRING &&
+         ab_artifact_repository_literal_path_string(&value->as.text);
 }
 
 ArchbirdStatus ab_artifact_resolve_relative_to_file(

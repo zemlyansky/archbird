@@ -1,5 +1,7 @@
 #include "interchange/okf/okf_internal.h"
 
+#include "base/artifact_validation.h"
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,15 +42,7 @@ ArchbirdStatus ab_okf_copy_literal(ArchbirdEngine *engine, AbString *out,
 }
 
 static int lowercase_sha256(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < 64; index++) {
-    char byte = value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 static int path_valid(const AbString *path) {

@@ -12,16 +12,7 @@ static int buffer_write(void *user_data, const uint8_t *bytes, size_t length) {
 }
 
 static int stable_id(const AbString *value) {
-  size_t index;
-  if (!value || !value->length || value->length > 256)
-    return 0;
-  for (index = 0; index < value->length; index++) {
-    unsigned char byte = (unsigned char)value->data[index];
-    if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
-          (byte >= '0' && byte <= '9') || (index && strchr("_.:-", byte))))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_stable_id_string(value);
 }
 
 static int fields_allowed(const AbValue *value, const char *const *fields,

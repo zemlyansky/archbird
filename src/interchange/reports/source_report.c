@@ -1,6 +1,7 @@
 #include "interchange/reports/source_report.h"
 
 #include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
 #include "base/path_match.h"
 #include "base/sha256.h"
 #include "base/utf8.h"
@@ -59,15 +60,7 @@ static int string_is(const AbValue *value, const char *literal) {
 }
 
 static int lowercase_sha256(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < 64; index++) {
-    unsigned char byte = (unsigned char)value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 static int stable_token(const AbValue *value) {
@@ -85,31 +78,7 @@ static int stable_token(const AbValue *value) {
 }
 
 static int repository_path(const AbValue *value) {
-  size_t index;
-  size_t part_start = 0;
-  if (!value || value->kind != AB_VALUE_STRING || !value->as.text.length ||
-      value->as.text.data[0] == '/' ||
-      (value->as.text.length >= 2 &&
-       ((value->as.text.data[0] >= 'A' && value->as.text.data[0] <= 'Z') ||
-        (value->as.text.data[0] >= 'a' && value->as.text.data[0] <= 'z')) &&
-       value->as.text.data[1] == ':'))
-    return 0;
-  for (index = 0; index <= value->as.text.length; index++) {
-    unsigned char byte = index < value->as.text.length
-                             ? (unsigned char)value->as.text.data[index]
-                             : (unsigned char)'/';
-    if (byte == '\\' || byte == '\0')
-      return 0;
-    if (byte != '/')
-      continue;
-    if (index == part_start ||
-        (index - part_start == 1 && value->as.text.data[part_start] == '.') ||
-        (index - part_start == 2 && value->as.text.data[part_start] == '.' &&
-         value->as.text.data[part_start + 1] == '.'))
-      return 0;
-    part_start = index + 1;
-  }
-  return 1;
+  return ab_artifact_repository_path(value);
 }
 
 static const AbValue *required_string(const AbValue *object, const char *name) {

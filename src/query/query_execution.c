@@ -1,6 +1,7 @@
 #include <archbird/archbird.h>
 
 #include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
 #include "base/json_value.h"
 #include "base/path_match.h"
 #include "base/render_internal.h"
@@ -303,14 +304,7 @@ static ArchbirdStatus route_add_evidence(QueryContext *context,
 }
 
 static int valid_sha256(const AbString *value) {
-  size_t index;
-  if (!value || value->length != 64)
-    return 0;
-  for (index = 0; index < value->length; index++)
-    if (!((value->data[index] >= '0' && value->data[index] <= '9') ||
-          (value->data[index] >= 'a' && value->data[index] <= 'f')))
-      return 0;
-  return 1;
+  return ab_artifact_sha256_string(value);
 }
 
 static int valid_sha256_value(const AbValue *value) {
@@ -319,18 +313,7 @@ static int valid_sha256_value(const AbValue *value) {
 }
 
 static int stable_id_value(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || !value->as.text.length)
-    return 0;
-  for (index = 0; index < value->as.text.length; index++) {
-    unsigned char byte = (unsigned char)value->as.text.data[index];
-    if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
-          (byte >= '0' && byte <= '9') ||
-          (index &&
-           (byte == '_' || byte == '.' || byte == ':' || byte == '-'))))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_stable_id(value);
 }
 
 static int field_allowed(const AbString *name, const char *const *allowed,

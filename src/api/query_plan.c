@@ -1,6 +1,7 @@
 #include "archbird/archbird.h"
 
 #include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
 #include "base/json_internal.h"
 #include "base/json_value.h"
 #include "configuration/project_configuration.h"
@@ -9,18 +10,8 @@
 #include <string.h>
 
 static int stable_id(const char *value, size_t length) {
-  size_t index;
-  if (!value || !length)
-    return 0;
-  for (index = 0; index < length; index++) {
-    unsigned char byte = (unsigned char)value[index];
-    if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
-          (byte >= '0' && byte <= '9') ||
-          (index &&
-           (byte == '_' || byte == '.' || byte == ':' || byte == '-'))))
-      return 0;
-  }
-  return 1;
+  AbString text = {(char *)value, length};
+  return ab_artifact_stable_id_string(&text);
 }
 
 static const AbObjectField *named_field(const AbValue *object,

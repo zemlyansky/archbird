@@ -1,5 +1,6 @@
 #include "query/query_internal.h"
 
+#include "base/artifact_validation.h"
 #include "projection/projection_internal.h"
 
 #include <stdlib.h>
@@ -26,15 +27,7 @@ static int field_allowed(const AbString *name, const char *const *allowed,
 }
 
 static int sha256_value(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < 64; index++) {
-    unsigned char byte = (unsigned char)value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 ArchbirdStatus ab_query_projections_evaluate(ArchbirdEngine *engine,

@@ -1,5 +1,7 @@
 #include "interchange/okf/okf_publish_internal.h"
 
+#include "base/artifact_validation.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -8,15 +10,7 @@ static ArchbirdStatus invalid(AbOkfPublication *pub, const char *message) {
 }
 
 static int lowercase_sha256(const AbString *value) {
-  size_t index;
-  if (!value || value->length != 64)
-    return 0;
-  for (index = 0; index < value->length; index++) {
-    unsigned char byte = (unsigned char)value->data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256_string(value);
 }
 
 static int nonblank(const AbString *value) {

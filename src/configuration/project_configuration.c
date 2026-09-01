@@ -1,5 +1,6 @@
 #include "configuration/project_configuration.h"
 
+#include "base/artifact_validation.h"
 #include "base/date.h"
 #include "base/gate.h"
 #include "base/json_value.h"
@@ -48,45 +49,11 @@ static int string_equal(const AbString *value, const char *literal) {
 }
 
 static int stable_id(const AbString *value) {
-  size_t index;
-  if (!value || !value->length)
-    return 0;
-  for (index = 0; index < value->length; index++) {
-    unsigned char byte = (unsigned char)value->data[index];
-    if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
-          (byte >= '0' && byte <= '9') ||
-          (index &&
-           (byte == '_' || byte == '.' || byte == ':' || byte == '-'))))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_stable_id_string(value);
 }
 
 static int repository_path(const AbString *value) {
-  size_t index;
-  size_t segment = 0;
-  if (!value || !value->length || value->data[0] == '/' ||
-      value->data[0] == '\\' || value->data[value->length - 1] == '/' ||
-      value->data[value->length - 1] == '\\' ||
-      (value->length >= 2 &&
-       ((value->data[0] >= 'A' && value->data[0] <= 'Z') ||
-        (value->data[0] >= 'a' && value->data[0] <= 'z')) &&
-       value->data[1] == ':'))
-    return 0;
-  for (index = 0; index <= value->length; index++) {
-    if (index < value->length && value->data[index] != '/' &&
-        value->data[index] != '\\' && value->data[index] != '\0')
-      continue;
-    if (index < value->length && value->data[index] != '/')
-      return 0;
-    if (index == segment ||
-        (index - segment == 1 && value->data[segment] == '.') ||
-        (index - segment == 2 && value->data[segment] == '.' &&
-         value->data[segment + 1] == '.'))
-      return 0;
-    segment = index + 1;
-  }
-  return 1;
+  return ab_artifact_repository_path_string(value);
 }
 
 static int nonblank(const AbValue *value) {
@@ -102,15 +69,7 @@ static int nonblank(const AbValue *value) {
 }
 
 static int lowercase_sha256(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < value->as.text.length; index++) {
-    unsigned char byte = (unsigned char)value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 static int name_in(const AbString *name, const char *const *allowed,

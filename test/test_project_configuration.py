@@ -49,6 +49,47 @@ def _assert_project_configuration_conformance() -> None:
             assert entry["valid"], (
                 f"native compiler accepted invalid conformance case {entry['id']}"
             )
+    maximum_id = "a" * 256
+    compile_project_configuration(
+        json.dumps(
+            {
+                "project": "bounded-identities",
+                "projections": {maximum_id: {"select": "mapped_paths"}},
+            }
+        ).encode()
+    )
+    oversized_id = "a" * 257
+    try:
+        compile_project_configuration(
+            json.dumps(
+                {
+                    "project": "bounded-identities",
+                    "projections": {
+                        oversized_id: {"select": "mapped_paths"}
+                    },
+                }
+            ).encode()
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("project configuration accepted a 257-byte stable ID")
+    control_path = {
+        "project": "bounded-paths",
+        "ordered_containers": [
+            {
+                "language": "c",
+                "names": ["rules"],
+                "paths": ["src/\u0001rules.c"],
+            }
+        ],
+    }
+    try:
+        compile_project_configuration(json.dumps(control_path).encode())
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("project configuration accepted a control-byte path")
     matrix = next(
         entry
         for entry in corpus["cases"]
@@ -85,6 +126,19 @@ def _assert_project_configuration_conformance() -> None:
     assert len(projections) == len(expected_shapes)
     assert {row["select"] for row in projections.values()} == set(expected_shapes)
     report_map = (ROOT / "test/fixtures/report_map.json").read_bytes()
+    for operation in (
+        lambda: evaluate_projection_json(
+            report_map,
+            {"id": oversized_id, "select": "mapped_paths"},
+        ),
+        lambda: compile_query_plan_json(b"{}", oversized_id),
+    ):
+        try:
+            operation()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("public API accepted a 257-byte stable ID")
     for projection_id, projection in projections.items():
         result = json.loads(
             evaluate_projection_json(

@@ -1,6 +1,7 @@
 #include "projection/projection_internal.h"
 
 #include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
 
 #include <string.h>
 
@@ -30,45 +31,11 @@ static int nonblank(const AbValue *value) {
 }
 
 static int lowercase_sha256(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < 64; index++) {
-    char byte = value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 static int repository_path(const AbValue *value) {
-  const char *path;
-  size_t length;
-  size_t index;
-  size_t segment = 0;
-  if (!value || value->kind != AB_VALUE_STRING)
-    return 0;
-  path = value->as.text.data;
-  length = value->as.text.length;
-  if (!length || path[0] == '/' || path[length - 1] == '/' ||
-      (length >= 2 &&
-       ((path[0] >= 'A' && path[0] <= 'Z') ||
-        (path[0] >= 'a' && path[0] <= 'z')) &&
-       path[1] == ':'))
-    return 0;
-  for (index = 0; index <= length; index++) {
-    if (index < length && path[index] != '/') {
-      if (path[index] == '\\' || path[index] == '\0')
-        return 0;
-      continue;
-    }
-    if (index == segment || (index - segment == 1 && path[segment] == '.') ||
-        (index - segment == 2 && path[segment] == '.' &&
-         path[segment + 1] == '.'))
-      return 0;
-    segment = index + 1;
-  }
-  return 1;
+  return ab_artifact_repository_path(value);
 }
 
 ArchbirdStatus ab_projection_map_validate(ArchbirdEngine *engine,

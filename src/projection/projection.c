@@ -1,6 +1,7 @@
 #include <archbird/archbird.h>
 
 #include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
 #include "base/json_value.h"
 #include "base/render_internal.h"
 #include "base/sha256.h"
@@ -18,18 +19,7 @@
   } while (0)
 
 static int stable_id(const AbString *value) {
-  size_t index;
-  if (!value || !value->length)
-    return 0;
-  for (index = 0; index < value->length; index++) {
-    unsigned char byte = (unsigned char)value->data[index];
-    if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
-          (byte >= '0' && byte <= '9') ||
-          (index &&
-           (byte == '_' || byte == '.' || byte == ':' || byte == '-'))))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_stable_id_string(value);
 }
 
 static ArchbirdStatus invalid(ArchbirdEngine *engine, const char *message) {
@@ -85,15 +75,7 @@ static const AbValue *member_path(const AbValue *root, const char *first,
 }
 
 static int lowercase_sha256(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < value->as.text.length; index++) {
-    unsigned char byte = (unsigned char)value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 static ArchbirdStatus render_evaluation(AbBuffer *buffer, const AbValue *map,

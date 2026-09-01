@@ -52,15 +52,7 @@ static const char *fact_shape(const AbValue *kind) {
 }
 
 static int lowercase_sha256_value(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < 64; index++) {
-    unsigned char byte = (unsigned char)value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 static int valid_fact_state(const AbValue *value) {

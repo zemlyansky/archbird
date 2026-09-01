@@ -1,5 +1,6 @@
 #include "projection/projection_model.h"
 
+#include "base/artifact_validation.h"
 #include "base/sha256.h"
 
 #include <stdlib.h>
@@ -38,34 +39,7 @@ int ab_projection_nonblank(const AbValue *value) {
 }
 
 int ab_projection_path_is_repository(const AbValue *value) {
-  const char *path;
-  size_t length;
-  size_t index;
-  size_t segment = 0;
-  if (!ab_projection_nonblank(value))
-    return 0;
-  path = value->as.text.data;
-  length = value->as.text.length;
-  if (path[0] == '/' || path[0] == '\\' || path[length - 1] == '/' ||
-      path[length - 1] == '\\' ||
-      (length >= 2 &&
-       ((path[0] >= 'A' && path[0] <= 'Z') ||
-        (path[0] >= 'a' && path[0] <= 'z')) &&
-       path[1] == ':'))
-    return 0;
-  for (index = 0; index <= length; index++) {
-    if (index < length && path[index] != '/' && path[index] != '\\') {
-      if (path[index] == '\0')
-        return 0;
-      continue;
-    }
-    if (index == segment || (index - segment == 1 && path[segment] == '.') ||
-        (index - segment == 2 && path[segment] == '.' &&
-         path[segment + 1] == '.'))
-      return 0;
-    segment = index + 1;
-  }
-  return 1;
+  return ab_artifact_repository_path(value);
 }
 
 #define TRY(expression)                                                        \

@@ -1,20 +1,13 @@
 #include "projection/component_membership.h"
 
+#include "base/artifact_validation.h"
 #include "projection/projection_model.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 static int lowercase_sha256(const AbValue *value) {
-  size_t index;
-  if (!value || value->kind != AB_VALUE_STRING || value->as.text.length != 64)
-    return 0;
-  for (index = 0; index < value->as.text.length; index++) {
-    unsigned char byte = (unsigned char)value->as.text.data[index];
-    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f')))
-      return 0;
-  }
-  return 1;
+  return ab_artifact_sha256(value);
 }
 
 static int file_compare(const void *left_raw, const void *right_raw) {

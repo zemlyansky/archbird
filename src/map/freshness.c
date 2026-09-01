@@ -1,6 +1,7 @@
 #include <archbird/archbird.h>
 
 #include "base/archbird_internal.h"
+#include "base/artifact_validation.h"
 #include "base/json_value.h"
 #include "base/render_internal.h"
 #include "base/sha256.h"
@@ -54,45 +55,11 @@ static ArchbirdStatus freshness_error(FreshnessContext *context,
 }
 
 static int valid_sha256(const AbString *value) {
-  size_t index;
-  if (!value || value->length != 64)
-    return 0;
-  for (index = 0; index < value->length; index++)
-    if (value->data[index] < '0' ||
-        (value->data[index] > '9' && value->data[index] < 'a') ||
-        value->data[index] > 'f')
-      return 0;
-  return 1;
+  return ab_artifact_sha256_string(value);
 }
 
 static int valid_repository_path(const AbString *value) {
-  size_t segment = 0;
-  size_t index;
-  const char *path;
-  size_t length;
-  if (!value)
-    return 0;
-  path = value->data;
-  length = value->length;
-  if (!length || path[0] == '/' || path[length - 1] == '/' ||
-      (length >= 2 &&
-       ((path[0] >= 'A' && path[0] <= 'Z') ||
-        (path[0] >= 'a' && path[0] <= 'z')) &&
-       path[1] == ':'))
-    return 0;
-  for (index = 0; index <= length; index++) {
-    if (index < length && path[index] != '/') {
-      if (path[index] == '\\' || path[index] == '\0')
-        return 0;
-      continue;
-    }
-    if (index == segment || (index - segment == 1 && path[segment] == '.') ||
-        (index - segment == 2 && path[segment] == '.' &&
-         path[segment + 1] == '.'))
-      return 0;
-    segment = index + 1;
-  }
-  return 1;
+  return ab_artifact_repository_path_string(value);
 }
 
 static const AbString *required_string(FreshnessContext *context,
