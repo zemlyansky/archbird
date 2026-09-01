@@ -239,6 +239,19 @@ def main() -> int:
         documentation_symbols["Client"]["documentation"]
     ):
         raise AssertionError(documentation_query["matched_symbols"])
+    try:
+        query_map_json(
+            documentation_project.map_json(),
+            search=["caller disposal"],
+            depth=0,
+            test_depth=0,
+        )
+    except _native.Error:
+        pass
+    else:
+        raise AssertionError(
+            "declaration prose became an unreviewed lexical seed"
+        )
 
     conflict_project = Project(
         "merge-conflict",

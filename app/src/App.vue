@@ -71,6 +71,7 @@ import {
 } from "./graph/metrics";
 import type { GraphLayoutMode } from "./graph/layout";
 import type { GraphNotation } from "./graph/notation";
+import type { SourceSelection } from "./graph/source";
 
 type Theme = "dark" | "light" | "system";
 type TransportMode = "browser" | "none" | "server";
@@ -116,6 +117,7 @@ type GraphNavigationEntry = {
   selectedConstraintId: string | null;
   selectedId: string | null;
   source: Record<string, unknown> | null;
+  sourceSelection: SourceSelection | null;
   viewport: GraphViewport | null;
   zoomPercent: number;
 };
@@ -134,6 +136,7 @@ const fileGraph = shallowRef<GraphView | null>(null);
 const symbolGraphs = shallowRef<ReadonlyMap<string, GraphView>>(new Map());
 const verification = shallowRef<Record<string, unknown> | null>(null);
 const source = shallowRef<Record<string, unknown> | null>(null);
+const sourceSelection = shallowRef<SourceSelection | null>(null);
 const graphCanvas = ref<GraphCanvasApi | null>(null);
 const selectedId = ref<string | null>(null);
 const search = ref("");
@@ -367,6 +370,7 @@ function reportOperationError(cause: unknown) {
 function resetGraphState() {
   selectedId.value = null;
   source.value = null;
+  sourceSelection.value = null;
   search.value = "";
   edgeKind.value = "all";
   edgeClassification.value = "all";
@@ -427,6 +431,7 @@ function captureGraphNavigation(): GraphNavigationEntry | null {
     selectedConstraintId: selectedConstraintId.value,
     selectedId: selectedId.value,
     source: source.value,
+    sourceSelection: sourceSelection.value,
     viewport: graphCanvas.value?.captureViewport() || null,
     zoomPercent: zoomPercent.value,
   };
@@ -466,6 +471,7 @@ async function backToPreviousGraph(): Promise<void> {
   selectedConstraintId.value = previous.selectedConstraintId;
   selectedId.value = previous.selectedId;
   source.value = previous.source;
+  sourceSelection.value = previous.sourceSelection;
   zoomPercent.value = previous.zoomPercent;
   pendingGraphViewport = previous.viewport;
   await nextTick();
@@ -1435,11 +1441,12 @@ async function runDiff() {
   }
 }
 
-async function openSource(path: string) {
+async function openSource(selection: SourceSelection) {
   if (!liveHost || !sourceAvailable.value) return;
   error.value = "";
+  sourceSelection.value = selection;
   try {
-    source.value = await liveHost.source(path, baseGeneration.value || undefined);
+    source.value = await liveHost.source(selection.path, baseGeneration.value || undefined);
   } catch (cause) {
     error.value = (cause as Error).message;
   }
@@ -1995,6 +2002,7 @@ onMounted(async () => {
           :selected-id="selectedId"
           :source="source"
           :source-path="sourcePath"
+          :source-selection="sourceSelection"
           @activate="activateGraphElement"
           @close="inspectorOpen = false"
           @hide="hideGraphElement"

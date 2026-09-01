@@ -676,14 +676,9 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
       const AbString *kind = text_member(symbol, "kind");
       const AbString *scope = text_member(symbol, "scope");
       const AbString *signature = text_member(symbol, "signature");
-      const AbValue *documentation = ab_value_member(symbol, "documentation");
-      const AbString *documentation_text =
-          documentation && documentation->kind == AB_VALUE_OBJECT
-              ? text_member(documentation, "text")
-              : NULL;
       const AbValue *line_value = ab_value_member(symbol, "line");
       uint64_t line;
-      RetrievalField fields[8];
+      RetrievalField fields[7];
       size_t field_count = 0;
       if (!symbol_selected[symbol_offsets[index] + symbol_index])
         continue;
@@ -703,9 +698,6 @@ static ArchbirdStatus collect_candidates(ArchbirdEngine *engine,
       if (signature)
         fields[field_count++] =
             (RetrievalField){"symbol.signature", signature, 4};
-      if (documentation_text)
-        fields[field_count++] =
-            (RetrievalField){"symbol.documentation", documentation_text, 2};
       status = add_candidate(engine, result, &items, &count, &capacity,
                              AB_RETRIEVAL_SYMBOL, symbol, path, name, scope,
                              signature, kind, (size_t)line, index, fields,

@@ -918,14 +918,13 @@ assert.deepEqual(
     .attributes.documentation,
   documentedTargetQuery.matched_symbols[0].documentation,
 );
-const documentationRetrievalQuery = JSON.parse(queryMap(
-  semanticProject.mapJson(),
-  { search: ["inspectors"], searchLimit: 4, depth: 0, testDepth: 0 },
-));
-assert.equal(documentationRetrievalQuery.query.retrieval.hits[0].name, "target");
-assert.ok(documentationRetrievalQuery.query.retrieval.hits[0].reasons.some(
-  (reason) => reason.field === "symbol.documentation",
-));
+assert.throws(
+  () => queryMap(
+    semanticProject.mapJson(),
+    { search: ["inspectors"], searchLimit: 4, depth: 0, testDepth: 0 },
+  ),
+  /query selectors matched no indexed evidence/,
+);
 assert.ok(
   semanticMap.edges.some(
     (edge) =>

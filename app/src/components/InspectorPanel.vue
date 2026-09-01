@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type { GraphEdge, GraphNode, GraphView } from "../artifacts/model";
 import type { ProjectionResult } from "../artifacts/projection";
 import { edgePresentation } from "../graph/explore";
 import type { ComponentDetails } from "../graph/explore";
 import { symbolDocumentation } from "../graph/documentation";
+import { sourceSegments, type SourceSelection } from "../graph/source";
 import type { MetricId, MetricScopeMode } from "../graph/metrics";
 import type { VerificationConstraint } from "../graph/verification";
 import MetricsPanel from "./MetricsPanel.vue";
@@ -22,6 +23,7 @@ const props = defineProps<{
   selectedId: string | null;
   source: Record<string, unknown> | null;
   sourcePath: string | null;
+  sourceSelection?: SourceSelection | null;
 }>();
 const emit = defineEmits<{
   activate: [id: string];
@@ -31,7 +33,7 @@ const emit = defineEmits<{
   metricQuery: [path: string, symbol: string | null];
   metricScope: [scope: MetricScopeMode];
   restore: [id: string];
-  source: [path: string];
+  source: [selection: SourceSelection];
 }>();
 
 const emptyMetricErrors = new Map<MetricId, string>();
@@ -52,6 +54,16 @@ const selectedHidden = computed(() =>
   Boolean(selectedNode.value?.attributes.presentation_hidden));
 const documentation = computed(() =>
   symbolDocumentation(selectedNode.value?.attributes.documentation));
+const selectedSource = computed(() => sourceSegments(
+  props.source,
+  props.sourceSelection || null,
+));
+const sourceMark = ref<HTMLElement | null>(null);
+watch([selectedSource, sourceMark], async ([selection, mark]) => {
+  if (!selection || !mark) return;
+  await nextTick();
+  mark.scrollIntoView?.({ block: "center" });
+});
 const nodeById = computed(() =>
   new Map(props.graph.nodes.map((node) => [node.id, node])));
 const edgeEndpoints = computed(() => {
@@ -236,7 +248,19 @@ function forwardMetricQuery(path: string, symbol: string | null): void {
       <section v-if="documentation" class="symbol-documentation">
         <div class="eyebrow">Documentation · {{ documentation.kind }}</div>
         <p>{{ documentation.text }}</p>
-        <small v-if="documentation.span">
+        <button
+          v-if="documentation.span && sourcePath"
+          class="documentation-source"
+          type="button"
+          @click="emit('source', {
+            end: documentation.span.end,
+            path: sourcePath,
+            start: documentation.span.start,
+          })"
+        >
+          Source bytes {{ documentation.span.start }}–{{ documentation.span.end }}
+        </button>
+        <small v-else-if="documentation.span">
           Source bytes {{ documentation.span.start }}–{{ documentation.span.end }}
         </small>
       </section>
@@ -283,11 +307,15 @@ function forwardMetricQuery(path: string, symbol: string | null): void {
         v-if="sourcePath"
         class="source-button"
         type="button"
-        @click="emit('source', sourcePath)"
+        @click="emit('source', { path: sourcePath })"
       >Open {{ sourcePath }}</button>
       <details v-if="source && source.path === sourcePath" open>
         <summary>Source · {{ source.encoding }}{{ source.truncated ? ' · truncated' : '' }}</summary>
-        <pre>{{ source.text }}</pre>
+        <pre v-if="selectedSource"><span>{{ selectedSource.before }}</span><mark
+          ref="sourceMark"
+          class="source-selection"
+        >{{ selectedSource.selected }}</mark><span>{{ selectedSource.after }}</span></pre>
+        <pre v-else>{{ source.text }}</pre>
       </details>
       <dl v-if="selectedNode && attributes.length">
         <template v-for="[name, value] in attributes" :key="name">

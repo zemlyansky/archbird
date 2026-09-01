@@ -899,6 +899,21 @@ button.metric-plot-point { cursor: pointer; }
   white-space: pre-wrap;
 }
 .symbol-documentation small { color: var(--muted); }
+.documentation-source {
+  display: block;
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.source-selection {
+  color: inherit;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
 .inspector dl, .definition-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

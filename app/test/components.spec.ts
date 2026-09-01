@@ -9,6 +9,7 @@ import DocumentPanel from "../src/components/DocumentPanel.vue";
 import InspectorPanel from "../src/components/InspectorPanel.vue";
 import MetricsPanel from "../src/components/MetricsPanel.vue";
 import VerificationEditor from "../src/components/VerificationEditor.vue";
+import { sourceSegments } from "../src/graph/source";
 
 const encoder = new TextEncoder();
 let mounted: VueApp<Element> | null = null;
@@ -48,6 +49,13 @@ afterEach(() => {
 });
 
 describe("artifact workspaces", () => {
+  it("selects source spans by UTF-8 byte offsets", () => {
+    expect(sourceSegments(
+      { encoding: "utf-8", path: "src/api.py", text: "aλdocz" },
+      { end: 6, path: "src/api.py", start: 3 },
+    )).toEqual({ after: "z", before: "aλ", selected: "doc" });
+  });
+
   it("makes local source choices and provenance explicit", () => {
     const root = mount(ArtifactDrop, {
       prominent: true,
@@ -619,16 +627,25 @@ describe("artifact workspaces", () => {
     expect(act.textContent).toContain("src/api.c");
   });
 
-  it("renders exact declaration documentation in the symbol inspector", () => {
+  it("opens and highlights exact declaration documentation source", async () => {
+    const onSource = vi.fn();
     const graph = {
       artifact: "archbird-graph-view",
       diagnostics: [],
       edges: [],
       nodes: [{
+        attributes: {},
+        evidence: [],
+        id: "file:api",
+        identity: "src/api.py",
+        kind: "file",
+        label: "api.py",
+        parent: null,
+      }, {
         attributes: {
           documentation: {
             kind: "docstring",
-            span: { end: 64, start: 16 },
+            span: { end: 70, start: 16 },
             text: "Open the configured project.\n\nThe caller owns disposal.",
           },
         },
@@ -637,7 +654,7 @@ describe("artifact workspaces", () => {
         identity: "src/api.py:open_project",
         kind: "symbol",
         label: "open_project",
-        parent: null,
+        parent: "file:api",
       }],
       omissions: [],
       project: "demo",
@@ -651,14 +668,31 @@ describe("artifact workspaces", () => {
       constraint: null,
       fileGraph: null,
       graph,
+      onSource,
       selectedId: "symbol:open",
-      source: null,
-      sourcePath: null,
+      source: {
+        encoding: "utf-8",
+        path: "src/api.py",
+        text: "0123456789abcdefOpen the configured project. The caller owns disposal.trailing",
+        truncated: false,
+      },
+      sourcePath: "src/api.py",
+      sourceSelection: { end: 70, path: "src/api.py", start: 16 },
     });
 
     expect(root.textContent).toContain("Documentation · docstring");
     expect(root.textContent).toContain("Open the configured project.");
     expect(root.textContent).toContain("The caller owns disposal.");
     expect(root.textContent).not.toContain("[object Object]");
+    expect(root.querySelector("mark.source-selection")?.textContent)
+      .toBe("Open the configured project. The caller owns disposal.");
+
+    (root.querySelector("button.documentation-source") as HTMLButtonElement).click();
+    await nextTick();
+    expect(onSource).toHaveBeenCalledWith({
+      end: 70,
+      path: "src/api.py",
+      start: 16,
+    });
   });
 });

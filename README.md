@@ -47,9 +47,10 @@ spans. CPython AST and the TypeScript compiler add host-specific precision.
 SCIP is optional input for resolved definitions, references, and relationships;
 Archbird reads a supplied index but does not invoke an indexer.
 Recognized docstrings, JSDoc, Doxygen, roxygen, and SCIP documentation remain
-attached to their declarations. Query can find that text, while symbol hover
-shows its first paragraph and the inspector preserves the complete text and
-source span. Archbird does not generate documentation summaries.
+attached to their declarations. Symbol hover shows the first paragraph; the
+inspector preserves the complete text and opens its exact source span. Archbird
+does not generate documentation summaries or use declaration prose as an
+unreviewed Query seed.
 
 ## Stages
 
