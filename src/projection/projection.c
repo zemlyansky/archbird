@@ -171,27 +171,35 @@ ArchbirdStatus ab_projection_plan_evaluate(ArchbirdEngine *engine,
                                            const AbValue *map,
                                            const AbValue *resolution,
                                            AbProjectionResult *out) {
+  AbProjectionContext context = {0};
+  ArchbirdStatus status =
+      ab_projection_context_init(&context, engine, map, resolution);
+  if (status == ARCHBIRD_OK)
+    status = ab_projection_plan_evaluate_context(&context, plan, out);
+  ab_projection_context_free(&context);
+  return status;
+}
+
+ArchbirdStatus ab_projection_plan_evaluate_context(AbProjectionContext *context,
+                                                   const AbProjectionPlan *plan,
+                                                   AbProjectionResult *out) {
   AbBuffer base;
   ArchbirdStatus status;
-  if (!engine || !plan || !plan->id.length ||
-      plan->definition.kind != AB_VALUE_OBJECT || !map ||
-      map->kind != AB_VALUE_OBJECT || !out)
+  if (!context || !context->engine || !context->map || !plan ||
+      !plan->id.length || plan->definition.kind != AB_VALUE_OBJECT || !out)
     return ARCHBIRD_INVALID_ARGUMENT;
   memset(out, 0, sizeof(*out));
-  status = ab_projection_resolution_validate(engine, resolution, map,
-                                             "projection input");
-  if (status != ARCHBIRD_OK)
-    return status;
-  ab_buffer_init(&base, engine);
-  status = ab_projection_extract_map(engine, map, resolution, plan, &out->data);
+  ab_buffer_init(&base, context->engine);
+  status = ab_projection_extract_context(context, plan, &out->data);
   if (status == ARCHBIRD_OK)
     status = render_projection_result_identity(&base, plan->definition_sha256,
-                                               map, resolution, &out->data);
+                                               context->map,
+                                               context->resolution, &out->data);
   if (status == ARCHBIRD_OK)
     status = digest_buffer(&base, out->result_sha256);
   ab_buffer_free(&base);
   if (status != ARCHBIRD_OK)
-    ab_projection_result_free(engine, out);
+    ab_projection_result_free(context->engine, out);
   return status;
 }
 

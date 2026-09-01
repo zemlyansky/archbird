@@ -39,6 +39,7 @@ ArchbirdStatus ab_query_projections_evaluate(ArchbirdEngine *engine,
                                         "projection_definition_sha256"};
   size_t count;
   size_t index;
+  AbProjectionContext context = {0};
   ArchbirdStatus status = ARCHBIRD_OK;
   if (!engine || !serialized_plans ||
       serialized_plans->kind != AB_VALUE_ARRAY || !map || !out)
@@ -56,6 +57,7 @@ ArchbirdStatus ab_query_projections_evaluate(ArchbirdEngine *engine,
                               ARCHBIRD_NO_OFFSET,
                               "out of memory evaluating query projections");
   out->count = count;
+  status = ab_projection_context_init(&context, engine, map, resolution);
   for (index = 0; status == ARCHBIRD_OK && index < out->count; index++) {
     const AbValue *row = &serialized_plans->as.array.items[index];
     const AbValue *definition;
@@ -89,10 +91,10 @@ ArchbirdStatus ab_query_projections_evaluate(ArchbirdEngine *engine,
                expected_sha->as.text.data, 64) != 0)
       status = invalid(engine, "projection definition digest is stale");
     if (status == ARCHBIRD_OK)
-      status =
-          ab_projection_plan_evaluate(engine, &out->items[index].plan, map,
-                                      resolution, &out->items[index].result);
+      status = ab_projection_plan_evaluate_context(
+          &context, &out->items[index].plan, &out->items[index].result);
   }
+  ab_projection_context_free(&context);
   if (status != ARCHBIRD_OK)
     ab_query_projection_set_free(engine, out);
   return status;

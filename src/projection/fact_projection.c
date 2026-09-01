@@ -8100,27 +8100,57 @@ static ArchbirdStatus extract_map_fact(AbProjectionContext *context,
   return status;
 }
 
+ArchbirdStatus ab_projection_context_init(AbProjectionContext *context,
+                                          ArchbirdEngine *engine,
+                                          const AbValue *map,
+                                          const AbValue *resolution) {
+  ArchbirdStatus status;
+  if (!context || !engine || !map || map->kind != AB_VALUE_OBJECT)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  memset(context, 0, sizeof(*context));
+  context->engine = engine;
+  context->map = map;
+  context->resolution = resolution;
+  status = ab_projection_resolution_validate(engine, resolution, map,
+                                             "projection input");
+  if (status == ARCHBIRD_OK)
+    status = path_index_init(context, "files", &context->files,
+                             &context->file_slots, &context->file_slot_count);
+  if (status == ARCHBIRD_OK)
+    status = path_index_init(context, "inputs", &context->inputs,
+                             &context->input_slots, &context->input_slot_count);
+  if (status != ARCHBIRD_OK)
+    ab_projection_context_free(context);
+  return status;
+}
+
+void ab_projection_context_free(AbProjectionContext *context) {
+  if (!context)
+    return;
+  ab_free(context->engine, context->file_slots);
+  ab_free(context->engine, context->input_slots);
+  memset(context, 0, sizeof(*context));
+}
+
+ArchbirdStatus ab_projection_extract_context(AbProjectionContext *context,
+                                             const AbProjectionPlan *plan,
+                                             AbProjectionData *out) {
+  if (!context || !context->engine || !context->map || !plan || !out)
+    return ARCHBIRD_INVALID_ARGUMENT;
+  return extract_map_fact(context, plan, out);
+}
+
 ArchbirdStatus ab_projection_extract_map(ArchbirdEngine *engine,
                                          const AbValue *map,
                                          const AbValue *resolution,
                                          const AbProjectionPlan *plan,
                                          AbProjectionData *out) {
   AbProjectionContext context = {0};
-  ArchbirdStatus status;
-  if (!engine || !map || !plan || !out)
-    return ARCHBIRD_INVALID_ARGUMENT;
-  context.engine = engine;
-  context.map = map;
-  context.resolution = resolution;
-  status = path_index_init(&context, "files", &context.files,
-                           &context.file_slots, &context.file_slot_count);
+  ArchbirdStatus status =
+      ab_projection_context_init(&context, engine, map, resolution);
   if (status == ARCHBIRD_OK)
-    status = path_index_init(&context, "inputs", &context.inputs,
-                             &context.input_slots, &context.input_slot_count);
-  if (status == ARCHBIRD_OK)
-    status = extract_map_fact(&context, plan, out);
-  ab_free(engine, context.file_slots);
-  ab_free(engine, context.input_slots);
+    status = ab_projection_extract_context(&context, plan, out);
+  ab_projection_context_free(&context);
   return status;
 }
 

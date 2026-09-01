@@ -290,8 +290,7 @@ static ArchbirdStatus evaluate_select(AbProjectionContext *context,
   status =
       ab_projection_plan_compile(context->engine, &definition, &plan_id, &plan);
   if (status == ARCHBIRD_OK)
-    status = ab_projection_extract_map(context->engine, context->map,
-                                       context->resolution, &plan, out);
+    status = ab_projection_extract_context(context, &plan, out);
   ab_projection_plan_free(context->engine, &plan);
   return status;
 }
@@ -335,8 +334,7 @@ evaluate_symbol_relations(AbProjectionContext *context,
   status =
       ab_projection_plan_compile(context->engine, &definition, &plan_id, &plan);
   if (status == ARCHBIRD_OK)
-    status = ab_projection_extract_map(context->engine, context->map,
-                                       context->resolution, &plan, out);
+    status = ab_projection_extract_context(context, &plan, out);
   ab_projection_plan_free(context->engine, &plan);
   return status;
 }

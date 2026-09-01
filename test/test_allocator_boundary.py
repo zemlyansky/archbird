@@ -84,6 +84,22 @@ def code_only(source: str) -> str:
     return "".join(output)
 
 
+def projection_context_violations(root: Path) -> list[str]:
+    """Compound projections must reuse one decoded Map index context."""
+    graph = (root / "src/projection/graph_projection.c").read_text(
+        encoding="utf-8"
+    )
+    query = (root / "src/query/query_projection.c").read_text(encoding="utf-8")
+    violations = []
+    if "ab_projection_extract_map(" in graph:
+        violations.append("graph subprojections rebuild the Map projection context")
+    if query.count("ab_projection_context_init(") != 1:
+        violations.append("Query projections do not initialize one shared context")
+    if "ab_projection_plan_evaluate_context(" not in query:
+        violations.append("Query projections do not use their shared context")
+    return violations
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     engine_path = root / "src/base/engine.c"
@@ -107,12 +123,13 @@ def main() -> int:
         violations.append(
             f"src/base/engine.c: default libc calls {dict(defaults)} != {dict(expected)}"
         )
+    violations.extend(projection_context_violations(root))
     if violations:
-        print("direct owned libc allocation bypasses the engine contract:", file=sys.stderr)
+        print("native allocation/context boundary failed:", file=sys.stderr)
         for violation in violations:
             print(f"  {violation}", file=sys.stderr)
         return 1
-    print("native allocator boundary passed: only engine defaults call libc")
+    print("native allocation/context boundary passed")
     return 0
 
 

@@ -128,6 +128,14 @@ ArchbirdStatus ab_projection_plan_compile(ArchbirdEngine *engine,
                                           const AbString *id,
                                           AbProjectionPlan *out);
 void ab_projection_plan_free(ArchbirdEngine *engine, AbProjectionPlan *plan);
+ArchbirdStatus ab_projection_context_init(AbProjectionContext *context,
+                                          ArchbirdEngine *engine,
+                                          const AbValue *map,
+                                          const AbValue *resolution);
+void ab_projection_context_free(AbProjectionContext *context);
+ArchbirdStatus ab_projection_extract_context(AbProjectionContext *context,
+                                             const AbProjectionPlan *plan,
+                                             AbProjectionData *out);
 ArchbirdStatus ab_projection_extract_map(ArchbirdEngine *engine,
                                          const AbValue *map,
                                          const AbValue *resolution,
@@ -148,6 +156,9 @@ ArchbirdStatus ab_projection_plan_evaluate(ArchbirdEngine *engine,
                                            const AbValue *map,
                                            const AbValue *resolution,
                                            AbProjectionResult *out);
+ArchbirdStatus ab_projection_plan_evaluate_context(AbProjectionContext *context,
+                                                   const AbProjectionPlan *plan,
+                                                   AbProjectionResult *out);
 void ab_projection_result_free(ArchbirdEngine *engine,
                                AbProjectionResult *result);
 
