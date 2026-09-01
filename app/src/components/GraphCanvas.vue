@@ -62,6 +62,7 @@ const selectedRendered = ref<{ x: number; y: number } | null>(null);
 const nodeActionPosition = ref<{ x: number; y: number } | null>(null);
 const nodeActionInset = ref<number | null>(null);
 const hoveredNodeId = ref<string | null>(null);
+const draggingNodeId = ref<string | null>(null);
 const middlePanning = ref(false);
 const hover = ref<{
   documentation: string;
@@ -452,6 +453,7 @@ function render() {
     : null;
   if (!viewport) hasCompletedLayout.value = false;
   layoutReady.value = false;
+  draggingNodeId.value = null;
   hover.value = null;
   const architecture = props.notation === "architecture";
   const leafSize = elkLeafSize(props.spacing, props.notation);
@@ -712,6 +714,7 @@ function render() {
     }
   });
   cy.on("mouseover mousemove", "node, edge", (event: EventObject) => {
+    if (draggingNodeId.value) return;
     if (event.target.isNode()) {
       if (actionHideTimer) window.clearTimeout(actionHideTimer);
       hoveredNodeId.value = event.target.id();
@@ -722,6 +725,17 @@ function render() {
   cy.on("mouseout", "node, edge", (event: EventObject) => {
     hover.value = null;
     if (event.target.isNode()) scheduleActionHide();
+  });
+  cy.on("grab", "node", (event: EventObject) => {
+    if (actionHideTimer) window.clearTimeout(actionHideTimer);
+    draggingNodeId.value = event.target.id();
+    hoveredNodeId.value = null;
+    hover.value = null;
+  });
+  cy.on("free", "node", (event: EventObject) => {
+    draggingNodeId.value = null;
+    hoveredNodeId.value = event.target.id();
+    updateSelectedPosition();
   });
   cy.on("pan zoom", () => {
     hover.value = null;
@@ -1071,6 +1085,7 @@ onBeforeUnmount(() => {
       :data-hidden-node-count="graph.nodes.filter((node) => node.attributes.presentation_hidden).length"
       :data-hidden-edge-count="graph.edges.filter((edge) => edge.attributes?.presentation_hidden).length"
       :data-hidden-edge-opacity="hiddenEdgeOpacity"
+      :data-dragging-node="draggingNodeId !== null"
       :data-edge-count="graph.summary.edges"
       :data-focus-count="focusCount"
       :data-dimmed-count="dimmedCount"
@@ -1099,7 +1114,7 @@ onBeforeUnmount(() => {
       <span>Back</span>
     </button>
     <div
-      v-if="actionNode && nodeActionPosition"
+      v-if="!draggingNodeId && actionNode && nodeActionPosition"
       class="graph-node-actions"
       :data-node-id="actionNode.id"
       :data-rendered-inset="nodeActionInset"
@@ -1148,7 +1163,7 @@ onBeforeUnmount(() => {
     </div>
     <slot />
     <aside
-      v-if="hover"
+      v-if="!draggingNodeId && hover"
       class="graph-tooltip"
       role="tooltip"
       :style="{ left: `${hover.x}px`, top: `${hover.y}px` }"

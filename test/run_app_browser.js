@@ -416,7 +416,22 @@ async function main() {
       fullPage: true,
     });
     await initialZoom.fill("125");
-    const nodePosition = await selectedGraphPoint(page);
+    let nodePosition = await selectedGraphPoint(page);
+    await page.mouse.move(nodePosition.clientX, nodePosition.clientY);
+    await page.mouse.down();
+    await page.mouse.move(
+      nodePosition.clientX + 48,
+      nodePosition.clientY + 32,
+      { steps: 6 },
+    );
+    await page.locator('.graph-canvas[data-dragging-node="true"]').waitFor();
+    if (await page.locator(".graph-node-actions").count()
+        || await page.locator(".graph-tooltip").count()) {
+      throw new Error("node overlays remained visible at their pre-drag position");
+    }
+    await page.mouse.up();
+    await page.locator('.graph-canvas[data-dragging-node="false"]').waitFor();
+    nodePosition = await selectedGraphPoint(page);
     const edgeCount = await page.locator(".graph-canvas").getAttribute("data-edge-count");
     await page.getByRole("button", { name: "Remove node from view", exact: true }).click();
     await page.locator('.graph-canvas[data-hidden-node-count="1"][data-layout-ready="true"]')
