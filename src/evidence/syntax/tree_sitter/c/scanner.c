@@ -656,8 +656,8 @@ ArchbirdStatus ab_scan_tree_sitter_c_file(
        "ranges reduce coverage to partial"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-c",
-      "3",
-      "archbird-tree-sitter-c-v3;runtime=0.26.9;grammar=0.24.2;abi=15",
+      "4",
+      "archbird-tree-sitter-c-v4;runtime=0.26.9;grammar=0.24.2;abi=15",
       "tree-sitter-0.26.9;tree-sitter-c-0.24.2;grammar-abi-15",
       "c",
       tree_sitter_c,

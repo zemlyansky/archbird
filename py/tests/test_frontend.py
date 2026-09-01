@@ -253,6 +253,115 @@ def main() -> int:
     }:
         raise AssertionError(extension.project_counts(project))
 
+    documentation_source = '''\
+class Documented:
+    """Run deterministic model inference.
+
+    The second paragraph remains available to detailed consumers.
+    """
+
+    def run(self):
+        """Return the forwarded value."""
+        return 1
+
+# This ordinary comment does not document the separated declaration.
+
+def undocumented():
+    return 0
+'''
+    documentation_raw = documentation_source.encode()
+    documentation_manifest = {
+        **manifest,
+        "files": [
+            {
+                **manifest["files"][0],
+                "bytes": len(documentation_raw),
+                "path": "pkg/documented.py",
+                "sha256": hashlib.sha256(documentation_raw).hexdigest(),
+            }
+        ],
+    }
+    documentation_project = extension.project_create(
+        canonical(documentation_manifest)
+    )
+    extension.project_add_source(
+        documentation_project, "pkg/documented.py", documentation_raw
+    )
+    extension.project_finalize_sources(documentation_project)
+    documentation_provider = provider.python_ast_provider_facts(
+        project="python-test",
+        path="pkg/documented.py",
+        text=documentation_source,
+        source_manifest_sha256=extension.project_manifest_sha256(
+            documentation_project
+        ),
+    )
+    documentation_facts = {
+        row["name"]: row
+        for row in json.loads(documentation_provider)["facts"]
+        if row["domain"] == "symbols"
+    }
+    class_start = documentation_raw.index(b'"""Run deterministic')
+    class_end = documentation_raw.index(b'"""\n\n    def run') + 3
+    method_start = documentation_raw.index(b'"""Return the forwarded')
+    method_end = documentation_raw.index(b'"""\n        return') + 3
+    expected_class_text = (
+        "Run deterministic model inference.\n\n"
+        "The second paragraph remains available to detailed consumers."
+    )
+    expected_class_documentation = {
+        "documentation": expected_class_text,
+        "documentation_end": class_end,
+        "documentation_kind": "docstring",
+        "documentation_start": class_start,
+    }
+    class_attributes = documentation_facts["Documented"].get("attributes", {})
+    if {
+        name: class_attributes.get(name)
+        for name in expected_class_documentation
+    } != expected_class_documentation:
+        raise AssertionError(documentation_facts["Documented"])
+    expected_method_documentation = {
+        "documentation": "Return the forwarded value.",
+        "documentation_end": method_end,
+        "documentation_kind": "docstring",
+        "documentation_start": method_start,
+    }
+    method_attributes = documentation_facts["Documented.run"].get(
+        "attributes", {}
+    )
+    if {
+        name: method_attributes.get(name)
+        for name in expected_method_documentation
+    } != expected_method_documentation:
+        raise AssertionError(documentation_facts["Documented.run"])
+    if "documentation" in documentation_facts["undocumented"].get(
+        "attributes", {}
+    ):
+        raise AssertionError(documentation_facts["undocumented"])
+    extension.project_add_provider(
+        documentation_project, "primary", documentation_provider
+    )
+    extension.project_finalize_providers(documentation_project)
+    documented_file = json.loads(
+        extension.project_file_facts(documentation_project)
+    )["files"][0]
+    documented_symbols = {
+        symbol["name"]: symbol for symbol in documented_file["symbols"]
+    }
+    if documented_symbols["Documented"].get("documentation") != {
+        "kind": "docstring",
+        "span": {"end": class_end, "start": class_start},
+        "text": expected_class_text,
+    }:
+        raise AssertionError(documented_symbols["Documented"])
+    if documented_symbols["Documented.run"].get("documentation") != {
+        "kind": "docstring",
+        "span": {"end": method_end, "start": method_start},
+        "text": "Return the forwarded value.",
+    }:
+        raise AssertionError(documented_symbols["Documented.run"])
+
     qualified_source = (
         "import pkg as public_pkg\n"
         "value = public_pkg.target()\n"

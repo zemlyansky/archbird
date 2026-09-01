@@ -1267,8 +1267,8 @@ static ArchbirdStatus add_search_domain_item(
     AbProjectionContext *context, AbProjectionData *fact,
     const AbString *project, const char *entity_kind, const AbString *path,
     const AbString *name, const AbString *scope, const AbString *signature,
-    const AbString *symbol_kind, uint64_t line, size_t source_index,
-    size_t nested_index, const AbString *evidence_path,
+    const AbString *documentation, const AbString *symbol_kind, uint64_t line,
+    size_t source_index, size_t nested_index, const AbString *evidence_path,
     const char *evidence_sha) {
   AbString kind = {(char *)entity_kind, strlen(entity_kind)};
   AbString empty = {0};
@@ -1303,6 +1303,9 @@ static ArchbirdStatus add_search_domain_item(
   if (status == ARCHBIRD_OK)
     status = item_add_string_attribute(context->engine, &item, "signature",
                                        signature ? signature : &empty);
+  if (status == ARCHBIRD_OK)
+    status = item_add_string_attribute(context->engine, &item, "documentation",
+                                       documentation ? documentation : &empty);
   if (status == ARCHBIRD_OK)
     status = item_add_string_attribute(context->engine, &item, "symbol_kind",
                                        symbol_kind ? symbol_kind : &empty);
@@ -1374,10 +1377,10 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
           context, "Map contains an invalid searchable file row");
       break;
     }
-    status =
-        add_search_domain_item(context, fact, &project->as.text, "file",
-                               &path->as.text, &path->as.text, NULL, NULL, NULL,
-                               0, index, 0, &path->as.text, sha->as.text.data);
+    status = add_search_domain_item(context, fact, &project->as.text, "file",
+                                    &path->as.text, &path->as.text, NULL, NULL,
+                                    NULL, NULL, 0, index, 0, &path->as.text,
+                                    sha->as.text.data);
     universe++;
     for (symbol_index = 0;
          status == ARCHBIRD_OK && symbol_index < symbols->as.array.count;
@@ -1387,6 +1390,11 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
       const AbValue *kind = ab_value_member(symbol, "kind");
       const AbValue *scope = ab_value_member(symbol, "scope");
       const AbValue *signature = ab_value_member(symbol, "signature");
+      const AbValue *documentation = ab_value_member(symbol, "documentation");
+      const AbValue *documentation_text =
+          documentation && documentation->kind == AB_VALUE_OBJECT
+              ? ab_value_member(documentation, "text")
+              : NULL;
       uint64_t line = 0;
       if (!valid_symbol_row(symbol) ||
           !ab_value_u64(ab_value_member(symbol, "line"), &line)) {
@@ -1399,6 +1407,9 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
           &name->as.text, &scope->as.text,
           signature && signature->kind == AB_VALUE_STRING ? &signature->as.text
                                                           : NULL,
+          documentation_text && documentation_text->kind == AB_VALUE_STRING
+              ? &documentation_text->as.text
+              : NULL,
           &kind->as.text, line, index, symbol_index, &path->as.text,
           sha->as.text.data);
       universe++;
@@ -1419,7 +1430,7 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
       witness = &members->as.array.items[0].as.text;
     status = add_search_domain_item(context, fact, &project->as.text,
                                     "component", NULL, &name->as.text, NULL,
-                                    NULL, NULL, 0, index, 0, witness,
+                                    NULL, NULL, NULL, 0, index, 0, witness,
                                     witness ? file_sha(context, witness) : "");
     universe++;
   }
@@ -1433,10 +1444,10 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
           context, "Map contains an invalid searchable package row");
       break;
     }
-    status = add_search_domain_item(context, fact, &project->as.text, "package",
-                                    &manifest->as.text, &name->as.text, NULL,
-                                    NULL, NULL, 0, index, 0, &manifest->as.text,
-                                    file_sha(context, &manifest->as.text));
+    status = add_search_domain_item(
+        context, fact, &project->as.text, "package", &manifest->as.text,
+        &name->as.text, NULL, NULL, NULL, NULL, 0, index, 0, &manifest->as.text,
+        file_sha(context, &manifest->as.text));
     universe++;
   }
   for (index = 0; status == ARCHBIRD_OK && index < artifacts->as.array.count;
@@ -1457,7 +1468,7 @@ static ArchbirdStatus extract_search_domain(AbProjectionContext *context,
     }
     status = add_search_domain_item(
         context, fact, &project->as.text, "artifact", &output->as.text,
-        &name->as.text, NULL, NULL, NULL, 0, index, 0, witness,
+        &name->as.text, NULL, NULL, NULL, NULL, 0, index, 0, witness,
         witness ? file_sha(context, witness) : "");
     universe++;
   }
@@ -2183,9 +2194,12 @@ static ArchbirdStatus item_add_symbol_definition(ArchbirdEngine *engine,
   const AbValue *line = ab_value_member(symbol, "line");
   const AbValue *scope = ab_value_member(symbol, "scope");
   const AbValue *signature = ab_value_member(symbol, "signature");
+  const AbValue *documentation = ab_value_member(symbol, "documentation");
   const AbValue *extent_lines = ab_value_member(symbol, "extent_lines");
   size_t field_count =
       (size_t)3 +
+      (documentation && documentation->kind == AB_VALUE_OBJECT ? (size_t)1
+                                                               : (size_t)0) +
       (signature && signature->kind == AB_VALUE_STRING ? (size_t)1
                                                        : (size_t)0) +
       (extent_lines ? (size_t)1 : (size_t)0);
@@ -2222,6 +2236,14 @@ static ArchbirdStatus item_add_symbol_definition(ArchbirdEngine *engine,
     status =
         archbird_error_set(engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
                            "out of memory storing a symbol definition");
+  if (status == ARCHBIRD_OK && documentation &&
+      documentation->kind == AB_VALUE_OBJECT)
+    status = copy_literal(engine, &row->as.object.fields[field].name,
+                          "documentation");
+  if (status == ARCHBIRD_OK && documentation &&
+      documentation->kind == AB_VALUE_OBJECT)
+    status = ab_value_copy(engine, &row->as.object.fields[field++].value,
+                           documentation);
   if (status == ARCHBIRD_OK && extent_lines)
     status = copy_literal(engine, &row->as.object.fields[field].name,
                           "extent_lines");

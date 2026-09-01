@@ -650,9 +650,265 @@ static int source_extent_parent(TSNode parent, TSNode declaration) {
          !strcmp(type, "template_declaration");
 }
 
+static int documentation_gap(const AbTreeSitterScan *scan, size_t start,
+                             size_t end) {
+  size_t index;
+  size_t newlines = 0;
+  if (start > end || end > scan->source_length)
+    return 0;
+  for (index = start; index < end; index++) {
+    uint8_t byte = scan->source[index];
+    if (byte == '\n')
+      newlines++;
+    else if (byte != ' ' && byte != '\t' && byte != '\r')
+      return 0;
+  }
+  return newlines <= 1;
+}
+
+static int documentation_comment(const AbTreeSitterScan *scan, TSNode node,
+                                 size_t *out_start, size_t *out_end) {
+  const uint8_t *text;
+  size_t length;
+  const char *language;
+  if (!ab_tree_sitter_node_type(node, "comment") ||
+      !ab_tree_sitter_node_slice(scan, node, out_start, out_end) ||
+      *out_start >= *out_end)
+    return 0;
+  text = scan->source + *out_start;
+  length = *out_end - *out_start;
+  language = scan->descriptor->language_name;
+  if (!strcmp(language, "r"))
+    return length >= 2 && text[0] == '#' && text[1] == '\'';
+  if (!strcmp(language, "c") || !strcmp(language, "cpp"))
+    return (length >= 3 && text[0] == '/' && text[1] == '/' &&
+            (text[2] == '/' || text[2] == '!')) ||
+           (length >= 5 && text[0] == '/' && text[1] == '*' &&
+            (text[2] == '*' || text[2] == '!') && text[length - 2] == '*' &&
+            text[length - 1] == '/');
+  return length >= 5 && text[0] == '/' && text[1] == '*' && text[2] == '*' &&
+         text[length - 2] == '*' && text[length - 1] == '/';
+}
+
+static ArchbirdStatus documentation_line(AbBuffer *text, const uint8_t *line,
+                                         size_t length, int *has_text,
+                                         int *pending_blank) {
+  size_t start = 0;
+  size_t end = length;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  while (start < end && (line[start] == ' ' || line[start] == '\t'))
+    start++;
+  if (start < end && line[start] == '*') {
+    start++;
+    if (start < end && line[start] == ' ')
+      start++;
+  }
+  while (end > start && (line[end - 1] == ' ' || line[end - 1] == '\t' ||
+                         line[end - 1] == '\r'))
+    end--;
+  if (start == end) {
+    if (*has_text)
+      *pending_blank = 1;
+    return ARCHBIRD_OK;
+  }
+  if (*has_text)
+    status = ab_buffer_literal(text, *pending_blank ? "\n\n" : "\n");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(text, line + start, end - start);
+  if (status == ARCHBIRD_OK) {
+    *has_text = 1;
+    *pending_blank = 0;
+  }
+  return status;
+}
+
+static ArchbirdStatus normalize_documentation_comment(AbBuffer *text,
+                                                      const uint8_t *comment,
+                                                      size_t length,
+                                                      int *has_text,
+                                                      int *pending_blank) {
+  size_t start;
+  size_t end;
+  size_t line_start;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (length >= 2 && comment[0] == '#' && comment[1] == '\'') {
+    start = 2;
+    end = length;
+  } else if (length >= 3 && comment[0] == '/' && comment[1] == '/') {
+    start = 3;
+    end = length;
+  } else {
+    start = 3;
+    end = length - 2;
+  }
+  if (start < end && comment[start] == ' ')
+    start++;
+  line_start = start;
+  while (status == ARCHBIRD_OK && line_start <= end) {
+    size_t line_end = line_start;
+    while (line_end < end && comment[line_end] != '\n')
+      line_end++;
+    status = documentation_line(text, comment + line_start,
+                                line_end - line_start, has_text, pending_blank);
+    if (line_end == end)
+      break;
+    line_start = line_end + 1;
+  }
+  return status;
+}
+
+static int python_docstring_node(const AbTreeSitterScan *scan,
+                                 TSNode declaration, TSNode *out_string) {
+  TSNode body = ab_tree_sitter_child(declaration, "body");
+  TSNode statement;
+  TSNode string;
+  if (ts_node_is_null(body) || !ts_node_named_child_count(body))
+    return 0;
+  statement = ts_node_named_child(body, 0);
+  if (!ab_tree_sitter_node_type(statement, "expression_statement") ||
+      !ts_node_named_child_count(statement))
+    return 0;
+  string = ts_node_named_child(statement, 0);
+  if (!ab_tree_sitter_node_type(string, "string") ||
+      !ab_tree_sitter_node_has_text(scan, string))
+    return 0;
+  *out_string = string;
+  return 1;
+}
+
+static ArchbirdStatus normalize_python_docstring(AbBuffer *text,
+                                                 const uint8_t *literal,
+                                                 size_t length) {
+  size_t quote = 0;
+  size_t start;
+  size_t end;
+  size_t line_start;
+  size_t minimum_indent = SIZE_MAX;
+  int first = 1;
+  int has_text = 0;
+  int pending_blank = 0;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  while (quote < length && literal[quote] != '\'' && literal[quote] != '"')
+    quote++;
+  if (quote + 6 > length || literal[quote] != literal[quote + 1] ||
+      literal[quote] != literal[quote + 2] ||
+      literal[length - 1] != literal[quote] ||
+      literal[length - 2] != literal[quote] ||
+      literal[length - 3] != literal[quote] || memchr(literal, '\\', length))
+    return ARCHBIRD_OK;
+  start = quote + 3;
+  end = length - 3;
+  line_start = start;
+  while (line_start < end) {
+    size_t line_end = line_start;
+    size_t indent = 0;
+    while (line_end < end && literal[line_end] != '\n')
+      line_end++;
+    if (line_start != start) {
+      while (line_start + indent < line_end &&
+             literal[line_start + indent] == ' ')
+        indent++;
+      if (line_start + indent < line_end && indent < minimum_indent)
+        minimum_indent = indent;
+    }
+    if (line_end == end)
+      break;
+    line_start = line_end + 1;
+  }
+  if (minimum_indent == SIZE_MAX)
+    minimum_indent = 0;
+  line_start = start;
+  while (status == ARCHBIRD_OK && line_start <= end) {
+    size_t line_end = line_start;
+    size_t remove = 0;
+    while (line_end < end && literal[line_end] != '\n')
+      line_end++;
+    if (!first)
+      while (remove < minimum_indent && line_start + remove < line_end &&
+             literal[line_start + remove] == ' ')
+        remove++;
+    status = documentation_line(text, literal + line_start + remove,
+                                line_end - line_start - remove, &has_text,
+                                &pending_blank);
+    first = 0;
+    if (line_end == end)
+      break;
+    line_start = line_end + 1;
+  }
+  return status;
+}
+
+static ArchbirdStatus add_symbol_documentation(AbTreeSitterScan *scan,
+                                               AbFact *fact, TSNode declaration,
+                                               TSNode extent) {
+  AbBuffer text;
+  const char *kind = NULL;
+  size_t start = 0;
+  size_t end = 0;
+  int has_text = 0;
+  int pending_blank = 0;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  ab_buffer_init(&text, scan->engine);
+  if (!strcmp(scan->descriptor->language_name, "python")) {
+    TSNode string;
+    if (python_docstring_node(scan, declaration, &string) &&
+        ab_tree_sitter_node_slice(scan, string, &start, &end)) {
+      status =
+          normalize_python_docstring(&text, scan->source + start, end - start);
+      kind = text.length ? "docstring" : NULL;
+    }
+  } else {
+    TSNode current = ts_node_prev_named_sibling(extent);
+    TSNode earliest = (TSNode){0};
+    size_t boundary = ts_node_start_byte(extent);
+    size_t current_start;
+    size_t current_end;
+    while (documentation_comment(scan, current, &current_start, &current_end) &&
+           documentation_gap(scan, current_end, boundary)) {
+      earliest = current;
+      start = current_start;
+      boundary = current_start;
+      current = ts_node_prev_named_sibling(current);
+    }
+    current = earliest;
+    while (status == ARCHBIRD_OK && !ts_node_is_null(current) &&
+           !ts_node_eq(current, extent)) {
+      if (!documentation_comment(scan, current, &current_start, &current_end))
+        break;
+      status = normalize_documentation_comment(
+          &text, scan->source + current_start, current_end - current_start,
+          &has_text, &pending_blank);
+      end = current_end;
+      current = ts_node_next_named_sibling(current);
+    }
+    if (text.length) {
+      const char *language = scan->descriptor->language_name;
+      kind = !strcmp(language, "r")                                 ? "roxygen"
+             : (!strcmp(language, "c") || !strcmp(language, "cpp")) ? "doxygen"
+                                                                    : "jsdoc";
+    }
+  }
+  if (status == ARCHBIRD_OK && kind)
+    status = ab_fact_add_string_attribute(scan->engine, fact, "documentation",
+                                          text.data, text.length);
+  if (status == ARCHBIRD_OK && kind)
+    status =
+        ab_fact_add_string_attribute(scan->engine, fact, "documentation_kind",
+                                     (const uint8_t *)kind, strlen(kind));
+  if (status == ARCHBIRD_OK && kind)
+    status = ab_fact_add_u64_attribute(scan->engine, fact,
+                                       "documentation_start", start);
+  if (status == ARCHBIRD_OK && kind)
+    status =
+        ab_fact_add_u64_attribute(scan->engine, fact, "documentation_end", end);
+  ab_buffer_free(&text);
+  return status;
+}
+
 ArchbirdStatus ab_tree_sitter_add_symbol_extent(AbTreeSitterScan *scan,
                                                 AbFact *fact,
                                                 TSNode declaration) {
+  TSNode symbol_declaration = declaration;
   TSNode parent;
   size_t start;
   size_t end;
@@ -676,6 +932,9 @@ ArchbirdStatus ab_tree_sitter_add_symbol_extent(AbTreeSitterScan *scan,
   if (status == ARCHBIRD_OK)
     status = ab_fact_add_string_attribute(scan->engine, fact, "extent_fidelity",
                                           (const uint8_t *)"concrete", 8);
+  if (status == ARCHBIRD_OK)
+    status =
+        add_symbol_documentation(scan, fact, symbol_declaration, declaration);
   return status;
 }
 

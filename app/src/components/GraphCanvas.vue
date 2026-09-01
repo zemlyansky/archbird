@@ -8,6 +8,7 @@ import ELKWorker from "elkjs/lib/elk-worker.min.js?worker";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { GraphView } from "../artifacts/model";
 import { edgePresentation, graphActivation } from "../graph/explore";
+import { documentationPreview } from "../graph/documentation";
 import {
   elkLeafSize,
   elkLayoutGraph,
@@ -63,6 +64,7 @@ const nodeActionInset = ref<number | null>(null);
 const hoveredNodeId = ref<string | null>(null);
 const middlePanning = ref(false);
 const hover = ref<{
+  documentation: string;
   details: string[];
   eyebrow: string;
   subtitle: string;
@@ -749,6 +751,7 @@ function showHover(event: EventObject) {
     const incoming = event.target.incomers("edge").length;
     const outgoing = event.target.outgoers("edge").length;
     const details: string[] = [`${incoming} incoming · ${outgoing} outgoing`];
+    const documentation = documentationPreview(node.attributes.documentation);
     const files = Number(node.attributes.files || 0);
     const symbols = Number(node.attributes.symbols || 0);
     if (files || symbols) details.push(`${files} files · ${symbols} symbols`);
@@ -768,6 +771,7 @@ function showHover(event: EventObject) {
       );
     }
     hover.value = {
+      documentation,
       details,
       eyebrow: node.kind,
       subtitle: node.identity === node.label ? "" : node.identity,
@@ -791,6 +795,7 @@ function showHover(event: EventObject) {
     details.push(`${status || "verification"} · ${findings} findings`);
   }
   hover.value = {
+    documentation: "",
     details,
     eyebrow: presentation.eyebrow,
     subtitle: edge.names.length
@@ -1151,6 +1156,7 @@ onBeforeUnmount(() => {
       <small>{{ hover.eyebrow }}</small>
       <strong>{{ hover.title }}</strong>
       <code v-if="hover.subtitle">{{ hover.subtitle }}</code>
+      <p v-if="hover.documentation">{{ hover.documentation }}</p>
       <span v-for="detail in hover.details" :key="detail">{{ detail }}</span>
     </aside>
     <p v-if="!layoutReady && !layoutError && !hasCompletedLayout" class="layout-status">Arranging graph…</p>

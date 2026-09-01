@@ -66,12 +66,22 @@ function occurrence(symbol, roles, line, start, end) {
   ]);
 }
 
-function document(path, value, text) {
+function symbolInformation(symbol, displayName, documentation) {
+  return concat([
+    stringField(1, symbol),
+    ...documentation.map((text) => stringField(3, text)),
+    integerField(5, 17),
+    stringField(6, displayName),
+  ]);
+}
+
+function document(path, value, text, symbols = []) {
   // Position encoding field 6 is deliberately absent. Tests must provide an
   // explicit reviewed fallback instead of inferring an indexer's convention.
   return concat([
     stringField(1, path),
     bytesField(2, value),
+    ...symbols.map((symbol) => bytesField(3, symbol)),
     stringField(4, "javascript"),
     stringField(5, text),
   ]);
@@ -90,7 +100,12 @@ function scipFixture() {
   return concat([
     bytesField(1, metadata),
     bytesField(2, document("src/defs.js", occurrence(symbol, 1, 0, 16, 19),
-      "export function add(a, b) { return a + b; }\n")),
+      "export function add(a, b) { return a + b; }\n", [
+        symbolInformation(symbol, "add", [
+          "Add two values.",
+          "The result preserves JavaScript addition semantics.",
+        ]),
+      ])),
     bytesField(2, document("src/use.js", occurrence(symbol, 8, 0, 9, 12),
       'import { add } from "./defs.js";\nexport const value = add(1, 2);\n')),
   ]);

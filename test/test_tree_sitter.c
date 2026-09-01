@@ -92,7 +92,9 @@ static ArchbirdProject *create_project(ArchbirdEngine *engine,
 #ifdef ARCHBIRD_TEST_TREE_SITTER_C
 static void test_composed_c_evidence(ArchbirdEngine *engine) {
   static const char source[] = "#include \"api.h\"\n"
+                               "/** Detached documentation. */\n\n"
                                "static int helper(int x) { return x; }\n"
+                               "/** Run the helper. */\n"
                                "int run(void) { return helper(1); }\n";
   ArchbirdProject *project =
       create_project(engine, source, "src/sample.c", "c");
@@ -148,6 +150,9 @@ static void test_composed_c_evidence(ArchbirdEngine *engine) {
       !strstr(facts.bytes, "\"name\":\"run\"") ||
       !strstr(facts.bytes, "\"source_metrics\":") ||
       !strstr(facts.bytes, "\"source.cyclomatic_complexity\":1") ||
+      !strstr(facts.bytes, "\"documentation\":{\"kind\":\"doxygen\"") ||
+      !strstr(facts.bytes, "\"text\":\"Run the helper.\"") ||
+      strstr(facts.bytes, "Detached documentation.") ||
       !strstr(facts.bytes, "\"extent\":{\"end\":") ||
       !strstr(facts.bytes, ",\"start\":")) {
     fputs("FAIL composed syntax facts were not reduced into common IR\n",
@@ -694,6 +699,12 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
     failures++;
   }
   if (strcmp(name, "python-pack") == 0 &&
+      (!strstr(first.bytes, "\"documentation\":\"Run the box.\"") ||
+       !strstr(first.bytes, "\"documentation_kind\":\"docstring\""))) {
+    fputs("FAIL Python docstring evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "python-pack") == 0 &&
       !strstr(first.bytes, "\"kind\":\"variable\",\"name\":\"VALUE\"")) {
     fputs("FAIL Python module variable syntax symbol is absent\n", stderr);
     failures++;
@@ -720,6 +731,12 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
     failures++;
   }
   if (strcmp(name, "javascript-pack") == 0 &&
+      (!strstr(first.bytes, "\"documentation\":\"Run the box.\"") ||
+       !strstr(first.bytes, "\"documentation_kind\":\"jsdoc\""))) {
+    fputs("FAIL JavaScript JSDoc evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "javascript-pack") == 0 &&
       (!strstr(first.bytes, "\"name\":\"api.run\"") ||
        !strstr(first.bytes, "\"name\":\"module.exports.start\"") ||
        !strstr(first.bytes, "\"name\":\"table.stop\""))) {
@@ -739,6 +756,24 @@ static void test_language_pack(ArchbirdEngine *engine, const char *name,
       !strstr(first.bytes, "\"name\":\"api.run\"")) {
     fputs("FAIL TypeScript assignment-bound function symbol is absent\n",
           stderr);
+    failures++;
+  }
+  if (strcmp(name, "typescript-pack") == 0 &&
+      (!strstr(first.bytes, "\"documentation\":\"Parse a value.\"") ||
+       !strstr(first.bytes, "\"documentation_kind\":\"jsdoc\""))) {
+    fputs("FAIL TypeScript JSDoc evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "cpp-pack") == 0 &&
+      (!strstr(first.bytes, "\"documentation\":\"Run the box.\"") ||
+       !strstr(first.bytes, "\"documentation_kind\":\"doxygen\""))) {
+    fputs("FAIL C++ Doxygen evidence is absent\n", stderr);
+    failures++;
+  }
+  if (strcmp(name, "r-pack") == 0 &&
+      (!strstr(first.bytes, "\"documentation\":\"Run helper.\"") ||
+       !strstr(first.bytes, "\"documentation_kind\":\"roxygen\""))) {
+    fputs("FAIL R roxygen evidence is absent\n", stderr);
     failures++;
   }
   if (strcmp(name, "typescript-pack") == 0 &&
@@ -772,7 +807,8 @@ int main(void) {
 #ifdef ARCHBIRD_TEST_TREE_SITTER_CPP
     test_language_pack(
         engine, "cpp-pack", "syntax:tree-sitter:cpp", "cpp", "src/sample.cpp",
-        "#include <vector>\nnamespace demo { class Box { public: int run() "
+        "#include <vector>\nnamespace demo { class Box { public: "
+        "/** Run the box. */ int run() "
         "{ return helper(); } }; int helper() { return 1; } }\nnamespace { "
         "int hidden() { return 2; } }\nvoid recovered() { value.; }\n",
         "\"name\":\"demo.Box.run\"", "\"name\":\"helper\"",
@@ -783,8 +819,8 @@ int main(void) {
     test_language_pack(
         engine, "python-pack", "syntax:tree-sitter:python", "python",
         "pkg/sample.py",
-        "import os\nVALUE = helper()\nclass Box:\n  def run(self):\n    return "
-        "helper()\n",
+        "import os\nVALUE = helper()\nclass Box:\n  def run(self):\n    "
+        "\"\"\"Run the box.\"\"\"\n    return helper()\n",
         "\"name\":\"Box.run\"", "\"name\":\"helper\"", "\"name\":\"os\"");
 #endif
 #ifdef ARCHBIRD_TEST_TREE_SITTER_JAVASCRIPT
@@ -793,7 +829,7 @@ int main(void) {
         engine, "javascript-pack", "syntax:tree-sitter:javascript",
         "javascript", "src/sample.js",
         "import value from './dep.js';\nexport default function main() {}\n"
-        "class Box { run() { return helper(); } "
+        "class Box { /** Run the box. */ run() { return helper(); } "
         "}\nconst ops = { nested: { mul() { return helper(); } } };\n"
         "const api = {}; api.run = function run() { return helper(); };\n"
         "module.exports.start = () => helper();\n"
@@ -807,7 +843,8 @@ int main(void) {
         "typescript", "src/sample.ts",
         "import {Value} from './dep.js';\nclass Box { run(x: Value) { return "
         "helper(x); } }\nconst api: any = {}; api.run = (x: Value) => "
-        "helper(x);\nexport abstract class AbstractBox { parse(x: Value) { "
+        "helper(x);\nexport abstract class AbstractBox { /** Parse a value. */ "
+        "parse(x: Value) { "
         "return helper(x); } }\n",
         "\"name\":\"Box.run\"", "\"name\":\"helper\"", "\"name\":\"./dep.js\"");
 #endif
@@ -821,10 +858,11 @@ int main(void) {
                        "\"name\":\"react\"");
 #endif
 #ifdef ARCHBIRD_TEST_TREE_SITTER_R
-    test_language_pack(
-        engine, "r-pack", "syntax:tree-sitter:r", "r", "R/sample.R",
-        "helper <- function(x) { x }\nrun <- function() { helper(1) }\n",
-        "\"name\":\"run\"", "\"name\":\"helper\"", NULL);
+    test_language_pack(engine, "r-pack", "syntax:tree-sitter:r", "r",
+                       "R/sample.R",
+                       "helper <- function(x) { x }\n#' Run helper.\n"
+                       "run <- function() { helper(1) }\n",
+                       "\"name\":\"run\"", "\"name\":\"helper\"", NULL);
 #endif
   }
   archbird_engine_destroy(engine);

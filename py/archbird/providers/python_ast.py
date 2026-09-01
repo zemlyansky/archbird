@@ -50,7 +50,7 @@ _DOMAINS = (
     "symbols",
 )
 _CONFIGURATION_BYTES = (
-    b'{"contract":"archbird-python-ast-v5",'
+    b'{"contract":"archbird-python-ast-v6",'
     b'"provider":"archbird-python-ast","schema_version":1}'
 )
 _STDLIB = set(getattr(sys, "stdlib_module_names", ())) | {
@@ -963,6 +963,26 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         ] = {}
         self.ordered_containers = tuple(ordered_containers)
 
+    def _documentation(self, node: ast.AST) -> Dict[str, object]:
+        body = getattr(node, "body", ())
+        if not body or not isinstance(body[0], ast.Expr):
+            return {}
+        literal = body[0].value
+        if not isinstance(literal, ast.Constant) or not isinstance(
+            literal.value, str
+        ):
+            return {}
+        text = ast.get_docstring(node, clean=True)
+        if not text:
+            return {}
+        start, end = _absolute_span(literal, self.starts)
+        return {
+            "documentation": text,
+            "documentation_end": self.facts.source_offset(end),
+            "documentation_kind": "docstring",
+            "documentation_start": self.facts.source_offset(start),
+        }
+
     def _child_table(
         self, kind: str, name: str, line: int
     ) -> Optional[symtable.SymbolTable]:
@@ -1789,20 +1809,22 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         enum_like = any(self._enum_base(base) for base in node.bases)
         if enum_like:
             self.enum_classes.add(qualified)
+        attributes: Dict[str, object] = {
+            "extent_end": self.facts.source_offset(definition_span[1]),
+            "extent_fidelity": "semantic",
+            "extent_start": self.facts.source_offset(definition_span[0]),
+            "line": node.lineno,
+            "scope": "class",
+            "signature": signature,
+        }
+        attributes.update(self._documentation(node))
         self.facts.add(
             "symbols",
             "class",
             name_span,
             qualified,
             qualified,
-            {
-                "extent_end": self.facts.source_offset(definition_span[1]),
-                "extent_fidelity": "semantic",
-                "extent_start": self.facts.source_offset(definition_span[0]),
-                "line": node.lineno,
-                "scope": "class",
-                "signature": signature,
-            },
+            attributes,
         )
         self._record_class_constants(node, qualified, enum_like)
         self._record_decorators(node, qualified)
@@ -1894,20 +1916,22 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         if returns is not None:
             signature += f" -> {ast.unparse(returns)}"
         qualified = self._qualname(name)
+        attributes: Dict[str, object] = {
+            "extent_end": self.facts.source_offset(definition_span[1]),
+            "extent_fidelity": "semantic",
+            "extent_start": self.facts.source_offset(definition_span[0]),
+            "line": getattr(node, "lineno"),
+            "scope": kind,
+            "signature": signature,
+        }
+        attributes.update(self._documentation(node))
         self.facts.add(
             "symbols",
             kind,
             name_span,
             qualified,
             qualified,
-            {
-                "extent_end": self.facts.source_offset(definition_span[1]),
-                "extent_fidelity": "semantic",
-                "extent_start": self.facts.source_offset(definition_span[0]),
-                "line": getattr(node, "lineno"),
-                "scope": kind,
-                "signature": signature,
-            },
+            attributes,
         )
         self._record_decorators(node, qualified)
         for decorator in getattr(node, "decorator_list", ()):
@@ -2567,7 +2591,7 @@ def python_ast_provider_facts(
             "implementation_sha256": _implementation_sha256(),
             "name": "archbird-python-ast",
             "runtime": f"cpython-{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "version": "5",
+            "version": "6",
         },
         "provenance": "derived",
         "resolutions": [],

@@ -1071,6 +1071,10 @@ A Python file rejected by the installed CPython grammar marks that optional
 provider inapplicable while portable facts remain. Tree-sitter recovery is
 fact-local. SCIP retains producer, document coverage, source anchoring, and
 freshness. Provider conflicts and unresolved targets remain explicit.
+Recognized Python docstrings, JSDoc, Doxygen, roxygen, and SCIP documentation
+remain attached to declarations and searchable by Query. Provider text and
+source spans are preserved where available; Archbird does not generate
+summaries.
 
 Per-file provider facts and materialized complete unchanged Maps are
 content-addressed and revalidated against the native core, configuration,

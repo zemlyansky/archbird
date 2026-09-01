@@ -357,8 +357,8 @@ ArchbirdStatus ab_scan_tree_sitter_python_file(
        "lexical enclosing context"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-python",
-      "4",
-      "archbird-tree-sitter-python-v4;runtime=0.26.9;grammar=0.25.0;abi=15",
+      "5",
+      "archbird-tree-sitter-python-v5;runtime=0.26.9;grammar=0.25.0;abi=15",
       "tree-sitter-0.26.9;tree-sitter-python-0.25.0;grammar-abi-15",
       "python",
       tree_sitter_python,

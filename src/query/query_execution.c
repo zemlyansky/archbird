@@ -3691,6 +3691,9 @@ static ArchbirdStatus render_matched_symbols(AbBuffer *buffer,
   for (index = 0; status == ARCHBIRD_OK && index < context->symbol_count;
        index++) {
     const QuerySymbol *symbol = &context->symbols[index];
+    const AbValue *documentation =
+        ab_value_member(symbol->row, "documentation");
+    const AbValue *signature = ab_value_member(symbol->row, "signature");
     const AbValue *syntax_recovery =
         ab_value_member(symbol->row, "syntax_recovery");
     if (index)
@@ -3715,6 +3718,18 @@ static ArchbirdStatus render_matched_symbols(AbBuffer *buffer,
       status = ab_buffer_literal(buffer, ",\"scope\":");
     if (status == ARCHBIRD_OK)
       status = render_string(buffer, symbol->scope);
+    if (status == ARCHBIRD_OK && documentation &&
+        documentation->kind == AB_VALUE_OBJECT) {
+      status = ab_buffer_literal(buffer, ",\"documentation\":");
+      if (status == ARCHBIRD_OK)
+        status = ab_value_render(buffer, documentation);
+    }
+    if (status == ARCHBIRD_OK && signature &&
+        signature->kind == AB_VALUE_STRING) {
+      status = ab_buffer_literal(buffer, ",\"signature\":");
+      if (status == ARCHBIRD_OK)
+        status = render_string(buffer, &signature->as.text);
+    }
     if (status == ARCHBIRD_OK && syntax_recovery &&
         syntax_recovery->kind == AB_VALUE_STRING) {
       status = ab_buffer_literal(buffer, ",\"syntax_recovery\":");

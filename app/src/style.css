@@ -837,6 +837,16 @@ button.metric-plot-point { cursor: pointer; }
   color: var(--muted);
   font-size: 0.7rem;
 }
+.graph-tooltip p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 4px 0;
+  color: var(--text);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
 .layout-status {
   position: absolute;
   inset: 50% auto auto 50%;
@@ -878,6 +888,17 @@ button.metric-plot-point { cursor: pointer; }
 }
 .source-button { margin-top: 12px; }
 .inspector p, .inspector dd { color: var(--muted); line-height: 1.5; }
+.symbol-documentation {
+  margin: 14px 0;
+  padding: 10px 0;
+  border-block: 1px solid var(--line);
+}
+.symbol-documentation p {
+  margin: 6px 0;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.symbol-documentation small { color: var(--muted); }
 .inspector dl, .definition-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

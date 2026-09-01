@@ -4,6 +4,7 @@ import type { GraphEdge, GraphNode, GraphView } from "../artifacts/model";
 import type { ProjectionResult } from "../artifacts/projection";
 import { edgePresentation } from "../graph/explore";
 import type { ComponentDetails } from "../graph/explore";
+import { symbolDocumentation } from "../graph/documentation";
 import type { MetricId, MetricScopeMode } from "../graph/metrics";
 import type { VerificationConstraint } from "../graph/verification";
 import MetricsPanel from "./MetricsPanel.vue";
@@ -49,6 +50,8 @@ const selectedEdge = computed(() =>
   selected.value && !("identity" in selected.value) ? selected.value : null);
 const selectedHidden = computed(() =>
   Boolean(selectedNode.value?.attributes.presentation_hidden));
+const documentation = computed(() =>
+  symbolDocumentation(selectedNode.value?.attributes.documentation));
 const nodeById = computed(() =>
   new Map(props.graph.nodes.map((node) => [node.id, node])));
 const edgeEndpoints = computed(() => {
@@ -112,7 +115,9 @@ const attributes = computed(() => Object.entries(selectedNode.value?.attributes 
   .filter(([name]) =>
     !name.startsWith("presentation_")
     && !name.startsWith("verification_")
-    && !["canonical_id", "canonical_path", "member_files", "expanded"].includes(name)));
+    && ![
+      "canonical_id", "canonical_path", "documentation", "member_files", "expanded",
+    ].includes(name)));
 const canActivate = computed(() => {
   if (selectedHidden.value) return false;
   return selectedNode.value?.attributes.presentation_role === "group"
@@ -228,6 +233,13 @@ function forwardMetricQuery(path: string, symbol: string | null): void {
       <h2>{{ selectedNode ? selectedNode.label : selectedEdgePresentation?.title }}</h2>
       <code>{{ selectedNode ? selectedNode.identity : selectedEdgePresentation?.subtitle }}</code>
       <p v-if="component?.description">{{ component.description }}</p>
+      <section v-if="documentation" class="symbol-documentation">
+        <div class="eyebrow">Documentation · {{ documentation.kind }}</div>
+        <p>{{ documentation.text }}</p>
+        <small v-if="documentation.span">
+          Source bytes {{ documentation.span.start }}–{{ documentation.span.end }}
+        </small>
+      </section>
       <p v-if="selectedEdgePresentation">{{ selectedEdgePresentation.summary }}</p>
       <button
         v-if="canActivate && selectedNode"

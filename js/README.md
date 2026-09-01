@@ -1080,6 +1080,10 @@ ARCHBIRD_ENGINE=wasm npx archbird map . --check
 For CPython-AST evidence, use the PyPI host. Tree-sitter recovery is fact-local;
 SCIP retains producer, document coverage, source anchoring, and freshness.
 Provider conflicts, ambiguity, and unresolved targets remain explicit.
+Recognized JSDoc, Doxygen, roxygen, simple Python docstrings, and SCIP
+documentation remain attached to declarations and searchable by Query. The app
+shows the first paragraph on hover and complete text in the inspector; it does
+not generate summaries.
 
 Node's per-file provider facts and materialized complete unchanged Maps are
 content-addressed and revalidated against the native/Wasm core, configuration,

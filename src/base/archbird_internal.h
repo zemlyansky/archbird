@@ -34,17 +34,16 @@
 #endif
 
 #define ARCHBIRD_MAP_SCHEMA_MIN 4u
-#define ARCHBIRD_MAP_SCHEMA_CURRENT 15u
-#define ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT "15"
+#define ARCHBIRD_MAP_SCHEMA_CURRENT 16u
+#define ARCHBIRD_MAP_SCHEMA_CURRENT_TEXT "16"
 #define ARCHBIRD_MAP_SCHEMA_SUPPORTED_TEXT                                     \
-  "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, or 15"
+  "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, or 16"
 
-/* Query artifacts have an independent compatibility namespace. The initial
- * wire version intentionally remains 7 for backward compatibility. */
+/* Query artifacts have an independent compatibility namespace. */
 #define ARCHBIRD_QUERY_SCHEMA_MIN 7u
-#define ARCHBIRD_QUERY_SCHEMA_CURRENT 7u
-#define ARCHBIRD_QUERY_SCHEMA_CURRENT_TEXT "7"
-#define ARCHBIRD_QUERY_SCHEMA_SUPPORTED_TEXT "7"
+#define ARCHBIRD_QUERY_SCHEMA_CURRENT 8u
+#define ARCHBIRD_QUERY_SCHEMA_CURRENT_TEXT "8"
+#define ARCHBIRD_QUERY_SCHEMA_SUPPORTED_TEXT "7 or 8"
 #define ARCHBIRD_PATH_SCHEMA_MIN 1u
 #define ARCHBIRD_PATH_SCHEMA_CURRENT 1u
 #define ARCHBIRD_PATH_SCHEMA_CURRENT_TEXT "1"

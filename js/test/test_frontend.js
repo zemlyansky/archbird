@@ -796,7 +796,7 @@ let semanticProject = new Project("typescript-test", [
   new Source(
     "src/defs.ts",
     Buffer.from(
-      "// π\nexport function target(value: number) { return value; }\n",
+      "/** Return the supplied value.\n *\n * This detail remains available to inspectors.\n */\nexport function target(value: number) { return value; }\n",
     ),
     {
       language: "typescript",
@@ -870,7 +870,62 @@ assert.equal(
   typescriptEvidence.every((bundle) => bundle.diagnostics.length === 0),
   true,
 );
+const typescriptDefinition = typescriptEvidence
+  .find((bundle) => bundle.subject.path === "src/defs.ts")
+  .facts
+  .find((fact) => fact.domain === "semantic-definitions" && fact.name === "target");
+assert.deepEqual({
+  documentation: typescriptDefinition.attributes.documentation,
+  documentation_end: typescriptDefinition.attributes.documentation_end,
+  documentation_kind: typescriptDefinition.attributes.documentation_kind,
+  documentation_start: typescriptDefinition.attributes.documentation_start,
+}, {
+  documentation: "Return the supplied value.\n\nThis detail remains available to inspectors.",
+  documentation_end: 85,
+  documentation_kind: "jsdoc",
+  documentation_start: 0,
+});
 const semanticMap = semanticProject.map();
+const documentedTarget = semanticMap.files
+  .find((file) => file.path === "src/defs.ts")
+  .symbols.find((symbol) => symbol.name === "target");
+assert.deepEqual(documentedTarget.documentation, {
+  kind: "jsdoc",
+  span: { end: 85, start: 0 },
+  text: "Return the supplied value.\n\nThis detail remains available to inspectors.",
+});
+const documentedTargetQuery = JSON.parse(queryMap(semanticProject.mapJson(), {
+  symbols: ["src/defs.ts:target"], depth: 0, testDepth: 0,
+}));
+assert.equal(documentedTargetQuery.schema_version, 8);
+assert.deepEqual(documentedTargetQuery.matched_symbols[0].documentation, {
+  kind: "jsdoc",
+  span: { end: 85, start: 0 },
+  text: "Return the supplied value.\n\nThis detail remains available to inspectors.",
+});
+const documentedTargetMarkdown = queryMapMarkdown(semanticProject.mapJson(), {
+  symbols: ["src/defs.ts:target"], depth: 0, testDepth: 0,
+}).toString("utf8");
+assert.match(documentedTargetMarkdown, /## Declaration documentation/);
+assert.match(documentedTargetMarkdown, /src\/defs\.ts:target/);
+assert.match(documentedTargetMarkdown, /This detail remains available to inspectors\./);
+const documentedTargetGraph = JSON.parse(exportGraph(
+  Buffer.from(JSON.stringify(documentedTargetQuery)),
+  { format: "json", view: "symbols" },
+));
+assert.deepEqual(
+  documentedTargetGraph.nodes.find((node) => node.kind === "symbol")
+    .attributes.documentation,
+  documentedTargetQuery.matched_symbols[0].documentation,
+);
+const documentationRetrievalQuery = JSON.parse(queryMap(
+  semanticProject.mapJson(),
+  { search: ["inspectors"], searchLimit: 4, depth: 0, testDepth: 0 },
+));
+assert.equal(documentationRetrievalQuery.query.retrieval.hits[0].name, "target");
+assert.ok(documentationRetrievalQuery.query.retrieval.hits[0].reasons.some(
+  (reason) => reason.field === "symbol.documentation",
+));
 assert.ok(
   semanticMap.edges.some(
     (edge) =>
@@ -965,6 +1020,15 @@ assert.equal(scipMap.indexes[0].coverage.documents_mapped, 2);
 assert.equal(scipMap.indexes[0].coverage.edges, 1);
 assert.equal(scipMap.indexes[0].coverage.position_encoding_fallback_documents, 2);
 assert.equal(scipMap.indexes[0].position_encoding_fallback, "utf8");
+assert.deepEqual(
+  scipMap.files
+    .find((file) => file.path === "src/defs.js")
+    .symbols.find((symbol) => symbol.name === "add").documentation,
+  {
+    kind: "scip",
+    text: "Add two values.\n\nThe result preserves JavaScript addition semantics.",
+  },
+);
 assert.ok(
   scipMap.edges.some(
     (edge) =>
@@ -979,7 +1043,7 @@ assert.ok(
     (fact) =>
       fact.domain === "semantic-definitions" &&
       fact.name === "add" &&
-      fact.attributes.display_name_state === "source-range" &&
+      fact.attributes.display_name_state === "provided" &&
       fact.attributes.semantic_symbol === "scip npm fixture 1.0 fixture/add().",
   ),
 );

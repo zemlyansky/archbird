@@ -668,7 +668,7 @@ ARCHBIRD_API ArchbirdStatus archbird_project_render_map(
     ArchbirdWriteFn write_fn, void *user_data);
 
 /*
- * Project a saved schema-4/5/6/7 Map as the deterministic agent-facing
+ * Project a saved schema-4-through-16 Map as the deterministic agent-facing
  * Markdown report.  Compact output defaults to a 30,000-character budget. If
  * the complete overview does not fit, it selects complete semantic sections
  * before ranked file blocks and emits an omission ledger; the Map remains
@@ -890,9 +890,9 @@ ARCHBIRD_API ArchbirdStatus archbird_unified_diff(
     void *user_data);
 
 /*
- * Compare a saved schema-4/5/6/7 Map or Query snapshot with a freshly derived
- * current Map. The pure core reads no filesystem state: hosts derive the
- * current Map through their normal discovery/provider pipeline, then this
+ * Compare a saved schema-4-through-16 Map or Query snapshot with a freshly
+ * derived current Map. The pure core reads no filesystem state: hosts derive
+ * the current Map through their normal discovery/provider pipeline, then this
  * function classifies source, configuration, discovery, and producer
  * freshness and cites exact mapped-file deltas where the snapshot permits it.
  */
@@ -948,7 +948,7 @@ archbird_workspace_plan(ArchbirdEngine *engine, const uint8_t *workspace_json,
 
 /*
  * Join already-derived project maps into one deterministic workspace artifact.
- * maps_json is a JSON array containing one schema-4/5/6/7 map for each
+ * maps_json is a JSON array containing one schema-4-through-16 map for each
  * configured workspace project. The core performs no repository I/O or project
  * execution.
  */

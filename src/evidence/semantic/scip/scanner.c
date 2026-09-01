@@ -49,6 +49,9 @@ typedef struct ScipSymbol {
   ScipSlice display_name;
   ScipSlice signature;
   ScipSlice enclosing_symbol;
+  ScipSlice *documentation;
+  size_t documentation_count;
+  size_t documentation_capacity;
   uint32_t kind;
   ScipRelationship *relationships;
   size_t relationship_count;
@@ -116,8 +119,10 @@ typedef struct ScipReferenceGroup {
 
 typedef struct ScipSymbolMetadata {
   ScipSlice display_name;
+  const ScipSymbol *documentation;
   uint32_t kind;
   int display_name_conflict;
+  int documentation_conflict;
   int display_name_from_source;
   int kind_conflict;
 } ScipSymbolMetadata;
@@ -538,24 +543,37 @@ static ArchbirdStatus parse_symbol(ScipAnalysis *analysis,
          (status = ab_pb_next(analysis->engine, &cursor, &field, &has)) ==
              ARCHBIRD_OK &&
          has) {
-    if (field.number == 1 || field.number == 6 || field.number == 8) {
+    if (field.number == 1 || field.number == 3 || field.number == 6 ||
+        field.number == 8) {
       if (field.wire != 2)
         return archbird_error_set(analysis->engine, ARCHBIRD_INVALID_SCHEMA,
                                   cursor.offset,
                                   "SCIP symbol string has invalid wire type");
       if (field.number == 1)
         out->symbol = (ScipSlice){field.bytes, field.length};
-      else if (field.number == 6)
+      else if (field.number == 3) {
+        status = grow(analysis, (void **)&out->documentation,
+                      &out->documentation_capacity, out->documentation_count,
+                      sizeof(*out->documentation), "symbol documentation");
+        if (status == ARCHBIRD_OK)
+          out->documentation[out->documentation_count++] =
+              (ScipSlice){field.bytes, field.length};
+      } else if (field.number == 6)
         out->display_name = (ScipSlice){field.bytes, field.length};
       else
         out->enclosing_symbol = (ScipSlice){field.bytes, field.length};
-      status = validate_string(analysis,
-                               field.number == 1   ? out->symbol
-                               : field.number == 6 ? out->display_name
-                                                   : out->enclosing_symbol,
-                               field.number == 1   ? "symbol identity"
-                               : field.number == 6 ? "symbol display name"
-                                                   : "enclosing symbol");
+      if (status == ARCHBIRD_OK)
+        status = validate_string(
+            analysis,
+            field.number == 1 ? out->symbol
+            : field.number == 3
+                ? out->documentation[out->documentation_count - 1]
+            : field.number == 6 ? out->display_name
+                                : out->enclosing_symbol,
+            field.number == 1   ? "symbol identity"
+            : field.number == 3 ? "symbol documentation"
+            : field.number == 6 ? "symbol display name"
+                                : "enclosing symbol");
     } else if (field.number == 4) {
       ScipRelationship *relationship;
       status = grow(analysis, (void **)&out->relationships,
@@ -620,6 +638,7 @@ static ArchbirdStatus parse_external_symbol(ScipAnalysis *analysis,
 }
 
 static void symbol_free(ScipAnalysis *analysis, ScipSymbol *symbol) {
+  ab_free(analysis->engine, symbol->documentation);
   ab_free(analysis->engine, symbol->relationships);
   memset(symbol, 0, sizeof(*symbol));
 }
@@ -973,6 +992,17 @@ static int valid_symbol(ScipSlice symbol) {
          !slice_has_nul(symbol);
 }
 
+static int symbol_documentation_equal(const ScipSymbol *left,
+                                      const ScipSymbol *right) {
+  size_t index;
+  if (left->documentation_count != right->documentation_count)
+    return 0;
+  for (index = 0; index < left->documentation_count; index++)
+    if (!slice_equal(left->documentation[index], right->documentation[index]))
+      return 0;
+  return 1;
+}
+
 static ScipSymbolMetadata document_symbol_metadata(const ScipDocument *document,
                                                    ScipSlice identity) {
   ScipSymbolMetadata result;
@@ -988,6 +1018,12 @@ static ScipSymbolMetadata document_symbol_metadata(const ScipDocument *document,
       else if (!slice_equal(result.display_name, candidate->display_name))
         result.display_name_conflict = 1;
     }
+    if (candidate->documentation_count) {
+      if (!result.documentation)
+        result.documentation = candidate;
+      else if (!symbol_documentation_equal(result.documentation, candidate))
+        result.documentation_conflict = 1;
+    }
     if (candidate->kind) {
       if (!result.kind)
         result.kind = candidate->kind;
@@ -997,6 +1033,8 @@ static ScipSymbolMetadata document_symbol_metadata(const ScipDocument *document,
   }
   if (result.display_name_conflict)
     result.display_name = (ScipSlice){NULL, 0};
+  if (result.documentation_conflict)
+    result.documentation = NULL;
   if (result.kind_conflict)
     result.kind = 0;
   return result;
@@ -1724,6 +1762,40 @@ add_semantic_identity_attributes(ScipAnalysis *analysis, AbFact *fact,
 }
 
 static ArchbirdStatus
+add_symbol_documentation(ScipAnalysis *analysis, AbFact *fact,
+                         const ScipSymbolMetadata *metadata) {
+  AbBuffer text;
+  size_t documentation_index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!metadata->documentation)
+    return ARCHBIRD_OK;
+  ab_buffer_init(&text, analysis->engine);
+  for (documentation_index = 0;
+       status == ARCHBIRD_OK &&
+       documentation_index < metadata->documentation->documentation_count;
+       documentation_index++) {
+    ScipSlice documentation =
+        metadata->documentation->documentation[documentation_index];
+    if (!documentation.length)
+      continue;
+    if (text.length)
+      status = ab_buffer_literal(&text, "\n\n");
+    if (status == ARCHBIRD_OK)
+      status =
+          ab_buffer_append(&text, documentation.data, documentation.length);
+  }
+  if (status == ARCHBIRD_OK && text.length)
+    status = ab_fact_add_string_attribute(
+        analysis->engine, fact, "documentation", text.data, text.length);
+  if (status == ARCHBIRD_OK && text.length)
+    status = ab_fact_add_string_attribute(
+        analysis->engine, fact, "documentation_kind", (const uint8_t *)"scip",
+        sizeof("scip") - 1);
+  ab_buffer_free(&text);
+  return status;
+}
+
+static ArchbirdStatus
 add_index_diagnostic_fact(ScipAnalysis *analysis, const char *severity,
                           const char *code, const char *message,
                           const AbString *diagnostic_path) {
@@ -1831,6 +1903,8 @@ static ArchbirdStatus add_symbol_fact(ScipAnalysis *analysis,
     status = ab_fact_add_string_attribute(
         analysis->engine, fact, "enclosing_symbol",
         symbol->enclosing_symbol.data, symbol->enclosing_symbol.length);
+  if (status == ARCHBIRD_OK)
+    status = add_symbol_documentation(analysis, fact, &metadata);
   ab_buffer_free(&key);
   return status;
 }
@@ -1880,6 +1954,8 @@ static ArchbirdStatus add_projected_symbol_fact(
   if (status == ARCHBIRD_OK)
     status =
         add_semantic_identity_attributes(analysis, fact, identity, metadata);
+  if (status == ARCHBIRD_OK)
+    status = add_symbol_documentation(analysis, fact, metadata);
   ab_buffer_free(&key);
   return status;
 }
@@ -2606,7 +2682,7 @@ static ArchbirdStatus init_analysis_builder(ScipAnalysis *analysis,
   configuration_digest(analysis->spec, configuration);
   status = ab_bundle_builder_init_project(
       &analysis->builder, analysis->engine, analysis->manifest,
-      ab_project_manifest_sha256_bytes(project), "archbird-scip", "1",
+      ab_project_manifest_sha256_bytes(project), "archbird-scip", "2",
       implementation, configuration);
   if (status == ARCHBIRD_OK)
     status = ab_bundle_builder_set_runtime(&analysis->builder,

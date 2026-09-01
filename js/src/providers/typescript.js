@@ -7,6 +7,7 @@ const CONFIGURATION = Object.freeze({
   allowJs: true,
   checkJs: false,
   diagnostics: "syntactic-only",
+  documentation: "symbol-jsdoc",
   fact_domains: ["semantic-definitions", "reference-targets"],
   jsx: "preserve",
   module: "commonjs",
@@ -73,6 +74,24 @@ function byteOffsets(text) {
 
 function canonicalPath(value) {
   return value.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+function documentationAttributes(declaration, symbol, checker, sourceFile, offsets) {
+  if (!symbol) return {};
+  const text = ts.displayPartsToString(
+    symbol.getDocumentationComment(checker),
+  ).trim();
+  const comments = ts.getJSDocCommentsAndTags(declaration)
+    .filter((node) => ts.isJSDoc(node));
+  if (!text || !comments.length) return {};
+  const start = Math.min(...comments.map((node) => node.getStart(sourceFile)));
+  const end = Math.max(...comments.map((node) => node.end));
+  return {
+    documentation: text,
+    documentation_end: offsets[end],
+    documentation_kind: "jsdoc",
+    documentation_start: offsets[start],
+  };
 }
 
 function definitionDeclaration(node) {
@@ -547,6 +566,7 @@ function* typescriptProviderBundles({
           offsetsByPath,
         );
         if (definition) {
+          const symbol = checker.getSymbolAtLocation(node);
           facts.push(
             makeFact(
               hashBytes,
@@ -566,6 +586,13 @@ function* typescriptProviderBundles({
                 scope: definition.scope,
                 signature: definition.signature,
                 syntax_kind: definition.syntaxKind,
+                ...documentationAttributes(
+                  node.parent,
+                  symbol,
+                  checker,
+                  sourceFile,
+                  offsets,
+                ),
               },
             ),
           );
@@ -645,7 +672,7 @@ function* typescriptProviderBundles({
         implementation_sha256: implementationSha256,
         name: "archbird-typescript",
         runtime,
-        version: "1",
+        version: "2",
       },
       provenance: "derived",
       resolutions,

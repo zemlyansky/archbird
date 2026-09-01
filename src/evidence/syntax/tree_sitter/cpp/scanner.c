@@ -286,8 +286,8 @@ ArchbirdStatus ab_scan_tree_sitter_cpp_file(
        "functions, declarations, classes, structs, unions, and namespaces"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-cpp",
-      "2",
-      "archbird-tree-sitter-cpp-v2;runtime=0.26.9;grammar=0.23.4;abi=14",
+      "3",
+      "archbird-tree-sitter-cpp-v3;runtime=0.26.9;grammar=0.23.4;abi=14",
       "tree-sitter-0.26.9;tree-sitter-cpp-0.23.4;grammar-abi-14",
       "cpp",
       tree_sitter_cpp,

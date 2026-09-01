@@ -429,9 +429,15 @@ int ab_fact_attribute_is_declaration_extent(const AbString *name) {
 
 int ab_fact_attribute_is_presentation(const AbString *name) {
   static const char signature[] = "signature";
-  return name && ((name->length == sizeof(signature) - 1 &&
-                   memcmp(name->data, signature, sizeof(signature) - 1) == 0) ||
-                  ab_fact_attribute_is_declaration_extent(name));
+  static const char documentation[] = "documentation";
+  return name &&
+         ((name->length == sizeof(signature) - 1 &&
+           memcmp(name->data, signature, sizeof(signature) - 1) == 0) ||
+          (name->length >= sizeof(documentation) - 1 &&
+           memcmp(name->data, documentation, sizeof(documentation) - 1) == 0 &&
+           (name->length == sizeof(documentation) - 1 ||
+            name->data[sizeof(documentation) - 1] == '_')) ||
+          ab_fact_attribute_is_declaration_extent(name));
 }
 
 static const AbObjectField *fact_attribute(const AbFact *fact,

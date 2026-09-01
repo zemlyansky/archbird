@@ -40,8 +40,8 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TYPESCRIPT
   static const AbTreeSitterDescriptor typescript = {
       "archbird-tree-sitter-typescript",
-      "5",
-      "archbird-tree-sitter-typescript-v5;runtime=0.26.9;grammar=0.23.2;abi=14",
+      "6",
+      "archbird-tree-sitter-typescript-v6;runtime=0.26.9;grammar=0.23.2;abi=14",
       "tree-sitter-0.26.9;tree-sitter-typescript-0.23.2;grammar-abi-14",
       "typescript",
       tree_sitter_typescript,
@@ -57,8 +57,8 @@ ArchbirdStatus ab_scan_tree_sitter_typescript_file(
 #ifdef ARCHBIRD_HAVE_TREE_SITTER_TSX
   static const AbTreeSitterDescriptor typescript_react = {
       "archbird-tree-sitter-tsx",
-      "5",
-      "archbird-tree-sitter-tsx-v5;runtime=0.26.9;grammar=0.23.2;abi=14",
+      "6",
+      "archbird-tree-sitter-tsx-v6;runtime=0.26.9;grammar=0.23.2;abi=14",
       "tree-sitter-0.26.9;tree-sitter-tsx-0.23.2;grammar-abi-14",
       "tsx",
       tree_sitter_tsx,

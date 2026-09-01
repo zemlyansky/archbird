@@ -91,6 +91,7 @@ def main() -> int:
             "name": "broken",
             "path": path,
             "scope": "",
+            "signature": "",
             "syntax_recovery": "intersects",
         }
     ]:

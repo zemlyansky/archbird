@@ -106,6 +106,7 @@ typedef struct QueryReportViewContext {
   const AbValue *focus;
   const AbValue *seeds;
   const AbValue *seed_identities;
+  const AbValue *matched_symbols;
   const AbValue *change_set;
   const AbValue *retrieval;
   const AbValue *plan;
@@ -229,6 +230,67 @@ static const AbValue *optional_object(const AbValue *object, const char *name) {
   static const AbValue empty = {.kind = AB_VALUE_OBJECT};
   const AbValue *value = ab_value_member(object, name);
   return value && value->kind == AB_VALUE_OBJECT ? value : &empty;
+}
+
+static size_t documentation_fence_length(const AbString *text) {
+  size_t longest = 0;
+  size_t current = 0;
+  size_t index;
+  for (index = 0; index < text->length; index++) {
+    if (text->data[index] == '`') {
+      current++;
+      if (current > longest)
+        longest = current;
+    } else {
+      current = 0;
+    }
+  }
+  return longest >= 3 ? longest + 1 : 3;
+}
+
+static ArchbirdStatus
+render_documentation_fence(AbBuffer *out, const AbString *path,
+                           const AbString *name, const AbString *kind,
+                           const AbString *text, size_t text_length,
+                           const AbValue *span) {
+  size_t fence = documentation_fence_length(text);
+  size_t index;
+  uint64_t start = 0;
+  uint64_t end = 0;
+  int has_span = span && span->kind == AB_VALUE_OBJECT;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (has_span &&
+      (!ab_value_u64(ab_value_member(span, "start"), &start) ||
+       !ab_value_u64(ab_value_member(span, "end"), &end) || end <= start))
+    return query_schema_error(out->engine,
+                              "query symbol documentation span is malformed");
+  for (index = 0; status == ARCHBIRD_OK && index < fence; index++)
+    status = ab_buffer_literal(out, "`");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, "text\n");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(out, path->data, path->length);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, ":");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(out, name->data, name->length);
+  if (status == ARCHBIRD_OK)
+    status = ab_report_appendf(out, " [%.*s", (int)kind->length, kind->data);
+  if (status == ARCHBIRD_OK && has_span)
+    status = ab_report_appendf(out, "; source-bytes=%" PRIu64 "..%" PRIu64,
+                               start, end);
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, "]\n");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(out, text->data, text_length);
+  if (status == ARCHBIRD_OK &&
+      (!text_length || text->data[text_length - 1] != '\n'))
+    status = ab_buffer_literal(out, "\n");
+  for (index = 0; status == ARCHBIRD_OK && index < fence; index++)
+    status = ab_buffer_literal(out, "`");
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_literal(out, "\n\n");
+  return status;
 }
 
 static const AbString *string_or_empty(const AbValue *object,
@@ -1645,6 +1707,7 @@ query_report_view_init(QueryReportViewContext *view, ArchbirdEngine *engine,
   view->focus = optional_array(view->metadata, "focus");
   view->seeds = optional_array(view->metadata, "seeds");
   view->seed_identities = optional_array(view->metadata, "seed_identities");
+  view->matched_symbols = optional_array(query, "matched_symbols");
   view->change_set = ab_value_member(view->metadata, "change_set");
   view->retrieval = ab_value_member(view->metadata, "retrieval");
   view->plan = optional_object(view->metadata, "plan");
@@ -1912,6 +1975,67 @@ static ArchbirdStatus render_query_header(QueryReportViewContext *view) {
   }
   if (retrieval)
     QUERY_TRY(render_retrieval_summary(engine, retrieval, compact_detail, out));
+
+cleanup:
+  return status;
+}
+
+static ArchbirdStatus render_query_documentation(QueryReportViewContext *view) {
+  const AbValue *symbols = view->matched_symbols;
+  AbBuffer *out = view->out;
+  size_t limit = view->full_detail ? SIZE_MAX : view->compact_detail ? 2 : 6;
+  size_t available = 0;
+  size_t emitted = 0;
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  for (index = 0; index < symbols->as.array.count; index++) {
+    const AbValue *row = &symbols->as.array.items[index];
+    const AbValue *documentation = ab_value_member(row, "documentation");
+    const AbString *path;
+    const AbString *name;
+    const AbString *kind;
+    const AbString *text;
+    const AbValue *span;
+    size_t text_length;
+    if (!documentation)
+      continue;
+    path = ab_report_string(row, "path");
+    name = ab_report_string(row, "name");
+    kind = ab_report_string(documentation, "kind");
+    text = ab_report_string(documentation, "text");
+    span = ab_value_member(documentation, "span");
+    if (documentation->kind != AB_VALUE_OBJECT || !path || !name || !kind ||
+        !kind->length || !text || !text->length ||
+        (span && span->kind != AB_VALUE_OBJECT))
+      return query_schema_error(view->engine,
+                                "query symbol documentation is malformed");
+    available++;
+    if (emitted >= limit)
+      continue;
+    if (!emitted) {
+      QUERY_TRY(ab_report_literal_line(out, "## Declaration documentation"));
+      QUERY_TRY(ab_report_blank(out));
+    }
+    text_length = text->length;
+    if (view->compact_detail) {
+      size_t cursor;
+      for (cursor = 0; cursor + 1 < text->length; cursor++) {
+        if (text->data[cursor] == '\n' && text->data[cursor + 1] == '\n') {
+          text_length = cursor;
+          break;
+        }
+      }
+    }
+    QUERY_TRY(render_documentation_fence(out, path, name, kind, text,
+                                         text_length, span));
+    emitted++;
+  }
+  if (available > emitted) {
+    QUERY_TRY(ab_report_linef(out,
+                              "… %zu documented declarations omitted by detail",
+                              available - emitted));
+    QUERY_TRY(ab_report_blank(out));
+  }
 
 cleanup:
   return status;
@@ -3114,6 +3238,8 @@ static ArchbirdStatus render_query_view(
   if (report.metrics_view)
     QUERY_TRY(render_query_metrics(&report));
   else {
+    if (report.include_neighborhood)
+      QUERY_TRY(render_query_documentation(&report));
     QUERY_TRY(render_query_neighborhood(&report));
     QUERY_TRY(render_query_routed_evidence(&report));
   }

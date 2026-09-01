@@ -180,6 +180,66 @@ def main() -> int:
     ):
         raise AssertionError("native Python JSON Pointer edit binding diverged")
 
+    documentation_project = Project(
+        "documentation",
+        [
+            Source(
+                "pkg/api.py",
+                b'class Client:\n    """Open configured services.\n\n'
+                b'    The caller owns disposal.\n    """\n\n'
+                b'    def open(self):\n'
+                b'        """Return the active service."""\n'
+                b'        return self\n',
+                language="python",
+                layer="python",
+            )
+        ],
+    )
+    documentation_project.set_config(
+        json.dumps(
+            {
+                "project": "documentation",
+                "layers": [
+                    {
+                        "globs": ["pkg/**/*.py"],
+                        "language": "python",
+                        "name": "python",
+                        "role": "frontend",
+                    }
+                ],
+            }
+        ).encode()
+    )
+    documentation_project.scan()
+    documentation_map = json.loads(documentation_project.map_json())
+    documentation_symbols = {
+        row["name"]: row for row in documentation_map["files"][0]["symbols"]
+    }
+    if documentation_symbols["Client"]["documentation"] != {
+        "kind": "docstring",
+        "span": {"end": 85, "start": 18},
+        "text": "Open configured services.\n\nThe caller owns disposal.",
+    }:
+        raise AssertionError(documentation_symbols["Client"])
+    if documentation_symbols["Client.open"]["documentation"]["text"] != (
+        "Return the active service."
+    ):
+        raise AssertionError(documentation_symbols["Client.open"])
+    documentation_query = json.loads(
+        query_map_json(
+            documentation_project.map_json(),
+            symbols=["pkg/api.py:Client"],
+            depth=0,
+            test_depth=0,
+        )
+    )
+    if documentation_query["schema_version"] != 8:
+        raise AssertionError(documentation_query["schema_version"])
+    if documentation_query["matched_symbols"][0]["documentation"] != (
+        documentation_symbols["Client"]["documentation"]
+    ):
+        raise AssertionError(documentation_query["matched_symbols"])
+
     conflict_project = Project(
         "merge-conflict",
         [Source("src/a.txt", b"abc", language="text")],

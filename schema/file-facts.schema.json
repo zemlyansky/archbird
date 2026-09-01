@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/file-facts.schema.json",
   "title": "Archbird compatibility file facts",
-  "description": "Deterministic schema-6-compatible file evidence reduced from merged provider occurrences.",
+  "description": "Deterministic per-file evidence reduced from merged provider occurrences.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,7 @@
     "files"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "artifact": {"const": "archbird-file-facts"},
     "project": {"$ref": "#/$defs/id"},
     "source_manifest_sha256": {"$ref": "#/$defs/sha256"},
@@ -64,6 +64,7 @@
         "scope": {"type": "string"},
         "line": {"type": "integer", "minimum": 1},
         "signature": {"type": "string"},
+        "documentation": {"$ref": "#/$defs/documentation"},
         "extent": {
           "type": "object",
           "additionalProperties": false,
@@ -77,6 +78,16 @@
         "span": {"$ref": "#/$defs/span"},
         "source_metrics": {"$ref": "#/$defs/sourceMetrics"},
         "syntax_recovery": {"const": "intersects"}
+      }
+    },
+    "documentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text"],
+      "properties": {
+        "kind": {"enum": ["docstring", "doxygen", "jsdoc", "roxygen", "scip"]},
+        "span": {"$ref": "#/$defs/span"},
+        "text": {"type": "string", "minLength": 1}
       }
     },
     "span": {

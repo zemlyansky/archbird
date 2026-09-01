@@ -80,9 +80,9 @@
       "source": "schema/evaluation-run.schema.json"
     },
     {
-      "bytes": 7487,
+      "bytes": 7861,
       "path": "file-facts.schema.json",
-      "sha256": "0065dc70a885e47b3fec00a69774e2e9e7b775ef75c27048777cd859adf831e7",
+      "sha256": "f69c5bd1db5bced6bcc9ae2e43a025bbd7876965a0d737d53ddb65d4d39f0984",
       "source": "schema/file-facts.schema.json"
     },
     {

@@ -44,7 +44,7 @@ def main() -> int:
     if first.stdout != second.stdout:
         raise AssertionError("file-facts bytes changed across identical runs")
     data = json.loads(first.stdout)
-    if data["artifact"] != "archbird-file-facts" or data["schema_version"] != 1:
+    if data["artifact"] != "archbird-file-facts" or data["schema_version"] != 2:
         raise AssertionError("unexpected file-facts identity")
     if len(data["files"]) != 1:
         raise AssertionError("unexpected file count")

@@ -46,6 +46,10 @@ protocols from source text. Tree-sitter adds syntax, scopes, imports, and exact
 spans. CPython AST and the TypeScript compiler add host-specific precision.
 SCIP is optional input for resolved definitions, references, and relationships;
 Archbird reads a supplied index but does not invoke an indexer.
+Recognized docstrings, JSDoc, Doxygen, roxygen, and SCIP documentation remain
+attached to their declarations. Query can find that text, while symbol hover
+shows its first paragraph and the inspector preserves the complete text and
+source span. Archbird does not generate documentation summaries.
 
 ## Stages
 

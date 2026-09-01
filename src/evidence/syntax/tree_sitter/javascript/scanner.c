@@ -32,8 +32,8 @@ ArchbirdStatus ab_scan_tree_sitter_javascript_file(
                   "values, and statically proven descriptor-helper members"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-javascript",
-      "5",
-      "archbird-tree-sitter-javascript-v5;runtime=0.26.9;grammar=0.25.0;abi=15",
+      "6",
+      "archbird-tree-sitter-javascript-v6;runtime=0.26.9;grammar=0.25.0;abi=15",
       "tree-sitter-0.26.9;tree-sitter-javascript-0.25.0;grammar-abi-15",
       "javascript",
       tree_sitter_javascript,

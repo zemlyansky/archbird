@@ -618,4 +618,47 @@ describe("artifact workspaces", () => {
     expect(act.textContent).toContain("satisfied");
     expect(act.textContent).toContain("src/api.c");
   });
+
+  it("renders exact declaration documentation in the symbol inspector", () => {
+    const graph = {
+      artifact: "archbird-graph-view",
+      diagnostics: [],
+      edges: [],
+      nodes: [{
+        attributes: {
+          documentation: {
+            kind: "docstring",
+            span: { end: 64, start: 16 },
+            text: "Open the configured project.\n\nThe caller owns disposal.",
+          },
+        },
+        evidence: [],
+        id: "symbol:open",
+        identity: "src/api.py:open_project",
+        kind: "symbol",
+        label: "open_project",
+        parent: null,
+      }],
+      omissions: [],
+      project: "demo",
+      request: { max_edge_names: 10, max_nodes: 100, view: "symbols" },
+      schema_version: 1,
+      source: {},
+      summary: { edges: 0, nodes: 1 },
+      tool: {},
+    };
+    const root = mount(InspectorPanel, {
+      constraint: null,
+      fileGraph: null,
+      graph,
+      selectedId: "symbol:open",
+      source: null,
+      sourcePath: null,
+    });
+
+    expect(root.textContent).toContain("Documentation · docstring");
+    expect(root.textContent).toContain("Open the configured project.");
+    expect(root.textContent).toContain("The caller owns disposal.");
+    expect(root.textContent).not.toContain("[object Object]");
+  });
 });

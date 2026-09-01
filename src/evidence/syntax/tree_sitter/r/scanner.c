@@ -176,8 +176,8 @@ ArchbirdStatus ab_scan_tree_sitter_r_file(
                   "function_definition"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-r",
-      "2",
-      "archbird-tree-sitter-r-v2;runtime=0.26.9;grammar=1.3.0;abi=14",
+      "3",
+      "archbird-tree-sitter-r-v3;runtime=0.26.9;grammar=1.3.0;abi=14",
       "tree-sitter-0.26.9;tree-sitter-r-1.3.0;grammar-abi-14",
       "r",
       tree_sitter_r,
