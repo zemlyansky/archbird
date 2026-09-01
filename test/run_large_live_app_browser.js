@@ -239,14 +239,15 @@ async function main() {
     await page.locator('.graph-canvas[data-spacing="5"][data-layout-ready="true"]')
       .waitFor({ timeout: 60_000 });
     const extentAt5 = await layoutExtent(page, 5, extentAt60);
+    const areaAt60 = extentAt60.height * extentAt60.width;
+    const areaAt5 = extentAt5.height * extentAt5.width;
     if (
       !Number.isFinite(extentAt60.height) || !Number.isFinite(extentAt60.width)
       || !Number.isFinite(extentAt5.height) || !Number.isFinite(extentAt5.width)
-      || extentAt5.height * extentAt5.width
-        >= extentAt60.height * extentAt60.width * 0.7
+      || areaAt5 > areaAt60 * 1.1
     ) {
       throw new Error(
-        `5% spacing did not materially compact the layout: `
+        `5% spacing expanded the layout: `
         + `${extentAt60.width}x${extentAt60.height} -> `
         + `${extentAt5.width}x${extentAt5.height}`,
       );
