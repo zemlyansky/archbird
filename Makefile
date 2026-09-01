@@ -215,6 +215,8 @@ test-py: build-py
 		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_compile_context_scaling.py \
 		$(PYTHON_NATIVE)
+	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_package_dependency_scaling.py \
+		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_modules.py \
 		$(PYTHON_NATIVE)
 	PYTHONPATH=$(CURDIR)/py $(PYTHON) test/test_ecmascript_identity.py \

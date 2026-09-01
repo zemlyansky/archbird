@@ -372,6 +372,9 @@ void ab_map_state_free(AbMapState *state) {
   ab_map_graph_free(state->engine, &state->graph);
   for (index = 0; index < state->package_count; index++)
     ab_map_package_clear(state->engine, &state->packages[index]);
+  ab_free(state->engine, state->package_aliases);
+  ab_free(state->engine, state->package_owners);
+  ab_free(state->engine, state->package_layers);
   ab_free(state->engine, state->packages);
   for (index = 0; index < state->build_count; index++)
     build_free(state->engine, &state->builds[index]);

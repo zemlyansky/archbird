@@ -160,6 +160,18 @@ typedef struct AbMapPackage {
   size_t script_count;
 } AbMapPackage;
 
+typedef struct AbMapPackageAliasIndex {
+  const AbMapPackage *package;
+  const AbString *alias;
+  const char *manager;
+} AbMapPackageAliasIndex;
+
+typedef struct AbMapPackageOwnerIndex {
+  const AbMapPackage *package;
+  const char *manager;
+  size_t root_length;
+} AbMapPackageOwnerIndex;
+
 typedef struct AbMapBuildRoute {
   AbString source;
   AbString name;
@@ -394,6 +406,12 @@ typedef struct AbMapState {
   AbMapGraph graph;
   AbMapPackage *packages;
   size_t package_count;
+  AbMapPackageAliasIndex *package_aliases;
+  size_t package_alias_count;
+  AbMapPackageOwnerIndex *package_owners;
+  size_t package_owner_count;
+  AbMapPackageOwnerIndex *package_layers;
+  size_t package_layer_count;
   AbMapBuildRoute *builds;
   size_t build_count;
   size_t build_capacity;
@@ -497,9 +515,13 @@ AbString ab_map_external_import_name(const AbString *language,
                                      const AbString *imported);
 int ab_map_package_alias_matches(const AbMapPackage *package,
                                  const char *manager, const AbString *external);
+const AbMapPackage *ab_map_package_by_alias(const AbMapState *state,
+                                            const char *manager,
+                                            const AbString *external,
+                                            size_t *out_matches);
 const AbMapDependency *
-ab_map_file_package_dependency(const AbMapPackage *packages,
-                               size_t package_count, const AbManifestFile *file,
+ab_map_file_package_dependency(const AbMapState *state,
+                               const AbManifestFile *file,
                                const AbString *external);
 
 ArchbirdStatus ab_map_analyze_packages(AbMapState *state);

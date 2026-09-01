@@ -1858,12 +1858,13 @@ typedef enum ImportTargetClass {
   IMPORT_TARGET_AMBIGUOUS
 } ImportTargetClass;
 
-static ArchbirdStatus
-classify_import_target(ArchbirdEngine *engine, const AbMapConfig *config,
-                       const AbManifestFile *file, const AbString *imported,
-                       const AbMapPackage *packages, size_t package_count,
-                       char **out, size_t *out_length,
-                       ImportTargetClass *out_class) {
+static ArchbirdStatus classify_import_target(AbMapState *state,
+                                             const AbManifestFile *file,
+                                             const AbString *imported,
+                                             char **out, size_t *out_length,
+                                             ImportTargetClass *out_class) {
+  ArchbirdEngine *engine = state->engine;
+  const AbMapConfig *config = state->config;
   size_t family_length;
   const char *family = language_family(file, &family_length);
   const char *start = imported->data;
@@ -1873,7 +1874,6 @@ classify_import_target(ArchbirdEngine *engine, const AbMapConfig *config,
   const AbMapPackage *matched = NULL;
   const char *manager;
   size_t matches = 0;
-  size_t package_index;
   const AbExternalNamespace *external;
   *out = NULL;
   *out_length = 0;
@@ -1924,14 +1924,7 @@ classify_import_target(ArchbirdEngine *engine, const AbMapConfig *config,
   package.data = (char *)start;
   package.length = name_length;
   manager = ab_map_language_manager(&file->language);
-  for (package_index = 0; package_index < package_count; package_index++) {
-    const AbMapPackage *candidate = &packages[package_index];
-    if (strcmp(ab_map_package_manager(&candidate->kind), manager) != 0 ||
-        !ab_map_package_alias_matches(candidate, manager, &package))
-      continue;
-    matched = candidate;
-    matches++;
-  }
+  matched = ab_map_package_by_alias(state, manager, &package, &matches);
   if (matches == 1) {
     package = matched->name;
     *out_class = IMPORT_TARGET_LOCAL;
@@ -1948,7 +1941,7 @@ classify_import_target(ArchbirdEngine *engine, const AbMapConfig *config,
   }
   {
     const AbMapDependency *dependency =
-        ab_map_file_package_dependency(packages, package_count, file, &package);
+        ab_map_file_package_dependency(state, file, &package);
     if (dependency) {
       package = dependency->name;
       *out_class = IMPORT_TARGET_EXTERNAL;
@@ -2249,8 +2242,6 @@ static ArchbirdStatus build_graph(AbMapState *state) {
   const ArchbirdProject *project = state->project;
   const AbSourceManifest *manifest = state->manifest;
   const AbMapConfig *config = state->config;
-  const AbMapPackage *packages = state->packages;
-  size_t package_count = state->package_count;
   MapGraph *graph = &state->graph;
   SymbolReference *symbols = NULL;
   size_t symbol_count = 0;
@@ -2432,9 +2423,8 @@ static ArchbirdStatus build_graph(AbMapState *state) {
             target_class = IMPORT_TARGET_UNKNOWN;
           }
         } else if (status == ARCHBIRD_OK) {
-          status = classify_import_target(engine, config, imports[index].file,
-                                          imports[index].name, packages,
-                                          package_count, &external_target,
+          status = classify_import_target(state, imports[index].file,
+                                          imports[index].name, &external_target,
                                           &external_length, &target_class);
         }
       }

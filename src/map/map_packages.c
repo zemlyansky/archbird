@@ -77,6 +77,22 @@ static int normalized_package_equal(const char *manager, const AbString *left,
   return !normalized_package_next(manager, right, &right_index, &right_byte);
 }
 
+static int normalized_package_compare(const char *manager, const AbString *left,
+                                      const AbString *right) {
+  size_t left_index = 0;
+  size_t right_index = 0;
+  unsigned char left_byte;
+  unsigned char right_byte;
+  while (normalized_package_next(manager, left, &left_index, &left_byte)) {
+    if (!normalized_package_next(manager, right, &right_index, &right_byte))
+      return 1;
+    if (left_byte != right_byte)
+      return left_byte < right_byte ? -1 : 1;
+  }
+  return normalized_package_next(manager, right, &right_index, &right_byte) ? -1
+                                                                            : 0;
+}
+
 AbString ab_map_external_import_name(const AbString *language,
                                      const AbString *imported) {
   AbString result = *imported;
@@ -147,64 +163,171 @@ static size_t package_root_length(const AbString *manifest) {
   return length;
 }
 
-/* A package owns files below its manifest directory; the deepest manifest
- * wins in nested workspaces.  Layer is only a fallback for nonstandard trees.
- */
-const AbMapDependency *
-ab_map_file_package_dependency(const AbMapPackage *packages,
-                               size_t package_count, const AbManifestFile *file,
-                               const AbString *external) {
-  const char *manager = ab_map_language_manager(&file->language);
+static int bytes_compare(const char *left, size_t left_length,
+                         const char *right, size_t right_length) {
+  size_t common = left_length < right_length ? left_length : right_length;
+  int compared = common ? memcmp(left, right, common) : 0;
+  if (compared)
+    return compared;
+  return left_length < right_length ? -1 : left_length > right_length;
+}
+
+static int alias_index_compare(const void *left_raw, const void *right_raw) {
+  const AbMapPackageAliasIndex *left = (const AbMapPackageAliasIndex *)left_raw;
+  const AbMapPackageAliasIndex *right =
+      (const AbMapPackageAliasIndex *)right_raw;
+  int compared = strcmp(left->manager, right->manager);
+  if (!compared)
+    compared =
+        normalized_package_compare(left->manager, left->alias, right->alias);
+  if (!compared)
+    compared = ab_string_compare(&left->package->name, &right->package->name);
+  return compared;
+}
+
+static int owner_index_compare(const void *left_raw, const void *right_raw) {
+  const AbMapPackageOwnerIndex *left = (const AbMapPackageOwnerIndex *)left_raw;
+  const AbMapPackageOwnerIndex *right =
+      (const AbMapPackageOwnerIndex *)right_raw;
+  int compared = strcmp(left->manager, right->manager);
+  if (!compared)
+    compared = bytes_compare(left->package->manifest.data, left->root_length,
+                             right->package->manifest.data, right->root_length);
+  if (!compared)
+    compared = ab_string_compare(&left->package->name, &right->package->name);
+  return compared;
+}
+
+static int layer_index_compare(const void *left_raw, const void *right_raw) {
+  const AbMapPackageOwnerIndex *left = (const AbMapPackageOwnerIndex *)left_raw;
+  const AbMapPackageOwnerIndex *right =
+      (const AbMapPackageOwnerIndex *)right_raw;
+  int compared = strcmp(left->manager, right->manager);
+  if (!compared)
+    compared = ab_string_compare(&left->package->layer, &right->package->layer);
+  if (!compared)
+    compared = ab_string_compare(&left->package->name, &right->package->name);
+  return compared;
+}
+
+static ArchbirdStatus build_package_indexes(AbMapState *state) {
+  size_t alias_count = 0;
+  size_t package_index;
+  for (package_index = 0; package_index < state->package_count; package_index++)
+    alias_count += state->packages[package_index].aliases.count;
+  if (alias_count) {
+    state->package_aliases = (AbMapPackageAliasIndex *)ab_calloc(
+        state->engine, alias_count, sizeof(*state->package_aliases));
+    if (!state->package_aliases)
+      return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory indexing package aliases");
+  }
+  if (state->package_count) {
+    state->package_owners = (AbMapPackageOwnerIndex *)ab_calloc(
+        state->engine, state->package_count, sizeof(*state->package_owners));
+    state->package_layers = (AbMapPackageOwnerIndex *)ab_calloc(
+        state->engine, state->package_count, sizeof(*state->package_layers));
+    if (!state->package_owners || !state->package_layers)
+      return archbird_error_set(state->engine, ARCHBIRD_OUT_OF_MEMORY,
+                                ARCHBIRD_NO_OFFSET,
+                                "out of memory indexing package ownership");
+  }
+  for (package_index = 0; package_index < state->package_count;
+       package_index++) {
+    const AbMapPackage *package = &state->packages[package_index];
+    const char *manager = ab_map_package_manager(&package->kind);
+    size_t alias_index;
+    state->package_owners[package_index].package = package;
+    state->package_owners[package_index].manager = manager;
+    state->package_owners[package_index].root_length =
+        package_root_length(&package->manifest);
+    state->package_layers[package_index].package = package;
+    state->package_layers[package_index].manager = manager;
+    for (alias_index = 0; alias_index < package->aliases.count; alias_index++) {
+      AbMapPackageAliasIndex *row =
+          &state->package_aliases[state->package_alias_count++];
+      row->package = package;
+      row->alias = &package->aliases.items[alias_index];
+      row->manager = manager;
+    }
+  }
+  state->package_owner_count = state->package_count;
+  state->package_layer_count = state->package_count;
+  if (state->package_alias_count > 1)
+    qsort(state->package_aliases, state->package_alias_count,
+          sizeof(*state->package_aliases), alias_index_compare);
+  if (state->package_owner_count > 1)
+    qsort(state->package_owners, state->package_owner_count,
+          sizeof(*state->package_owners), owner_index_compare);
+  if (state->package_layer_count > 1)
+    qsort(state->package_layers, state->package_layer_count,
+          sizeof(*state->package_layers), layer_index_compare);
+  return ARCHBIRD_OK;
+}
+
+static int alias_key_compare(const AbMapPackageAliasIndex *row,
+                             const char *manager, const AbString *external) {
+  int compared = strcmp(row->manager, manager);
+  return compared ? compared
+                  : normalized_package_compare(manager, row->alias, external);
+}
+
+const AbMapPackage *ab_map_package_by_alias(const AbMapState *state,
+                                            const char *manager,
+                                            const AbString *external,
+                                            size_t *out_matches) {
+  const AbMapPackage *matched = NULL;
+  const AbMapPackage *previous = NULL;
+  size_t low = 0;
+  size_t high = state->package_alias_count;
+  size_t index;
+  *out_matches = 0;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (alias_key_compare(&state->package_aliases[middle], manager, external) <
+        0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  for (index = low; index < state->package_alias_count; index++) {
+    const AbMapPackageAliasIndex *row = &state->package_aliases[index];
+    if (alias_key_compare(row, manager, external))
+      break;
+    if (row->package == previous)
+      continue;
+    matched = row->package;
+    previous = row->package;
+    (*out_matches)++;
+  }
+  return matched;
+}
+
+static int owner_key_compare(const AbMapPackageOwnerIndex *row,
+                             const char *manager, const char *root,
+                             size_t root_length) {
+  int compared = strcmp(row->manager, manager);
+  return compared ? compared
+                  : bytes_compare(row->package->manifest.data, row->root_length,
+                                  root, root_length);
+}
+
+static int layer_key_compare(const AbMapPackageOwnerIndex *row,
+                             const char *manager, const AbString *layer) {
+  int compared = strcmp(row->manager, manager);
+  return compared ? compared : ab_string_compare(&row->package->layer, layer);
+}
+
+static const AbMapDependency *
+dependency_in_range(const AbMapPackageOwnerIndex *rows, size_t start,
+                    size_t end, const char *manager, const AbString *external) {
   const AbMapDependency *matched = NULL;
-  size_t owner_root = 0;
-  int has_owner = 0;
   int ambiguous = 0;
   size_t index;
-  /* Determine ownership before looking up a dependency.  Otherwise a parent
-   * workspace can leak its dependencies into a nested package. */
-  for (index = 0; index < package_count; index++) {
-    const AbMapPackage *package = &packages[index];
-    size_t root_length;
-    if (strcmp(ab_map_package_manager(&package->kind), manager))
-      continue;
-    root_length = package_root_length(&package->manifest);
-    if (root_length > file->path.length ||
-        (root_length &&
-         memcmp(package->manifest.data, file->path.data, root_length)))
-      continue;
-    if (!has_owner || root_length > owner_root) {
-      owner_root = root_length;
-      has_owner = 1;
-    }
-  }
-  if (has_owner) {
-    for (index = 0; index < package_count; index++) {
-      const AbMapPackage *package = &packages[index];
-      const AbMapDependency *dependency;
-      if (strcmp(ab_map_package_manager(&package->kind), manager) ||
-          package_root_length(&package->manifest) != owner_root ||
-          (owner_root &&
-           memcmp(package->manifest.data, file->path.data, owner_root)))
-        continue;
-      dependency = package_dependency(package, manager, external);
-      if (!dependency)
-        continue;
-      if (matched && !ab_string_equal(&matched->name, &dependency->name))
-        ambiguous = 1;
-      else
-        matched = dependency;
-    }
-    return ambiguous ? NULL : matched;
-  }
-  matched = NULL;
-  ambiguous = 0;
-  for (index = 0; index < package_count; index++) {
-    const AbMapPackage *package = &packages[index];
-    const AbMapDependency *dependency;
-    if (strcmp(ab_map_package_manager(&package->kind), manager) ||
-        !ab_string_equal(&package->layer, &file->layer))
-      continue;
-    dependency = package_dependency(package, manager, external);
+  for (index = start; index < end; index++) {
+    const AbMapDependency *dependency =
+        package_dependency(rows[index].package, manager, external);
     if (!dependency)
       continue;
     if (matched && !ab_string_equal(&matched->name, &dependency->name))
@@ -213,6 +336,80 @@ ab_map_file_package_dependency(const AbMapPackage *packages,
       matched = dependency;
   }
   return ambiguous ? NULL : matched;
+}
+
+static int owner_range(const AbMapState *state, const char *manager,
+                       const char *root, size_t root_length, size_t *out_start,
+                       size_t *out_end) {
+  size_t low = 0;
+  size_t high = state->package_owner_count;
+  size_t end;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (owner_key_compare(&state->package_owners[middle], manager, root,
+                          root_length) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  end = low;
+  while (end < state->package_owner_count &&
+         !owner_key_compare(&state->package_owners[end], manager, root,
+                            root_length))
+    end++;
+  *out_start = low;
+  *out_end = end;
+  return low < end;
+}
+
+static int layer_range(const AbMapState *state, const char *manager,
+                       const AbString *layer, size_t *out_start,
+                       size_t *out_end) {
+  size_t low = 0;
+  size_t high = state->package_layer_count;
+  size_t end;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (layer_key_compare(&state->package_layers[middle], manager, layer) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  end = low;
+  while (end < state->package_layer_count &&
+         !layer_key_compare(&state->package_layers[end], manager, layer))
+    end++;
+  *out_start = low;
+  *out_end = end;
+  return low < end;
+}
+
+/* A package owns files below its manifest directory; the deepest manifest
+ * wins in nested workspaces.  Layer is only a fallback for nonstandard trees.
+ */
+const AbMapDependency *
+ab_map_file_package_dependency(const AbMapState *state,
+                               const AbManifestFile *file,
+                               const AbString *external) {
+  const char *manager = ab_map_language_manager(&file->language);
+  size_t root_length = file->path.length;
+  size_t start;
+  size_t end;
+  /* Search exact ancestor roots from deepest to shallowest. */
+  for (;;) {
+    while (root_length && file->path.data[root_length - 1] != '/')
+      root_length--;
+    if (owner_range(state, manager, file->path.data, root_length, &start, &end))
+      return dependency_in_range(state->package_owners, start, end, manager,
+                                 external);
+    if (!root_length)
+      break;
+    root_length--;
+  }
+  if (layer_range(state, manager, &file->layer, &start, &end))
+    return dependency_in_range(state->package_layers, start, end, manager,
+                               external);
+  return NULL;
 }
 
 static int string_compare(const void *left_raw, const void *right_raw) {
@@ -1219,6 +1416,9 @@ static ArchbirdStatus collect_file_exports(AbMapState *state,
                                            const AbManifestFile *file,
                                            const AbManifestFile **stack,
                                            size_t depth, int include_default) {
+  static const char *const domains[] = {"exports", "module-reexports",
+                                        "module-surface-unknowns"};
+  size_t domain_index;
   size_t fact_index;
   size_t stack_index;
   ArchbirdStatus status = ARCHBIRD_OK;
@@ -1230,100 +1430,106 @@ static ArchbirdStatus collect_file_exports(AbMapState *state,
                               ARCHBIRD_NO_OFFSET,
                               "package re-export traversal exceeded files");
   stack[depth++] = file;
-  for (fact_index = 0;
-       status == ARCHBIRD_OK &&
-       fact_index < ab_project_merged_fact_count(state->project);
-       fact_index++) {
-    const AbFact *fact = ab_project_merged_fact(state->project, fact_index);
-    AbMapExportOrigin *origin_row;
-    const AbString *origin;
-    const AbString *origin_name;
-    const AbManifestFile *target = NULL;
-    uint64_t local_definition = 0;
-    if (!ab_string_equal(&fact->path, &file->path))
-      continue;
-    if (fact_domain(fact, "module-surface-unknowns")) {
-      char message[384];
-      snprintf(message, sizeof(message),
-               "package %.*s export surface is incomplete: %.*s",
-               (int)package->name.length, package->name.data,
-               fact->has_name ? (int)fact->name.length : 7,
-               fact->has_name ? fact->name.data : "unknown");
-      status = ab_map_add_diagnostic_span(
-          state, "warning", "package-export-surface-partial", message,
-          &file->path, fact->span_start, fact->span_end);
-      package->export_surface_partial = 1;
-      continue;
-    }
-    if (fact_domain(fact, "module-reexports") && fact->has_name) {
-      status = ab_map_resolve_import(state->engine, state->manifest,
-                                     state->config, file, &fact->name, &target);
-      if (status != ARCHBIRD_OK)
-        break;
-      if (target && target->has_layer) {
-        status = collect_file_exports(
-            state, package, target, stack, depth,
-            include_default && !string_literal(&fact->kind, "esm-star"));
-      } else {
+  for (domain_index = 0; status == ARCHBIRD_OK &&
+                         domain_index < sizeof(domains) / sizeof(domains[0]);
+       domain_index++) {
+    size_t start;
+    size_t end;
+    ab_project_merged_fact_range(state->project, &file->path,
+                                 domains[domain_index], &start, &end);
+    for (fact_index = start; status == ARCHBIRD_OK && fact_index < end;
+         fact_index++) {
+      const AbFact *fact =
+          ab_project_merged_fact_by_path(state->project, fact_index);
+      AbMapExportOrigin *origin_row;
+      const AbString *origin;
+      const AbString *origin_name;
+      const AbManifestFile *target = NULL;
+      uint64_t local_definition = 0;
+      if (fact_domain(fact, "module-surface-unknowns")) {
         char message[384];
         snprintf(message, sizeof(message),
-                 "package %.*s re-export %.*s cannot be resolved to a "
-                 "mapped source file",
+                 "package %.*s export surface is incomplete: %.*s",
                  (int)package->name.length, package->name.data,
-                 (int)fact->name.length, fact->name.data);
+                 fact->has_name ? (int)fact->name.length : 7,
+                 fact->has_name ? fact->name.data : "unknown");
         status = ab_map_add_diagnostic_span(
-            state, "warning", "package-reexport-unresolved", message,
+            state, "warning", "package-export-surface-partial", message,
             &file->path, fact->span_start, fact->span_end);
         package->export_surface_partial = 1;
+        continue;
       }
-      continue;
-    }
-    if (!fact->has_name || !fact_domain(fact, "exports") ||
-        (!include_default && string_literal(&fact->name, "default")))
-      continue;
-    status = append_unique_string(state->engine, &package->exports,
-                                  fact->name.data, fact->name.length);
-    if (status != ARCHBIRD_OK)
-      break;
-    status = ensure_export_origin(state, package, &fact->name, &origin_row);
-    if (status != ARCHBIRD_OK)
-      break;
-    origin_name = fact_string_attribute(fact, "origin_name");
-    if (origin_name && origin_name->length) {
-      if (!origin_row->target_symbol.length &&
-          !origin_row->target_symbol_ambiguous)
+      if (fact_domain(fact, "module-reexports") && fact->has_name) {
         status =
-            copy_string(state->engine, &origin_row->target_symbol, origin_name);
-      else if (!origin_row->target_symbol_ambiguous &&
-               !ab_string_equal(&origin_row->target_symbol, origin_name)) {
-        char message[384];
-        snprintf(message, sizeof(message),
-                 "package %.*s export %.*s has multiple target symbols",
-                 (int)package->name.length, package->name.data,
-                 (int)fact->name.length, fact->name.data);
-        ab_string_free(state->engine, &origin_row->target_symbol);
-        origin_row->target_symbol_ambiguous = 1;
-        status = ab_map_add_diagnostic_span(
-            state, "warning", "package-export-origin-ambiguous", message,
-            &file->path, fact->span_start, fact->span_end);
+            ab_map_resolve_import(state->engine, state->manifest, state->config,
+                                  file, &fact->name, &target);
+        if (status != ARCHBIRD_OK)
+          break;
+        if (target && target->has_layer) {
+          status = collect_file_exports(
+              state, package, target, stack, depth,
+              include_default && !string_literal(&fact->kind, "esm-star"));
+        } else {
+          char message[384];
+          snprintf(message, sizeof(message),
+                   "package %.*s re-export %.*s cannot be resolved to a "
+                   "mapped source file",
+                   (int)package->name.length, package->name.data,
+                   (int)fact->name.length, fact->name.data);
+          status = ab_map_add_diagnostic_span(
+              state, "warning", "package-reexport-unresolved", message,
+              &file->path, fact->span_start, fact->span_end);
+          package->export_surface_partial = 1;
+        }
+        continue;
       }
-    }
-    if (status != ARCHBIRD_OK)
-      break;
-    origin = fact_string_attribute(fact, "origin");
-    if (origin && origin->length) {
-      status = ab_map_resolve_import(state->engine, state->manifest,
-                                     state->config, file, origin, &target);
+      if (!fact->has_name || !fact_domain(fact, "exports") ||
+          (!include_default && string_literal(&fact->name, "default")))
+        continue;
+      status = append_unique_string(state->engine, &package->exports,
+                                    fact->name.data, fact->name.length);
       if (status != ARCHBIRD_OK)
         break;
+      status = ensure_export_origin(state, package, &fact->name, &origin_row);
+      if (status != ARCHBIRD_OK)
+        break;
+      origin_name = fact_string_attribute(fact, "origin_name");
+      if (origin_name && origin_name->length) {
+        if (!origin_row->target_symbol.length &&
+            !origin_row->target_symbol_ambiguous)
+          status = copy_string(state->engine, &origin_row->target_symbol,
+                               origin_name);
+        else if (!origin_row->target_symbol_ambiguous &&
+                 !ab_string_equal(&origin_row->target_symbol, origin_name)) {
+          char message[384];
+          snprintf(message, sizeof(message),
+                   "package %.*s export %.*s has multiple target symbols",
+                   (int)package->name.length, package->name.data,
+                   (int)fact->name.length, fact->name.data);
+          ab_string_free(state->engine, &origin_row->target_symbol);
+          origin_row->target_symbol_ambiguous = 1;
+          status = ab_map_add_diagnostic_span(
+              state, "warning", "package-export-origin-ambiguous", message,
+              &file->path, fact->span_start, fact->span_end);
+        }
+      }
+      if (status != ARCHBIRD_OK)
+        break;
+      origin = fact_string_attribute(fact, "origin");
+      if (origin && origin->length) {
+        status = ab_map_resolve_import(state->engine, state->manifest,
+                                       state->config, file, origin, &target);
+        if (status != ARCHBIRD_OK)
+          break;
+      }
+      (void)fact_integer_attribute(fact, "local_definition", &local_definition);
+      if (target || local_definition ||
+          entry_defines_export(state, &file->path, &fact->name))
+        status = append_unique_string(
+            state->engine, &origin_row->paths,
+            target ? target->path.data : file->path.data,
+            target ? target->path.length : file->path.length);
     }
-    (void)fact_integer_attribute(fact, "local_definition", &local_definition);
-    if (target || local_definition ||
-        entry_defines_export(state, &file->path, &fact->name))
-      status = append_unique_string(
-          state->engine, &origin_row->paths,
-          target ? target->path.data : file->path.data,
-          target ? target->path.length : file->path.length);
   }
   return status;
 }
@@ -1537,6 +1743,8 @@ ArchbirdStatus ab_map_analyze_packages(AbMapState *state) {
   if (status == ARCHBIRD_OK && state->package_count > 1)
     qsort(state->packages, state->package_count, sizeof(*state->packages),
           package_compare);
+  if (status == ARCHBIRD_OK)
+    status = build_package_indexes(state);
   return status;
 }
 

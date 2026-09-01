@@ -290,18 +290,10 @@ static const AbMapPackage *matching_package(const AbMapState *state,
   AbString external;
   const AbMapPackage *matched = NULL;
   size_t matches = 0;
-  size_t index;
   if (!manager[0] || !module->length || module->data[0] == '.')
     return NULL;
   external = ab_map_external_import_name(&source->language, module);
-  for (index = 0; index < state->package_count; index++) {
-    const AbMapPackage *candidate = &state->packages[index];
-    if (strcmp(ab_map_package_manager(&candidate->kind), manager) != 0 ||
-        !ab_map_package_alias_matches(candidate, manager, &external))
-      continue;
-    matched = candidate;
-    matches++;
-  }
+  matched = ab_map_package_by_alias(state, manager, &external, &matches);
   return matches == 1 ? matched : NULL;
 }
 
@@ -313,8 +305,7 @@ static const AbMapDependency *matching_dependency(const AbMapState *state,
       !ab_map_language_manager(&source->language)[0])
     return NULL;
   external = ab_map_external_import_name(&source->language, module);
-  return ab_map_file_package_dependency(state->packages, state->package_count,
-                                        source, &external);
+  return ab_map_file_package_dependency(state, source, &external);
 }
 
 static int same_resolution_target(const AbMapReferenceResolution *left,
