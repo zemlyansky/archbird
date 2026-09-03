@@ -31,6 +31,15 @@
   ],
   "packages": [
     {
+      "name": "python-root",
+      "kind": "python",
+      "path": "py/pyproject.toml",
+      "layer": "python",
+      "entries": ["py/__init__.py"],
+      "identity": "rootpkg",
+      "aliases": ["rootpkg"]
+    },
+    {
       "name": "python-public",
       "kind": "python",
       "path": "py/publicpkg/__init__.py",

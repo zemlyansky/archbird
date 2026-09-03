@@ -1417,6 +1417,7 @@ def main() -> int:
         }
         expected = {
             "py/caller.py": {"bool": "builtin"},
+            "py/controller.py": {"connect_program": "imported"},
             "py/default_scope.py": {"dependency": "project"},
             "py/imported.py": {"helper": "imported"},
             "py/local.py": {"helper": "local"},
@@ -1424,6 +1425,10 @@ def main() -> int:
                 "len": "builtin",
                 "project_helper": "project",
                 "str": "builtin",
+            },
+            "py/service.py": {
+                "controller_arguments": "member",
+                "object": "builtin",
             },
             "py/shadow.py": {"bool": "project"},
             "py/test_builtin.py": {"bool": "builtin"},
@@ -1433,11 +1438,13 @@ def main() -> int:
                 "ExternalChild": "imported",
                 "Override": "imported",
                 "run": "local",
+                "step": "member",
             },
             "py/test_member.py": {
                 "LocalWidget": "project",
                 "Receiver": "imported",
                 "build": "member",
+                "chain": "member",
                 "inherited": "member",
                 "object": "builtin",
                 "run": "member",
@@ -2011,6 +2018,11 @@ def main() -> int:
         raise AssertionError(resolutions[("py/local.py", "helper")])
     if resolutions[("py/imported.py", "helper")]["kind"] != "unique":
         raise AssertionError(resolutions[("py/imported.py", "helper")])
+    root_import = resolutions[("py/controller.py", "connect_program")]
+    if root_import["kind"] != "unique" or root_import["candidates"] != [
+        "py/factory.py"
+    ]:
+        raise AssertionError(root_import)
     if resolutions[("py/shadow.py", "bool")]["kind"] != "unique":
         raise AssertionError(resolutions[("py/shadow.py", "bool")])
     cross_file = resolutions[("test/cross_file_candidate.c", "cross_file_only")]
@@ -2248,6 +2260,36 @@ def main() -> int:
         "Widget.build",
     ) not in typed_edges:
         raise AssertionError(f"missing imported-member edge: {sorted(typed_edges)!r}")
+    annotated_receiver = [
+        row
+        for row in mapped["symbol_calls"]
+        if row["source"]
+        == {"path": "py/service.py", "symbol": "Service.invoke"}
+        and row["name"] == "controller_arguments"
+    ]
+    if len(annotated_receiver) != 1 or {
+        "resolution": annotated_receiver[0]["resolution"],
+        "candidates": annotated_receiver[0]["candidates"],
+    } != {
+        "resolution": "candidate",
+        "candidates": [
+            {
+                "line": 2,
+                "path": "py/configuration.py",
+                "symbol": "Configuration.controller_arguments",
+            }
+        ],
+    }:
+        raise AssertionError(annotated_receiver)
+    reassigned_receiver = [
+        row
+        for row in mapped["symbol_calls"]
+        if row["source"]
+        == {"path": "py/service.py", "symbol": "ReassignedService.invoke"}
+        and row["name"] == "controller_arguments"
+    ]
+    if any(row["candidates"] for row in reassigned_receiver):
+        raise AssertionError(reassigned_receiver)
     if any(
         source == "py/test_member.py" and name == "Receiver.run"
         for _kind, source, _target, name in typed_edges

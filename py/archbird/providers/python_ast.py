@@ -595,6 +595,76 @@ class _ReceiverScope:
     written: frozenset[str]
 
 
+class _InstanceAttributeCollector(ast.NodeVisitor):
+    """Retain unambiguous ``self.member = typed_parameter`` bindings."""
+
+    def __init__(
+        self,
+        receiver: str,
+        parameters: Mapping[str, _ReceiverOrigin],
+    ) -> None:
+        self.receiver = receiver
+        self.parameters = parameters
+        self.writes: Dict[str, List[Optional[_ReceiverOrigin]]] = {}
+
+    def _attribute(self, target: ast.expr) -> Optional[str]:
+        if (
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == self.receiver
+        ):
+            return target.attr
+        return None
+
+    def _record(self, target: ast.expr, value: Optional[ast.expr]) -> None:
+        attribute = self._attribute(target)
+        if attribute is None:
+            return
+        origin = (
+            self.parameters.get(value.id)
+            if isinstance(value, ast.Name)
+            else None
+        )
+        self.writes.setdefault(attribute, []).append(origin)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._record(target, node.value)
+        self.visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._record(node.target, node.value)
+        if node.value is not None:
+            self.visit(node.value)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self._record(node.target, None)
+        self.visit(node.value)
+
+    def visit_Delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            self._record(target, None)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        del node
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        del node
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        del node
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        del node
+
+    def result(self) -> Dict[str, _ReceiverOrigin]:
+        return {
+            f"{self.receiver}.{attribute}": writes[0]
+            for attribute, writes in self.writes.items()
+            if len(writes) == 1 and writes[0] is not None
+        }
+
+
 def _receiver_expression_origin(node: ast.expr) -> Optional[Tuple[str, Tuple[str, ...], str]]:
     """Trace a call chain to its imported-looking syntactic root.
 
@@ -956,6 +1026,7 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             {name: name for name in receivers.classes}
         ]
         self.method_receivers: List[Dict[str, str]] = [{}]
+        self.instance_receivers: List[Dict[str, _ReceiverOrigin]] = []
         self.enum_classes: set[str] = set()
         self.module_table = table
         self.child_tables: Dict[
@@ -1093,6 +1164,109 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         owner = self._lexical_binding_owner(name)
         return self.method_receivers[owner].get(name) if owner is not None else None
 
+    def _annotation_receiver_origin(
+        self, annotation: ast.expr
+    ) -> Optional[_ReceiverOrigin]:
+        parsed = annotation
+        if isinstance(parsed, ast.Constant) and isinstance(parsed.value, str):
+            try:
+                parsed = ast.parse(parsed.value, mode="eval").body
+            except SyntaxError:
+                return None
+        candidates: List[ast.expr] = []
+
+        def collect(node: ast.expr) -> None:
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+                collect(node.left)
+                collect(node.right)
+                return
+            if isinstance(node, ast.Name) and node.id == "None":
+                return
+            candidates.append(node)
+
+        collect(parsed)
+        resolved: List[_ReceiverOrigin] = []
+        for candidate in candidates:
+            if isinstance(candidate, ast.Name):
+                binding = self._lexical_import_binding(candidate.id)
+                if binding is not None:
+                    resolved.append(
+                        _ReceiverOrigin(
+                            candidate.id,
+                            (),
+                            0,
+                            0,
+                            "annotated-instance-attribute",
+                            binding,
+                        )
+                    )
+                continue
+            if isinstance(candidate, ast.Attribute):
+                chain = _attribute_chain(candidate)
+                if chain is None:
+                    continue
+                root, attributes = chain
+                binding = self._lexical_import_binding(root)
+                if binding is not None:
+                    resolved.append(
+                        _ReceiverOrigin(
+                            root,
+                            attributes,
+                            0,
+                            0,
+                            "annotated-instance-attribute",
+                            binding,
+                        )
+                    )
+        identities = {
+            (row.import_binding, row.callee_attributes) for row in resolved
+        }
+        return resolved[0] if len(identities) == 1 else None
+
+    def _class_instance_receivers(
+        self, node: ast.ClassDef
+    ) -> Dict[str, _ReceiverOrigin]:
+        initializers = [
+            statement
+            for statement in node.body
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and statement.name == "__init__"
+        ]
+        if len(initializers) != 1:
+            return {}
+        initializer = initializers[0]
+        if any(_decorator_leaf(row) == "staticmethod" for row in initializer.decorator_list):
+            return {}
+        positional = [
+            *initializer.args.posonlyargs,
+            *initializer.args.args,
+        ]
+        if not positional:
+            return {}
+        receiver = positional[0].arg
+        parameters: Dict[str, _ReceiverOrigin] = {}
+        for argument in [
+            *positional[1:],
+            *initializer.args.kwonlyargs,
+        ]:
+            if argument.annotation is None:
+                continue
+            origin = self._annotation_receiver_origin(argument.annotation)
+            if origin is not None:
+                start, end = _absolute_span(argument.annotation, self.starts)
+                parameters[argument.arg] = _ReceiverOrigin(
+                    origin.root,
+                    origin.callee_attributes,
+                    start,
+                    end,
+                    origin.derivation,
+                    origin.import_binding,
+                )
+        collector = _InstanceAttributeCollector(receiver, parameters)
+        for statement in initializer.body:
+            collector.visit(statement)
+        return collector.result()
+
     def _local_member_owner(
         self, receiver: ast.expr
     ) -> Optional[Tuple[str, str, str]]:
@@ -1171,10 +1345,20 @@ class _PythonProviderVisitor(ast.NodeVisitor):
     def _lexical_import_binding(
         self, name: str
     ) -> Optional[Tuple[str, str, str]]:
-        for imports in reversed(self.imports):
-            binding = imports.get(name)
-            if binding is not None:
-                return binding
+        # Future annotations are absent from ``symtable`` uses. Walk actual
+        # lexical bindings so postponed annotations still resolve imports and
+        # an inner assignment still shadows an outer import.
+        for index in range(len(self.tables) - 1, -1, -1):
+            table = self.tables[index]
+            if table is None or not self._bound_in_table(table, name):
+                continue
+            try:
+                symbol = table.lookup(name)
+            except KeyError:
+                return None
+            if symbol.is_imported() and not symbol.is_assigned():
+                return self.imports[index].get(name)
+            return None
         return None
 
     def _record_receiver_call(
@@ -1189,6 +1373,12 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         if isinstance(receiver, ast.Name):
             receiver_name = receiver.id
             origin = self._receiver_binding(receiver.id, full_span[0])
+        elif isinstance(receiver, ast.Attribute):
+            chain = _attribute_chain(receiver)
+            if chain is not None:
+                receiver_name = ".".join((chain[0], *chain[1]))
+                if self.instance_receivers:
+                    origin = self.instance_receivers[-1].get(receiver_name)
         if origin is None:
             resolved = _receiver_expression_origin(receiver)
             if resolved is None:
@@ -1229,6 +1419,18 @@ class _PythonProviderVisitor(ast.NodeVisitor):
                 str(self.facts.source_offset(origin.assignment_start)),
                 str(self.facts.source_offset(origin.assignment_end)),
             )
+        )
+        self.facts.add(
+            "calls",
+            "receiver-call",
+            full_span,
+            key,
+            target_symbol,
+            {
+                "binding": "member",
+                "enclosing": self._qualname("").rstrip("."),
+                "line": node.func.lineno,
+            },
         )
         self.facts.add(
             "name-uses",
@@ -1894,8 +2096,10 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             {name: self._qualname(name) for name in receivers.classes}
         )
         self.method_receivers.append({})
+        self.instance_receivers.append(self._class_instance_receivers(node))
         for statement in node.body:
             self.visit(statement)
+        self.instance_receivers.pop()
         self.method_receivers.pop()
         self.local_classes.pop()
         self.receivers.pop()

@@ -827,6 +827,113 @@ static size_t path_directory_length(const AbString *path) {
   return index ? index - 1 : 0;
 }
 
+static int python_package_module_suffix(const AbString *imported,
+                                        const AbString *alias,
+                                        size_t *out_start) {
+  if (!alias->length || imported->length < alias->length ||
+      memcmp(imported->data, alias->data, alias->length) != 0)
+    return 0;
+  if (imported->length == alias->length) {
+    *out_start = imported->length;
+    return 1;
+  }
+  if (imported->data[alias->length] != '.')
+    return 0;
+  *out_start = alias->length + 1;
+  return 1;
+}
+
+static int python_package_module_manifest(const AbString *path) {
+  static const char name[] = "__init__.py";
+  return path->length >= sizeof(name) - 1 &&
+         memcmp(path->data + path->length - (sizeof(name) - 1), name,
+                sizeof(name) - 1) == 0 &&
+         (path->length == sizeof(name) - 1 ||
+          path->data[path->length - sizeof(name)] == '/');
+}
+
+static ArchbirdStatus resolve_python_package_module(
+    ArchbirdEngine *engine, const AbSourceManifest *manifest,
+    const AbMapConfig *config, const AbString *imported,
+    const AbManifestFile **out, int *out_ambiguous) {
+  static const char *const suffixes[] = {"", ".py", "/__init__.py"};
+  const AbManifestFile *matched = NULL;
+  size_t package_index;
+  *out = NULL;
+  *out_ambiguous = 0;
+  for (package_index = 0; package_index < config->package_count;
+       package_index++) {
+    const AbConfigPackage *package = &config->packages[package_index];
+    size_t root_index;
+    if (!string_literal(&package->kind, "python"))
+      continue;
+    for (root_index = 0; root_index <= package->entries.count; root_index++) {
+      const AbString *module_manifest =
+          root_index == 0 ? &package->path
+                          : &package->entries.items[root_index - 1];
+      size_t alias_index;
+      if (!python_package_module_manifest(module_manifest))
+        continue;
+      for (alias_index = 0; alias_index <= package->aliases.count;
+           alias_index++) {
+        const AbString *alias = alias_index == 0
+                                    ? &package->identity
+                                    : &package->aliases.items[alias_index - 1];
+        const AbManifestFile *candidate = NULL;
+        size_t suffix_start;
+        size_t root_length;
+        char *joined;
+        size_t joined_length;
+        size_t write;
+        size_t read;
+        ArchbirdStatus status;
+        if (!python_package_module_suffix(imported, alias, &suffix_start))
+          continue;
+        if (suffix_start == imported->length) {
+          candidate = ab_map_manifest_file(manifest, module_manifest->data,
+                                           module_manifest->length);
+        } else {
+          root_length = path_directory_length(module_manifest);
+          if (root_length > SIZE_MAX - (imported->length - suffix_start) - 2)
+            return archbird_error_set(engine, ARCHBIRD_LIMIT_EXCEEDED,
+                                      ARCHBIRD_NO_OFFSET,
+                                      "Python package import is too large");
+          joined_length = root_length + (root_length ? 1 : 0) +
+                          imported->length - suffix_start;
+          joined = (char *)ab_malloc(engine, joined_length + 1);
+          if (!joined)
+            return archbird_error_set(
+                engine, ARCHBIRD_OUT_OF_MEMORY, ARCHBIRD_NO_OFFSET,
+                "out of memory resolving Python package import");
+          if (root_length)
+            memcpy(joined, module_manifest->data, root_length);
+          write = root_length;
+          if (root_length)
+            joined[write++] = '/';
+          for (read = suffix_start; read < imported->length; read++)
+            joined[write++] =
+                imported->data[read] == '.' ? '/' : imported->data[read];
+          status = candidate_file(
+              engine, manifest, joined, joined_length, suffixes,
+              sizeof(suffixes) / sizeof(suffixes[0]), &candidate);
+          ab_free(engine, joined);
+          if (status != ARCHBIRD_OK)
+            return status;
+        }
+        if (!candidate || candidate == matched)
+          continue;
+        if (matched) {
+          *out_ambiguous = 1;
+          return ARCHBIRD_OK;
+        }
+        matched = candidate;
+      }
+    }
+  }
+  *out = matched;
+  return ARCHBIRD_OK;
+}
+
 static ArchbirdStatus resolve_joined_import_with_suffixes(
     ArchbirdEngine *engine, const AbSourceManifest *manifest,
     const char *prefix, size_t prefix_length, const AbString *imported,
@@ -1607,6 +1714,13 @@ ab_map_resolve_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
   }
   {
     static const char *const suffixes[] = {"", ".py", "/__init__.py"};
+    int package_ambiguous = 0;
+    status = resolve_python_package_module(engine, manifest, config, imported,
+                                           &target, &package_ambiguous);
+    if (status != ARCHBIRD_OK || target || package_ambiguous) {
+      *out = target;
+      return status;
+    }
     size_t layer_index;
     for (layer_index = 0; layer_index < config->layer_count; layer_index++) {
       const AbConfigLayer *layer = &config->layers[layer_index];
