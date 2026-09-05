@@ -377,6 +377,7 @@ class LiveRepository:
                 self.current = candidate
                 if changed:
                     self._display = None
+                    self._prune_blobs()
                     if (
                         self._observed_display is not None
                         and self._observed_display.get("workspace") == "live"
@@ -520,29 +521,33 @@ class LiveRepository:
             self.snapshots[snapshot["generation"]] = snapshot
             self._prune_snapshots()
 
+    def _prune_blobs(self, preserve: Optional[str] = None) -> None:
+        """Call under the repository lock whenever display pins change."""
+        while len(self.blobs) > 1 and (
+            len(self.blobs) > BLOB_LIMIT
+            or sum(len(value) for value in self.blobs.values())
+            > self.blob_byte_limit
+        ):
+            protected = {preserve}
+            protected.update(self._pending_display_digests)
+            if self._display:
+                for name in ("artifact", "presentation"):
+                    descriptor = self._display.get(name)
+                    if isinstance(descriptor, Mapping):
+                        protected.add(str(descriptor.get("blob_sha256") or ""))
+            removable = next(
+                (key for key in self.blobs if key not in protected), None
+            )
+            if removable is None:
+                break
+            self.blobs.pop(removable)
+
     def artifact(self, snapshot: Mapping[str, Any], data: bytes) -> dict[str, object]:
         digest = hashlib.sha256(data).hexdigest()
         with self._lock:
             self.blobs.pop(digest, None)
             self.blobs[digest] = data if isinstance(data, bytes) else bytes(data)
-            while len(self.blobs) > 1 and (
-                len(self.blobs) > BLOB_LIMIT
-                or sum(len(value) for value in self.blobs.values())
-                > self.blob_byte_limit
-            ):
-                protected = {digest}
-                protected.update(self._pending_display_digests)
-                if self._display:
-                    for name in ("artifact", "presentation"):
-                        descriptor = self._display.get(name)
-                        if isinstance(descriptor, Mapping):
-                            protected.add(str(descriptor.get("blob_sha256") or ""))
-                removable = next(
-                    (key for key in self.blobs if key not in protected), None
-                )
-                if removable is None:
-                    break
-                self.blobs.pop(removable)
+            self._prune_blobs(digest)
         return {
             "blob_sha256": digest,
             "bytes": len(data),
@@ -600,6 +605,7 @@ class LiveRepository:
         finally:
             with self._lock:
                 self._pending_display_digests.difference_update(pending_digests)
+                self._prune_blobs()
         self._event(
             "display-updated",
             display,
@@ -1168,6 +1174,12 @@ def _operation_label(request: Mapping[str, Any]) -> Optional[str]:
 
 def _handler(repository: LiveRepository, static_root: Path):
     class Handler(BaseHTTPRequestHandler):
+        def handle_one_request(self) -> None:
+            try:
+                super().handle_one_request()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+
         server_version = "Archbird/1"
 
         def log_message(self, format: str, *args: object) -> None:
@@ -1352,6 +1364,9 @@ def _handler(repository: LiveRepository, static_root: Path):
                         },
                     )
                 self._json(200, envelope)
+            except (BrokenPipeError, ConnectionResetError):
+                # Transport cancellation is handled once at the HTTP boundary.
+                raise
             except Exception as error:
                 identity = locals().get("raw") if isinstance(locals().get("raw"), dict) else {}
                 label = locals().get("label")

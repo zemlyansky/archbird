@@ -28,6 +28,83 @@ def load_extension(path: Path) -> None:
     spec.loader.exec_module(module)
 
 
+def assert_cache_write_failures() -> None:
+    from archbird import provider_cache as module
+    parameters = dict(namespace="fixture", project="failure", provider_id="probe", path="a.py", source_sha256="1" * 64)
+    map_parameters = dict(namespace="fixture", project="failure", manifest_sha256="2" * 64, config_sha256="3" * 64)
+    failures = []
+    for code in (errno.ENOSPC, errno.EDQUOT):
+        for stage in ("create", "write", "flush", "publish"):
+            for first in ("provider", "map"):
+                with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / "build") as directory:
+                    cache = module.ProviderCache(Path(directory), max_bytes=1000)
+                    cache.store(b"cached", **parameters)
+                    original = module.tempfile.NamedTemporaryFile
+                    attempts = []
+
+                    def temporary(**kwargs):
+                        attempts.append(stage)
+                        if stage == "create":
+                            raise OSError(code, "injected storage exhaustion")
+                        stream = original(**kwargs)
+                        if stage in {"write", "flush"}:
+                            setattr(stream, stage, mock.Mock(side_effect=OSError(code, "injected storage exhaustion")))
+                        return stream
+
+                    with mock.patch.object(module.tempfile, "NamedTemporaryFile", side_effect=temporary):
+                        with mock.patch.object(module.os, "replace", side_effect=OSError(code, "injected storage exhaustion")) if stage == "publish" else mock.patch.object(module.os, "replace", wraps=module.os.replace):
+                            if first == "map":
+                                cache.store_map(b"{}", **map_parameters)
+                            else:
+                                cache.store(b"new", **parameters)
+                            cache.store(b"new", **parameters)
+                            cache.store_map(b"{}", **map_parameters)
+                            writer = cache.open_map_writer(**map_parameters)
+                            writer.write(b"{}")
+                            writer.commit()
+                    if len(attempts) != 1:
+                        failures.append((code, stage, first, "write attempts", len(attempts)))
+                    if list(Path(directory).rglob("*.tmp")):
+                        failures.append((code, stage, first, "leaked temporary"))
+                    assert cache.load(**parameters) == b"cached"
+                    recovered = module.ProviderCache(Path(directory), max_bytes=1000)
+                    recovered.store(b"new", **parameters)
+                    assert recovered.load(**parameters) == b"new"
+    assert not failures, failures
+
+
+def assert_cache_failure_cli() -> None:
+    from archbird import cli, provider_cache
+    from contextlib import redirect_stderr
+    with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / "build") as directory:
+        root = Path(directory) / "source"
+        root.mkdir()
+        (root / "a.py").write_text("def run(): return 1\n")
+        (root / "b.py").write_text("def other(): return 2\n")
+        failures = []
+        for area in ("providers-v1", "maps-v1"):
+            original = provider_cache.tempfile.NamedTemporaryFile
+            attempts = []
+            def temporary(**kwargs):
+                if f"/{area}/" in str(kwargs.get("dir")):
+                    attempts.append(area)
+                    raise OSError(errno.ENOSPC, "injected storage exhaustion")
+                return original(**kwargs)
+            output = io.BytesIO()
+            errors = io.StringIO()
+            with mock.patch.object(provider_cache.tempfile, "NamedTemporaryFile", side_effect=temporary), redirect_stderr(errors), mock.patch.object(sys, "stdout", io.TextIOWrapper(output, write_through=True)):
+                status = cli.main(["map", str(root), "--format", "json", "--cache-dir", str(Path(directory) / f"cache-{area}"), "--jobs", "1", "--progress", "never"])
+                actual = output.getvalue()
+            assert status == 0
+            assert len(attempts) == 1, attempts
+            warning = errors.getvalue()
+            if warning.count("archbird: warning:") != 1 or "Use --cache-dir" not in warning or "--no-cache" not in warning:
+                failures.append((area, warning))
+            from archbird.native import Project
+            assert json.loads(actual) == json.loads(Project.from_repository(root, jobs=1, cache_max_bytes=0, map_cache=False).map_json())
+        assert not failures, failures
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         raise SystemExit("usage: test_python_repository.py EXTENSION REPOSITORY_ROOT")
@@ -37,6 +114,8 @@ def main() -> int:
     from archbird.errors import ConfigError
 
     load_extension(Path(sys.argv[1]).resolve())
+    assert_cache_write_failures()
+    assert_cache_failure_cli()
     from archbird import _native
     from archbird.native import (
         Project,
@@ -1084,13 +1163,13 @@ writer.commit()
         recovered.store_map(b"{}", **map_parameters)
     if recovered.stats.no_space != 1 or recovered.stats.errors != 1:
         raise AssertionError("Python cache did not classify ENOSPC")
-    if recovered.map_stats.no_space != 1 or recovered.map_stats.errors != 1:
-        raise AssertionError("Python Map cache did not classify ENOSPC")
+    if recovered.map_stats.no_space != 0 or recovered.map_stats.errors != 0:
+        raise AssertionError("Python Map cache retried after provider ENOSPC")
     if (
         recovered.stats.attempted_bytes != 1
         or recovered.stats.error_errno != errno.ENOSPC
         or recovered.map_stats.attempted_bytes != 2
-        or recovered.map_stats.error_errno != errno.ENOSPC
+        or recovered.map_stats.error_errno != 0
     ):
         raise AssertionError("Python cache did not retain ENOSPC context")
     shutil.rmtree(bounded_root, ignore_errors=True)

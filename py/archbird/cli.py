@@ -724,7 +724,7 @@ def _warn_cache_stats(
         print(
             "archbird: warning: provider-cache write failed because storage "
             f"is full ({context}); analysis remains valid. Use --cache-dir, "
-            "increase --cache-max-bytes, or use --no-cache.",
+            "free space, or use --no-cache.",
             file=sys.stderr,
         )
     if stats.get("skipped", 0):
@@ -745,7 +745,8 @@ def _warn_map_cache_stats(
     if stats.get("no_space", 0):
         print(
             "archbird: warning: canonical Map cache write failed because "
-            f"storage is full ({context}); analysis remains valid.",
+            f"storage is full ({context}); analysis remains valid. Use --cache-dir, "
+            "free space, or use --no-cache.",
             file=sys.stderr,
         )
     if stats.get("skipped", 0):
@@ -2640,7 +2641,7 @@ def _freshness_identity(project: Project, schema_version: int) -> bytes:
             },
             "files": [
                 {"path": row["path"], "sha256": row["sha256"]}
-                for row in manifest["files"]
+                for row in manifest["files"] if row.get("layer")
             ],
             "project": project.project,
             "schema_version": schema_version,

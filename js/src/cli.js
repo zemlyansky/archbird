@@ -477,8 +477,7 @@ function warnCacheStats(stats, options) {
   if (stats.noSpace) {
     process.stderr.write(
       "archbird: warning: provider-cache write failed because storage is full; " +
-      `${context}; analysis remains valid. Use --cache-dir, increase ` +
-      "--cache-max-bytes, " +
+      `${context}; analysis remains valid. Use --cache-dir, free space, ` +
       "or use --no-cache.\n",
     );
   }
@@ -497,7 +496,8 @@ function warnMapCacheStats(stats, options) {
   if (stats.noSpace) {
     process.stderr.write(
       "archbird: warning: canonical Map cache write failed because storage " +
-      `is full; ${context}; analysis remains valid.\n`,
+      `is full; ${context}; analysis remains valid. Use --cache-dir, ` +
+      "free space, or use --no-cache.\n",
     );
   }
   if (stats.skipped) {
@@ -2002,7 +2002,8 @@ function freshnessMain(argv) {
       config_sha256: currentProject.configSha256,
       input_sha256: currentProject.mapInputSha256,
     },
-    files: manifest.files.map((row) => ({ path: row.path, sha256: row.sha256 })),
+    files: manifest.files.filter((row) => row.layer)
+      .map((row) => ({ path: row.path, sha256: row.sha256 })),
     project: currentProject.project,
     schema_version: snapshot.schema_version,
     tool: {

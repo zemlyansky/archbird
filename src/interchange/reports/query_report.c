@@ -89,6 +89,13 @@ typedef struct QueryContextPolicy {
   size_t test_match_offset;
 } QueryContextPolicy;
 
+typedef struct QueryRouteBudget {
+  size_t tests;
+  size_t calls;
+  size_t references;
+  int delivery;
+} QueryRouteBudget;
+
 typedef struct QueryReportViewContext {
   ArchbirdEngine *engine;
   const AbValue *map;
@@ -136,6 +143,8 @@ typedef struct QueryReportViewContext {
   size_t test_start;
   int include_neighborhood;
   int include_routed;
+  int include_delivery;
+  size_t collapsed_group_limit;
   int compact_header;
   int change_view;
   int metrics_view;
@@ -1682,6 +1691,8 @@ query_report_view_init(QueryReportViewContext *view, ArchbirdEngine *engine,
   view->node_limit = node_limit;
   view->include_neighborhood = include_neighborhood;
   view->include_routed = include_routed;
+  view->include_delivery = 1;
+  view->collapsed_group_limit = SIZE_MAX;
   view->compact_header = compact_header;
   view->detail = detail;
   view->change_view = selected_view == ARCHBIRD_QUERY_VIEW_CHANGES;
@@ -2882,10 +2893,16 @@ static ArchbirdStatus render_query_test_routes(QueryReportViewContext *view) {
         status =
             ab_report_list_addf(&rows, "…+%zu", eligible_count - start - limit);
       for (match_index = 0;
-           status == ARCHBIRD_OK && match_index < collapsed_group_count;
+           status == ARCHBIRD_OK && match_index < collapsed_group_count &&
+           match_index < view->collapsed_group_limit;
            match_index++)
         status =
             collapsed_test_group_render(&rows, &collapsed_groups[match_index]);
+      if (status == ARCHBIRD_OK &&
+          collapsed_group_count > view->collapsed_group_limit)
+        status = ab_report_list_addf(
+            &rows, "… %zu collapsed test groups not shown",
+            collapsed_group_count - view->collapsed_group_limit);
       if (status == ARCHBIRD_OK && candidate_collapsed_count)
         status = ab_report_list_addf(
             &rows, "… expand %zu candidate routes with `--candidate expand`",
@@ -3070,7 +3087,14 @@ render_query_routed_evidence(QueryReportViewContext *view) {
   QUERY_TRY(ab_report_literal_line(out, "```text"));
   QUERY_TRY(render_query_call_routes(view));
   QUERY_TRY(render_query_test_routes(view));
-  QUERY_TRY(render_query_delivery_routes(view));
+  if (view->include_delivery)
+    QUERY_TRY(render_query_delivery_routes(view));
+  else
+    QUERY_TRY(ab_report_linef(
+        out, "delivery omitted: builds=%zu artifacts=%zu surfaces=%zu",
+        optional_array(view->query, "builds")->as.array.count,
+        optional_array(view->query, "artifacts")->as.array.count,
+        optional_array(view->query, "surfaces")->as.array.count));
   QUERY_TRY(ab_report_literal_line(out, "```"));
 
 cleanup:
@@ -3223,8 +3247,9 @@ cleanup:
 static ArchbirdStatus render_query_view(
     ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
     const AbValue *verification, size_t node_limit, int include_neighborhood,
-    int include_routed, int compact_header, ArchbirdQueryView selected_view,
-    ArchbirdReportDetail detail, AbBuffer *out) {
+    int include_routed, int compact_header, const QueryRouteBudget *budget,
+    ArchbirdQueryView selected_view, ArchbirdReportDetail detail,
+    AbBuffer *out) {
   QueryReportViewContext report;
   ArchbirdStatus status =
       query_report_view_init(&report, engine, map, query, verification,
@@ -3232,6 +3257,18 @@ static ArchbirdStatus render_query_view(
                              compact_header, selected_view, detail, out);
   if (status != ARCHBIRD_OK)
     return status;
+  if (budget) {
+    if (report.policy.test_match_quota > budget->tests)
+      report.policy.test_match_quota = budget->tests;
+    if (report.policy.symbol_call_quota > budget->calls)
+      report.policy.symbol_call_quota = budget->calls;
+    if (report.policy.symbol_reference_quota > budget->references)
+      report.policy.symbol_reference_quota = budget->references;
+    if (report.test_emitted_count > report.policy.test_match_quota)
+      report.test_emitted_count = report.policy.test_match_quota;
+    report.collapsed_group_limit = report.policy.test_match_quota;
+    report.include_delivery = budget->delivery;
+  }
   QUERY_TRY(render_query_header(&report));
   QUERY_TRY(render_query_change_context(&report));
   QUERY_TRY(render_query_scope_summary(&report));
@@ -3256,7 +3293,7 @@ render_query_once(ArchbirdEngine *engine, const AbValue *map,
                   size_t node_limit, ArchbirdQueryView view,
                   ArchbirdReportDetail detail, AbBuffer *out) {
   return render_query_view(engine, map, query, verification, node_limit, 1, 1,
-                           0, view, detail, out);
+                           0, NULL, view, detail, out);
 }
 
 static ArchbirdStatus
@@ -3307,11 +3344,12 @@ render_query_budget_summary(ArchbirdEngine *engine, const AbValue *query,
 static ArchbirdStatus render_query_budget_candidate(
     ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
     const AbValue *verification, size_t budget, size_t node_limit,
-    int include_neighborhood, int include_routed, ArchbirdQueryView view,
+    int include_neighborhood, int include_routed,
+    const QueryRouteBudget *routes, ArchbirdQueryView view,
     ArchbirdReportDetail detail, AbBuffer *out) {
   ArchbirdStatus status = render_query_view(
       engine, map, query, verification, node_limit, include_neighborhood,
-      include_routed, 1, view, detail, out);
+      include_routed, 1, routes, view, detail, out);
   if (status == ARCHBIRD_OK)
     status = render_query_budget_summary(engine, query, budget, node_limit,
                                          include_neighborhood, include_routed,
@@ -3322,14 +3360,15 @@ static ArchbirdStatus render_query_budget_candidate(
 static ArchbirdStatus render_query_budget_length(
     ArchbirdEngine *engine, const AbValue *map, const AbValue *query,
     const AbValue *verification, size_t budget, size_t node_limit,
-    int include_neighborhood, int include_routed, ArchbirdQueryView view,
+    int include_neighborhood, int include_routed,
+    const QueryRouteBudget *routes, ArchbirdQueryView view,
     ArchbirdReportDetail detail, size_t *out_length) {
   AbBuffer candidate;
   ArchbirdStatus status;
   ab_buffer_init(&candidate, engine);
   status = render_query_budget_candidate(
       engine, map, query, verification, budget, node_limit,
-      include_neighborhood, include_routed, view, detail, &candidate);
+      include_neighborhood, include_routed, routes, view, detail, &candidate);
   if (status == ARCHBIRD_OK)
     *out_length = ab_report_codepoints(candidate.data, candidate.length);
   ab_buffer_free(&candidate);
@@ -3342,13 +3381,15 @@ render_query_budgeted(ArchbirdEngine *engine, const AbValue *map,
                       size_t budget, ArchbirdQueryView view,
                       ArchbirdReportDetail detail, AbBuffer *out) {
   const AbValue *files = optional_array(query, "files");
+  QueryRouteBudget routes = {0};
   size_t minimum_length = 0;
   size_t visible_count = 0;
   int include_neighborhood = 0;
   int include_routed = 0;
+  size_t phase;
   ArchbirdStatus status =
       render_query_budget_length(engine, map, query, verification, budget, 0, 0,
-                                 0, view, detail, &minimum_length);
+                                 0, &routes, view, detail, &minimum_length);
   if (status != ARCHBIRD_OK)
     return status;
   if (minimum_length > budget)
@@ -3357,27 +3398,52 @@ render_query_budgeted(ArchbirdEngine *engine, const AbValue *map,
         "query.max_chars: %zu is too small; minimum navigable projection is "
         "%zu",
         budget, minimum_length);
-  {
+  if (view != ARCHBIRD_QUERY_VIEW_METRICS) {
     size_t length = 0;
-    include_neighborhood = 1;
-    status = render_query_budget_length(engine, map, query, verification,
-                                        budget, 0, include_neighborhood,
-                                        include_routed, view, detail, &length);
+    status =
+        render_query_budget_length(engine, map, query, verification, budget, 0,
+                                   0, 1, &routes, view, detail, &length);
     if (status != ARCHBIRD_OK)
       return status;
-    if (length > budget)
-      include_neighborhood = 0;
+    include_routed = length <= budget;
+  }
+  /* Keep ranked test witnesses before spending the budget on relation tails. */
+  for (phase = 0; include_routed && phase < 3; phase++) {
+    const char *field = phase == 0   ? "test_matches"
+                        : phase == 1 ? "symbol_calls"
+                                     : "symbol_references";
+    size_t *limit = phase == 0   ? &routes.tests
+                    : phase == 1 ? &routes.calls
+                                 : &routes.references;
+    size_t low = 1;
+    size_t high = optional_array(query, field)->as.array.count;
+    size_t best = 0;
+    while (low <= high) {
+      size_t middle = low + (high - low) / 2;
+      size_t length = 0;
+      *limit = middle;
+      status = render_query_budget_length(engine, map, query, verification,
+                                          budget, 0, 0, include_routed, &routes,
+                                          view, detail, &length);
+      if (status != ARCHBIRD_OK)
+        return status;
+      if (length <= budget) {
+        best = middle;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    *limit = best;
   }
   {
     size_t length = 0;
-    include_routed = 1;
     status = render_query_budget_length(engine, map, query, verification,
-                                        budget, 0, include_neighborhood,
-                                        include_routed, view, detail, &length);
+                                        budget, 0, 1, include_routed, &routes,
+                                        view, detail, &length);
     if (status != ARCHBIRD_OK)
       return status;
-    if (length > budget)
-      include_routed = 0;
+    include_neighborhood = length <= budget;
   }
   if (include_neighborhood && files->as.array.count) {
     size_t low = 1;
@@ -3387,7 +3453,7 @@ render_query_budgeted(ArchbirdEngine *engine, const AbValue *map,
       size_t length = 0;
       status = render_query_budget_length(
           engine, map, query, verification, budget, middle,
-          include_neighborhood, include_routed, view, detail, &length);
+          include_neighborhood, include_routed, &routes, view, detail, &length);
       if (status != ARCHBIRD_OK)
         return status;
       if (length <= budget) {
@@ -3398,9 +3464,20 @@ render_query_budgeted(ArchbirdEngine *engine, const AbValue *map,
       }
     }
   }
-  return render_query_budget_candidate(engine, map, query, verification, budget,
-                                       visible_count, include_neighborhood,
-                                       include_routed, view, detail, out);
+  if (include_routed) {
+    size_t length = 0;
+    routes.delivery = 1;
+    status = render_query_budget_length(
+        engine, map, query, verification, budget, visible_count,
+        include_neighborhood, include_routed, &routes, view, detail, &length);
+    if (status != ARCHBIRD_OK)
+      return status;
+    if (length > budget)
+      routes.delivery = 0;
+  }
+  return render_query_budget_candidate(
+      engine, map, query, verification, budget, visible_count,
+      include_neighborhood, include_routed, &routes, view, detail, out);
 }
 
 ArchbirdStatus ab_query_report_markdown_view(ArchbirdEngine *engine,

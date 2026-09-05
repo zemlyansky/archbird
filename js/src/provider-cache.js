@@ -136,6 +136,8 @@ function temporaryOwnerIsDead(candidate) {
 
 class ProviderCache {
   constructor(root, { maxBytes = defaultProviderCacheMaxBytes() } = {}) {
+    // Exhaustion disables writes for this operation; reads remain useful.
+    this.writesDisabled = false;
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
       throw new TypeError("provider cache maxBytes must be a positive safe integer");
     }
@@ -319,6 +321,7 @@ class ProviderCache {
     { namespace, project, providerId, path: subjectPath, sourceSha256 },
   ) {
     this.stats.attemptedBytes = Math.max(this.stats.attemptedBytes, data.length);
+    if (this.writesDisabled) return;
     const target = this.target({
       namespace,
       project,
@@ -356,7 +359,10 @@ class ProviderCache {
     } catch (error) {
       this.stats.errors += 1;
       this.stats.errorErrno = Math.abs(Number(error.errno) || 0);
-      if (["ENOSPC", "EDQUOT"].includes(error.code)) this.stats.noSpace += 1;
+      if (["ENOSPC", "EDQUOT"].includes(error.code)) {
+        this.stats.noSpace += 1;
+        this.writesDisabled = true;
+      }
     } finally {
       try {
         fs.unlinkSync(temporary);
@@ -371,6 +377,7 @@ class ProviderCache {
       this.mapStats.attemptedBytes,
       data.length,
     );
+    if (this.writesDisabled) return;
     const target = this.mapTarget(parameters);
     if (data.length > this.maxBytes) {
       this.mapStats.skipped += 1;
@@ -402,7 +409,10 @@ class ProviderCache {
     } catch (error) {
       this.mapStats.errors += 1;
       this.mapStats.errorErrno = Math.abs(Number(error.errno) || 0);
-      if (["ENOSPC", "EDQUOT"].includes(error.code)) this.mapStats.noSpace += 1;
+      if (["ENOSPC", "EDQUOT"].includes(error.code)) {
+        this.mapStats.noSpace += 1;
+        this.writesDisabled = true;
+      }
     } finally {
       try {
         fs.unlinkSync(temporary);

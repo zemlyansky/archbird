@@ -1,8 +1,7 @@
 #include "map/map_internal.h"
 
 #include "base/archbird_internal.h"
-
-#include <string.h>
+#include "base/json_value.h"
 
 static ArchbirdStatus add_message(AbMapState *state, const char *code,
                                   const AbString *path, size_t part_count,
@@ -49,17 +48,26 @@ static int path_matches_any(const AbString *path, const AbStringArray *patterns,
   return 0;
 }
 
-static int automatic_layer(const AbString *name) {
-  static const char *const names[] = {
-      "auto-c",          "auto-cpp", "auto-python", "auto-javascript",
-      "auto-typescript", "auto-vue", "auto-r"};
-  size_t index;
-  for (index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
-    size_t length = strlen(names[index]);
-    if (name->length == length && !memcmp(name->data, names[index], length))
-      return 1;
-  }
-  return 0;
+static int automatic_layer(const AbMapState *state, size_t index) {
+  const AbValue *policy = state->manifest->resolution.policy;
+  const AbValue *configuration;
+  const AbValue *request;
+  const AbValue *layers;
+  const AbValue *sources;
+  size_t authored_count = 0;
+  if (!state->manifest->has_resolution ||
+      !state->manifest->resolution.has_policy)
+    return 0;
+  configuration = ab_value_member(policy, "configuration");
+  request = ab_value_member(policy, "request");
+  layers = ab_value_member(configuration, "layers");
+  sources = ab_value_member(request, "sources");
+  if (layers && layers->kind == AB_VALUE_ARRAY)
+    authored_count += layers->as.array.count;
+  if (sources && sources->kind == AB_VALUE_ARRAY)
+    authored_count += sources->as.array.count;
+  /* Resolution appends discovered layers after CLI and configured layers. */
+  return index >= authored_count;
 }
 
 static ArchbirdStatus layer_diagnostics(AbMapState *state) {
@@ -120,7 +128,7 @@ static ArchbirdStatus layer_diagnostics(AbMapState *state) {
         continue;
       /* Automatic layers are fallbacks after configured classification. */
       if (!ab_string_equal(&file->layer, &layer->name) &&
-          automatic_layer(&layer->name))
+          automatic_layer(state, layer_index))
         continue;
       if (seen) {
         const AbString *parts[] = {&layer->name};

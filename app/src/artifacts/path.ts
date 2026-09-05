@@ -215,8 +215,10 @@ export function pathGraphFromArtifact(document: JsonObject): GraphView {
         kind: String(attributes.relation_kind || attributes.family || "relation"),
         names: strings(attributes.names),
         omitted_names: 0,
-        source: identities[stepIndex],
-        target: identities[stepIndex + 1],
+        source: typeof attributes.source === "string"
+          ? attributes.source : identities[step.traversal === "reverse" ? stepIndex + 1 : stepIndex],
+        target: typeof attributes.target === "string"
+          ? attributes.target : identities[step.traversal === "reverse" ? stepIndex : stepIndex + 1],
       });
     }
   }

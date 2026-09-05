@@ -427,3 +427,31 @@ test("file findings color a containing group only while the file is collapsed", 
     undefined,
   );
 });
+
+
+test("one finding localizes every path across mixed expansion", () => {
+  const graph = view("symbols", [
+    node("root", ".", "directory", null, { member_files: ["a.py", "b.py", "c.py"] }),
+    node("a", "a.py", "file", "root", { canonical_path: "a.py" }),
+    node("a-symbol", "run", "symbol", "a", { path: "a.py" }),
+    node("b-group", "b", "directory", "root", { member_files: ["b.py"] }),
+    node("c", "c.py", "file", "root", { canonical_path: "c.py" }),
+    node("c-symbol", "other", "symbol", "c", { path: "c.py" }),
+  ], []);
+  const overlay = applyVerificationOverlay(graph, {
+    artifact: "verification",
+    constraints: [{
+      id: "MIXED", status: "fail", coverage: ["a.py", "b.py", "c.py"],
+      findings: [{
+        key: "run", fingerprint: "mixed", message: "related findings",
+        evidence: [{ path: "a.py" }, { path: "b.py" }, { path: "b.py" }, { path: "c.py" }],
+      }],
+    }],
+  });
+  assert.deepEqual(overlay.graph.nodes.filter((row) =>
+    row.attributes.verification_status === "fail").map((row) => row.id),
+  ["a-symbol", "b-group", "c"]);
+  assert.equal(overlay.graph.nodes.find((row) => row.id === "b-group")
+    ?.attributes.verification_findings, 1);
+  assert.equal(overlay.unmappedFindings.length, 0);
+});

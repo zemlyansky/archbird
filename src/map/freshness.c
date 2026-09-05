@@ -502,8 +502,11 @@ static ArchbirdStatus render_freshness(FreshnessContext *context,
   if (status == ARCHBIRD_OK)
     status = render_missing_files(buffer, &context->snapshot_files,
                                   &context->current_files);
+  /* Full Map inventories omit supporting inputs such as manifests. */
   unattributed =
-      source == FRESHNESS_CHANGED && !context->snapshot.complete_file_inventory;
+      source == FRESHNESS_CHANGED &&
+      (!context->snapshot.complete_file_inventory ||
+       (!changed && !missing && context->current_files.count == unchanged));
   if (status == ARCHBIRD_OK)
     status = ab_buffer_literal(buffer, ",\"scope\":");
   if (status == ARCHBIRD_OK)

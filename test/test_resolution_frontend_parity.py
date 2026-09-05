@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 MAP_REQUEST = json.dumps(
@@ -1001,6 +1002,30 @@ def main() -> int:
     sys.path.insert(0, str(repository / "py"))
     load_extension(extension.resolve())
     from archbird.native import Project, resolve_discovery
+    from test_freshness import assert_supporting_input_freshness
+    assert_supporting_input_freshness()
+
+    with tempfile.TemporaryDirectory(dir=repository / "build") as directory:
+        collision_root = Path(directory)
+        (collision_root / "a.py").write_text("def run(): return 1\n")
+        (collision_root / "b.py").write_text("def other(): return 2\n")
+        (collision_root / "history.py").write_text("def record(): return []\n")
+        (collision_root / "pyproject.toml").write_text('[project]\nname="collision"\nversion="1"\n')
+        for names in (("auto-python",), ("auto-python", "auto-python-2"), ("first", "second")):
+            configuration = canonical({"layers": [
+                {"name": name, "language": "python", "globs": [f"{chr(97 + index)}.py"]}
+                for index, name in enumerate(names)
+            ]})
+            python_resolution = resolve_discovery(collision_root, config=configuration)
+            node_resolution = subprocess.run(
+                [str(node), str(repository / "test/test_resolution_node.js"),
+                 str(addon.resolve()), str(repository), str(collision_root), "configuration"],
+                input=configuration, capture_output=True, check=True,
+            )
+            assert bytes.fromhex(node_resolution.stdout.decode().strip()) == python_resolution
+            effective = json.loads(python_resolution)["effective_config"]
+            assert len(effective["packages"]) == 1
+            assert len(effective["layers"]) == len(names) + 7
 
     native_module = sys.modules["archbird._native"]
     check_native_manifest_protocol(native_module)

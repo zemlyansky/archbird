@@ -196,29 +196,30 @@ function matchingNodes(
   key: string,
   evidence: Array<Record<string, unknown>>,
 ): GraphNode[] {
-  const paths = evidence.flatMap((row) =>
-    typeof row.path === "string" && row.path ? [row.path] : []);
-  if (key) {
-    const symbols = graph.nodes.filter((node) =>
-      node.kind === "symbol" && (node.label === key || node.identity === key)
-      && (!paths.length || paths.includes(ownedPath(node, nodes) || "")));
-    if (symbols.length) return symbols;
+  const paths = [...new Set(evidence.flatMap((row) =>
+    typeof row.path === "string" && row.path ? [row.path] : []))];
+  const matchingSymbols = (path?: string) => graph.nodes.filter((node) =>
+    node.kind === "symbol" && !!key && (node.label === key || node.identity === key)
+    && (path === undefined || ownedPath(node, nodes) === path));
+  if (!paths.length) return matchingSymbols();
+  const matches = new Map<string, GraphNode>();
+  // Each path can be visible at a different level of expansion.
+  for (const path of paths) {
+    let selected = matchingSymbols(path);
+    if (!selected.length) selected = graph.nodes.filter((node) =>
+      node.kind === "file" && nodeMatchesPath(node, path));
+    if (!selected.length) {
+      const groups = graph.nodes.filter((node) => {
+        const members = node.attributes.member_files;
+        return Array.isArray(members) && members.includes(path);
+      });
+      selected = groups.filter((group) =>
+        !groups.some((candidate) =>
+          candidate.id !== group.id && hasAncestor(candidate, group.id, nodes)));
+    }
+    for (const node of selected) matches.set(node.id, node);
   }
-  if (paths.length) {
-    const files = graph.nodes.filter((node) =>
-      node.kind === "file" && paths.some((path) => nodeMatchesPath(node, path)));
-    if (files.length) return files;
-    const groups = graph.nodes.filter((node) => {
-      const members = node.attributes.member_files;
-      return Array.isArray(members) && paths.some((path) => members.includes(path));
-    });
-    return groups.filter((group) =>
-      !groups.some((candidate) =>
-        candidate.id !== group.id && hasAncestor(candidate, group.id, nodes)));
-  }
-  if (!key) return [];
-  return graph.nodes.filter((node) =>
-    node.kind === "symbol" && (node.label === key || node.identity === key));
+  return [...matches.values()];
 }
 
 function matchingEdges(

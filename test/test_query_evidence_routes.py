@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 
 
 def load_extension(path: Path) -> None:
@@ -23,7 +24,7 @@ def load_extension(path: Path) -> None:
 if len(sys.argv) > 1:
     load_extension(Path(sys.argv[1]).resolve())
 
-from archbird.native import Project, query_map_json  # noqa: E402
+from archbird.native import Project, query_map_json, query_map_markdown  # noqa: E402
 
 
 def endpoint(path: str) -> dict[str, object]:
@@ -45,7 +46,43 @@ def edge(document: dict, source: str, target: str) -> dict:
     return matches[0]
 
 
+def assert_bounded_test_witnesses() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory(dir=repository / "build") as directory:
+        root = Path(directory)
+        (root / "src").mkdir()
+        (root / "test").mkdir()
+        (root / "src/core.c").write_text(
+            "".join(f"int release_storage_helper_{i}(void) {{ return {i}; }}\n" for i in range(150)) +
+            "int collect(void) { return " + "+".join(f"release_storage_helper_{i}()" for i in range(150)) + "; }\n"
+        )
+        (root / "test/test_core.c").write_text(
+            "#define TEST(suite,name) void test_##suite##_##name(void)\n"
+            "int collect(void);\n"
+            "TEST(gc, releases_rows) { collect(); }\n"
+            "TEST(gc, unrelated) { int x = 1; }\n"
+        )
+        config = {"layers": [{"name": "c", "language": "c", "globs": ["**/*.c"]}],
+                  "tests": [{"name": "c", "language": "c", "globs": ["test/*.c"], "route_to": ["c"], "case_extractors": [
+                      {"kind": "c_macro", "call": "TEST", "selector_arguments": [0, 1], "separator": "."}]}]}
+        project = Project.from_repository(root, config=json.dumps(config).encode(), jobs=1, cache_max_bytes=0, map_cache=False)
+        mapped = project.map_json()
+        options = dict(symbols=["src/core.c:collect"], depth=1, test_depth=1)
+        query = json.loads(query_map_json(mapped, **options))
+        assert any(row["selector"] == "gc.releases_rows" and row["confidence"] == "candidate" for row in query["test_matches"])
+        bounded = query_map_markdown(mapped, **options, max_chars=5000).decode()
+        assert "gc.releases_rows" in bounded, bounded
+        assert "gc.unrelated" not in bounded
+        assert "candidate" in bounded and "test-matches=1/1" in bounded
+        assert len(bounded) <= 5000
+        zero = query_map_markdown(mapped, **options, max_chars=5000,
+                                  context={"quotas": {"test_matches": 0}}).decode()
+        assert "gc.releases_rows" not in zero
+        assert "test-matches=0/1" in zero
+
+
 def main() -> None:
+    assert_bounded_test_witnesses()
     repository = Path(__file__).resolve().parents[1]
     root = repository / "build/query-evidence-routes"
     shutil.rmtree(root, ignore_errors=True)

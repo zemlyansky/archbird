@@ -5,13 +5,65 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import hashlib
+import io
+from types import SimpleNamespace
 import shutil
 import sys
 import threading
 import time
 from pathlib import Path
 
-from archbird.serve import LiveRepository, create_live_server
+from archbird.serve import LiveRepository, create_live_server, _handler
+
+
+def assert_display_retention(repository: Path) -> None:
+    cache = LiveRepository(root=repository)
+    cache.blob_byte_limit = 10
+    snapshot = {"generation": "1" * 64, "project": "cache"}
+    request = {"method": "map", "display": {}, "params": {}, "session": None}
+    first = cache.artifact(snapshot, b"AAAAAA")
+    cache.publish_display(request, first)
+    second = cache.artifact(snapshot, b"BBBBBB")
+    assert first["blob_sha256"] in cache.blobs
+    cache.publish_display(request, second)
+    assert list(cache.blobs) == [second["blob_sha256"]], list(cache.blobs)
+    large = cache.artifact(snapshot, b"C" * 11)
+    cache.publish_display(request, large)
+    assert list(cache.blobs) == [large["blob_sha256"]]
+    assert cache.blobs[large["blob_sha256"]] == b"C" * 11
+
+
+def assert_disconnected_responses(app_root: Path) -> None:
+    activities = []
+    repository = SimpleNamespace(request=lambda _: {}, current=None,
+                                 state=lambda: {}, _activity=lambda *args: activities.append(args))
+    handler_type = _handler(repository, app_root)
+    for method in ("POST", "GET", "HEAD"):
+        for error_type in (BrokenPipeError, ConnectionResetError, None):
+            handler = object.__new__(handler_type)
+            body = b'{"method":"state"}'
+            route = "/api/v1/request" if method == "POST" else "/api/v1/bootstrap"
+            handler.rfile = io.BytesIO(f"{method} {route} HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+            handler.wfile = io.BytesIO()
+            if error_type:
+                def disconnected(_data):
+                    raise error_type("client disconnected")
+                handler.wfile.write = disconnected
+            handler._host_allowed = lambda: True
+            handler.client_address = ("127.0.0.1", 1234)
+            responses = []
+            original = handler.send_response
+            def response(status, message=None):
+                responses.append(status)
+                return original(status, message)
+            handler.send_response = response
+            handler.handle_one_request()
+            assert responses == [200], responses
+            if error_type:
+                assert handler.close_connection
+            else:
+                assert b"200 OK" in handler.wfile.getvalue()
+    assert not any(row[0] == "operation-failed" for row in activities)
 
 
 def main() -> int:
@@ -25,6 +77,8 @@ def main() -> int:
     repository = temporary / "repository"
     shutil.rmtree(temporary, ignore_errors=True)
     shutil.copytree(fixture, repository)
+    assert_display_retention(repository)
+    assert_disconnected_responses(app_root)
 
     original = LiveRepository._candidate
     release = threading.Event()

@@ -237,6 +237,7 @@ class LiveRepository {
       this.current = snapshot;
       if (changed) {
         this.display = null;
+        this.pruneBlobs();
         if (this.observedDisplay?.workspace === "live") this.observedDisplay = null;
       }
       this.retainSnapshot(snapshot);
@@ -399,18 +400,14 @@ class LiveRepository {
     this.pruneSnapshots();
   }
 
-  artifact(snapshot, bytes) {
-    const encoded = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-    const sha256 = crypto.createHash("sha256").update(encoded).digest("hex");
-    this.blobs.delete(sha256);
-    this.blobs.set(sha256, encoded);
+  pruneBlobs(preserve = null) {
     const blobBytes = () => [...this.blobs.values()]
       .reduce((total, value) => total + value.length, 0);
     while (
       this.blobs.size > 1
       && (this.blobs.size > BLOB_LIMIT || blobBytes() > this.blobByteLimit)
     ) {
-      const protectedDigests = new Set([sha256, this.pendingDisplayDigest]);
+      const protectedDigests = new Set([preserve, this.pendingDisplayDigest]);
       for (const name of ["artifact", "presentation"]) {
         protectedDigests.add(this.display?.[name]?.blob_sha256);
       }
@@ -419,6 +416,14 @@ class LiveRepository {
       if (!removable) break;
       this.blobs.delete(removable);
     }
+  }
+
+  artifact(snapshot, bytes) {
+    const encoded = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    const sha256 = crypto.createHash("sha256").update(encoded).digest("hex");
+    this.blobs.delete(sha256);
+    this.blobs.set(sha256, encoded);
+    this.pruneBlobs(sha256);
     return {
       blob_sha256: sha256,
       bytes: encoded.length,
@@ -449,19 +454,20 @@ class LiveRepository {
           view: "symbols",
         }));
       }
+      this.display = {
+        artifact: { ...result },
+        display: { ...request.display },
+        generation: result.generation,
+        method: request.method,
+        params: { ...request.params },
+        ...(presentation ? { presentation } : {}),
+        revision: ++this.displayRevision,
+        ...(request.session === null ? {} : { session: request.session }),
+      };
     } finally {
       this.pendingDisplayDigest = null;
+      this.pruneBlobs();
     }
-    this.display = {
-      artifact: { ...result },
-      display: { ...request.display },
-      generation: result.generation,
-      method: request.method,
-      params: { ...request.params },
-      ...(presentation ? { presentation } : {}),
-      revision: ++this.displayRevision,
-      ...(request.session === null ? {} : { session: request.session }),
-    };
     this.event("display-updated", this.display, result.generation, request.session);
     return this.display;
   }

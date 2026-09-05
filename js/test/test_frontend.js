@@ -1649,6 +1649,92 @@ assert.equal(fs.existsSync(foreignCacheTemporary), true);
 assert.equal(reclaimedCache.stats.temporariesRemoved, 1);
 fs.unlinkSync(legacyCacheTemporary);
 fs.unlinkSync(foreignCacheTemporary);
+function assertCacheWriteFailures() {
+  const parameters = { namespace: "fixture", project: "failure", providerId: "probe", path: "a.py", sourceSha256: "1".repeat(64) };
+  const mapParameters = { namespace: "fixture", project: "failure", manifestSha256: "2".repeat(64), configSha256: "3".repeat(64) };
+  const failures = [];
+  for (const code of ["ENOSPC", "EDQUOT"]) {
+    for (const operation of ["openSync", "writeFileSync", "fsyncSync", "renameSync"]) {
+      for (const first of ["provider", "map"]) {
+        const directory = fs.mkdtempSync(path.join(repositoryRoot, "build/cache-failure-"));
+        try {
+          const cache = new ProviderCache(directory, { maxBytes: 1000 });
+          cache.store(Buffer.from("cached"), parameters);
+          const original = fs[operation];
+          let attempts = 0;
+          fs[operation] = () => {
+            attempts += 1;
+            throw Object.assign(new Error("injected storage exhaustion"), { code });
+          };
+          try {
+            if (first === "map") cache.storeMap(Buffer.from("{}"), mapParameters);
+            else cache.store(Buffer.from("new"), parameters);
+            cache.store(Buffer.from("new"), parameters);
+            cache.storeMap(Buffer.from("{}"), mapParameters);
+          } finally {
+            fs[operation] = original;
+          }
+          if (attempts !== 1) failures.push({ code, operation, first, attempts });
+          assert.deepEqual(fs.readdirSync(directory, { recursive: true }).filter((name) => name.endsWith(".tmp")), []);
+          assert.equal(cache.load(parameters).toString(), "cached");
+          const recovered = new ProviderCache(directory, { maxBytes: 1000 });
+          recovered.store(Buffer.from("new"), parameters);
+          assert.equal(recovered.load(parameters).toString(), "new");
+        } finally {
+          fs.rmSync(directory, { force: true, recursive: true });
+        }
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+}
+assertCacheWriteFailures();
+
+function assertCacheFailureCli() {
+  const { main } = require(path.join(repositoryRoot, "js/src/cli"));
+  const directory = fs.mkdtempSync(path.join(repositoryRoot, "build/cache-cli-"));
+  const root = path.join(directory, "source");
+  fs.mkdirSync(root);
+  fs.writeFileSync(path.join(root, "a.py"), "def run(): return 1\n");
+  fs.writeFileSync(path.join(root, "b.py"), "def other(): return 2\n");
+  const failures = [];
+  let baseline;
+  try {
+    for (const area of [null, "providers-v1", "maps-v1"]) {
+      const open = fs.openSync, stdout = process.stdout.write, stderr = process.stderr.write;
+      const output = [], errors = [];
+      let attempts = 0;
+      try {
+        fs.openSync = (target, flags, ...args) => {
+          if (area && flags === "wx" && String(target).includes(`/${area}/`)) {
+            attempts += 1;
+            throw Object.assign(new Error("injected storage exhaustion"), { code: "ENOSPC", errno: -28 });
+          }
+          return open(target, flags, ...args);
+        };
+        process.stdout.write = (value) => { output.push(Buffer.from(value)); return true; };
+        process.stderr.write = (value) => { errors.push(String(value)); return true; };
+        assert.equal(main(["map", root, "--format", "json", "--progress", "never",
+          ...(area ? ["--cache-dir", path.join(directory, `cache-${area}`)] : ["--no-cache"])]), 0);
+      } finally {
+        fs.openSync = open; process.stdout.write = stdout; process.stderr.write = stderr;
+      }
+      const result = JSON.parse(Buffer.concat(output));
+      if (!area) baseline = result;
+      else {
+        assert.deepEqual(result, baseline);
+        assert.equal(attempts, 1);
+        const warning = errors.join("");
+        if ((warning.match(/archbird: warning:/g) || []).length !== 1 || !warning.includes("Use --cache-dir") || !warning.includes("--no-cache")) failures.push({ area, warning });
+      }
+    }
+    assert.deepEqual(failures, []);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+assertCacheFailureCli();
+
 const originalOpenSync = fs.openSync;
 fs.openSync = () => {
   const error = new Error("no space left on device");

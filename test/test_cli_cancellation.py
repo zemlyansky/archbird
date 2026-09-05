@@ -12,6 +12,46 @@ import sys
 import tempfile
 
 
+def assert_callback_entry_interrupt(repository: Path, fixture: Path, environment):
+    # Deliver SIGINT before the ctypes callback's first statement, where its
+    # local exception handler cannot catch Python's default signal handler.
+    probe = r"""
+import os, signal, sys
+from archbird import _native
+from archbird.cli import main
+
+fired = False
+def interrupt(frame, event, arg):
+    global fired
+    if not fired and event == 'call' and frame.f_code.co_name == '_python_cancel':
+        fired = True
+        os.kill(os.getpid(), signal.SIGINT)
+    return interrupt
+
+previous = signal.getsignal(signal.SIGINT)
+sys.settrace(interrupt)
+try:
+    result = main(['map', sys.argv[1], '--no-config', '--no-cache',
+                   '--max-file-bytes', '8000000', '--progress', 'never'])
+finally:
+    sys.settrace(None)
+assert fired, 'native cancellation callback was not reached'
+assert result == 130, result
+assert signal.getsignal(signal.SIGINT) is previous
+assert _native.json_canonicalize(b'{"ok":true}') == b'{"ok":true}'
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+assert _native.json_canonicalize(b'{}') == b'{}'
+assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", probe, str(fixture)],
+        cwd=repository, env=environment, capture_output=True, text=True, timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not completed.stdout, completed.stdout
+    assert completed.stderr == "archbird: cancelled\n", completed.stderr
+
+
 def main() -> int:
     repository = Path(sys.argv[1]).resolve()
     temporary_root = repository / "build/tmp"
@@ -28,6 +68,7 @@ def main() -> int:
             "PYTHONPATH": str(repository / "py"),
             "TMPDIR": str(temporary_root),
         }
+        assert_callback_entry_interrupt(repository, fixture, environment)
         process = subprocess.Popen(
             [
                 sys.executable,

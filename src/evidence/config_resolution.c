@@ -1533,24 +1533,23 @@ static ArchbirdStatus prefer_cpp_headers(ResolutionState *state) {
   return ARCHBIRD_INVALID_SCHEMA;
 }
 
-static int inferred_package_layer_matches(const AbValue *discovered_layer,
+static int inferred_package_layer_matches(const AbValue *layers,
+                                          const AbValue *discovered_layer,
                                           const AbValue *language) {
-  if (!discovered_layer || !language ||
-      discovered_layer->kind != AB_VALUE_STRING ||
-      language->kind != AB_VALUE_STRING)
-    return 0;
-  if (ab_value_string_is(discovered_layer, "auto-python"))
-    return ab_value_string_is(language, "python");
-  if (ab_value_string_is(discovered_layer, "auto-r"))
-    return ab_value_string_is(language, "r");
-  if (ab_value_string_is(discovered_layer, "auto-c"))
-    return ab_value_string_is(language, "c");
-  if (ab_value_string_is(discovered_layer, "auto-cpp"))
-    return ab_value_string_is(language, "cpp");
-  if (ab_value_string_is(discovered_layer, "auto-javascript"))
-    return ab_value_string_is(language, "javascript") ||
-           ab_value_string_is(language, "typescript") ||
-           ab_value_string_is(language, "vue");
+  size_t index;
+  for (index = 0; index < layers->as.array.count; index++) {
+    const AbValue *layer = &layers->as.array.items[index];
+    const AbValue *name = ab_value_member(layer, "name");
+    const AbValue *discovered_language = ab_value_member(layer, "language");
+    if (!name || !discovered_layer || !language || !discovered_language ||
+        !ab_string_equal(&name->as.text, &discovered_layer->as.text))
+      continue;
+    if (ab_value_string_is(discovered_language, "javascript"))
+      return ab_value_string_is(language, "javascript") ||
+             ab_value_string_is(language, "typescript") ||
+             ab_value_string_is(language, "vue");
+    return ab_string_equal(&discovered_language->as.text, &language->as.text);
+  }
   return 0;
 }
 
@@ -1598,10 +1597,55 @@ static ArchbirdStatus overlay_configured_layers(ResolutionState *state,
     const AbValue *name =
         ab_value_member(&defaults.as.array.items[index], "name");
     AbValue layer = {0};
-    if (effective_layer_exists(configured, name))
+    size_t configured_index;
+    /* Materialized defaults already provide the complete fallback policy. */
+    for (configured_index = 0; configured_index < configured->as.array.count;
+         configured_index++) {
+      if (ab_value_equal(&configured->as.array.items[configured_index],
+                         &defaults.as.array.items[index]))
+        break;
+    }
+    if (configured_index < configured->as.array.count)
       continue;
     status =
         ab_value_copy(state->engine, &layer, &defaults.as.array.items[index]);
+    if (status == ARCHBIRD_OK && effective_layer_exists(&combined, name)) {
+      char renamed[80];
+      size_t suffix = 2;
+      AbValue candidate = {0};
+      int length;
+      candidate.kind = AB_VALUE_STRING;
+      do {
+        length =
+            snprintf(renamed, sizeof(renamed), "%.*s-%zu",
+                     (int)name->as.text.length, name->as.text.data, suffix++);
+        if (length < 0 || (size_t)length >= sizeof(renamed)) {
+          status = ARCHBIRD_LIMIT_EXCEEDED;
+          break;
+        }
+        candidate.as.text.data = renamed;
+        candidate.as.text.length = (size_t)length;
+      } while (effective_layer_exists(&combined, &candidate));
+      if (status == ARCHBIRD_OK)
+        status = object_set_string(state->engine, &layer, "name", renamed,
+                                   (size_t)length);
+      /* Inferred package references own the generated layer, not its spelling.
+       */
+      AbObjectField *packages = mutable_member(&state->effective, "packages");
+      if (packages && !configured_map_field(state, "packages")) {
+        size_t package_index;
+        for (package_index = 0; status == ARCHBIRD_OK &&
+                                package_index < packages->value.as.array.count;
+             package_index++) {
+          AbValue *package = &packages->value.as.array.items[package_index];
+          const AbValue *package_layer = ab_value_member(package, "layer");
+          if (package_layer &&
+              ab_string_equal(&package_layer->as.text, &name->as.text))
+            status = object_set_string(state->engine, package, "layer", renamed,
+                                       (size_t)length);
+        }
+      }
+    }
     if (status == ARCHBIRD_OK)
       status = array_append(state->engine, &combined, &layer);
     ab_value_free(state->engine, &layer);
@@ -1642,7 +1686,7 @@ static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
            layer_index++) {
         const AbValue *layer = &configured_layers->as.array.items[layer_index];
         const AbValue *language = ab_value_member(layer, "language");
-        if (!inferred_package_layer_matches(discovered_layer, language))
+        if (!inferred_package_layer_matches(layers, discovered_layer, language))
           continue;
         replacement = ab_value_member(layer, "name");
         matches++;
@@ -1651,8 +1695,7 @@ static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
         status = object_set_string(state->engine, package, "layer",
                                    replacement->as.text.data,
                                    replacement->as.text.length);
-      else if (matches > 1 ||
-               !effective_layer_exists(layers, discovered_layer)) {
+      else if (!effective_layer_exists(layers, discovered_layer)) {
         ab_value_free(state->engine, package);
         continue;
       }
@@ -3095,7 +3138,7 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
         buffer, &first, "layers", index, source,
         name && name->kind == AB_VALUE_STRING ? &name->as.text : NULL);
     if (status == ARCHBIRD_OK && !strcmp(source, "discovery") &&
-        ab_value_string_is(name, "auto-python")) {
+        ab_value_string_is(ab_value_member(layer, "language"), "python")) {
       const AbValue *roots = ab_value_member(layer, "import_roots");
       size_t root_index;
       for (root_index = 0;

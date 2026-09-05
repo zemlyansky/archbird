@@ -115,3 +115,32 @@ test("Path status states the result once", () => {
     outcome: "found",
   });
 });
+
+
+test("upstream and mixed Path traversal preserve canonical relation direction", () => {
+  for (const traversals of [["reverse"], ["reverse", "forward"]]) {
+    const identities = ["file:a.js", "file:b.js", "file:c.js"].slice(0, traversals.length + 1);
+    const graph = pathGraphFromArtifact({
+      artifact: "path", outcome: "unknown", graph: { classification: "incomplete" },
+      paths: [{
+        nodes: identities, state: "unknown",
+        steps: traversals.map((traversal, index) => ({
+          traversal,
+          relation: {
+            key: `relation:${index}`, state: "unknown",
+            attributes: {
+              source: identities[traversal === "reverse" ? index + 1 : index],
+              target: identities[traversal === "reverse" ? index : index + 1],
+              relation_kind: "import", resolution: "candidate",
+            },
+          },
+        })),
+      }],
+    });
+    assert.deepEqual(graph.edges.map((edge) => [edge.source, edge.target]),
+      traversals.map((traversal, index) => traversal === "reverse"
+        ? [identities[index + 1], identities[index]] : [identities[index], identities[index + 1]]));
+    assert.deepEqual(graph.edges.map((edge) => edge.attributes?.path_traversal), traversals);
+    assert.ok(graph.edges.every((edge) => edge.classification === "unresolved"));
+  }
+});

@@ -60,10 +60,28 @@ async function artifact(server, method, payload = {}, options = {}) {
   return { bytes, descriptor };
 }
 
+function assertDisplayRetention(root) {
+  const cache = new LiveRepository({ root });
+  cache.blobByteLimit = 10;
+  const snapshot = { generation: "1".repeat(64), project: "cache" };
+  const request = { method: "map", display: {}, params: {}, session: null };
+  const first = cache.artifact(snapshot, Buffer.from("AAAAAA"));
+  cache.publishDisplay(request, first);
+  const second = cache.artifact(snapshot, Buffer.from("BBBBBB"));
+  assert.ok(cache.blobs.has(first.blob_sha256));
+  cache.publishDisplay(request, second);
+  assert.deepEqual([...cache.blobs.keys()], [second.blob_sha256]);
+  const large = cache.artifact(snapshot, Buffer.alloc(11, "C"));
+  cache.publishDisplay(request, large);
+  assert.deepEqual([...cache.blobs.keys()], [large.blob_sha256]);
+  assert.equal(cache.blobs.get(large.blob_sha256).length, 11);
+}
+
 async function main() {
   fs.rmSync(temporaryRoot, { force: true, recursive: true });
   fs.mkdirSync(temporaryRoot, { recursive: true });
   fs.cpSync(fixtureRoot, repositoryRoot, { recursive: true });
+  assertDisplayRetention(repositoryRoot);
   const candidate = LiveRepository.prototype.candidate;
   let candidateCalls = 0;
   LiveRepository.prototype.candidate = async function delayedCandidate() {

@@ -218,6 +218,8 @@ class _MapCacheWriter:
         self._stream: BinaryIO | None = None
         self._temporary: Path | None = None
         self._size = 0
+        if cache._writes_disabled:
+            return
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             stream = tempfile.NamedTemporaryFile(
@@ -236,6 +238,7 @@ class _MapCacheWriter:
         self._cache.map_stats.error_errno = error.errno or 0
         if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)}:
             self._cache.map_stats.no_space += 1
+            self._cache._writes_disabled = True
 
     def _discard(self) -> None:
         stream, self._stream = self._stream, None
@@ -261,6 +264,9 @@ class _MapCacheWriter:
         stream = self._stream
         if stream is None:
             return len(data)
+        if self._cache._writes_disabled:
+            self._discard()
+            return len(data)
         if self._size + len(data) > self._cache.max_bytes:
             self._cache.map_stats.skipped += 1
             self._discard()
@@ -282,6 +288,9 @@ class _MapCacheWriter:
         self._discard()
 
     def commit(self) -> None:
+        if self._cache._writes_disabled:
+            self._discard()
+            return
         stream = self._stream
         temporary = self._temporary
         if stream is None or temporary is None:
@@ -317,6 +326,8 @@ class ProviderCache:
     def __init__(
         self, root: Path | str, *, max_bytes: int | None = None
     ) -> None:
+        # Exhaustion disables writes for this operation; reads remain useful.
+        self._writes_disabled = False
         self.root = Path(root).expanduser()
         if max_bytes is None:
             self.max_bytes = default_provider_cache_max_bytes()
@@ -493,6 +504,8 @@ class ProviderCache:
         source_sha256: str,
     ) -> None:
         self.stats.attempted_bytes = max(self.stats.attempted_bytes, len(data))
+        if self._writes_disabled:
+            return
         target = self._path(
             namespace=namespace,
             project=project,
@@ -519,10 +532,10 @@ class ProviderCache:
                 suffix=".tmp",
                 delete=False,
             ) as temporary:
+                temporary_name = temporary.name
                 temporary.write(data)
                 temporary.flush()
                 os.fsync(temporary.fileno())
-                temporary_name = temporary.name
             os.replace(temporary_name, target)
             metadata = target.stat()
             self.stats.bytes += metadata.st_size - previous_size
@@ -533,12 +546,15 @@ class ProviderCache:
             self.stats.error_errno = error.errno or 0
             if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)}:
                 self.stats.no_space += 1
+                self._writes_disabled = True
         finally:
             if temporary_name:
                 try:
                     Path(temporary_name).unlink()
                 except FileNotFoundError:
                     pass
+                except OSError:
+                    self.stats.errors += 1
 
     def store_map(
         self,
@@ -552,6 +568,8 @@ class ProviderCache:
         self.map_stats.attempted_bytes = max(
             self.map_stats.attempted_bytes, len(data)
         )
+        if self._writes_disabled:
+            return
         if len(data) > self.max_bytes:
             self.map_stats.skipped += 1
             return

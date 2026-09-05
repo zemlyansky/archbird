@@ -14,6 +14,8 @@ const mode = process.argv[5] || "matrix";
 let outputs;
 if (mode === "default") {
   outputs = [resolveDiscovery(fixture)];
+} else if (mode === "configuration") {
+  outputs = [resolveDiscovery(fixture, { config: require("node:fs").readFileSync(0) })];
 } else if (mode === "authored") {
   outputs = [resolveDiscovery(fixture, {
     config: Buffer.from(JSON.stringify({

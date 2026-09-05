@@ -9,6 +9,8 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import subprocess
+import tempfile
 
 
 def load_extension(path: Path):
@@ -97,6 +99,41 @@ def expect_error(function, *args) -> None:
     raise AssertionError("invalid freshness input was accepted")
 
 
+def assert_supporting_input_freshness() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    failures = []
+    for command in ([sys.executable, "-m", "archbird"], ["node", str(repository / "js/src/cli.js")]):
+        with tempfile.TemporaryDirectory(dir=repository / "build") as directory:
+            root = Path(directory) / "repository"
+            root.mkdir()
+            source = root / "main.py"
+            source.write_text("def run(): return 1\n")
+            manifest = root / "pyproject.toml"
+            manifest.write_text('[project]\nname="freshness-probe"\nversion="1"\n')
+            snapshot = Path(directory) / "map.json"
+            def run(*arguments):
+                result = subprocess.run([*command, *arguments, "--progress", "never"], capture_output=True)
+                assert result.returncode == 0, result.stderr.decode()
+                return json.loads(result.stdout)
+            snapshot.write_text(json.dumps(run("map", str(root), "--format", "json", "--no-cache")))
+            def freshness():
+                return run("freshness", "--root", str(root), "--snapshot", str(snapshot))
+            unchanged = freshness()
+            if unchanged["files"]["added"] or unchanged["status"] != "current":
+                failures.append((command[0], "unchanged", unchanged["files"]))
+            manifest.write_text(manifest.read_text() + "# support input changed\n")
+            drift = freshness()
+            if drift["comparisons"]["source"] != "changed" or not drift["files"]["unattributed_input_drift"]:
+                failures.append((command[0], "support input drift", drift["files"]))
+            added = root / "added.py"
+            added.write_text("def added(): return 2\n")
+            source.unlink()
+            delta = freshness()["files"]
+            if delta["added"] != ["added.py"] or delta["missing"] != ["main.py"]:
+                failures.append((command[0], "mapped delta", delta))
+    assert not failures, failures
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: test_freshness.py EXTENSION")
@@ -129,6 +166,10 @@ def main() -> int:
         raise AssertionError(current["files"])
     if json.loads(extension.map_freshness(encoded, encoded, pretty=True)) != current:
         raise AssertionError("pretty freshness changed artifact semantics")
+
+    support_drift = json.loads(extension.map_freshness(
+        encoded, canonical(map_document(input_sha256="9" * 64))))
+    assert support_drift["files"]["unattributed_input_drift"], support_drift
 
     policy, policy_sha256 = discovery_policy()
     scoped_before = copy.deepcopy(snapshot)

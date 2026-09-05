@@ -12,6 +12,8 @@ import ctypes
 import ctypes.util
 import os
 from pathlib import Path
+import signal
+import threading
 from typing import Callable, Iterable, Optional, Sequence
 
 
@@ -52,12 +54,18 @@ _CANCEL = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
 _pyerr_check_signals = ctypes.pythonapi.PyErr_CheckSignals
 _pyerr_check_signals.argtypes = []
 _pyerr_check_signals.restype = ctypes.c_int
+_cancel_requested = False
+
+
+def _defer_sigint(_signum, _frame) -> None:
+    global _cancel_requested
+    _cancel_requested = True
 
 
 @_CANCEL
 def _python_cancel(_user_data) -> int:
     try:
-        return int(_pyerr_check_signals() != 0)
+        return int(_cancel_requested or _pyerr_check_signals() != 0)
     except KeyboardInterrupt:
         return 1
 
@@ -84,11 +92,7 @@ def _load_library() -> ctypes.CDLL:
             failures.append(f"{path}: missing")
             continue
         try:
-            # Match the compiled CPython binding: keep the GIL while native
-            # work polls PyErr_CheckSignals through the cancellation callback.
-            # CDLL releases it, allowing SIGINT to raise while ctypes is only
-            # entering the callback; ctypes then reports and swallows the
-            # exception instead of returning ARCHBIRD_CANCELLED.
+            # Native callbacks use the Python C API and require the GIL.
             return ctypes.PyDLL(path)
         except OSError as error:
             failures.append(f"{path}: {error}")
@@ -243,7 +247,28 @@ def _declare(name: str, arguments: Sequence[object], result=ctypes.c_int):
     function = getattr(_lib, name)
     function.argtypes = list(arguments)
     function.restype = result
-    return function
+
+    def call(*args):
+        global _cancel_requested
+        if (
+            threading.current_thread() is not threading.main_thread()
+            or signal.getsignal(signal.SIGINT) is not signal.default_int_handler
+        ):
+            return function(*args)
+        # SIGINT can run before a ctypes callback enters its try block. Defer
+        # the default exception until C unwinds; nested calls share this flag.
+        # Preserve callers' custom handlers and background-thread behavior.
+        previous = signal.signal(signal.SIGINT, _defer_sigint)
+        try:
+            return function(*args)
+        finally:
+            cancelled = _cancel_requested
+            _cancel_requested = False
+            signal.signal(signal.SIGINT, previous)
+            if cancelled:
+                raise KeyboardInterrupt
+
+    return call
 
 
 _engine_create = _declare(

@@ -2599,6 +2599,60 @@ def _assert_partial_configuration_overlay() -> None:
     assert json.loads(completed.stdout)["constraints"][0]["status"] == "pass"
 
 
+def _assert_layer_fallback_provenance() -> None:
+    root = ROOT / "build/layer-fallback-provenance"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "a.py").write_text("import requests\ndef run(): return requests.get('https://example.invalid')\n")
+    (root / "b.py").write_text("def other(): return 2\n")
+    (root / "history.py").write_text("def record(): return []\n")
+    (root / "pyproject.toml").write_text(
+        '[project]\nname="layer-probe"\nversion="1"\ndependencies=["requests"]\n'
+    )
+
+    def mapped(layers):
+        project = Project.from_repository(
+            root, config=json.dumps({"layers": layers}).encode(),
+            jobs=1, cache_max_bytes=0, map_cache=False,
+        )
+        return project, json.loads(project.map_json())
+
+    def layer(name, glob):
+        return {"name": name, "language": "python", "globs": [glob]}
+
+    failures = []
+    for layers, fallback, overlap in [
+        ([layer("auto-python", "a.py")], "auto-python-2", False),
+        ([layer("auto-python", "a.py"), layer("auto-python-2", "b.py")], "auto-python-3", False),
+        ([layer("first", "a.py"), layer("second", "b.py")], "auto-python", False),
+        ([layer("first", "a.py"), layer("auto-python", "a.py")], "auto-python-2", True),
+    ]:
+        project, document = mapped(layers)
+        actual = {row["path"]: row["layer"] for row in document["files"]}
+        expected = {"a.py": layers[0]["name"], "b.py": fallback, "history.py": fallback}
+        if layers[-1]["globs"] == ["b.py"]:
+            expected["b.py"] = layers[-1]["name"]
+        if actual != expected:
+            failures.append(("file classification", layers, actual, expected))
+        expected_package_layer = layers[0]["name"] if len(layers) == 1 else fallback
+        if [(row["name"], row["layer"]) for row in document["packages"]] != [("python-root", expected_package_layer)]:
+            failures.append(("manifest package lost or rebound", layers, document["packages"]))
+        codes = [row["code"] for row in document["diagnostics"]]
+        if ("overlapping-layers" in codes) != overlap:
+            failures.append(("authored overlap", layers, codes))
+        if "unresolved-import" in codes:
+            failures.append(("manifest dependency lost", layers, codes))
+        origins = json.loads(project.resolution_json)["origins"]
+        if not any(row["source"] == "discovery" and row.get("evidence") == [fallback] for row in origins):
+            failures.append(("fallback provenance", layers, fallback))
+    assert not failures, failures
+
+    # Without resolution provenance even an auto-named layer is authored.
+    direct = Project("direct", [Source("a.py", b"def run(): return 1\n", language="python", layer="first")])
+    direct.set_config(json.dumps({"project": "direct", "layers": [layer("first", "a.py"), layer("auto-python", "a.py")]}).encode())
+    direct.scan(jobs=1, cache_max_bytes=0, map_cache=False)
+    assert any(row["code"] == "overlapping-layers" for row in json.loads(direct.map_json())["diagnostics"])
+
+
 def _assert_invalid_projection(
     map_document: dict[str, object], definition: dict[str, object]
 ) -> None:
@@ -3324,6 +3378,7 @@ def main() -> None:
     _assert_import_resolution_soundness()
     _assert_projection_markdown_explainability()
     _assert_partial_configuration_overlay()
+    _assert_layer_fallback_provenance()
     _assert_symbol_occurrence_projection()
     _assert_ordered_container_facts()
     project_model = json.loads((ROOT / "archbird.json").read_text())
