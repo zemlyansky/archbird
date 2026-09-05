@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watchEffect } from "vue";
+import { computed, ref } from "vue";
 import MetricBoxPlot from "./MetricBoxPlot.vue";
 import type { GraphView } from "../artifacts/model";
 import type { ProjectionResult } from "../artifacts/projection";
@@ -23,7 +23,6 @@ const props = defineProps<{
   selectedId: string | null;
 }>();
 const emit = defineEmits<{
-  load: [metric: MetricId];
   overlay: [metric: MetricId | null];
   query: [path: string, symbol: string | null];
   scope: [scope: MetricScopeMode];
@@ -31,14 +30,6 @@ const emit = defineEmits<{
 
 const focused = ref<ReadonlyMap<MetricId, string>>(new Map());
 const expanded = ref<ReadonlySet<MetricId>>(new Set());
-watchEffect(() => {
-  // Only open metrics request exhaustive evidence; cache resets follow a new Map.
-  for (const metric of expanded.value) {
-    if (!props.projections.has(metric) && !props.loading.has(metric) && !props.errors.has(metric)) {
-      emit("load", metric);
-    }
-  }
-});
 const summaries = computed(() => new Map(
   METRIC_DEFINITIONS.flatMap((definition) => {
     const projection = props.projections.get(definition.id);
@@ -71,7 +62,7 @@ function headline(metric: MetricId): string {
   const metricSummary = summary(metric)?.summary;
   if (!metricSummary) {
     if (props.loading.has(metric)) return "loading";
-    return props.errors.has(metric) ? "error" : "Expand to measure";
+    return props.errors.has(metric) ? "error" : "unavailable";
   }
   if (!metricSummary.population) return "no values";
   if (metricSummary.knownMaximumLowerBound !== null) {
@@ -168,7 +159,7 @@ function unit(definition: MetricDefinition, count: number): string {
       </div>
     </header>
     <p class="metrics-intro">
-      Expand a metric to load its distribution, contributors and evidence.
+      Expand a metric for contributors and exact evidence.
     </p>
 
     <section
@@ -211,7 +202,6 @@ function unit(definition: MetricDefinition, count: number): string {
         </p>
         <p v-else-if="errors.get(definition.id)" class="metrics-state metrics-error">
           {{ errors.get(definition.id) }}
-          <button type="button" @click="emit('load', definition.id)">Retry</button>
         </p>
         <template v-else-if="summary(definition.id)">
           <dl class="metric-facts">

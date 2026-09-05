@@ -1,9 +1,8 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createApp, h, nextTick, shallowReactive, type App as VueApp } from "vue";
-import type { GraphView, ParsedArtifact } from "../src/artifacts/model";
-import type { MetricId } from "../src/graph/metrics";
+import { createApp, nextTick, type App as VueApp } from "vue";
+import type { ParsedArtifact } from "../src/artifacts/model";
 import ArtifactDrop from "../src/components/ArtifactDrop.vue";
 import ConstraintPanel from "../src/components/ConstraintPanel.vue";
 import DocumentPanel from "../src/components/DocumentPanel.vue";
@@ -50,52 +49,6 @@ afterEach(() => {
 });
 
 describe("artifact workspaces", () => {
-  it("requests only expanded metrics, deduplicates pending work, and retries explicitly", async () => {
-    const state = shallowReactive({
-      errors: new Map<MetricId, string>(),
-      graph: {
-        artifact: "archbird-graph-view", schema_version: 1, project: "metrics",
-        source: {}, tool: {}, request: { view: "files", max_nodes: 0, max_edge_names: 0 },
-        nodes: [], edges: [], summary: { nodes: 0, edges: 0 }, omissions: [], diagnostics: [],
-      } satisfies GraphView,
-      loading: new Set<MetricId>(),
-      overlay: null,
-      projections: new Map(),
-      scope: "project" as const,
-      selectedId: null,
-    });
-    const load = vi.fn((metric: MetricId) => {
-      state.loading = new Set(state.loading).add(metric);
-    });
-    const root = mount({ render: () => h(MetricsPanel, { ...state, onLoad: load }) }, {});
-    await nextTick();
-    expect(load).not.toHaveBeenCalled();
-    const metric = root.querySelector('[data-metric="source.cyclomatic_complexity"]')!;
-    const toggle = metric.querySelector(".metric-summary") as HTMLButtonElement;
-    toggle.click();
-    await nextTick();
-    expect(load.mock.calls).toEqual([["source.cyclomatic_complexity"]]);
-    toggle.click();
-    await nextTick();
-    toggle.click();
-    await nextTick();
-    expect(load).toHaveBeenCalledTimes(1);
-    state.errors = new Map([["source.cyclomatic_complexity", "metric probe failed"]]);
-    state.loading = new Set();
-    await nextTick();
-    expect(load).toHaveBeenCalledTimes(1);
-    const retry = [...metric.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
-    retry.click();
-    await nextTick();
-    expect(load).toHaveBeenCalledTimes(2);
-    // A new Map clears results/errors; an open metric follows the new generation.
-    state.errors = new Map();
-    state.loading = new Set();
-    state.projections = new Map();
-    await nextTick();
-    expect(load).toHaveBeenCalledTimes(3);
-  });
-
   it("selects source spans by UTF-8 byte offsets", () => {
     expect(sourceSegments(
       { encoding: "utf-8", path: "src/api.py", text: "aλdocz" },
