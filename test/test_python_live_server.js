@@ -20,7 +20,6 @@ const appRoot = path.resolve(process.argv[4]);
 const packagedApp = process.argv[4] === "-";
 const temporaryRoot = path.resolve(process.argv[5]);
 const repositoryRoot = path.join(temporaryRoot, "repository");
-let nextId = 0;
 
 async function waitFor(predicate, label, timeout = 30_000) {
   const deadline = Date.now() + timeout;
@@ -31,13 +30,12 @@ async function waitFor(predicate, label, timeout = 30_000) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function request(url, method, payload = {}, expected = 200) {
+async function request(url, method, params = {}, expected = 200, options = {}) {
   const envelope = {
-    id: `python-${++nextId}`,
     method,
-    payload,
-    protocol_version: 1,
-    session: "python-test",
+    params,
+    ...(options.display === undefined ? {} : { display: options.display }),
+    ...(options.session === undefined ? {} : { session: options.session }),
   };
   const response = await fetch(new URL("api/v1/request", url), {
     body: JSON.stringify(envelope),
@@ -46,8 +44,8 @@ async function request(url, method, payload = {}, expected = 200) {
   });
   assert.equal(response.status, expected);
   const value = await response.json();
-  assert.equal(value.id, envelope.id);
-  assert.equal(value.session, envelope.session);
+  assert.equal("id" in value, false);
+  assert.equal(value.session, options.session);
   assert.equal(value.ok, expected === 200);
   return value;
 }
@@ -112,10 +110,9 @@ async function main() {
     assert.doesNotMatch(appDocument, /<meta name="archbird-host" content="static"/);
 
     const firstBootstrap = await (await fetch(new URL("api/v1/bootstrap", url))).json();
-    assert.equal(firstBootstrap.protocol_version, 1);
+    assert.equal(firstBootstrap.protocol_version, 2);
     assert.deepEqual(firstBootstrap.capabilities, [
-      "map", "projection", "projections", "view", "export", "query", "diff", "source",
-      "verification", "snapshots", "events",
+      "map", "query", "path", "diff", "verify", "state", "display", "events",
     ]);
     assert.match(firstBootstrap.phase, /^(waiting|analyzing|ready)$/);
     await waitFor(async () => {
@@ -133,7 +130,66 @@ async function main() {
       initialMap.schema_version,
     );
     assert.equal(initial.descriptor.generation, initialMap.evidence.input_sha256);
-    const verification = JSON.parse((await artifact(url, "verification")).bytes);
+    const observedDisplay = {
+      artifact: "map",
+      expanded: { files: [], groups: [], omitted: 0, symbols: [] },
+      generation: initial.descriptor.generation,
+      graph: {
+        direction: "LR",
+        edge_classification: "all",
+        edge_flow: "flow",
+        edge_kind: "all",
+        edges: 2,
+        group_by: "directory",
+        layout: "flow",
+        nodes: 3,
+        notation: "architecture",
+        perspective: "overview",
+        view: "components",
+      },
+      hidden: { ids: [], omitted: 0 },
+      history_depth: 0,
+      selected: {
+        id: "file:js/index.js",
+        identity: "js/index.js",
+        kind: "file",
+        label: "index.js",
+        path: "js/index.js",
+      },
+      selected_constraint: null,
+      source: null,
+      workspace: "live",
+    };
+    const observedState = (await request(
+      url,
+      "state",
+      { observed_display: observedDisplay },
+      200,
+      { session: "python-browser" },
+    )).result;
+    assert.deepEqual(observedState.observed_display, {
+      ...observedDisplay,
+      revision: 1,
+      session: "python-browser",
+    });
+    assert.deepEqual(
+      (await request(url, "state")).result.observed_display,
+      observedState.observed_display,
+    );
+    const incompleteObservation = { ...observedDisplay };
+    delete incompleteObservation.selected;
+    assert.match((await request(
+      url,
+      "state",
+      { observed_display: incompleteObservation },
+      400,
+      { session: "python-browser" },
+    )).error.message, /selected/);
+    assert.deepEqual(
+      (await request(url, "state")).result.observed_display,
+      observedState.observed_display,
+    );
+    const verification = JSON.parse((await artifact(url, "verify")).bytes);
     assert.equal(verification.artifact, "verification");
     assert.equal(verification.policy.project, "map-base");
     const membership = JSON.parse((await artifact(url, "projection", {
@@ -160,9 +216,31 @@ async function main() {
       "Fixture arithmetic module.",
     );
     const query = JSON.parse((await artifact(url, "query", {
-      query: { depth: 0, symbols: ["add"], test_depth: 0 },
+      depth: 0, symbols: ["add"], test_depth: 0,
     })).bytes);
     assert.equal(query.artifact, "query");
+    const connection = JSON.parse((await artifact(url, "path", {
+      direction: "downstream",
+      relations: ["imports"],
+      source: { kind: "file", patterns: ["py/pkg/__init__.py"] },
+      target: { kind: "file", patterns: ["py/pkg/api.py"] },
+    })).bytes);
+    assert.equal(connection.artifact, "path");
+    assert.equal(connection.outcome, "found");
+    const displayed = await request(
+      url,
+      "query",
+      { depth: 0, symbols: ["add"], test_depth: 0 },
+      200,
+      { display: {}, session: "python-agent" },
+    );
+    const displayState = (await request(url, "state")).result.display;
+    assert.equal(displayState.revision, 1);
+    assert.equal(displayState.session, "python-agent");
+    assert.equal(displayState.artifact.blob_sha256, displayed.result.blob_sha256);
+    assert.match(displayState.presentation.blob_sha256, /^[0-9a-f]{64}$/);
+    await request(url, "query", { depth: 0, symbols: ["add"], test_depth: 0 });
+    assert.equal((await request(url, "state")).result.display.revision, 1);
     const source = await request(url, "source", { path: "js/index.js" });
     assert.match(source.result.text, /export function add/);
     assert.match((await request(url, "source", { path: "../outside" }, 400)).error.message, /escapes repository root/);
@@ -186,6 +264,16 @@ async function main() {
       currentGeneration = current.result.generation;
       return currentGeneration !== initialGeneration;
     }, "Python live generation");
+    assert.equal(
+      (await request(url, "state")).result.display,
+      null,
+      "stale display survived a new source generation",
+    );
+    assert.equal(
+      (await request(url, "state")).result.observed_display,
+      null,
+      "stale browser observation survived a new source generation",
+    );
     const snapshots = await request(url, "snapshots");
     assert.equal(snapshots.result.length, 2);
     assert.ok(snapshots.result.every(

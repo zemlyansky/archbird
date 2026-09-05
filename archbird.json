@@ -1,7 +1,7 @@
 {
   "project": "archbird",
   "description": "Language-neutral C core with Python, Node, and Wasm hosts.",
-  "exclude": ["build/**", "py/build/**", "py/dist/**", "py/csrc/**", "js/native/**", "js/node_modules/**"],
+  "exclude": ["build/**", "py/build/**", "py/dist/**", "py/csrc/**", "js/native/**", "js/node_modules/**", "temp/**", "test/fixtures/**", "vendor/**/.github/**", "vendor/**/bindings/**", "vendor/**/doc/**", "vendor/**/docs/**", "vendor/**/examples/**", "vendor/**/test/**", "vendor/**/tests/**", "vendor/**/define-grammar.js", "vendor/**/eslint.config.mjs", "vendor/**/grammar.js", "vendor/**/setup.py", "vendor/pcre2/deps/**", "vendor/pcre2/maint/**", "vendor/pcre2/vms/**", "vendor/tree-sitter/crates/**", "vendor/tree-sitter/lib/binding_web/**", "vendor/tree-sitter/lib/lldb_pretty_printers/**", "vendor/yyjson/fuzz/**", "vendor/yyjson/misc/**"],
   "limits": {
     "max_file_bytes": 20000000,
     "max_index_bytes": 536870912
@@ -46,6 +46,33 @@
       ]
     },
     {
+      "name": "browser-app-typescript",
+      "role": "frontend",
+      "language": "typescript",
+      "globs": ["app/**/*.ts"],
+      "import_roots": ["app/src"]
+    },
+    {
+      "name": "browser-app-vue",
+      "role": "frontend",
+      "language": "vue",
+      "globs": ["app/**/*.vue"],
+      "import_roots": ["app/src"]
+    },
+    {
+      "name": "browser-app-javascript",
+      "role": "build",
+      "language": "javascript",
+      "globs": ["app/**/*.js", "app/**/*.mjs"],
+      "import_roots": ["app"]
+    },
+    {
+      "name": "browser-app-assets",
+      "role": "asset",
+      "language": "text",
+      "globs": ["app/**/*.css"]
+    },
+    {
       "name": "json-parser",
       "role": "vendor",
       "language": "c",
@@ -57,6 +84,7 @@
       "role": "vendor",
       "language": "c",
       "globs": [
+        "vendor/pcre2/src/**",
         "vendor/pcre2/src/config.h.generic",
         "vendor/pcre2/src/pcre2.h.generic",
         "vendor/pcre2/src/pcre2_auto_possess.c",
@@ -180,7 +208,7 @@
       "name": "build",
       "role": "build",
       "language": "text",
-      "globs": ["CMakeLists.txt", "Makefile", "cmake/*.in", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/*.py", "js/package.json", "js/package-lock.json", "js/scripts/*.js"]
+      "globs": ["CMakeLists.txt", "Makefile", "cmake/*.in", "test/*.cmake", "test/cmake_consumer/CMakeLists.txt", "py/setup.py", "py/pyproject.toml", "py/MANIFEST.in", "py/scripts/*.py", "js/package.json", "js/package-lock.json", "js/scripts/*.js", "js/scripts/*.py"]
     },
     {
       "name": "documentation",
@@ -300,6 +328,7 @@
     {"name": "bindings", "paths": ["bindings/**"], "description": "CPython and Node-API ABI adapters"},
     {"name": "python-host", "paths": ["py/archbird/**"], "description": "PyPI host and Python precision providers"},
     {"name": "javascript-host", "paths": ["js/src/**"], "description": "npm host and TypeScript precision provider"},
+    {"name": "browser-app", "paths": ["app/**"], "description": "offline and live repository visualization"},
     {"name": "json-parser", "paths": ["vendor/yyjson/src/**"], "description": "Pinned strict JSON parser"},
     {"name": "regex-engine", "paths": ["vendor/pcre2/src/**"], "description": "Pinned portable configured-pattern engine"},
     {"name": "syntax-vendor", "paths": ["vendor/tree-sitter/lib/**", "vendor/tree-sitter-c/src/**", "vendor/tree-sitter-cpp/src/**", "vendor/tree-sitter-python/src/**", "vendor/tree-sitter-javascript/src/**", "vendor/tree-sitter-typescript/common/**", "vendor/tree-sitter-typescript/typescript/src/**", "vendor/tree-sitter-typescript/tsx/src/**", "vendor/tree-sitter-r/src/**"], "description": "Pinned Tree-sitter runtime and generated language grammars"},
@@ -574,6 +603,16 @@
             "source": "base",
             "kind": "*",
             "target": "regex-engine"
+          },
+          {
+            "source": "browser-app",
+            "kind": "*",
+            "target": "build"
+          },
+          {
+            "source": "browser-app",
+            "kind": "*",
+            "target": "javascript-host"
           },
           {
             "source": "bindings",

@@ -171,6 +171,33 @@ async function waitForInitialMap(page, timeout = 30_000) {
   ]);
 }
 
+async function agentRequest(url, method, params, display) {
+  const response = await fetch(new URL("api/v1/request", url), {
+    body: JSON.stringify({
+      method,
+      params,
+      ...(display === undefined ? {} : { display }),
+    }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) {
+    throw new Error(`agent request failed: ${result.error?.message || response.status}`);
+  }
+  return result;
+}
+
+async function waitForObservedDisplay(url, predicate, timeout = 10_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const state = (await agentRequest(url, "state", {})).result?.observed_display;
+    if (state && predicate(state)) return state;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("browser-observed display state did not become current");
+}
+
 async function expectSelectedDocumentation(page, label, text) {
   await page.locator(".inspector h2").getByText(label, { exact: true }).waitFor();
   await page.getByText("Documentation · jsdoc", { exact: true }).waitFor();
@@ -438,6 +465,86 @@ async function main() {
       [...document.querySelectorAll(".metric-summary-value")]
         .every((node) => node.textContent !== "loading"),
     undefined, { timeout: 30_000 });
+    await agentRequest(server.url, "query", {
+      depth: 0,
+      symbols: ["add"],
+      test_depth: 0,
+    });
+    if (!await page.locator(".artifact-meta small").textContent()
+      .then((value) => value?.includes("map ·"))) {
+      throw new Error("private agent Query changed the browser display");
+    }
+    await agentRequest(server.url, "query", {
+      depth: 0,
+      symbols: ["add"],
+      test_depth: 0,
+    }, {});
+    await page.waitForFunction(
+      () => document.querySelector(".artifact-meta small")?.textContent?.includes("query ·"),
+      undefined,
+      { timeout: 10_000 },
+    );
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.querySelector(".artifact-meta small")?.textContent?.includes("query ·"),
+      undefined,
+      { timeout: 30_000 },
+    );
+    await page.getByRole("button", { name: "Back to previous graph", exact: true })
+      .click();
+    await page.waitForFunction(
+      () => document.querySelector(".artifact-meta small")?.textContent?.includes("map ·"),
+      undefined,
+      { timeout: 10_000 },
+    );
+    await agentRequest(server.url, "map", {}, {
+      group_by: "language",
+      view: "architecture",
+    });
+    await page.locator(
+      '.graph-canvas[data-map-view="architecture"][data-group-by="language"]'
+        + '[data-layout-ready="true"]',
+    ).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Back to previous graph", exact: true })
+      .click();
+    await page.locator(
+      '.graph-canvas[data-map-view="overview"][data-group-by="directory"]'
+        + '[data-layout-ready="true"]',
+    ).waitFor({ timeout: 10_000 });
+    await agentRequest(server.url, "query", {
+      depth: 0,
+      symbols: ["js/index.js:add"],
+      test_depth: 0,
+    }, { view: "source" });
+    await page.locator(".inspector h2").getByText("add", { exact: true })
+      .waitFor({ timeout: 10_000 });
+    await page.getByText("Source · utf-8", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Back to previous graph", exact: true })
+      .click();
+    await agentRequest(server.url, "path", {
+      direction: "downstream",
+      level: "symbol",
+      max_depth: 2,
+      max_paths: 2,
+      relations: ["calls"],
+      source: { kind: "symbol", patterns: ["twice"] },
+      target: { kind: "symbol", patterns: ["add"] },
+    }, {});
+    await page.waitForFunction(
+      () => document.querySelector(".artifact-meta small")?.textContent?.includes("path ·"),
+      undefined,
+      { timeout: 10_000 },
+    );
+    const pathCanvas = page.locator('.graph-canvas[data-layout-ready="true"]');
+    await pathCanvas.waitFor({ timeout: 10_000 });
+    await page.getByText("Path · found", { exact: true }).waitFor();
+    if (Number(await pathCanvas.getAttribute("data-node-count")) < 2
+        || Number(await pathCanvas.getAttribute("data-edge-count")) < 1) {
+      throw new Error("published Path did not render its witness graph");
+    }
+    await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+    await page.locator('.graph-canvas[data-layout-ready="true"]')
+      .waitFor({ timeout: 10_000 });
     await expectEntitySearch(page);
     if (insecureOrigin) {
       const security = await page.evaluate(() => ({
@@ -475,9 +582,8 @@ async function main() {
                   code: "injected-projection-failure",
                   message: "injected projection evaluation failure",
                 },
-                id: envelope.id,
                 ok: false,
-                protocol_version: 1,
+                protocol_version: 2,
                 session: envelope.session,
               }),
               contentType: "application/json",
@@ -577,6 +683,14 @@ async function main() {
     await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
     await openEntitySearchResult(page, "Add two values", "add");
     await expectDocumentedAdd(page);
+    const observed = await waitForObservedDisplay(
+      server.url,
+      (state) => state.selected?.label === "add" && state.graph?.view === "symbols",
+    );
+    if (observed.selected.identity !== 'symbol:["js/index.js","add"]'
+        || observed.selected.path !== "js/index.js") {
+      throw new Error(`browser selection context is incomplete: ${JSON.stringify(observed)}`);
+    }
     await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
     await openEntitySearchResult(page, "js/index.js", "js/index.js");
     await page.getByRole("button", { name: "Open js/index.js", exact: true }).click();

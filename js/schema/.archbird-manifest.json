@@ -8,9 +8,9 @@
       "source": "schema/act.schema.json"
     },
     {
-      "bytes": 52436,
+      "bytes": 52591,
       "path": "archbird.schema.json",
-      "sha256": "623c9e54296642b1b6de091b5b016dd72509ed43fe817916557a50c6e76287c3",
+      "sha256": "8927e2fce3e87cf9d11d8d3dc6e9c30da9363319d5dfa168375cdee323c1b30d",
       "source": "schema/archbird.schema.json"
     },
     {
@@ -176,21 +176,21 @@
       "source": "schema/test-symbol-observations.schema.json"
     },
     {
-      "bytes": 963,
+      "bytes": 2108,
       "path": "visualization-event.schema.json",
-      "sha256": "768db7ba6ebef99aaabd6bb857c7230528b918e552ff77a91120a19c8a70d3b1",
+      "sha256": "7fc5195deb8bde275ba071a2ec134b27bb25d10938ad418679dcae13a8f42ff2",
       "source": "schema/visualization-event.schema.json"
     },
     {
-      "bytes": 985,
+      "bytes": 5341,
       "path": "visualization-request.schema.json",
-      "sha256": "8ae9cd1008d9e3342011b2a3640966650f06795cbb49f8b6247b59459c0cc587",
+      "sha256": "6b10847abef1b274565780ae0ac39b190f5661b586ba09d1d92bf0e8db3d649c",
       "source": "schema/visualization-request.schema.json"
     },
     {
-      "bytes": 1373,
+      "bytes": 1223,
       "path": "visualization-response.schema.json",
-      "sha256": "8340bbed4505186d96ca03c1e3ed8a63c00e185d2c2d4ae09393c861133d3fdb",
+      "sha256": "cd59770944f245f9c3792480fdc6f24d85a8756da32237734545662d2e5cc164",
       "source": "schema/visualization-response.schema.json"
     },
     {

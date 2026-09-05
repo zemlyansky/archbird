@@ -2,6 +2,8 @@
 
 #include "base/archbird_internal.h"
 
+#include <string.h>
+
 static ArchbirdStatus add_message(AbMapState *state, const char *code,
                                   const AbString *path, size_t part_count,
                                   const AbString *const *parts,
@@ -42,6 +44,19 @@ static int path_matches_any(const AbString *path, const AbStringArray *patterns,
   for (index = 0; index < patterns->count; index++) {
     if ((collection ? ab_map_collection_match(path, &patterns->items[index])
                     : ab_map_path_match(path, &patterns->items[index])))
+      return 1;
+  }
+  return 0;
+}
+
+static int automatic_layer(const AbString *name) {
+  static const char *const names[] = {
+      "auto-c",          "auto-cpp", "auto-python", "auto-javascript",
+      "auto-typescript", "auto-vue", "auto-r"};
+  size_t index;
+  for (index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
+    size_t length = strlen(names[index]);
+    if (name->length == length && !memcmp(name->data, names[index], length))
       return 1;
   }
   return 0;
@@ -102,6 +117,10 @@ static ArchbirdStatus layer_diagnostics(AbMapState *state) {
          layer_index++) {
       const AbConfigLayer *layer = &state->config->layers[layer_index];
       if (!path_matches_any(&file->path, &layer->globs, 1))
+        continue;
+      /* Automatic layers are fallbacks after configured classification. */
+      if (!ab_string_equal(&file->layer, &layer->name) &&
+          automatic_layer(&layer->name))
         continue;
       if (seen) {
         const AbString *parts[] = {&layer->name};

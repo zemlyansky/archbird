@@ -1177,20 +1177,36 @@ def main() -> int:
     if bytes.fromhex(authored_completed.stdout.decode().strip()) != authored_resolution:
         raise AssertionError("Python and Node authored-config artifacts differ")
     authored = json.loads(authored_resolution)["effective_config"]
-    if authored["project"] != "authored" or authored["layers"] != [
+    authored_layer = [
         {
             "globs": ["**/*.js"],
             "language": "javascript",
             "name": "authored",
         }
-    ] or authored["packages"] != [
+    ]
+    automatic_layers = {
+        "auto-c",
+        "auto-cpp",
+        "auto-javascript",
+        "auto-python",
+        "auto-r",
+        "auto-typescript",
+        "auto-vue",
+    }
+    if (
+        authored["project"] != "authored"
+        or authored["layers"][:1] != authored_layer
+        or {layer["name"] for layer in authored["layers"][1:]}
+        != automatic_layers
+        or authored["packages"] != [
         {
             "kind": "npm",
             "layer": "authored",
             "name": "authored",
             "path": "package.json",
         }
-    ]:
+        ]
+    ):
         raise AssertionError(
             f"manifest candidates overrode authored architecture: {authored!r}"
         )

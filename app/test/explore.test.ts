@@ -274,7 +274,12 @@ test("verification overlays map relations and findings onto the visible frontier
   const file = overlay.graph.nodes.find((row) => row.attributes.canonical_path === "src/a.c");
   assert.equal(file?.attributes.verification_status, "fail");
   assert.equal(file?.attributes.verification_findings, 1);
-  assert.equal(overlay.graph.edges[0].attributes?.verification_status, "fail");
+  assert.equal(
+    overlay.graph.nodes.find((row) => row.id === "component-a")
+      ?.attributes.verification_status,
+    undefined,
+  );
+  assert.equal(overlay.graph.edges[0].attributes?.verification_status, undefined);
   assert.deepEqual(overlay.unmappedFindings, []);
   assert.equal(overlay.constraints[0].owner, "architecture");
   assert.equal(
@@ -285,4 +290,140 @@ test("verification overlays map relations and findings onto the visible frontier
   assert.equal(overlay.constraints[0].severity, "warning");
   assert.deepEqual(overlay.constraints[0].tags, ["dependencies"]);
   assert.equal(overlay.constraints[0].witnesses.length, 1);
+});
+
+test("a failing constraint colors only evidence with findings", () => {
+  const overlay = applyVerificationOverlay(fileGraph, {
+    artifact: "verification",
+    constraints: [{
+      assert: "numeric_bounds",
+      coverage: ["src/a.c", "src/b.c"],
+      findings: [{
+        evidence: [{ path: "src/a.c" }],
+        fingerprint: "unowned-a",
+        key: "src/a.c",
+        message: "src/a.c has no component",
+      }],
+      id: "COMPONENT-COVERAGE",
+      owner: "architecture",
+      rationale: "Every mapped source belongs to a component.",
+      requirements: [],
+      severity: "error",
+      status: "fail",
+      tags: ["components"],
+      witnesses: [],
+    }],
+  });
+  const failed = overlay.graph.nodes.find((row) => row.id === "file-a");
+  const covered = overlay.graph.nodes.find((row) => row.id === "file-b");
+  assert.equal(failed?.attributes.verification_status, "fail");
+  assert.equal(failed?.attributes.verification_findings, 1);
+  assert.equal(covered?.attributes.verification_covered, true);
+  assert.equal(covered?.attributes.verification_status, undefined);
+  assert.equal(covered?.attributes.verification_findings, 0);
+});
+
+test("file findings do not color their visible container or child symbols", () => {
+  const graph = view("symbols", [
+    node("root", ".", "directory", null, {
+      member_files: ["history.py"],
+      presentation_role: "group",
+    }),
+    node("history", "history.py", "file", "root", {
+      canonical_path: "history.py",
+    }),
+    node("record", "history.py:record", "symbol", "history", {
+      canonical_path: "history.py",
+      path: "history.py",
+    }),
+  ], []);
+  const overlay = applyVerificationOverlay(graph, {
+    artifact: "verification",
+    constraints: [{
+      assert: "numeric_bounds",
+      coverage: ["history.py"],
+      findings: [{
+        evidence: [{ path: "history.py" }],
+        fingerprint: "unowned-history",
+        key: "history.py",
+        message: "history.py has no component",
+      }],
+      id: "COMPONENT-COVERAGE",
+      owner: "architecture",
+      rationale: "Every mapped source belongs to a component.",
+      requirements: [],
+      severity: "error",
+      status: "fail",
+      tags: ["components"],
+      witnesses: [],
+    }],
+  });
+  assert.equal(
+    overlay.graph.nodes.find((row) => row.id === "history")
+      ?.attributes.verification_status,
+    "fail",
+  );
+  assert.equal(
+    overlay.graph.nodes.find((row) => row.id === "root")
+      ?.attributes.verification_status,
+    undefined,
+  );
+  assert.equal(
+    overlay.graph.nodes.find((row) => row.id === "record")
+      ?.attributes.verification_status,
+    undefined,
+  );
+});
+
+test("file findings color a containing group only while the file is collapsed", () => {
+  const collapsed = view("components", [
+    node("root", ".", "directory", null, {
+      member_files: ["src/a.c", "src/b.c"],
+      presentation_role: "group",
+    }),
+    node("component-a", "component:a", "component", "root", {
+      member_files: ["src/a.c"],
+      presentation_role: "group",
+    }),
+    node("component-b", "component:b", "component", "root", {
+      member_files: ["src/b.c"],
+      presentation_role: "group",
+    }),
+  ], []);
+  const overlay = applyVerificationOverlay(collapsed, {
+    artifact: "verification",
+    constraints: [{
+      assert: "numeric_bounds",
+      coverage: ["src/a.c", "src/b.c"],
+      findings: [{
+        evidence: [{ path: "src/a.c" }],
+        fingerprint: "unowned-a",
+        key: "src/a.c",
+        message: "src/a.c has no component",
+      }],
+      id: "COMPONENT-COVERAGE",
+      owner: "architecture",
+      rationale: "Every mapped source belongs to a component.",
+      requirements: [],
+      severity: "error",
+      status: "fail",
+      tags: ["components"],
+      witnesses: [],
+    }],
+  });
+  assert.equal(
+    overlay.graph.nodes.find((row) => row.id === "component-a")
+      ?.attributes.verification_status,
+    "fail",
+  );
+  assert.equal(
+    overlay.graph.nodes.find((row) => row.id === "component-b")
+      ?.attributes.verification_status,
+    undefined,
+  );
+  assert.equal(
+    overlay.graph.nodes.find((row) => row.id === "root")
+      ?.attributes.verification_status,
+    undefined,
+  );
 });

@@ -130,6 +130,38 @@ function nodeMatchesPath(node: GraphNode, path: string): boolean {
   return Array.isArray(members) && members.includes(path);
 }
 
+function ownedPath(
+  node: GraphNode,
+  nodes: ReadonlyMap<string, GraphNode>,
+): string | null {
+  let current: GraphNode | undefined = node;
+  while (current) {
+    if (current.kind === "file") {
+      return typeof current.attributes.canonical_path === "string"
+        ? current.attributes.canonical_path
+        : current.identity;
+    }
+    if (typeof current.attributes.path === "string") {
+      return current.attributes.path;
+    }
+    current = current.parent ? nodes.get(current.parent) : undefined;
+  }
+  return null;
+}
+
+function hasAncestor(
+  node: GraphNode,
+  ancestorId: string,
+  nodes: ReadonlyMap<string, GraphNode>,
+): boolean {
+  let parent = node.parent ? nodes.get(node.parent) : undefined;
+  while (parent) {
+    if (parent.id === ancestorId) return true;
+    parent = parent.parent ? nodes.get(parent.parent) : undefined;
+  }
+  return false;
+}
+
 function mergeStatus(current: unknown, candidate: string): string {
   const existing = typeof current === "string" ? current : "";
   return (statusWeight[candidate] || 0) > (statusWeight[existing] || 0)
@@ -146,24 +178,43 @@ function annotate(
     ? attributes.verification_constraints.filter((id): id is string => typeof id === "string")
     : [];
   if (!rows.includes(constraint.id)) rows.push(constraint.id);
+  const status = findingCount > 0 || constraint.status === "pass"
+    ? mergeStatus(attributes?.verification_status, constraint.status)
+    : attributes?.verification_status;
   return {
     ...attributes,
     verification_constraints: rows,
     verification_covered: true,
     verification_findings: Number(attributes?.verification_findings || 0) + findingCount,
-    verification_status: mergeStatus(attributes?.verification_status, constraint.status),
+    ...(typeof status === "string" && status ? { verification_status: status } : {}),
   };
 }
 
 function matchingNodes(
   graph: GraphView,
+  nodes: ReadonlyMap<string, GraphNode>,
   key: string,
   evidence: Array<Record<string, unknown>>,
 ): GraphNode[] {
   const paths = evidence.flatMap((row) =>
     typeof row.path === "string" && row.path ? [row.path] : []);
+  if (key) {
+    const symbols = graph.nodes.filter((node) =>
+      node.kind === "symbol" && (node.label === key || node.identity === key)
+      && (!paths.length || paths.includes(ownedPath(node, nodes) || "")));
+    if (symbols.length) return symbols;
+  }
   if (paths.length) {
-    return graph.nodes.filter((node) => paths.some((path) => nodeMatchesPath(node, path)));
+    const files = graph.nodes.filter((node) =>
+      node.kind === "file" && paths.some((path) => nodeMatchesPath(node, path)));
+    if (files.length) return files;
+    const groups = graph.nodes.filter((node) => {
+      const members = node.attributes.member_files;
+      return Array.isArray(members) && paths.some((path) => members.includes(path));
+    });
+    return groups.filter((group) =>
+      !groups.some((candidate) =>
+        candidate.id !== group.id && hasAncestor(candidate, group.id, nodes)));
   }
   if (!key) return [];
   return graph.nodes.filter((node) =>
@@ -224,7 +275,7 @@ export function applyVerificationOverlay(
     }
     for (const row of constraint.findings) {
       const relationEdges = matchingEdges(graph, nodeIndex, row.key);
-      const findingNodes = matchingNodes(graph, row.key, row.evidence);
+      const findingNodes = matchingNodes(graph, nodeIndex, row.key, row.evidence);
       if (!relationEdges.length && !findingNodes.length) {
         unmappedFindings.push(row);
         continue;

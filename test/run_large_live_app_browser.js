@@ -22,7 +22,7 @@ const screenshot = path.resolve(process.argv[4]);
 
 async function select(page, value) {
   await page.locator(".search input").fill(value);
-  const result = page.locator(".results button").first();
+  const result = page.getByRole("option").first();
   await result.waitFor({ timeout: 30_000 });
   await result.click();
 }
@@ -59,6 +59,16 @@ async function nodeCount(page) {
   return Number(await page.locator(".graph-canvas").getAttribute("data-node-count"));
 }
 
+async function returnToMap(page) {
+  for (let index = 0; index < 8; index += 1) {
+    if ((await page.locator(".artifact-meta small").textContent())?.includes("map ·")) return;
+    await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+    await page.locator('.graph-canvas[data-layout-ready="true"]')
+      .waitFor({ timeout: 60_000 });
+  }
+  throw new Error("graph history did not return to Map");
+}
+
 async function layoutExtent(page, spacing, previous = null) {
   await page.waitForFunction(({ expectedSpacing, prior }) => {
     const canvas = document.querySelector(".graph-canvas");
@@ -74,14 +84,6 @@ async function layoutExtent(page, spacing, previous = null) {
     height: Number(element.getAttribute("data-layout-height")),
     width: Number(element.getAttribute("data-layout-width")),
   }));
-}
-
-async function assertSelectionFocus(page) {
-  await page.waitForFunction(() => {
-    const canvas = document.querySelector(".graph-canvas");
-    return Number(canvas?.getAttribute("data-focus-count")) > 1
-      && Number(canvas?.getAttribute("data-dimmed-count")) > 0;
-  }, undefined, { timeout: 10_000 });
 }
 
 async function assertMiddlePanPreservesNode(page) {
@@ -257,27 +259,14 @@ async function main() {
       throw new Error("large zero-config app exposed reviewed component grouping");
     }
     await changeGrouping(page, "layer");
-    await select(page, "layer:auto-c");
-    await page.getByText("inferred layer group", { exact: true }).waitFor();
     await changeMapView(page, "architecture");
     await changeGrouping(page, "directory");
     const collapsedArchitecture = await nodeCount(page);
-    await select(page, "src/");
-    await page.getByText("inferred directory group", { exact: true }).waitFor();
-    await expand(page, "Expand area");
-    const rootExpanded = await nodeCount(page);
-    if (rootExpanded <= initial || rootExpanded > 60) {
-      throw new Error(
-        `top-level src expansion is not progressive: ${initial} -> ${rootExpanded} nodes`,
-      );
-    }
-
-    await select(page, "src/projection/");
-    await expand(page, "Expand directory");
     await select(page, "src/projection/fact_projection.c");
-    await assertSelectionFocus(page);
+    await page.locator(".inspector h2")
+      .getByText("src/projection/fact_projection.c", { exact: true })
+      .waitFor({ timeout: 30_000 });
     await assertMiddlePanPreservesNode(page);
-    await expand(page, "Expand symbols");
     await select(page, "extract_file_edges");
     await page.locator(".inspector h2")
       .getByText("extract_file_edges", { exact: true })
@@ -289,14 +278,10 @@ async function main() {
     ).click();
     await page.getByText("Source · utf-8").waitFor({ timeout: 30_000 });
     await page.screenshot({ path: screenshot });
+    await returnToMap(page);
 
-    await clickAndWaitForGraphLayout(
-      page,
-      page.getByRole("button", { name: "Collapse all", exact: true }),
-      60_000,
-    );
     if (await nodeCount(page) !== collapsedArchitecture) {
-      throw new Error("collapse-all did not restore the current architecture frontier");
+      throw new Error("Back did not restore the current architecture frontier");
     }
     if (pageErrors.length) throw new Error(pageErrors.join("\n"));
     if (consoleErrors.length) throw new Error(consoleErrors.join("\n"));

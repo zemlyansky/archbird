@@ -59,6 +59,27 @@ def main() -> int:
             raise AssertionError(f"initial live candidate did not become ready: {state!r}")
         if state["project"] != "map-base" or not state["source_available"]:
             raise AssertionError(f"invalid ready state: {state!r}")
+        LiveRepository._candidate = original
+        recovery = LiveRepository(root=repository)
+        recovery.current = server.repository.current
+        subscriber = recovery.subscribe()
+        configuration_path = repository / "archbird.json"
+        configuration = configuration_path.read_bytes()
+        configuration_path.write_text('{"schema_version":2}\n', encoding="utf-8")
+        recovery.rebuild()
+        if recovery.state()["phase"] != "failed":
+            raise AssertionError("invalid live candidate did not fail")
+        configuration_path.write_bytes(configuration)
+        recovery.rebuild()
+        recovery_events = []
+        while not subscriber.empty():
+            recovery_events.append(subscriber.get_nowait())
+        recovery.unsubscribe(subscriber)
+        recovery.close()
+        if not any(row and row.get("type") == "snapshot-ready" for row in recovery_events):
+            raise AssertionError(
+                "successful unchanged recovery did not announce the last good Map"
+            )
         plan = {"id": "app-membership", "select": "component_membership"}
         first = server.repository.request(
             {"method": "projection", "payload": {"plan": plan}, "session": "test"}

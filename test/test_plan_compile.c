@@ -84,6 +84,7 @@ int main(void) {
   ArchbirdProject *project = NULL;
   AbBuffer map;
   AbBuffer resolution;
+  AbBuffer effective_config_json;
   AbBuffer coverage_json;
   AbBuffer profile_json;
   AbBuffer verification;
@@ -99,12 +100,14 @@ int main(void) {
   const AbValue *coverage;
   const AbValue *profile;
   const AbValue *resolution_sha;
+  const AbValue *effective_config;
   ArchbirdStatus status;
 
   if (archbird_engine_create(NULL, &engine) != ARCHBIRD_OK)
     return 2;
   ab_buffer_init(&map, engine);
   ab_buffer_init(&resolution, engine);
+  ab_buffer_init(&effective_config_json, engine);
   ab_buffer_init(&coverage_json, engine);
   ab_buffer_init(&profile_json, engine);
   ab_buffer_init(&verification, engine);
@@ -133,12 +136,19 @@ int main(void) {
   resolution_sha = status == ARCHBIRD_OK
                        ? ab_value_member(&resolution_document, "sha256")
                        : NULL;
+  effective_config =
+      status == ARCHBIRD_OK
+          ? ab_value_member(&resolution_document, "effective_config")
+          : NULL;
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&coverage_json, coverage);
   if (status == ARCHBIRD_OK)
     status = ab_value_render(&profile_json, profile);
+  if (status == ARCHBIRD_OK)
+    status = ab_value_render(&effective_config_json, effective_config);
   expect_status("resolve configuration", status, ARCHBIRD_OK, engine);
-  if (status != ARCHBIRD_OK || !configuration_sha || !resolution_sha)
+  if (status != ARCHBIRD_OK || !configuration_sha || !resolution_sha ||
+      !effective_config)
     goto cleanup;
   manifest_length = snprintf(
       manifest, sizeof(manifest),
@@ -178,8 +188,9 @@ int main(void) {
   if (status == ARCHBIRD_OK)
     status = archbird_project_finalize_sources(engine, project);
   if (status == ARCHBIRD_OK)
-    status = archbird_project_set_config(
-        engine, project, (const uint8_t *)CONFIG, sizeof(CONFIG) - 1);
+    status =
+        archbird_project_set_config(engine, project, effective_config_json.data,
+                                    effective_config_json.length);
   if (status == ARCHBIRD_OK)
     status = archbird_project_scan_builtin(engine, project,
                                            ARCHBIRD_PROVIDER_PRIMARY);
@@ -248,6 +259,7 @@ cleanup:
   ab_buffer_free(&plan);
   ab_buffer_free(&verification);
   ab_buffer_free(&resolution);
+  ab_buffer_free(&effective_config_json);
   ab_buffer_free(&map);
   archbird_project_destroy(project);
   archbird_engine_destroy(engine);

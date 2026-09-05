@@ -684,6 +684,27 @@ Live Map, projection, Query, Verify, and source work runs in the native Node
 host; the page receives typed ProjectionResults and does not load browser Wasm.
 Normal exploration does not download the canonical Map; saving it is explicit.
 
+An agent can reuse the running server through `POST /api/v1/request`:
+
+<!-- archbird-example: template node-agent-display -->
+```bash
+curl -s http://127.0.0.1:4177/api/v1/request \
+  -H 'Content-Type: application/json' \
+  -d '{"method":"query","params":{"symbols":["src/runtime.c:runtime_start"],"depth":1},"display":{}}'
+```
+
+`method` follows the CLI stages (`map`, `query`, `path`, `diff`, `verify`) and
+`params` holds normalized semantic arguments. The response returns an artifact
+descriptor whose bytes are at `GET /api/v1/blobs/{blob_sha256}`. Without
+`display`, the result is private to the caller. With `display`, it is retained,
+announced over the existing event stream, and opened in the browser; failed and
+private requests do not replace it. `session` is optional.
+
+`{"method":"state"}` returns `result.observed_display`: the browser's last
+observed generation, graph controls, visible counts, expansions, source range,
+constraint, and selected canonical entity. This bounded UI context tells an
+agent what the user is inspecting; it is not architecture evidence.
+
 The right inspector shows all seven interactive Metrics together. They follow the
 selected graph region or stay fixed to the whole project; quartile plots show
 every value above p99 as a selectable evidence point.
@@ -1014,7 +1035,7 @@ inventory is:
 | --- | --- |
 | `project`, `description` | optional stable project identity and human context |
 | `exclude`, `discovery` | project-level selection and explicit discovery policy |
-| `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
+| `layers`, `components` | source classification/provider policy and reviewed architecture groupings |
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
 | `tests` | static cases, reviewed case routes, and generated-source relations |
@@ -1026,8 +1047,12 @@ inventory is:
 <!-- archbird-config-fields:end -->
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
-`src/**/*.c` is recursive. Components group selected files; they do not discover
-new files. `route_to` is broad asserted intent; `case_routes` is case-specific.
+`src/**/*.c` is recursive. Configured layers classify matching source before
+automatic language layers; they are not a source allowlist. A new supported
+file outside every configured layer remains mapped under `auto-*` and remains
+unassigned to a component until reviewed. Use `exclude` to remove source from
+the project scope. Components group mapped files; they do not discover source.
+`route_to` is broad asserted intent; `case_routes` is case-specific.
 Patterns use the pinned `archbird-pcre2-v1` contract rather than JavaScript
 `RegExp`.
 

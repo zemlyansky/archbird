@@ -1,12 +1,14 @@
 import {
   VISUALIZATION_PROTOCOL_VERSION,
+  artifactDescriptor,
   artifactPayload,
   isHostEvent,
-  isHostResponse,
+  isServerResponse,
   type ArtifactPayload,
+  type ArtifactDescriptor,
   type HostEvent,
-  type HostMethod,
-  type HostRequest,
+  type ObservedDisplay,
+  type ServerMethod,
   type SnapshotSummary,
 } from "./protocol";
 import type { GraphViewName } from "../artifacts/model";
@@ -26,9 +28,9 @@ function sha256Integrity(digest: string): string {
 
 export class ServerHost {
   private readonly session = sessionId();
-  private nextId = 0;
   private listeners = new Set<Listener>();
   private events: EventSource | null = null;
+  private observationQueue: Promise<unknown> = Promise.resolve();
 
   static async connect(): Promise<ServerHost | null> {
     const mode = document.querySelector<HTMLMetaElement>('meta[name="archbird-host"]')?.content;
@@ -55,6 +57,7 @@ export class ServerHost {
     this.events = new EventSource(`${import.meta.env.BASE_URL}api/v1/events`);
     for (const type of [
       "scan-started", "progress", "candidate-failed", "snapshot-ready", "verification-ready",
+      "display-updated",
     ]) {
       this.events.addEventListener(type, (event) => {
         try {
@@ -74,12 +77,10 @@ export class ServerHost {
     return () => this.listeners.delete(listener);
   }
 
-  private async request(method: HostMethod, payload: Record<string, unknown> = {}): Promise<unknown> {
-    const request: HostRequest = {
-      id: `r${++this.nextId}`,
+  private async request(method: ServerMethod, payload: Record<string, unknown> = {}): Promise<unknown> {
+    const request = {
       method,
-      payload,
-      protocol_version: VISUALIZATION_PROTOCOL_VERSION,
+      params: payload,
       session: this.session,
     };
     const response = await fetch(`${import.meta.env.BASE_URL}api/v1/request`, {
@@ -89,37 +90,35 @@ export class ServerHost {
       method: "POST",
     });
     const value = await response.json();
-    if (!isHostResponse(value) || value.id !== request.id || value.session !== this.session) {
+    if (!isServerResponse(value) || value.session !== this.session) {
       throw new Error("local host returned an invalid response envelope");
     }
     if (!value.ok) throw new Error(value.error?.message || `local host request failed (${response.status})`);
     return value.result;
   }
 
-  private async artifactResult(value: unknown): Promise<ArtifactPayload> {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error("local host artifact descriptor is invalid");
-    }
-    const descriptor = value as Record<string, unknown>;
+  async loadArtifactDescriptor(value: unknown): Promise<ArtifactPayload> {
+    const descriptor = artifactDescriptor(value);
     const digest = descriptor.blob_sha256;
-    if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
-      throw new Error("local host artifact digest is invalid");
-    }
     const response = await fetch(`${import.meta.env.BASE_URL}api/v1/blobs/${digest}`, {
       cache: "force-cache",
       integrity: sha256Integrity(digest),
     });
     if (!response.ok) throw new Error(`local host artifact is unavailable (${response.status})`);
     const bytes = await response.arrayBuffer();
-    if (Number(descriptor.bytes) !== bytes.byteLength) throw new Error("local host artifact size changed");
+    if (descriptor.bytes !== bytes.byteLength) throw new Error("local host artifact size changed");
     if (response.headers.get("x-content-sha256") !== digest) {
       throw new Error("local host artifact digest changed in transport");
     }
     return artifactPayload({ ...descriptor, bytes });
   }
 
-  private async artifact(method: HostMethod, payload: Record<string, unknown> = {}): Promise<ArtifactPayload> {
-    return this.artifactResult(await this.request(method, payload));
+  artifactDescriptor(value: ArtifactDescriptor): Promise<ArtifactPayload> {
+    return this.loadArtifactDescriptor(value);
+  }
+
+  private async artifact(method: ServerMethod, payload: Record<string, unknown> = {}): Promise<ArtifactPayload> {
+    return this.loadArtifactDescriptor(await this.request(method, payload));
   }
 
   map(generation?: string): Promise<ArtifactPayload> {
@@ -179,15 +178,12 @@ export class ServerHost {
   }
 
   query(query: Record<string, unknown>, generation?: string): Promise<ArtifactPayload> {
-    return this.artifact("query", {
-      ...(generation ? { generation } : {}),
-      query,
-    });
+    return this.artifact("query", { ...(generation ? { generation } : {}), ...query });
   }
 
   async verification(generation?: string): Promise<ArtifactPayload | null> {
-    const value = await this.request("verification", generation ? { generation } : {});
-    return value === null ? null : this.artifactResult(value);
+    const value = await this.request("verify", generation ? { generation } : {});
+    return value === null ? null : this.loadArtifactDescriptor(value);
   }
 
   diff(before: string, after: string): Promise<ArtifactPayload> {
@@ -196,6 +192,13 @@ export class ServerHost {
 
   async state(): Promise<Record<string, unknown>> {
     return await this.request("state") as Record<string, unknown>;
+  }
+
+  observeDisplay(value: ObservedDisplay): Promise<void> {
+    const operation = this.observationQueue.then(() =>
+      this.request("state", { observed_display: value }));
+    this.observationQueue = operation.catch(() => undefined);
+    return operation.then(() => undefined);
   }
 
   async source(path: string, generation?: string): Promise<Record<string, unknown>> {

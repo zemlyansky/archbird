@@ -10,6 +10,7 @@ import json
 import mimetypes
 from pathlib import Path, PurePosixPath
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -23,11 +24,12 @@ from .native import (
     evaluate_projection_json,
     evaluate_projections_json,
     export_graph,
+    path_map_json,
     query_map_json,
 )
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 STATIC_HOST_MARKER = b'name="archbird-host" content="static"'
 SERVER_HOST_MARKER = b'name="archbird-host" content="server"'
 SNAPSHOT_LIMIT = 4
@@ -38,10 +40,8 @@ BLOB_BYTE_LIMIT = 256 * 1024 * 1024
 BODY_LIMIT = 2 * 1024 * 1024
 TEXT_LIMIT = 256 * 1024
 HEX_LIMIT = 64 * 1024
-CAPABILITIES = [
-    "map", "projection", "projections", "view", "export", "query", "diff", "source",
-    "verification", "snapshots", "events",
-]
+CAPABILITIES = ["map", "query", "path", "diff", "verify", "state", "display", "events"]
+DISPLAY_METHODS = {"diff", "map", "path", "query", "verify"}
 MIME = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
@@ -173,6 +173,11 @@ class LiveRepository:
         self._selections: dict[str, str] = {}
         self._subscribers: set[queue.Queue[Optional[dict[str, object]]]] = set()
         self._event_id = 0
+        self._display: Optional[dict[str, object]] = None
+        self._display_revision = 0
+        self._observed_display: Optional[dict[str, object]] = None
+        self._observed_display_revision = 0
+        self._pending_display_digests: set[str] = set()
         self._watch_paths: tuple[Path, ...] = (self.root,)
         self._watch_state: tuple[tuple[str, object], ...] = ()
         self._lock = threading.RLock()
@@ -194,6 +199,12 @@ class LiveRepository:
                 "project": snapshot["project"] if snapshot else None,
                 "schema_version": snapshot["schema_version"] if snapshot else None,
                 "source_available": snapshot is not None,
+                "display": dict(self._display) if self._display is not None else None,
+                "observed_display": (
+                    dict(self._observed_display)
+                    if self._observed_display is not None
+                    else None
+                ),
             }
 
     def _set_phase(self, phase: str, error: Optional[str] = None) -> None:
@@ -202,16 +213,21 @@ class LiveRepository:
             self._last_error = error
 
     def _event(
-        self, event_type: str, payload: Mapping[str, object], generation: Optional[str] = None
+        self,
+        event_type: str,
+        payload: Mapping[str, object],
+        generation: Optional[str] = None,
+        session: Optional[str] = "server",
     ) -> None:
         with self._lock:
             event: dict[str, object] = {
                 "event_id": self._event_id,
                 "payload": dict(payload),
                 "protocol_version": PROTOCOL_VERSION,
-                "session": "server",
                 "type": event_type,
             }
+            if session is not None:
+                event["session"] = session
             self._event_id += 1
             if generation:
                 event["generation"] = generation
@@ -359,21 +375,27 @@ class LiveRepository:
             with self._lock:
                 changed = self.current is None or candidate["generation"] != current_generation
                 self.current = candidate
+                if changed:
+                    self._display = None
+                    if (
+                        self._observed_display is not None
+                        and self._observed_display.get("workspace") == "live"
+                    ):
+                        self._observed_display = None
                 self._retain_snapshot(candidate)
                 self._sync_watch_paths(candidate["files"])
                 self._watch_state = self._signature()
                 self._phase = "ready"
                 self._last_error = None
-            if changed:
-                self._event(
-                    "snapshot-ready",
-                    {
-                        "files": len(candidate["files"]),
-                        "phase": "ready",
-                        "project": candidate["project"],
-                    },
-                    candidate["generation"],
-                )
+            self._event(
+                "snapshot-ready",
+                {
+                    "files": len(candidate["files"]),
+                    "phase": "ready",
+                    "project": candidate["project"],
+                },
+                candidate["generation"],
+            )
             if candidate["verification"]:
                 self._event(
                     "verification-ready",
@@ -508,13 +530,103 @@ class LiveRepository:
                 or sum(len(value) for value in self.blobs.values())
                 > self.blob_byte_limit
             ):
-                self.blobs.popitem(last=False)
+                protected = {digest}
+                protected.update(self._pending_display_digests)
+                if self._display:
+                    for name in ("artifact", "presentation"):
+                        descriptor = self._display.get(name)
+                        if isinstance(descriptor, Mapping):
+                            protected.add(str(descriptor.get("blob_sha256") or ""))
+                removable = next(
+                    (key for key in self.blobs if key not in protected), None
+                )
+                if removable is None:
+                    break
+                self.blobs.pop(removable)
         return {
             "blob_sha256": digest,
             "bytes": len(data),
             "generation": snapshot["generation"],
             "project": snapshot["project"],
         }
+
+    def publish_display(
+        self,
+        request: Mapping[str, Any],
+        result: object,
+    ) -> dict[str, object]:
+        if not isinstance(result, Mapping) or not isinstance(
+            result.get("blob_sha256"), str
+        ):
+            raise ValueError("display requires an artifact-producing operation")
+        descriptor = dict(result)
+        presentation: Optional[dict[str, object]] = None
+        pending_digest = str(descriptor["blob_sha256"])
+        pending_digests = {pending_digest}
+        with self._lock:
+            if pending_digest not in self.blobs:
+                raise ValueError("display artifact is unavailable")
+            self._pending_display_digests.update(pending_digests)
+        try:
+            if request["method"] == "query":
+                artifact = self.blobs[pending_digest]
+                snapshot = self.snapshot(descriptor.get("generation"))
+                rendered = export_graph(
+                    artifact,
+                    format="json",
+                    view="symbols",
+                    max_nodes=0,
+                    max_edge_names=3,
+                )
+                with self._lock:
+                    presentation = self.artifact(snapshot, rendered)
+                    pending_digests.add(str(presentation["blob_sha256"]))
+                    self._pending_display_digests.update(pending_digests)
+            with self._lock:
+                self._display_revision += 1
+                display: dict[str, object] = {
+                    "artifact": descriptor,
+                    "display": dict(request["display"]),
+                    "generation": descriptor.get("generation"),
+                    "method": request["method"],
+                    "params": dict(request["params"]),
+                    "revision": self._display_revision,
+                }
+                if presentation is not None:
+                    display["presentation"] = presentation
+                if request.get("session") is not None:
+                    display["session"] = request["session"]
+                self._display = display
+        finally:
+            with self._lock:
+                self._pending_display_digests.difference_update(pending_digests)
+        self._event(
+            "display-updated",
+            display,
+            str(descriptor.get("generation") or "") or None,
+            request.get("session"),
+        )
+        return display
+
+    def observe_display(
+        self,
+        value: object,
+        session: Optional[str],
+    ) -> dict[str, object]:
+        if not session:
+            raise ValueError("observed display requires a session")
+        observed = _validate_observed_display(value)
+        self.snapshot(observed["generation"])
+        with self._lock:
+            self._observed_display_revision += 1
+            observed.update(
+                {
+                    "revision": self._observed_display_revision,
+                    "session": session,
+                }
+            )
+            self._observed_display = observed
+            return dict(observed)
 
     def derived(
         self,
@@ -578,6 +690,13 @@ class LiveRepository:
         if method == "bootstrap":
             return {"capabilities": CAPABILITIES, "engine": "native"}
         if method == "state":
+            unknown = set(payload) - {"observed_display"}
+            if unknown:
+                raise ValueError(
+                    f"state request contains unsupported parameter: {sorted(unknown)[0]}"
+                )
+            if "observed_display" in payload:
+                self.observe_display(payload["observed_display"], session)
             return self.state()
         if method == "snapshots":
             return [
@@ -592,9 +711,12 @@ class LiveRepository:
             ]
         if method == "open-snapshot":
             snapshot = self.snapshot(payload.get("generation"))
-            self._selections[session] = snapshot["generation"]
+            if session:
+                self._selections[session] = snapshot["generation"]
             return self.artifact(snapshot, snapshot["map"])
-        generation = payload.get("generation") or self._selections.get(session)
+        generation = payload.get("generation") or (
+            self._selections.get(session) if session else None
+        )
         snapshot = self.snapshot(generation)
         if method == "map":
             return self.artifact(snapshot, snapshot["map"])
@@ -671,6 +793,27 @@ class LiveRepository:
                     **_query_options(payload.get("query") or {}),
                 ),
             )
+        if method == "path":
+            source = payload.get("source")
+            target = payload.get("target")
+            if not isinstance(source, Mapping) or not isinstance(target, Mapping):
+                raise ValueError("path request requires source and target objects")
+            return self.artifact(
+                snapshot,
+                path_map_json(
+                    snapshot["map"],
+                    source,
+                    target,
+                    level=str(payload.get("level") or "file"),
+                    relations=payload.get("relations"),
+                    direction=str(payload.get("direction") or "downstream"),
+                    max_depth=int(payload.get("max_depth", 8)),
+                    max_paths=int(payload.get("max_paths", 8)),
+                    producer_policy=str(
+                        payload.get("producer_policy") or "compatible"
+                    ),
+                ),
+            )
         if method == "diff":
             before = self.snapshot(payload.get("before"))
             after = self.snapshot(payload.get("after"))
@@ -684,7 +827,8 @@ class LiveRepository:
                 else None
             )
         if method == "dispose":
-            self._selections.pop(session, None)
+            if session:
+                self._selections.pop(session, None)
             return {"disposed": True}
         raise ValueError(f"unsupported visualization method: {method}")
 
@@ -706,14 +850,238 @@ class LiveRepository:
 def _validate_request(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("request must be an object")
-    if value.get("protocol_version") != PROTOCOL_VERSION:
-        raise ValueError("unsupported visualization protocol")
-    for name in ("id", "method", "session"):
-        if not isinstance(value.get(name), str) or not value[name]:
-            raise ValueError(f"request.{name} is required")
-    if not isinstance(value.get("payload"), dict):
-        raise ValueError("request.payload must be an object")
+    unknown = set(value) - {"display", "method", "params", "session"}
+    if unknown:
+        raise ValueError(f"request contains unsupported field: {sorted(unknown)[0]}")
+    method = value.get("method")
+    if not isinstance(method, str) or not method:
+        raise ValueError("request.method is required")
+    params = value.get("params", {})
+    if not isinstance(params, dict):
+        raise ValueError("request.params must be an object")
+    session = value.get("session")
+    if session is not None and (not isinstance(session, str) or not session):
+        raise ValueError("request.session must be a non-empty string when supplied")
+    display = value.get("display")
+    if display is not None and not isinstance(display, dict):
+        raise ValueError("request.display must be an object or null")
+    if display is not None and method not in DISPLAY_METHODS:
+        raise ValueError(f"request.display is unsupported for method {method}")
+    return {
+        "display": display,
+        "method": method,
+        "params": dict(params),
+        "session": session,
+    }
+
+
+def _display_object(
+    value: object,
+    label: str,
+    keys: set[str],
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    unknown = set(value) - keys
+    if unknown:
+        raise ValueError(f"{label} contains unsupported field: {sorted(unknown)[0]}")
     return value
+
+
+def _display_string(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > 4096:
+        raise ValueError(
+            f"{label} must be a non-empty string of at most 4096 characters"
+        )
+    return value
+
+
+def _display_count(value: object, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{label} must be a nonnegative safe integer")
+    if value > 9_007_199_254_740_991:
+        raise ValueError(f"{label} must be a nonnegative safe integer")
+    return value
+
+
+def _display_ids(value: object, label: str) -> list[str]:
+    if not isinstance(value, list) or len(value) > 128:
+        raise ValueError(f"{label} must contain at most 128 identifiers")
+    return [
+        _display_string(item, f"{label}[{index}]")
+        for index, item in enumerate(value)
+    ]
+
+
+def _validate_observed_display(value: object) -> dict[str, object]:
+    row = _display_object(
+        value,
+        "observed display",
+        {
+            "artifact",
+            "expanded",
+            "generation",
+            "graph",
+            "hidden",
+            "history_depth",
+            "selected",
+            "selected_constraint",
+            "source",
+            "workspace",
+        },
+    )
+    missing = {
+        "artifact",
+        "expanded",
+        "generation",
+        "graph",
+        "hidden",
+        "history_depth",
+        "selected",
+        "selected_constraint",
+        "source",
+        "workspace",
+    } - set(row)
+    if missing:
+        raise ValueError(f"observed display is missing field: {sorted(missing)[0]}")
+    generation = _display_string(row.get("generation"), "observed display generation")
+    if re.fullmatch(r"[0-9a-f]{64}", generation) is None:
+        raise ValueError("observed display generation must be a SHA-256 digest")
+    workspace = _display_string(row.get("workspace"), "observed display workspace")
+    if workspace not in {"live", "snapshot"}:
+        raise ValueError("observed display workspace is invalid")
+    expanded = _display_object(
+        row.get("expanded"),
+        "observed display expanded state",
+        {"files", "groups", "omitted", "symbols"},
+    )
+    hidden = _display_object(
+        row.get("hidden"),
+        "observed display hidden state",
+        {"ids", "omitted"},
+    )
+    graph: Optional[dict[str, object]] = None
+    if row.get("graph") is not None:
+        item = _display_object(
+            row["graph"],
+            "observed display graph",
+            {
+                "direction",
+                "edge_classification",
+                "edge_flow",
+                "edge_kind",
+                "edges",
+                "group_by",
+                "layout",
+                "nodes",
+                "notation",
+                "perspective",
+                "view",
+            },
+        )
+        graph = {
+            "direction": _display_string(item.get("direction"), "observed display graph direction"),
+            "edge_classification": _display_string(
+                item.get("edge_classification"),
+                "observed display edge classification",
+            ),
+            "edge_flow": _display_string(item.get("edge_flow"), "observed display edge flow"),
+            "edge_kind": _display_string(item.get("edge_kind"), "observed display edge kind"),
+            "edges": _display_count(item.get("edges"), "observed display graph edges"),
+            "group_by": _display_string(item.get("group_by"), "observed display graph grouping"),
+            "layout": _display_string(item.get("layout"), "observed display graph layout"),
+            "nodes": _display_count(item.get("nodes"), "observed display graph nodes"),
+            "notation": _display_string(item.get("notation"), "observed display graph notation"),
+            "perspective": _display_string(
+                item.get("perspective"), "observed display graph perspective"
+            ),
+            "view": _display_string(item.get("view"), "observed display graph view"),
+        }
+    selected: Optional[dict[str, object]] = None
+    if row.get("selected") is not None:
+        item = _display_object(
+            row["selected"],
+            "observed display selection",
+            {"id", "identity", "kind", "label", "path"},
+        )
+        selected = {
+            "id": _display_string(item.get("id"), "observed display selection id"),
+            "identity": _display_string(
+                item.get("identity"), "observed display selection identity"
+            ),
+            "kind": _display_string(item.get("kind"), "observed display selection kind"),
+            "label": _display_string(item.get("label"), "observed display selection label"),
+        }
+        if "path" in item:
+            selected["path"] = _display_string(
+                item["path"], "observed display selection path"
+            )
+    source: Optional[dict[str, object]] = None
+    if row.get("source") is not None:
+        item = _display_object(
+            row["source"], "observed display source", {"end", "path", "start"}
+        )
+        source = {
+            "path": _display_string(item.get("path"), "observed display source path")
+        }
+        if "start" in item:
+            source["start"] = _display_count(
+                item["start"], "observed display source start"
+            )
+        if "end" in item:
+            source["end"] = _display_count(item["end"], "observed display source end")
+        if ("start" in source) != ("end" in source) or (
+            "start" in source and source["end"] <= source["start"]
+        ):
+            raise ValueError("observed display source range is invalid")
+    selected_constraint = row.get("selected_constraint")
+    return {
+        "artifact": _display_string(row.get("artifact"), "observed display artifact"),
+        "expanded": {
+            "files": _display_ids(expanded.get("files"), "observed display expanded files"),
+            "groups": _display_ids(expanded.get("groups"), "observed display expanded groups"),
+            "omitted": _display_count(
+                expanded.get("omitted"), "observed display omitted expansions"
+            ),
+            "symbols": _display_ids(expanded.get("symbols"), "observed display revealed symbols"),
+        },
+        "generation": generation,
+        "graph": graph,
+        "hidden": {
+            "ids": _display_ids(hidden.get("ids"), "observed display hidden identifiers"),
+            "omitted": _display_count(
+                hidden.get("omitted"),
+                "observed display omitted hidden identifiers",
+            ),
+        },
+        "history_depth": _display_count(row.get("history_depth"), "observed display history depth"),
+        "selected": selected,
+        "selected_constraint": (
+            None
+            if selected_constraint is None
+            else _display_string(
+                selected_constraint, "observed display selected constraint"
+            )
+        ),
+        "source": source,
+        "workspace": workspace,
+    }
+
+
+def _internal_request(request: Mapping[str, Any]) -> dict[str, Any]:
+    method = "verification" if request["method"] == "verify" else request["method"]
+    params = dict(request["params"])
+    payload = params
+    if method == "query":
+        generation = params.pop("generation", None)
+        payload = {"query": params}
+        if generation is not None:
+            payload["generation"] = generation
+    return {
+        "method": method,
+        "payload": payload,
+        "session": request.get("session"),
+    }
 
 
 def _activity_text(value: object, limit: int = 120) -> str:
@@ -771,6 +1139,16 @@ def _operation_label(request: Mapping[str, Any]) -> Optional[str]:
             if selected is not None and str(selected):
                 return f"query {label} {_activity_text(selected)}"
         return "query"
+    if method == "map":
+        return "map"
+    if method == "path":
+        source = payload.get("source")
+        target = payload.get("target")
+        source = source if isinstance(source, Mapping) else {}
+        target = target if isinstance(target, Mapping) else {}
+        source_name = source.get("identity") or source.get("name") or "unknown"
+        target_name = target.get("identity") or target.get("name") or "unknown"
+        return f"path {_activity_text(source_name)} → {_activity_text(target_name)}"
     if method == "source":
         return f"source {_activity_text(payload.get('path') or 'unknown')}"
     if method == "verification":
@@ -948,17 +1326,22 @@ def _handler(repository: LiveRepository, static_root: Path):
                     raise ValueError(f"request body exceeds {BODY_LIMIT} bytes")
                 raw: object = json.loads(self.rfile.read(length))
                 request = _validate_request(raw)
-                label = _operation_label(request)
+                internal = _internal_request(request)
+                label = _operation_label(internal)
+                if label and request["display"] is not None:
+                    label = f"{label} · displayed"
                 started = time.monotonic()
-                result = repository.request(request)
+                result = repository.request(internal)
+                if request["display"] is not None:
+                    repository.publish_display(request, result)
                 envelope = {
                     "generation": repository.current["generation"] if repository.current else None,
-                    "id": request["id"],
                     "ok": True,
                     "protocol_version": PROTOCOL_VERSION,
                     "result": result,
-                    "session": request["session"],
                 }
+                if request.get("session") is not None:
+                    envelope["session"] = request["session"]
                 if label:
                     repository._activity(
                         "operation-complete",
@@ -985,10 +1368,13 @@ def _handler(repository: LiveRepository, static_root: Path):
                     )
                 self._json(400, {
                     "error": {"code": "host-error", "message": str(error)},
-                    "id": identity.get("id", "invalid"),
                     "ok": False,
                     "protocol_version": PROTOCOL_VERSION,
-                    "session": identity.get("session", "invalid"),
+                    **(
+                        {"session": identity["session"]}
+                        if isinstance(identity.get("session"), str)
+                        else {}
+                    ),
                 })
 
     return Handler

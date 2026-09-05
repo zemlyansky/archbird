@@ -1040,6 +1040,41 @@ changes. Analysis progress is visible from the first page render. If an update
 fails, the explorer reports the failure and keeps showing the last valid Map
 and generation-matched Verification.
 
+Agents can reuse the running server instead of starting another repository
+host. `POST /api/v1/request` accepts CLI-aligned method names and normalized
+arguments:
+
+<!-- archbird-example: template core-agent-display -->
+```bash
+curl -s http://127.0.0.1:4177/api/v1/request \
+  -H 'Content-Type: application/json' \
+  -d '{"method":"query","params":{"symbols":["src/runtime.c:runtime_start"],"depth":1},"display":{}}'
+```
+
+The response returns a content-addressed descriptor; retrieve its bytes from
+`GET /api/v1/blobs/{blob_sha256}`. Omit `display` to keep the result private to
+the caller. Supplying it also
+publishes that exact result to the open browser through the server event stream;
+the browser opens it and Back restores the previous graph. The latest successful
+display for the current source generation survives browser reconnection. Failed
+and private requests never replace it. `session` is optional attribution, not
+routing.
+
+Read the browser's last observed context through the same endpoint:
+
+<!-- archbird-example: template core-agent-state -->
+```bash
+curl -s http://127.0.0.1:4177/api/v1/request \
+  -H 'Content-Type: application/json' \
+  -d '{"method":"state"}'
+```
+
+`result.observed_display` identifies the current generation, artifact, graph
+perspective/grouping/layout, visible node and edge counts, expanded or hidden
+entities, source range, selected constraint, and selected canonical entity.
+It is bounded UI context, not architecture evidence; use the referenced entity
+to request a fresh Query or source artifact.
+
 <!-- archbird-example: template core-serve-workspaces -->
 ```bash
 archbird serve
@@ -1523,7 +1558,7 @@ vocabulary is:
 | --- | --- |
 | `project`, `description` | optional stable project identity and human context |
 | `exclude`, `discovery` | project-level selection and explicit discovery policy |
-| `layers`, `components` | selected source/provider groups and reviewed architecture groupings |
+| `layers`, `components` | source classification/provider policy and reviewed architecture groupings |
 | `packages`, `builds`, `artifacts` | manifests, public entrypoints, compilation-database/Autoconf/Make/npm routes, logical outputs and loaders |
 | `bridges` | declared/used/implemented ABI, binding, or message surfaces |
 | `tests` | static cases, reviewed case routes, and generated-source relations |
@@ -1535,8 +1570,12 @@ vocabulary is:
 <!-- archbird-config-fields:end -->
 
 Selectors are segment-aware: `src/*.c` matches immediate children and
-`src/**/*.c` is recursive. Components group selected files; they do not discover
-new source. `route_to` records broad asserted intent; `case_routes` is
+`src/**/*.c` is recursive. Configured layers classify matching source before
+automatic language layers; they are not a source allowlist. A new supported
+file outside every configured layer remains mapped under `auto-*` and remains
+unassigned to a component until reviewed. Use `exclude` to remove source from
+the project scope. Components group mapped files; they do not discover source.
+`route_to` records broad asserted intent; `case_routes` is
 case-specific. Patterns use the pinned `archbird-pcre2-v1` contract rather than
 Python `re` or JavaScript `RegExp`.
 

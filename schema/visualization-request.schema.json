@@ -1,40 +1,161 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/visualization-request.schema.json",
-  "title": "Archbird visualization host request envelope",
+  "title": "Archbird live-server request",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "method", "payload", "protocol_version", "session"],
+  "required": ["method"],
   "properties": {
-    "id": {"$ref": "#/$defs/id"},
+    "display": {"type": ["object", "null"]},
     "method": {
       "enum": [
         "bootstrap",
-        "load",
         "state",
         "map",
         "projection",
+        "projections",
         "view",
         "export",
         "query",
+        "path",
         "diff",
         "source",
+        "verify",
         "verification",
         "snapshots",
         "open-snapshot",
         "dispose"
       ]
     },
-    "payload": {"type": "object"},
-    "protocol_version": {"const": 1},
-    "session": {"$ref": "#/$defs/id"}
+    "params": {"type": "object"},
+    "session": {"type": "string", "minLength": 1}
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["display"],
+        "properties": {"display": {"type": "object"}}
+      },
+      "then": {
+        "properties": {
+          "method": {"enum": ["map", "query", "path", "diff", "verify"]}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"method": {"const": "state"}}},
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "observed_display": {"$ref": "#/$defs/observed_display"}
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
-    "id": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    "count": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "identifier_list": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "identity", "kind", "label"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "identity": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "kind": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "label": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    },
+    "expanded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "groups", "omitted", "symbols"],
+      "properties": {
+        "files": {"$ref": "#/$defs/identifier_list"},
+        "groups": {"$ref": "#/$defs/identifier_list"},
+        "omitted": {"$ref": "#/$defs/count"},
+        "symbols": {"$ref": "#/$defs/identifier_list"}
+      }
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "direction", "edge_classification", "edge_flow", "edge_kind", "edges",
+        "group_by", "layout", "nodes", "notation", "perspective", "view"
+      ],
+      "properties": {
+        "direction": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "edge_classification": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "edge_flow": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "edge_kind": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "edges": {"$ref": "#/$defs/count"},
+        "group_by": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "layout": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "nodes": {"$ref": "#/$defs/count"},
+        "notation": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "perspective": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "view": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    },
+    "hidden": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ids", "omitted"],
+      "properties": {
+        "ids": {"$ref": "#/$defs/identifier_list"},
+        "omitted": {"$ref": "#/$defs/count"}
+      }
+    },
+    "observed_display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact", "expanded", "generation", "graph", "hidden", "history_depth",
+        "selected", "selected_constraint", "source", "workspace"
+      ],
+      "properties": {
+        "artifact": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "expanded": {"$ref": "#/$defs/expanded"},
+        "generation": {"$ref": "#/$defs/sha256"},
+        "graph": {
+          "oneOf": [{"$ref": "#/$defs/graph"}, {"type": "null"}]
+        },
+        "hidden": {"$ref": "#/$defs/hidden"},
+        "history_depth": {"$ref": "#/$defs/count"},
+        "selected": {
+          "oneOf": [{"$ref": "#/$defs/entity"}, {"type": "null"}]
+        },
+        "selected_constraint": {
+          "type": ["string", "null"], "minLength": 1, "maxLength": 4096
+        },
+        "source": {
+          "oneOf": [{"$ref": "#/$defs/source"}, {"type": "null"}]
+        },
+        "workspace": {"enum": ["live", "snapshot"]}
+      }
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "dependentRequired": {"end": ["start"], "start": ["end"]},
+      "properties": {
+        "end": {"$ref": "#/$defs/count"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "start": {"$ref": "#/$defs/count"}
+      }
     }
   }
 }

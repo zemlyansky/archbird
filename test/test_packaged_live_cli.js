@@ -60,7 +60,7 @@ async function main() {
     assert.equal(html.status, 200);
     assert.match(await html.text(), /Archbird/);
     const firstBootstrap = await (await fetch(new URL("api/v1/bootstrap", url))).json();
-    assert.equal(firstBootstrap.protocol_version, 1);
+    assert.equal(firstBootstrap.protocol_version, 2);
     assert.match(firstBootstrap.phase, /^(waiting|analyzing|ready)$/);
     await waitFor(async () => {
       const bootstrap = await (await fetch(new URL("api/v1/bootstrap", url))).json();

@@ -11,10 +11,11 @@ const {
   evaluateProjections,
   exportGraph,
   jsonCanonicalize,
+  pathMap,
   queryMap,
 } = require("./index");
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const STATIC_HOST_MARKER = 'name="archbird-host" content="static"';
 const SERVER_HOST_MARKER = 'name="archbird-host" content="server"';
 const SNAPSHOT_LIMIT = 4;
@@ -23,10 +24,8 @@ const BLOB_LIMIT = 32;
 const SNAPSHOT_BYTE_LIMIT = 512 * 1024 * 1024;
 const BLOB_BYTE_LIMIT = 256 * 1024 * 1024;
 const BODY_LIMIT = 2 * 1024 * 1024;
-const CAPABILITIES = [
-  "map", "projection", "projections", "view", "export", "query", "diff", "source",
-  "verification", "snapshots", "events",
-];
+const CAPABILITIES = ["map", "query", "path", "diff", "verify", "state", "display", "events"];
+const DISPLAY_METHODS = new Set(["diff", "map", "path", "query", "verify"]);
 const DEFAULT_SKIPPED_DIRECTORIES = new Set([
   ".git", ".hg", ".svn", ".venv", "__pycache__", "build", "dist", "node_modules",
 ]);
@@ -112,6 +111,11 @@ class LiveRepository {
     this.watchers = new Map();
     this.clients = new Set();
     this.eventId = 0;
+    this.display = null;
+    this.displayRevision = 0;
+    this.observedDisplay = null;
+    this.observedDisplayRevision = 0;
+    this.pendingDisplayDigest = null;
     this.timer = null;
     this.building = null;
     this.dirty = false;
@@ -131,6 +135,8 @@ class LiveRepository {
       project: this.current?.project || null,
       schema_version: this.current?.schemaVersion || null,
       source_available: Boolean(this.current),
+      display: this.display,
+      observed_display: this.observedDisplay,
     };
   }
 
@@ -156,13 +162,13 @@ class LiveRepository {
     return crypto.createHash("sha256").update(JSON.stringify(rows)).digest("hex");
   }
 
-  event(type, payload, generation = null) {
+  event(type, payload, generation = null, session = "server") {
     const event = {
       event_id: this.eventId++,
       ...(generation ? { generation } : {}),
       payload,
       protocol_version: PROTOCOL_VERSION,
-      session: "server",
+      ...(session === null ? {} : { session }),
       type,
     };
     const encoded = `id: ${event.event_id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -227,7 +233,12 @@ class LiveRepository {
     this.event("scan-started", { phase: "analyzing", root: "." }, this.current?.generation);
     this.building = this.candidate().then((snapshot) => {
       if (this.closed) return;
+      const changed = this.current?.generation !== snapshot.generation;
       this.current = snapshot;
+      if (changed) {
+        this.display = null;
+        if (this.observedDisplay?.workspace === "live") this.observedDisplay = null;
+      }
       this.retainSnapshot(snapshot);
       this.syncWatchers(snapshot.files);
       this.watchState = this.inputSignature();
@@ -398,13 +409,73 @@ class LiveRepository {
     while (
       this.blobs.size > 1
       && (this.blobs.size > BLOB_LIMIT || blobBytes() > this.blobByteLimit)
-    ) this.blobs.delete(this.blobs.keys().next().value);
+    ) {
+      const protectedDigests = new Set([sha256, this.pendingDisplayDigest]);
+      for (const name of ["artifact", "presentation"]) {
+        protectedDigests.add(this.display?.[name]?.blob_sha256);
+      }
+      const removable = [...this.blobs.keys()]
+        .find((digest) => !protectedDigests.has(digest));
+      if (!removable) break;
+      this.blobs.delete(removable);
+    }
     return {
       blob_sha256: sha256,
       bytes: encoded.length,
       generation: snapshot.generation,
       project: snapshot.project,
     };
+  }
+
+  publishDisplay(request, result) {
+    if (!result || typeof result !== "object" || Array.isArray(result)
+        || typeof result.blob_sha256 !== "string") {
+      throw new Error("display requires an artifact-producing operation");
+    }
+    if (!this.blobs.has(result.blob_sha256)) {
+      throw new Error("display artifact is unavailable");
+    }
+    let presentation = null;
+    this.pendingDisplayDigest = result.blob_sha256;
+    try {
+      if (request.method === "query") {
+        const bytes = this.blobs.get(result.blob_sha256);
+        if (!bytes) throw new Error("display artifact is unavailable");
+        const snapshot = this.snapshot(result.generation);
+        presentation = this.artifact(snapshot, exportGraph(bytes, {
+          format: "json",
+          maxEdgeNames: 3,
+          maxNodes: 0,
+          view: "symbols",
+        }));
+      }
+    } finally {
+      this.pendingDisplayDigest = null;
+    }
+    this.display = {
+      artifact: { ...result },
+      display: { ...request.display },
+      generation: result.generation,
+      method: request.method,
+      params: { ...request.params },
+      ...(presentation ? { presentation } : {}),
+      revision: ++this.displayRevision,
+      ...(request.session === null ? {} : { session: request.session }),
+    };
+    this.event("display-updated", this.display, result.generation, request.session);
+    return this.display;
+  }
+
+  observeDisplay(value, session) {
+    if (!session) throw new Error("observed display requires a session");
+    const observed = validateObservedDisplay(value);
+    this.snapshot(observed.generation);
+    this.observedDisplay = {
+      ...observed,
+      revision: ++this.observedDisplayRevision,
+      session,
+    };
+    return this.observedDisplay;
   }
 
   derived(snapshot, operation, request, evaluate) {
@@ -522,14 +593,169 @@ function readJson(request) {
 
 function validateRequest(value) {
   if (!value || Array.isArray(value) || typeof value !== "object") throw new Error("request must be an object");
-  if (value.protocol_version !== PROTOCOL_VERSION) throw new Error("unsupported visualization protocol");
-  for (const name of ["id", "method", "session"]) {
-    if (typeof value[name] !== "string" || !value[name]) throw new Error(`request.${name} is required`);
+  const unknown = Object.keys(value).filter((key) =>
+    !["display", "method", "params", "session"].includes(key)).sort();
+  if (unknown.length) throw new Error(`request contains unsupported field: ${unknown[0]}`);
+  if (typeof value.method !== "string" || !value.method) {
+    throw new Error("request.method is required");
   }
-  if (!value.payload || Array.isArray(value.payload) || typeof value.payload !== "object") {
-    throw new Error("request.payload must be an object");
+  const params = value.params ?? {};
+  if (!params || Array.isArray(params) || typeof params !== "object") {
+    throw new Error("request.params must be an object");
+  }
+  if (value.session !== undefined
+      && (typeof value.session !== "string" || !value.session)) {
+    throw new Error("request.session must be a non-empty string when supplied");
+  }
+  if (value.display !== undefined && value.display !== null
+      && (Array.isArray(value.display) || typeof value.display !== "object")) {
+    throw new Error("request.display must be an object or null");
+  }
+  if (value.display !== undefined && value.display !== null
+      && !DISPLAY_METHODS.has(value.method)) {
+    throw new Error(`request.display is unsupported for method ${value.method}`);
+  }
+  return {
+    display: value.display ?? null,
+    method: value.method,
+    params: { ...params },
+    session: value.session ?? null,
+  };
+}
+
+function displayString(value, label) {
+  if (typeof value !== "string" || !value || value.length > 4096) {
+    throw new Error(`${label} must be a non-empty string of at most 4096 characters`);
   }
   return value;
+}
+
+function displayObject(value, label, keys) {
+  if (!value || Array.isArray(value) || typeof value !== "object") {
+    throw new Error(`${label} must be an object`);
+  }
+  const unknown = Object.keys(value).filter((key) => !keys.includes(key)).sort();
+  if (unknown.length) throw new Error(`${label} contains unsupported field: ${unknown[0]}`);
+  return value;
+}
+
+function displayCount(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a nonnegative safe integer`);
+  }
+  return value;
+}
+
+function displayIds(value, label) {
+  if (!Array.isArray(value) || value.length > 128) {
+    throw new Error(`${label} must contain at most 128 identifiers`);
+  }
+  return value.map((item, index) => displayString(item, `${label}[${index}]`));
+}
+
+function validateObservedDisplay(value) {
+  const row = displayObject(value, "observed display", [
+    "artifact", "expanded", "generation", "graph", "hidden", "history_depth",
+    "selected", "selected_constraint", "source", "workspace",
+  ]);
+  const generation = displayString(row.generation, "observed display generation");
+  if (!/^[0-9a-f]{64}$/.test(generation)) {
+    throw new Error("observed display generation must be a SHA-256 digest");
+  }
+  const workspace = displayString(row.workspace, "observed display workspace");
+  if (!["live", "snapshot"].includes(workspace)) {
+    throw new Error("observed display workspace is invalid");
+  }
+  const expanded = displayObject(row.expanded, "observed display expanded state", [
+    "files", "groups", "omitted", "symbols",
+  ]);
+  const hidden = displayObject(row.hidden, "observed display hidden state", ["ids", "omitted"]);
+  let graph = null;
+  if (row.graph !== null) {
+    const input = displayObject(row.graph, "observed display graph", [
+      "direction", "edge_classification", "edge_flow", "edge_kind", "edges",
+      "group_by", "layout", "nodes", "notation", "perspective", "view",
+    ]);
+    graph = {
+      direction: displayString(input.direction, "observed display graph direction"),
+      edge_classification: displayString(input.edge_classification, "observed display edge classification"),
+      edge_flow: displayString(input.edge_flow, "observed display edge flow"),
+      edge_kind: displayString(input.edge_kind, "observed display edge kind"),
+      edges: displayCount(input.edges, "observed display graph edges"),
+      group_by: displayString(input.group_by, "observed display graph grouping"),
+      layout: displayString(input.layout, "observed display graph layout"),
+      nodes: displayCount(input.nodes, "observed display graph nodes"),
+      notation: displayString(input.notation, "observed display graph notation"),
+      perspective: displayString(input.perspective, "observed display graph perspective"),
+      view: displayString(input.view, "observed display graph view"),
+    };
+  }
+  let selected = null;
+  if (row.selected !== null) {
+    const input = displayObject(row.selected, "observed display selection", [
+      "id", "identity", "kind", "label", "path",
+    ]);
+    selected = {
+      id: displayString(input.id, "observed display selection id"),
+      identity: displayString(input.identity, "observed display selection identity"),
+      kind: displayString(input.kind, "observed display selection kind"),
+      label: displayString(input.label, "observed display selection label"),
+      ...(input.path === undefined ? {} : {
+        path: displayString(input.path, "observed display selection path"),
+      }),
+    };
+  }
+  let source = null;
+  if (row.source !== null) {
+    const input = displayObject(row.source, "observed display source", ["end", "path", "start"]);
+    source = {
+      path: displayString(input.path, "observed display source path"),
+      ...(input.start === undefined ? {} : {
+        start: displayCount(input.start, "observed display source start"),
+      }),
+      ...(input.end === undefined ? {} : {
+        end: displayCount(input.end, "observed display source end"),
+      }),
+    };
+    if ((source.start === undefined) !== (source.end === undefined)
+        || (source.start !== undefined && source.end <= source.start)) {
+      throw new Error("observed display source range is invalid");
+    }
+  }
+  return {
+    artifact: displayString(row.artifact, "observed display artifact"),
+    expanded: {
+      files: displayIds(expanded.files, "observed display expanded files"),
+      groups: displayIds(expanded.groups, "observed display expanded groups"),
+      omitted: displayCount(expanded.omitted, "observed display omitted expansions"),
+      symbols: displayIds(expanded.symbols, "observed display revealed symbols"),
+    },
+    generation,
+    graph,
+    hidden: {
+      ids: displayIds(hidden.ids, "observed display hidden identifiers"),
+      omitted: displayCount(hidden.omitted, "observed display omitted hidden identifiers"),
+    },
+    history_depth: displayCount(row.history_depth, "observed display history depth"),
+    selected,
+    selected_constraint: row.selected_constraint === null
+      ? null
+      : displayString(row.selected_constraint, "observed display selected constraint"),
+    source,
+    workspace,
+  };
+}
+
+function internalRequest(request) {
+  const method = request.method === "verify" ? "verification" : request.method;
+  const params = { ...request.params };
+  let payload = params;
+  if (method === "query") {
+    const generation = params.generation;
+    delete params.generation;
+    payload = { query: params, ...(generation === undefined ? {} : { generation }) };
+  }
+  return { method, payload, session: request.session };
 }
 
 function activityText(value, limit = 120) {
@@ -573,6 +799,14 @@ function operationLabel(request) {
     }
     return "query";
   }
+  if (request.method === "map") return "map";
+  if (request.method === "path") {
+    const source = payload.source && typeof payload.source === "object" ? payload.source : {};
+    const target = payload.target && typeof payload.target === "object" ? payload.target : {};
+    const sourceName = source.identity || source.name || "unknown";
+    const targetName = target.identity || target.name || "unknown";
+    return `path ${activityText(sourceName)} → ${activityText(targetName)}`;
+  }
   if (request.method === "source") return `source ${activityText(payload.path || "unknown")}`;
   if (request.method === "verification") return "verification";
   if (request.method === "diff") {
@@ -588,7 +822,8 @@ function operationLabel(request) {
 }
 
 function requestSnapshot(repository, selections, request) {
-  const generation = request.payload.generation || selections.get(request.session) || null;
+  const generation = request.payload.generation
+    || (request.session ? selections.get(request.session) : null) || null;
   return repository.snapshot(generation);
 }
 
@@ -600,6 +835,13 @@ async function hostRequest(repository, selections, request) {
     };
   }
   if (request.method === "state") {
+    const keys = Object.keys(request.payload);
+    if (keys.some((key) => key !== "observed_display")) {
+      throw new Error(`state request contains unsupported parameter: ${keys.sort()[0]}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(request.payload, "observed_display")) {
+      repository.observeDisplay(request.payload.observed_display, request.session);
+    }
     return repository.state();
   }
   if (request.method === "snapshots") {
@@ -615,7 +857,7 @@ async function hostRequest(repository, selections, request) {
   }
   if (request.method === "open-snapshot") {
     const snapshot = repository.snapshot(request.payload.generation);
-    selections.set(request.session, snapshot.generation);
+    if (request.session) selections.set(request.session, snapshot.generation);
     return repository.artifact(snapshot, snapshot.map);
   }
   const snapshot = requestSnapshot(repository, selections, request);
@@ -671,6 +913,23 @@ async function hostRequest(repository, selections, request) {
   if (request.method === "query") {
     return repository.artifact(snapshot, queryMap(snapshot.map, request.payload.query || {}));
   }
+  if (request.method === "path") {
+    const { source, target } = request.payload;
+    if (!source || Array.isArray(source) || typeof source !== "object"
+        || !target || Array.isArray(target) || typeof target !== "object") {
+      throw new Error("path request requires source and target objects");
+    }
+    return repository.artifact(snapshot, pathMap(snapshot.map, {
+      direction: request.payload.direction || "downstream",
+      level: request.payload.level || "file",
+      maxDepth: Number(request.payload.max_depth ?? 8),
+      maxPaths: Number(request.payload.max_paths ?? 8),
+      producerPolicy: request.payload.producer_policy || "compatible",
+      relations: request.payload.relations ?? null,
+      source,
+      target,
+    }));
+  }
   if (request.method === "diff") {
     const before = repository.snapshot(request.payload.before);
     const after = repository.snapshot(request.payload.after);
@@ -683,7 +942,7 @@ async function hostRequest(repository, selections, request) {
       : null;
   }
   if (request.method === "dispose") {
-    selections.delete(request.session);
+    if (request.session) selections.delete(request.session);
     return { disposed: true };
   }
   throw new Error(`unsupported visualization method: ${request.method}`);
@@ -784,32 +1043,35 @@ async function createLiveServer({
       const started = process.hrtime.bigint();
       try {
         raw = await readJson(request);
-        hostEnvelope = validateRequest(raw);
+        const requestEnvelope = validateRequest(raw);
+        hostEnvelope = internalRequest(requestEnvelope);
         label = operationLabel(hostEnvelope);
+        if (label && requestEnvelope.display !== null) label += " · displayed";
         const result = await hostRequest(repository, selections, hostEnvelope);
+        if (requestEnvelope.display !== null) {
+          repository.publishDisplay(requestEnvelope, result);
+        }
         envelope = {
           generation: repository.current?.generation,
-          id: hostEnvelope.id,
           ok: true,
           protocol_version: PROTOCOL_VERSION,
           result,
-          session: hostEnvelope.session,
+          ...(requestEnvelope.session === null ? {} : { session: requestEnvelope.session }),
         };
         if (label) {
           repository.activityEvent("operation-complete", {
             duration_ms: Number(process.hrtime.bigint() - started) / 1e6,
             label,
-            method: hostEnvelope.method,
+            method: requestEnvelope.method,
           });
         }
       } catch (error) {
         const identity = hostEnvelope || raw || {};
         envelope = {
           error: { code: "host-error", message: String(error.message || error) },
-          id: typeof identity.id === "string" ? identity.id : "invalid",
           ok: false,
           protocol_version: PROTOCOL_VERSION,
-          session: typeof identity.session === "string" ? identity.session : "invalid",
+          ...(typeof identity.session === "string" ? { session: identity.session } : {}),
         };
         if (label) {
           repository.activityEvent("operation-failed", {

@@ -1,18 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/zemlyansky/archbird/raw/main/schema/visualization-response.schema.json",
-  "title": "Archbird visualization host response envelope",
+  "title": "Archbird live-server response",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "ok", "protocol_version", "session"],
+  "required": ["ok", "protocol_version"],
   "properties": {
     "error": {"$ref": "#/$defs/error"},
-    "generation": {"$ref": "#/$defs/sha256"},
-    "id": {"$ref": "#/$defs/id"},
+    "generation": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    },
     "ok": {"type": "boolean"},
-    "protocol_version": {"const": 1},
+    "protocol_version": {"const": 2},
     "result": {},
-    "session": {"$ref": "#/$defs/id"}
+    "session": {"type": "string", "minLength": 1}
   },
   "oneOf": [
     {
@@ -28,12 +29,6 @@
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "id": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
-    },
     "error": {
       "type": "object",
       "additionalProperties": false,

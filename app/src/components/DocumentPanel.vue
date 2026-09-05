@@ -47,7 +47,6 @@ const actAcceptance = computed(() => {
     ? value as Record<string, unknown>
     : {};
 });
-
 function label(value: unknown): string {
   if (typeof value === "string") return value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return JSON.stringify(value);

@@ -9,7 +9,13 @@ import {
   watch,
 } from "vue";
 import { BrowserHost, type BrowserSource } from "./adapters/browser-host";
-import type { HostEvent, SnapshotSummary } from "./adapters/protocol";
+import {
+  displayState,
+  type DisplayState,
+  type HostEvent,
+  type ObservedDisplay,
+  type SnapshotSummary,
+} from "./adapters/protocol";
 import {
   evaluateArtifactProjection,
   evaluateArtifactProjections,
@@ -30,6 +36,10 @@ import {
   type ParsedArtifact,
   type WorkspaceArtifact,
 } from "./artifacts/model";
+import {
+  pathGraphFromArtifact,
+  pathStatusFromArtifact,
+} from "./artifacts/path";
 import {
   parseProjectionResult,
   parseProjectionResults,
@@ -203,7 +213,9 @@ let operationStartedAt = 0;
 let metricGeneration = 0;
 let entitySearchGeneration = 0;
 let entitySearchTimer: number | null = null;
+let observedDisplayTimer: number | null = null;
 let pendingGraphViewport: GraphViewport | null = null;
+let appliedDisplayRevision = 0;
 let themeMedia: MediaQueryList | null = null;
 
 const availableViews = computed(() => {
@@ -281,6 +293,11 @@ const emptyMappedScope = computed(() =>
   artifact.value?.artifact === "map"
   && Boolean(fileGraph.value)
   && fileGraph.value?.nodes.length === 0);
+const pathStatus = computed(() => {
+  if (!artifact.value || !isParsedArtifact(artifact.value)
+      || artifact.value.artifact !== "path") return null;
+  return pathStatusFromArtifact(artifact.value.document);
+});
 const explorationGraph = computed<GraphView | null>(() => {
   if (
     artifact.value?.artifact !== "map" || !baseMap.value
@@ -342,7 +359,10 @@ const sourcePath = computed(() => {
   if (selected.kind === "symbol" && selected.parent) {
     file = visibleGraph.value.nodes.find((node) => node.id === selected.parent) || selected;
   }
-  return file.kind === "file" ? file.identity : null;
+  if (file.kind === "file") return file.identity;
+  return selected.kind === "symbol" && typeof selected.attributes.path === "string"
+    ? selected.attributes.path
+    : null;
 });
 
 function beginOperation(): number {
@@ -511,6 +531,89 @@ function selectConstraint(id: string | null) {
   }
 }
 
+function boundedDisplayIds(values: ReadonlySet<string>): {
+  ids: string[];
+  omitted: number;
+} {
+  const rows = [...values].sort();
+  return { ids: rows.slice(0, 128), omitted: Math.max(0, rows.length - 128) };
+}
+
+function observedDisplay(): ObservedDisplay | null {
+  if (!(liveHost instanceof ServerHost) || !artifact.value || !baseGeneration.value
+      || workspaceMode.value === "saved") return null;
+  const visible = visibleGraph.value;
+  const selected = selectedId.value && visible
+    ? visible.nodes.find((node) => node.id === selectedId.value) || null
+    : null;
+  const selectedFile = selected?.kind === "file"
+    ? selected
+    : selected?.parent && visible
+      ? visible.nodes.find((node) => node.id === selected.parent && node.kind === "file") || null
+      : null;
+  const selectedPath = selectedFile?.identity
+    || (typeof selected?.attributes.path === "string" ? selected.attributes.path : null);
+  const expandedGroupRows = boundedDisplayIds(expandedGroups.value);
+  const expandedFileRows = boundedDisplayIds(expandedFiles.value);
+  const revealedSymbolRows = boundedDisplayIds(revealedSymbols.value);
+  const hiddenRows = boundedDisplayIds(hiddenElements.value);
+  const range = sourceSelection.value;
+  return {
+    artifact: artifact.value.artifact,
+    expanded: {
+      files: expandedFileRows.ids,
+      groups: expandedGroupRows.ids,
+      omitted: expandedFileRows.omitted + expandedGroupRows.omitted + revealedSymbolRows.omitted,
+      symbols: revealedSymbolRows.ids,
+    },
+    generation: baseGeneration.value,
+    graph: visible ? {
+      direction: direction.value,
+      edge_classification: edgeClassification.value,
+      edge_flow: edgeFlow.value,
+      edge_kind: edgeKind.value,
+      edges: visible.edges.length,
+      group_by: artifact.value.artifact === "map" ? graphGrouping.value : "none",
+      layout: graphLayout.value,
+      nodes: visible.nodes.length,
+      notation: graphNotation.value,
+      perspective: artifact.value.artifact === "map" ? mapView.value : "focused",
+      view: currentView.value,
+    } : null,
+    hidden: hiddenRows,
+    history_depth: graphHistory.value.length,
+    selected: selected ? {
+      id: selected.id,
+      identity: selected.identity,
+      kind: selected.kind,
+      label: selected.label,
+      ...(selectedPath ? { path: selectedPath } : {}),
+    } : null,
+    selected_constraint: selectedConstraintId.value,
+    source: range ? {
+      path: range.path,
+      ...(range.start === undefined || range.end === undefined
+        ? {}
+        : { end: range.end, start: range.start }),
+    } : null,
+    workspace: workspaceMode.value,
+  };
+}
+
+function scheduleObservedDisplay() {
+  if (observedDisplayTimer !== null) window.clearTimeout(observedDisplayTimer);
+  observedDisplayTimer = window.setTimeout(() => {
+    observedDisplayTimer = null;
+    const host = liveHost;
+    const state = observedDisplay();
+    if (host instanceof ServerHost && state) {
+      void host.observeDisplay(state).catch(() => {
+        // A generation may change while this non-evidence UI observation is in flight.
+      });
+    }
+  }, 50);
+}
+
 function replaceSet(
   current: ReadonlySet<string>,
   value: string,
@@ -543,6 +646,7 @@ function initializeSnapshotSelection() {
 async function setHost(host: BrowserHost | ServerHost | null, mode: TransportMode) {
   unsubscribe?.();
   unsubscribe = null;
+  if (liveHost !== host) appliedDisplayRevision = 0;
   if (liveHost && liveHost !== host) await liveHost.dispose();
   liveHost = host;
   transportMode.value = mode;
@@ -576,6 +680,146 @@ function hostEvent(event: HostEvent) {
   if (event.type === "snapshot-ready" && liveHost instanceof ServerHost &&
       workspaceMode.value === "live") {
     void refreshServer(liveHost);
+    return;
+  }
+  if (event.type === "display-updated" && liveHost instanceof ServerHost) {
+    try {
+      void applyDisplay(displayState(event.payload), liveHost);
+    } catch (cause) {
+      reportOperationError(cause);
+    }
+  }
+}
+
+function rememberGraph(previous: GraphNavigationEntry | null) {
+  if (!previous) return;
+  graphHistory.value = [
+    ...graphHistory.value.slice(-(GRAPH_HISTORY_LIMIT - 1)),
+    previous,
+  ];
+}
+
+function displaySourceSelection(params: Record<string, unknown>): {
+  path: string;
+  symbol: string | null;
+} | null {
+  const paths = Array.isArray(params.paths) ? params.paths : [];
+  if (typeof paths[0] === "string" && paths[0]) {
+    return { path: paths[0], symbol: null };
+  }
+  const symbols = Array.isArray(params.symbols) ? params.symbols : [];
+  if (typeof symbols[0] !== "string") return null;
+  const separator = symbols[0].lastIndexOf(":");
+  return separator > 0
+    ? {
+      path: symbols[0].slice(0, separator),
+      symbol: symbols[0].slice(separator + 1),
+    }
+    : null;
+}
+
+function installPathPresentation(loaded: ParsedArtifact, hasSource: boolean) {
+  const projected = pathGraphFromArtifact(loaded.document);
+  artifact.value = loaded;
+  currentView.value = projected.request.view;
+  graph.value = projected;
+  graphBytes.value = new TextEncoder().encode(JSON.stringify(projected));
+  edgeFlow.value = "uses";
+  sourceAvailable.value = hasSource;
+}
+
+async function applyDisplay(state: DisplayState, host: ServerHost) {
+  if (state.revision <= appliedDisplayRevision) return;
+  const previous = captureGraphNavigation();
+  const id = beginOperation();
+  error.value = "";
+  try {
+    if (state.method === "map") {
+      if (!baseMap.value || state.generation !== baseGeneration.value) {
+        throw new Error("displayed Map does not match the current live generation");
+      }
+      const requestedView = state.display.view;
+      const requestedGrouping = state.display.group_by;
+      const view: MapView = ["architecture", "evidence", "metrics", "overview", "tests"]
+        .includes(String(requestedView))
+        ? requestedView as MapView
+        : "overview";
+      const grouping: GraphGrouping = ["component", "directory", "language", "layer"]
+        .includes(String(requestedGrouping))
+        ? requestedGrouping as GraphGrouping
+        : "directory";
+      const presentation = await mapPresentation(
+        baseMap.value,
+        host,
+        view,
+        grouping,
+        state.generation,
+      );
+      if (!ownsOperation(id)) return;
+      resetGraphState();
+      installMapPresentation(baseMap.value, presentation);
+      rememberGraph(previous);
+    } else {
+      const payload = await host.artifactDescriptor(state.artifact);
+      const loaded = parseArtifact(
+        new Uint8Array(payload.bytes),
+        `${payload.project}.${state.method}.json`,
+      );
+      if (state.method === "query") {
+        if (!state.presentation) {
+          throw new Error("displayed Query has no graph presentation");
+        }
+        const graphPayload = await host.artifactDescriptor(state.presentation);
+        const projected = {
+          bytes: new Uint8Array(graphPayload.bytes),
+          graph: graphFromBytes(new Uint8Array(graphPayload.bytes)),
+        };
+        const requestedSource = state.display.view === "source"
+          ? displaySourceSelection(state.params)
+          : null;
+        const displayedSource = requestedSource
+          ? await host.source(requestedSource.path, state.generation)
+          : null;
+        if (!ownsOperation(id)) return;
+        resetGraphState();
+        artifact.value = loaded;
+        currentView.value = projected.graph.request.view;
+        graph.value = projected.graph;
+        graphBytes.value = projected.bytes;
+        sourceAvailable.value = true;
+        if (requestedSource) {
+          const file = projected.graph.nodes.find((node) =>
+            node.kind === "file" && node.identity === requestedSource.path);
+          const symbol = requestedSource.symbol && file
+            ? projected.graph.nodes.find((node) =>
+              node.kind === "symbol"
+              && node.label === requestedSource.symbol
+              && node.parent === file.id)
+            : null;
+          if (symbol || file) selectedId.value = (symbol || file)!.id;
+          sourceSelection.value = { path: requestedSource.path };
+          source.value = displayedSource;
+        }
+        rememberGraph(previous);
+      } else if (state.method === "path") {
+        if (!ownsOperation(id)) return;
+        resetGraphState();
+        installPathPresentation(loaded, true);
+        rememberGraph(previous);
+      } else {
+        if (!ownsOperation(id)) return;
+        artifact.value = loaded;
+        graph.value = null;
+        graphBytes.value = null;
+        graphHistory.value = [];
+        sourceAvailable.value = false;
+      }
+    }
+    appliedDisplayRevision = state.revision;
+  } catch (cause) {
+    if (ownsOperation(id)) reportOperationError(cause);
+  } finally {
+    finishOperation(id);
   }
 }
 
@@ -663,6 +907,7 @@ function installMapPresentation(
   loaded: WorkspaceArtifact,
   presentation: GraphPresentation,
 ) {
+  const mapChanged = baseMap.value !== loaded;
   artifact.value = loaded;
   baseMap.value = loaded;
   currentView.value = "components";
@@ -677,7 +922,7 @@ function installMapPresentation(
   graphBytes.value = new TextEncoder().encode(JSON.stringify(graph.value));
   queueMicrotask(() => {
     if (baseMap.value === loaded) void loadAllMetrics();
-    if (baseMap.value === loaded && entitySearch.value.trim()) {
+    if (mapChanged && baseMap.value === loaded && entitySearch.value.trim()) {
       scheduleEntitySearch(entitySearch.value);
     }
   });
@@ -1146,6 +1391,11 @@ async function open(file: File) {
       progress.value = null;
       return;
     }
+    if (loaded.artifact === "path") {
+      installPathPresentation(loaded, false);
+      progress.value = null;
+      return;
+    }
     const views = supportedViews(loaded.artifact);
     if (views.length) currentView.value = views[0];
     const projection = await projectArtifact(loaded, currentView.value);
@@ -1285,6 +1535,7 @@ async function returnToLive() {
 async function showBaseMap() {
   if (!baseMap.value) return;
   const id = beginOperation();
+  const retainedVerification = verification.value;
   error.value = "";
   resetGraphState();
   resetMapProjections();
@@ -1302,6 +1553,7 @@ async function showBaseMap() {
     );
     if (!ownsOperation(id)) return;
     installMapPresentation(baseMap.value, presentation);
+    verification.value = retainedVerification;
     sourceAvailable.value = workspaceMode.value === "live" ||
       (workspaceMode.value === "snapshot" && liveHost instanceof ServerHost);
   } catch (cause) {
@@ -1526,12 +1778,7 @@ async function runQueryOptions(
     currentView.value = "symbols";
     graph.value = projection?.graph || null;
     graphBytes.value = projection?.bytes || null;
-    if (previous) {
-      graphHistory.value = [
-        ...graphHistory.value.slice(-(GRAPH_HISTORY_LIMIT - 1)),
-        previous,
-      ];
-    }
+    rememberGraph(previous);
     if (hit && projection?.graph) {
       const selected = resultNode(projection.graph, hit);
       if (selected) {
@@ -1554,6 +1801,36 @@ async function runQuery() {
 async function openEntitySearchHit(hit: QueryRetrievalHit) {
   entitySearchOpen.value = false;
   entitySearchHits.value = [];
+  entitySearch.value = "";
+  if (["artifact", "component", "package"].includes(hit.kind)) {
+    if (!baseMap.value) return;
+    const previous = captureGraphNavigation();
+    const id = beginOperation();
+    error.value = "";
+    resetGraphState();
+    try {
+      const presentation = await mapPresentation(
+        baseMap.value,
+        queryHost(),
+        "architecture",
+        "component",
+        baseGeneration.value || undefined,
+      );
+      if (!ownsOperation(id)) return;
+      installMapPresentation(baseMap.value, presentation);
+      rememberGraph(previous);
+      const selected = resultNode(presentation.overview, hit);
+      if (!selected) throw new Error(`${hit.kind} is absent from the architecture view`);
+      selectGraphElement(selected.id);
+      await nextTick();
+      requestAnimationFrame(() => graphCanvas.value?.center(selected.id));
+    } catch (cause) {
+      if (ownsOperation(id)) reportOperationError(cause);
+    } finally {
+      finishOperation(id);
+    }
+    return;
+  }
   await runQueryOptions(queryOptionsForHit(hit), hit);
 }
 
@@ -1643,8 +1920,11 @@ function cancelLive() {
 
 async function refreshServer(host: ServerHost) {
   const id = beginOperation();
+  let state: Record<string, unknown> | null = null;
+  let refreshed = false;
   try {
-    const loaded = liveMapReference(await host.state());
+    state = await host.state();
+    const loaded = liveMapReference(state);
     const [presentation, verified] = await Promise.all([
       mapPresentation(loaded, host, "overview", "directory", loaded.generation),
       liveVerification(host, loaded.generation),
@@ -1661,10 +1941,20 @@ async function refreshServer(host: ServerHost) {
     initializeSnapshotSelection();
     error.value = "";
     progress.value = null;
+    refreshed = true;
   } catch (cause) {
     if (ownsOperation(id)) error.value = (cause as Error).message;
   } finally {
     finishOperation(id);
+    if (refreshed && state?.display && liveHost === host && workspaceMode.value === "live") {
+      queueMicrotask(() => {
+        try {
+          void applyDisplay(displayState(state!.display), host);
+        } catch (cause) {
+          reportOperationError(cause);
+        }
+      });
+    }
   }
 }
 
@@ -1745,9 +2035,36 @@ watch(graph, () => {
   edgeClassification.value = "all";
 });
 watch(entitySearch, scheduleEntitySearch);
+watch(
+  [
+    artifact,
+    baseGeneration,
+    currentView,
+    direction,
+    edgeClassification,
+    edgeFlow,
+    edgeKind,
+    expandedFiles,
+    expandedGroups,
+    graphGrouping,
+    graphLayout,
+    graphNotation,
+    hiddenElements,
+    mapView,
+    revealedSymbols,
+    selectedConstraintId,
+    selectedId,
+    sourceSelection,
+    visibleGraph,
+    workspaceMode,
+  ],
+  scheduleObservedDisplay,
+  { flush: "post" },
+);
 
 onBeforeUnmount(() => {
   if (entitySearchTimer !== null) window.clearTimeout(entitySearchTimer);
+  if (observedDisplayTimer !== null) window.clearTimeout(observedDisplayTimer);
   document.removeEventListener("pointerdown", dismissEntitySearchOutside);
   unsubscribe?.();
   themeMedia?.removeEventListener("change", systemThemeChanged);
@@ -2204,7 +2521,16 @@ onMounted(async () => {
           @minimize="minimizeGraphElement"
           @select="selectGraphElement"
           @zoom="zoomPercent = $event"
-        />
+        >
+          <div
+            v-if="pathStatus"
+            class="path-graph-status"
+            :data-status="pathStatus.outcome"
+          >
+            <strong>Path · {{ pathStatus.outcome }}</strong>
+            <span>{{ pathStatus.detail }}</span>
+          </div>
+        </GraphCanvas>
         <InspectorPanel
           v-if="!emptyMappedScope"
           v-show="inspectorOpen"

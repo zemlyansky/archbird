@@ -536,6 +536,26 @@ textarea { min-height: 76px; resize: vertical; }
   stroke-linejoin: round;
   stroke-width: 1.5;
 }
+.path-graph-status {
+  position: absolute;
+  z-index: 6;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: min(520px, calc(100% - 100px));
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 75%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 18%);
+  font-size: 0.7rem;
+}
+.path-graph-status span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.path-graph-status[data-status="found"] strong { color: var(--success); }
+.path-graph-status[data-status="unknown"] strong { color: var(--warning); }
+.path-graph-status[data-status="absent"] strong { color: var(--danger); }
 .metrics-panel {
   display: grid;
   gap: 0;

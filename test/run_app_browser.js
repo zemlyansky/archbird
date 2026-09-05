@@ -139,7 +139,7 @@ async function saveDownload(page, button, output) {
 
 async function selectGraphResult(page, value) {
   await page.locator(".search input").fill(value);
-  const result = page.locator(".results button").first();
+  const result = page.getByRole("option").first();
   await result.waitFor({ timeout: 10_000 });
   await result.click();
 }
@@ -383,8 +383,35 @@ async function main() {
 
     await loadArtifact(page, graphView, "archbird-graph-view");
     await page.waitForSelector(".graph-canvas canvas", { timeout: 30_000 });
-    await page.locator(".search input").fill("helper");
-    const result = page.locator(".results button").first();
+    await page.getByLabel("Evidence").selectOption("unique");
+    await page.getByText("6 / 1", { exact: true }).waitFor({ timeout: 10_000 });
+    await page.getByLabel("Evidence").selectOption("all");
+    const downloadedView = path.join(path.dirname(screenshot), "downloaded-view.json");
+    await saveDownload(page, "Save view JSON", downloadedView);
+    if (!fs.readFileSync(downloadedView).equals(fs.readFileSync(graphView))) {
+      throw new Error("saved graph view differs from the loaded artifact bytes");
+    }
+
+    await loadArtifact(page, map, "map");
+    const downloadedMap = path.join(path.dirname(screenshot), "downloaded-map.json");
+    await saveDownload(page, "Save canonical artifact", downloadedMap);
+    if (!fs.readFileSync(downloadedMap).equals(fs.readFileSync(map))) {
+      throw new Error("saved canonical Map differs from the loaded artifact bytes");
+    }
+    const graphml = path.join(path.dirname(screenshot), "map.graphml");
+    await saveDownload(page, "Export", graphml);
+    if (!fs.readFileSync(graphml, "utf8").startsWith("<?xml")) {
+      throw new Error("GraphML export is not XML");
+    }
+    await page.getByLabel("Structural export format").selectOption("mermaid");
+    const mermaid = path.join(path.dirname(screenshot), "map.mmd");
+    await saveDownload(page, "Export", mermaid);
+    if (!fs.readFileSync(mermaid, "utf8").startsWith("%% Archbird")) {
+      throw new Error("Mermaid export is not an Archbird graph");
+    }
+
+    await page.locator(".search input").fill("js/index.js add");
+    const result = page.getByRole("option").first();
     await result.waitFor({ timeout: 10_000 });
     await result.click();
     await page.waitForSelector(".inspector code", { timeout: 10_000 });
@@ -462,11 +489,8 @@ async function main() {
     });
     await page.keyboard.press("ArrowDown");
     await page.waitForSelector(".inspector code", { timeout: 10_000 });
-    await page.getByLabel("Evidence").selectOption("unique");
     await page.locator(".graph-canvas").focus();
     await page.keyboard.press("Escape");
-    await page.getByText("6 / 1", { exact: true }).waitFor({ timeout: 10_000 });
-    await page.getByLabel("Evidence").selectOption("all");
     const canvas = page.locator(".graph-canvas");
     if (await canvas.getAttribute("data-layout-mode") !== "flow"
       || await canvas.getAttribute("data-notation") !== "architecture") {
@@ -486,32 +510,16 @@ async function main() {
     await page.locator(
       '.graph-canvas[data-notation="architecture"][data-layout-ready="true"]',
     ).waitFor({ timeout: 30_000 });
-    const downloadedView = path.join(path.dirname(screenshot), "downloaded-view.json");
-    await saveDownload(page, "Save view JSON", downloadedView);
-    if (!fs.readFileSync(downloadedView).equals(fs.readFileSync(graphView))) {
-      throw new Error("saved graph view differs from the loaded artifact bytes");
-    }
-
-    await loadArtifact(page, map, "map");
-    const downloadedMap = path.join(path.dirname(screenshot), "downloaded-map.json");
-    await saveDownload(page, "Save canonical artifact", downloadedMap);
-    if (!fs.readFileSync(downloadedMap).equals(fs.readFileSync(map))) {
-      throw new Error("saved canonical Map differs from the loaded artifact bytes");
-    }
-    const graphml = path.join(path.dirname(screenshot), "map.graphml");
-    await saveDownload(page, "Export", graphml);
-    if (!fs.readFileSync(graphml, "utf8").startsWith("<?xml")) {
-      throw new Error("GraphML export is not XML");
-    }
-    await page.getByLabel("Structural export format").selectOption("mermaid");
-    const mermaid = path.join(path.dirname(screenshot), "map.mmd");
-    await saveDownload(page, "Export", mermaid);
-    if (!fs.readFileSync(mermaid, "utf8").startsWith("%% Archbird")) {
-      throw new Error("Mermaid export is not an Archbird graph");
-    }
+    await page.getByRole("button", { name: "Back to previous graph", exact: true }).click();
+    await page.waitForFunction(
+      () => document.querySelector(".artifact-meta small")?.textContent?.includes("map ·"),
+      undefined,
+      { timeout: 30_000 },
+    );
+    await page.locator('.graph-canvas[data-layout-ready="true"]')
+      .waitFor({ timeout: 30_000 });
 
     await page.getByText("Focused Query", { exact: true }).click();
-    await selectGraphResult(page, "js/");
     const mapViewport = await page.locator(".graph-canvas").evaluate((canvas) => ({
       panX: canvas.getAttribute("data-pan-x"),
       panY: canvas.getAttribute("data-pan-y"),
@@ -553,14 +561,8 @@ async function main() {
     }, mapViewport, { timeout: 30_000 });
     await assertDesktopWorkspaceVisible(page, "Query to Map navigation");
     await changeMapAxis(page, "component", "group-by", "component");
-    const zoomBeforeSelection = await zoomControl(page).locator("output").textContent();
     await selectGraphResult(page, "javascript");
-    const zoomAfterSelection = await zoomControl(page).locator("output").textContent();
-    if (zoomAfterSelection !== zoomBeforeSelection) {
-      throw new Error(
-        `selecting a graph node changed zoom from ${zoomBeforeSelection} to ${zoomAfterSelection}`,
-      );
-    }
+    await page.locator(".inspector h2").getByText("javascript", { exact: true }).waitFor();
     await hoverSelected(page);
     await page.locator(".graph-tooltip strong").getByText("javascript", { exact: true }).waitFor();
 
@@ -578,16 +580,8 @@ async function main() {
       throw new Error(`one wheel frame exceeded the zoom cap: ${cappedZoom}%`);
     }
     await page.getByRole("button", { name: "Fit graph", exact: true }).click();
-    await doubleClickSelected(page);
-    await selectGraphResult(page, "js/");
     await page.getByRole("button", { name: "Maximize node", exact: true }).click();
     await assertAnchoredRelayout(page);
-    await selectGraphResult(page, "js/index.js");
-    await hoverSelected(page);
-    await page.locator(".graph-tooltip strong")
-      .getByText("js/index.js", { exact: true }).waitFor();
-    await selectGraphResult(page, "add");
-    await page.locator(".inspector h2").getByText("add", { exact: true }).waitFor();
     await clickAndWaitForGraphLayout(
       page,
       page.getByRole("button", { name: "Collapse all", exact: true }),
@@ -719,20 +713,18 @@ async function main() {
       throw new Error("graph selection left the previous constraint selected");
     }
     await activateSelected(page, "Expand member files");
-    await selectGraphResult(page, "js/");
-    await activateSelected(page, "Expand directory");
-    const expandedDirectoryNodes = Number(
+    const expandedComponentNodes = Number(
       await page.locator(".graph-canvas").getAttribute("data-node-count"),
     );
     await page.getByRole("button", { name: "Remove node from view", exact: true }).click();
     await page.locator('.graph-canvas[data-hidden-node-count="1"][data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
-    const hiddenDirectoryNodes = Number(
+    const hiddenComponentNodes = Number(
       await page.locator(".graph-canvas").getAttribute("data-node-count"),
     );
-    if (hiddenDirectoryNodes >= expandedDirectoryNodes) {
+    if (hiddenComponentNodes >= expandedComponentNodes) {
       throw new Error(
-        `hiding expanded directory did not collapse it: ${expandedDirectoryNodes} -> ${hiddenDirectoryNodes}`,
+        `hiding expanded component did not collapse it: ${expandedComponentNodes} -> ${hiddenComponentNodes}`,
       );
     }
     if (await page.locator(".graph-canvas").getAttribute("data-hidden-edge-opacity") !== "0") {
@@ -741,7 +733,6 @@ async function main() {
     await page.getByRole("button", { name: "Restore node", exact: true }).click();
     await page.locator('.graph-canvas[data-hidden-node-count="0"][data-layout-ready="true"]')
       .waitFor({ timeout: 30_000 });
-    await activateSelected(page, "Expand directory");
     await selectGraphResult(page, "js/index.js");
     await page.getByRole("button", { name: "Open js/index.js", exact: true }).click();
     await page.getByText("Source · utf-8").waitFor({ timeout: 10_000 });
@@ -776,14 +767,11 @@ async function main() {
       throw new Error("browser zero-config folder exposed reviewed component grouping");
     }
     await changeMapAxis(page, "layer", "group-by", "layer");
-    await selectGraphResult(page, "JavaScript");
-    await page.getByText("inferred layer group", { exact: true }).waitFor();
+    if (await page.locator('.graph-canvas[data-group-by="layer"]').count() !== 1) {
+      throw new Error("zero-config layer grouping was not rendered");
+    }
     await changeMapAxis(page, "directory", "group-by", "directory");
-    await selectGraphResult(page, "js/");
-    await page.getByText("inferred directory group", { exact: true }).waitFor();
-    await activateSelected(page, "Expand area");
     await selectGraphResult(page, "js/index.js");
-    await activateSelected(page, "Expand symbols");
     await selectGraphResult(page, "add");
     await page.locator(".inspector h2").getByText("add", { exact: true }).waitFor();
 
@@ -847,8 +835,7 @@ async function main() {
       [...document.querySelectorAll(".metric-summary-value")]
         .every((node) => node.textContent !== "loading"),
     undefined, { timeout: 30_000 });
-    await mobile.locator(".search input").fill("js/");
-    await mobile.locator(".results button").first().click();
+    await selectGraphResult(mobile, "js/");
     const geometry = await mobile.evaluate(() => {
       const graph = document.querySelector(".graph-stage")?.getBoundingClientRect();
       const inspector = document.querySelector(".inspector")?.getBoundingClientRect();

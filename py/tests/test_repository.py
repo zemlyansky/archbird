@@ -3537,10 +3537,14 @@ writer.commit()
             ]
         )
         configured_map = json.loads(configured_map_path.read_bytes())
+        configured_layers = {
+            row["path"]: row["layer"] for row in configured_map["files"]
+        }
         if (
             status
             or configured_map["project"] != "cli-fixture"
-            or any(row["path"] == "src/main.js" for row in configured_map["files"])
+            or configured_layers.get("src/main.py") != "configured-python"
+            or configured_layers.get("src/main.js") != "auto-javascript"
         ):
             raise AssertionError("CLI > config > discovery precedence failed")
 

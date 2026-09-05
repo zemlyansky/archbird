@@ -2460,6 +2460,8 @@ def _assert_partial_configuration_overlay() -> None:
     (root / "src").mkdir(parents=True)
     (root / "tests").mkdir()
     (root / "src/core.py").write_text("def run():\n    return 1\n")
+    (root / "history.py").write_text("def record():\n    return []\n")
+    (root / "worker.js").write_text("export function work() { return 1; }\n")
     (root / "tests/test_core.py").write_text(
         "from src.core import run\n\ndef test_run():\n    assert run() == 1\n"
     )
@@ -2499,19 +2501,78 @@ def _assert_partial_configuration_overlay() -> None:
             }
         ],
     }
-    explicit_map = json.loads(
-        Project.from_repository(
-            root,
-            config=json.dumps(explicit, separators=(",", ":")).encode(),
-            jobs=1,
-        ).map_json()
+    explicit_project = Project.from_repository(
+        root,
+        config=json.dumps(explicit, separators=(",", ":")).encode(),
+        jobs=1,
     )
-    assert [layer["name"] for layer in explicit_map["layers"]] == ["owned"]
-    assert [source["path"] for source in explicit_map["files"]] == ["src/core.py"]
+    explicit_map = json.loads(explicit_project.map_json())
+    layer_by_path = {
+        source["path"]: source["layer"] for source in explicit_map["files"]
+    }
+    assert layer_by_path == {
+        "history.py": "auto-python",
+        "src/core.py": "owned",
+        "tests/test_core.py": "auto-python",
+        "worker.js": "auto-javascript",
+    }
+    assert not any(
+        diagnostic["code"] == "overlapping-layers"
+        for diagnostic in explicit_map["diagnostics"]
+    )
     assert [
         (package["name"], package["layer"])
         for package in explicit_map["packages"]
     ] == [("python-root", "owned")]
+    layer_origins = {
+        tuple(origin.get("evidence", [])): origin["source"]
+        for origin in json.loads(explicit_project.resolution_json)["origins"]
+        if origin["pointer"].startswith("/layers/")
+    }
+    assert layer_origins[("owned",)] == "config"
+    assert layer_origins[("auto-python",)] == "discovery"
+    assert layer_origins[("auto-javascript",)] == "discovery"
+
+    excluded = {**explicit, "exclude": ["history.py"]}
+    excluded_map = json.loads(
+        Project.from_repository(
+            root,
+            config=json.dumps(excluded, separators=(",", ":")).encode(),
+            jobs=1,
+        ).map_json()
+    )
+    assert [source["path"] for source in excluded_map["files"]] == [
+        "src/core.py",
+        "tests/test_core.py",
+        "worker.js",
+    ]
+
+    overlapping = {
+        "project": "overlapping",
+        "layers": [
+            {
+                "name": "first",
+                "language": "python",
+                "globs": ["src/**"],
+            },
+            {
+                "name": "second",
+                "language": "python",
+                "globs": ["src/**"],
+            },
+        ],
+    }
+    overlapping_map = json.loads(
+        Project.from_repository(
+            root,
+            config=json.dumps(overlapping, separators=(",", ":")).encode(),
+            jobs=1,
+        ).map_json()
+    )
+    assert any(
+        diagnostic["code"] == "overlapping-layers"
+        for diagnostic in overlapping_map["diagnostics"]
+    )
 
     completed = subprocess.run(
         [

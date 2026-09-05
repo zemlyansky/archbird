@@ -1570,9 +1570,53 @@ static int effective_layer_exists(const AbValue *layers,
   return 0;
 }
 
+/* Configured layers classify first; automatic layers retain source coverage. */
+static ArchbirdStatus overlay_configured_layers(ResolutionState *state,
+                                                const AbValue *configured) {
+  AbObjectField *field = mutable_member(&state->effective, "layers");
+  AbValue defaults = {0};
+  AbValue combined = {0};
+  size_t index;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!field || field->value.kind != AB_VALUE_ARRAY || !configured ||
+      configured->kind != AB_VALUE_ARRAY)
+    return ARCHBIRD_INVALID_SCHEMA;
+  defaults = field->value;
+  memset(&field->value, 0, sizeof(field->value));
+  combined.kind = AB_VALUE_ARRAY;
+  for (index = 0; status == ARCHBIRD_OK && index < configured->as.array.count;
+       index++) {
+    AbValue layer = {0};
+    status = ab_value_copy(state->engine, &layer,
+                           &configured->as.array.items[index]);
+    if (status == ARCHBIRD_OK)
+      status = array_append(state->engine, &combined, &layer);
+    ab_value_free(state->engine, &layer);
+  }
+  for (index = 0; status == ARCHBIRD_OK && index < defaults.as.array.count;
+       index++) {
+    const AbValue *name =
+        ab_value_member(&defaults.as.array.items[index], "name");
+    AbValue layer = {0};
+    if (effective_layer_exists(configured, name))
+      continue;
+    status =
+        ab_value_copy(state->engine, &layer, &defaults.as.array.items[index]);
+    if (status == ARCHBIRD_OK)
+      status = array_append(state->engine, &combined, &layer);
+    ab_value_free(state->engine, &layer);
+  }
+  if (status == ARCHBIRD_OK)
+    status = object_set(state->engine, &state->effective, "layers", &combined);
+  ab_value_free(state->engine, &defaults);
+  ab_value_free(state->engine, &combined);
+  return status;
+}
+
 static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
   AbObjectField *package_field;
   const AbValue *layers;
+  const AbValue *configured_layers;
   size_t read_index;
   size_t write_index = 0;
   if (!configured_map_field(state, "layers") ||
@@ -1580,8 +1624,10 @@ static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
     return ARCHBIRD_OK;
   package_field = mutable_member(&state->effective, "packages");
   layers = ab_value_member(&state->effective, "layers");
+  configured_layers = ab_value_member(&state->configured_map_overlay, "layers");
   if (!package_field || package_field->value.kind != AB_VALUE_ARRAY ||
-      !layers || layers->kind != AB_VALUE_ARRAY)
+      !layers || layers->kind != AB_VALUE_ARRAY || !configured_layers ||
+      configured_layers->kind != AB_VALUE_ARRAY)
     return ARCHBIRD_OK;
   for (read_index = 0; read_index < package_field->value.as.array.count;
        read_index++) {
@@ -1591,10 +1637,10 @@ static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
     size_t layer_index;
     size_t matches = 0;
     ArchbirdStatus status = ARCHBIRD_OK;
-    if (!effective_layer_exists(layers, discovered_layer)) {
-      for (layer_index = 0; layer_index < layers->as.array.count;
+    {
+      for (layer_index = 0; layer_index < configured_layers->as.array.count;
            layer_index++) {
-        const AbValue *layer = &layers->as.array.items[layer_index];
+        const AbValue *layer = &configured_layers->as.array.items[layer_index];
         const AbValue *language = ab_value_member(layer, "language");
         if (!inferred_package_layer_matches(discovered_layer, language))
           continue;
@@ -1605,7 +1651,8 @@ static ArchbirdStatus reconcile_inferred_packages(ResolutionState *state) {
         status = object_set_string(state->engine, package, "layer",
                                    replacement->as.text.data,
                                    replacement->as.text.length);
-      else {
+      else if (matches > 1 ||
+               !effective_layer_exists(layers, discovered_layer)) {
         ab_value_free(state->engine, package);
         continue;
       }
@@ -2289,7 +2336,10 @@ static ArchbirdStatus prepare_effective(
         &state->configured_map_overlay.as.object.fields[overlay_index];
     AbValue copied = {0};
     status = ab_value_copy(state->engine, &copied, &field->value);
-    if (status == ARCHBIRD_OK)
+    if (status == ARCHBIRD_OK && field->name.length == 6 &&
+        !memcmp(field->name.data, "layers", 6))
+      status = overlay_configured_layers(state, &copied);
+    else if (status == ARCHBIRD_OK)
       status = object_set_name(state->engine, &state->effective, &field->name,
                                &copied);
     ab_value_free(state->engine, &copied);
@@ -2972,6 +3022,8 @@ static ArchbirdStatus render_indexed_origin(AbBuffer *buffer, int *first,
 static ArchbirdStatus render_origins(AbBuffer *buffer,
                                      const ResolutionState *state) {
   const AbValue *layers = ab_value_member(&state->effective, "layers");
+  const AbValue *configured_layers =
+      ab_value_member(&state->configured_map_overlay, "layers");
   const AbValue *packages = ab_value_member(&state->effective, "packages");
   const AbValue *excludes = ab_value_member(&state->effective, "exclude");
   const AbValue *request_default =
@@ -2980,6 +3032,10 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
       ab_value_member(&state->request_document, "ignore");
   size_t cli_layers =
       state->request.sources ? state->request.sources->as.array.count : 0;
+  size_t configured_layer_count =
+      configured_layers && configured_layers->kind == AB_VALUE_ARRAY
+          ? configured_layers->as.array.count
+          : 0;
   size_t cli_excludes =
       state->request.exclude ? state->request.exclude->as.array.count : 0;
   size_t base_excludes = excludes && excludes->kind == AB_VALUE_ARRAY &&
@@ -3031,13 +3087,14 @@ static ArchbirdStatus render_origins(AbBuffer *buffer,
        index++) {
     const AbValue *layer = &layers->as.array.items[index];
     const AbValue *name = ab_value_member(layer, "name");
+    const char *source = index < cli_layers ? "cli"
+                         : index < cli_layers + configured_layer_count
+                             ? "config"
+                             : "discovery";
     status = render_indexed_origin(
-        buffer, &first, "layers", index,
-        index < cli_layers                      ? "cli"
-        : configured_map_field(state, "layers") ? "config"
-                                                : "discovery",
+        buffer, &first, "layers", index, source,
         name && name->kind == AB_VALUE_STRING ? &name->as.text : NULL);
-    if (status == ARCHBIRD_OK && !configured_map_field(state, "layers") &&
+    if (status == ARCHBIRD_OK && !strcmp(source, "discovery") &&
         ab_value_string_is(name, "auto-python")) {
       const AbValue *roots = ab_value_member(layer, "import_roots");
       size_t root_index;

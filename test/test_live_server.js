@@ -15,7 +15,6 @@ const fixtureRoot = path.resolve(process.argv[2]);
 const appRoot = path.resolve(process.argv[3]);
 const temporaryRoot = path.resolve(process.argv[4]);
 const repositoryRoot = path.join(temporaryRoot, "repository");
-let nextId = 0;
 
 async function waitFor(predicate, label, timeout = 20_000) {
   const deadline = Date.now() + timeout;
@@ -26,13 +25,16 @@ async function waitFor(predicate, label, timeout = 20_000) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function request(server, method, payload = {}, { ok = true } = {}) {
+async function request(server, method, params = {}, {
+  display,
+  ok = true,
+  session,
+} = {}) {
   const envelope = {
-    id: `test-${++nextId}`,
     method,
-    payload,
-    protocol_version: 1,
-    session: "test-session",
+    params,
+    ...(display === undefined ? {} : { display }),
+    ...(session === undefined ? {} : { session }),
   };
   const response = await fetch(new URL("api/v1/request", server.url), {
     body: JSON.stringify(envelope),
@@ -40,14 +42,14 @@ async function request(server, method, payload = {}, { ok = true } = {}) {
     method: "POST",
   });
   const result = await response.json();
-  assert.equal(result.id, envelope.id);
-  assert.equal(result.session, envelope.session);
+  assert.equal("id" in result, false);
+  assert.equal(result.session, session);
   assert.equal(result.ok, ok);
   return result;
 }
 
-async function artifact(server, method, payload = {}) {
-  const envelope = await request(server, method, payload);
+async function artifact(server, method, payload = {}, options = {}) {
+  const envelope = await request(server, method, payload, options);
   const descriptor = envelope.result;
   assert.match(descriptor.blob_sha256, /^[0-9a-f]{64}$/);
   const response = await fetch(new URL(`api/v1/blobs/${descriptor.blob_sha256}`, server.url));
@@ -94,10 +96,9 @@ async function main() {
     const bootstrapResponse = await fetch(new URL("api/v1/bootstrap", server.url));
     assert.equal(bootstrapResponse.status, 200);
     const bootstrap = await bootstrapResponse.json();
-    assert.equal(bootstrap.protocol_version, 1);
+    assert.equal(bootstrap.protocol_version, 2);
     assert.deepEqual(bootstrap.capabilities, [
-      "map", "projection", "projections", "view", "export", "query", "diff", "source",
-      "verification", "snapshots", "events",
+      "map", "query", "path", "diff", "verify", "state", "display", "events",
     ]);
     assert.equal(bootstrap.project, null);
     assert.match(bootstrap.phase, /^(waiting|analyzing)$/);
@@ -125,7 +126,63 @@ async function main() {
     assert.equal(initialMap.project, "map-base");
     assert.equal(readyState.schema_version, initialMap.schema_version);
     assert.equal(initial.descriptor.generation, initialMap.evidence.input_sha256);
-    const verification = JSON.parse((await artifact(server, "verification")).bytes);
+    const observedDisplay = {
+      artifact: "map",
+      expanded: { files: [], groups: [], omitted: 0, symbols: [] },
+      generation: initial.descriptor.generation,
+      graph: {
+        direction: "LR",
+        edge_classification: "all",
+        edge_flow: "flow",
+        edge_kind: "all",
+        edges: 2,
+        group_by: "directory",
+        layout: "flow",
+        nodes: 3,
+        notation: "architecture",
+        perspective: "overview",
+        view: "components",
+      },
+      hidden: { ids: [], omitted: 0 },
+      history_depth: 0,
+      selected: {
+        id: "file:js/index.js",
+        identity: "js/index.js",
+        kind: "file",
+        label: "index.js",
+        path: "js/index.js",
+      },
+      selected_constraint: null,
+      source: null,
+      workspace: "live",
+    };
+    const observedState = (await request(
+      server,
+      "state",
+      { observed_display: observedDisplay },
+      { session: "browser-one" },
+    )).result;
+    assert.deepEqual(observedState.observed_display, {
+      ...observedDisplay,
+      revision: 1,
+      session: "browser-one",
+    });
+    assert.deepEqual(
+      (await request(server, "state")).result.observed_display,
+      observedState.observed_display,
+      "agent state request did not return the browser-observed display",
+    );
+    const incompleteObservation = { ...observedDisplay };
+    delete incompleteObservation.selected;
+    const rejectedObservation = await request(
+      server,
+      "state",
+      { observed_display: incompleteObservation },
+      { ok: false, session: "browser-one" },
+    );
+    assert.match(rejectedObservation.error.message, /select/);
+    assert.deepEqual(server.repository.state().observed_display, observedState.observed_display);
+    const verification = JSON.parse((await artifact(server, "verify")).bytes);
     assert.equal(verification.artifact, "verification");
     assert.equal(verification.policy.project, "map-base");
     const membershipArtifact = await artifact(server, "projection", {
@@ -209,11 +266,65 @@ async function main() {
     assert.equal(symbols.request.view, "symbols");
     assert.ok(symbols.nodes.some((row) => row.kind === "symbol" && row.label === "add"));
     const query = JSON.parse((await artifact(server, "query", {
-      query: { depth: 0, symbols: ["add"], test_depth: 0 },
+      depth: 0, symbols: ["add"], test_depth: 0,
     })).bytes);
     assert.equal(query.artifact, "query");
+    const connection = JSON.parse((await artifact(server, "path", {
+      direction: "downstream",
+      relations: ["imports"],
+      source: { kind: "file", patterns: ["py/pkg/__init__.py"] },
+      target: { kind: "file", patterns: ["py/pkg/api.py"] },
+    })).bytes);
+    assert.equal(connection.artifact, "path");
+    assert.equal(connection.outcome, "found");
     assert.ok(activities.some((row) =>
       row.event === "operation-complete" && row.label === "query symbol add"));
+
+    assert.equal(server.repository.state().display, null);
+    const displayed = await request(
+      server,
+      "query",
+      { depth: 0, symbols: ["add"], test_depth: 0 },
+      { display: {} },
+    );
+    const displayState = server.repository.state().display;
+    assert.equal(displayState.revision, 1);
+    assert.equal(displayState.method, "query");
+    assert.deepEqual(displayState.params, {
+      depth: 0, symbols: ["add"], test_depth: 0,
+    });
+    assert.deepEqual(displayState.display, {});
+    assert.equal(displayState.artifact.blob_sha256, displayed.result.blob_sha256);
+    assert.match(displayState.presentation.blob_sha256, /^[0-9a-f]{64}$/);
+    assert.equal("session" in displayState, false);
+    assert.ok(events.some((value) => value.includes("event: display-updated")));
+    assert.ok(activities.some((row) =>
+      row.event === "operation-complete" && row.label === "query symbol add · displayed"));
+    const displayEvent = JSON.parse(
+      events.find((value) => value.includes("event: display-updated"))
+        .match(/data: (.+)\n\n$/s)[1],
+    );
+    assert.deepEqual(displayEvent.payload, displayState);
+    assert.equal("session" in displayEvent, false);
+
+    await request(server, "query", { depth: 0, symbols: ["add"], test_depth: 0 });
+    assert.equal(
+      server.repository.state().display.revision,
+      1,
+      "private request replaced the displayed artifact",
+    );
+    await request(server, "path", {}, { display: {}, ok: false });
+    assert.equal(
+      server.repository.state().display.revision,
+      1,
+      "failed display request replaced the last successful display",
+    );
+    await request(
+      server,
+      "projection",
+      { plan: { id: "private", select: "component_membership" } },
+      { display: {}, ok: false },
+    );
 
     const source = await request(server, "source", { path: "js/index.js" });
     assert.equal(source.result.encoding, "utf-8");
@@ -252,6 +363,16 @@ async function main() {
     );
     const currentGeneration = server.repository.current.generation;
     assert.match(currentGeneration, /^[0-9a-f]{64}$/);
+    assert.equal(
+      server.repository.state().display,
+      null,
+      "stale display survived a new source generation",
+    );
+    assert.equal(
+      server.repository.state().observed_display,
+      null,
+      "stale browser observation survived a new source generation",
+    );
     const snapshots = await request(server, "snapshots");
     assert.equal(snapshots.result.length, 2);
     assert.ok(snapshots.result.every(
@@ -266,9 +387,14 @@ async function main() {
     );
     assert.match(staleSource.error.message, /changed after selected generation/);
 
-    const opened = await artifact(server, "open-snapshot", { generation: initialGeneration });
+    const opened = await artifact(
+      server,
+      "open-snapshot",
+      { generation: initialGeneration },
+      { session: "snapshot-review" },
+    );
     assert.equal(opened.descriptor.generation, initialGeneration);
-    const selectedMap = await artifact(server, "map");
+    const selectedMap = await artifact(server, "map", {}, { session: "snapshot-review" });
     assert.equal(selectedMap.descriptor.generation, initialGeneration);
     const latestMap = await artifact(server, "map", { generation: currentGeneration });
     assert.equal(latestMap.descriptor.generation, currentGeneration);
