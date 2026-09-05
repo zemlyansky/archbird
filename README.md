@@ -1117,7 +1117,8 @@ The application provides:
 - compact node and edge hover details for identity, relation counts, evidence,
   and verification state; external symbol relations stay at the file frontier
   until explicitly revealed for one symbol;
-- all seven interactive Metrics in the right inspector, each showing the
+- all seven interactive Metrics in the right inspector, loaded individually
+  when expanded, each showing the
   selected region or whole project through quartiles, p95/p99 tail context,
   every value above p99, distribution completeness, and exact
   contributors; points and hotspot rows open focused graph context, while a

@@ -637,13 +637,15 @@ async function main() {
     if (await page.locator(".metric-accordion").count() !== 7) {
       throw new Error("Metrics sidebar does not expose all seven interactive metrics");
     }
-    await page.waitForFunction(() =>
-      [...document.querySelectorAll(".metric-summary-value")]
-        .every((node) => node.textContent !== "loading"),
-    undefined, { timeout: 30_000 });
     const complexity = page.locator(
       '[data-metric="source.cyclomatic_complexity"]',
     );
+    if (await complexity.locator(":scope > .metric-box-plot").count()) {
+      throw new Error("unopened metric eagerly loaded its distribution");
+    }
+    await complexity.locator(".metric-summary").click();
+    await complexity.locator(".metric-distribution").waitFor();
+    await complexity.locator(".metric-summary").click();
     if (await complexity.locator(":scope > .metric-box-plot").count() !== 1) {
       throw new Error("collapsed metric does not expose its quartile plot");
     }
@@ -831,10 +833,9 @@ async function main() {
     if (await mobile.locator(".metric-accordion").count() !== 7) {
       throw new Error("mobile Metrics sidebar does not expose all seven metrics");
     }
-    await mobile.waitForFunction(() =>
-      [...document.querySelectorAll(".metric-summary-value")]
-        .every((node) => node.textContent !== "loading"),
-    undefined, { timeout: 30_000 });
+    const mobileComplexity = mobile.locator('[data-metric="source.cyclomatic_complexity"]');
+    await mobileComplexity.locator(".metric-summary").click();
+    await mobileComplexity.locator(".metric-facts").waitFor();
     await selectGraphResult(mobile, "js/");
     const geometry = await mobile.evaluate(() => {
       const graph = document.querySelector(".graph-stage")?.getBoundingClientRect();

@@ -29,6 +29,7 @@ const emit = defineEmits<{
   activate: [id: string];
   close: [];
   hide: [id: string];
+  metricLoad: [metric: MetricId];
   metricOverlay: [metric: MetricId | null];
   metricQuery: [path: string, symbol: string | null];
   metricScope: [scope: MetricScopeMode];
@@ -227,6 +228,7 @@ function forwardMetricQuery(path: string, symbol: string | null): void {
       :projections="metricProjections || emptyMetricProjections"
       :scope="metricScope || 'selection'"
       :selected-id="selectedId"
+      @load="emit('metricLoad', $event)"
       @overlay="emit('metricOverlay', $event)"
       @query="forwardMetricQuery"
       @scope="emit('metricScope', $event)"

@@ -88,6 +88,9 @@ async function layoutExtent(page, spacing, previous = null) {
 
 async function assertMiddlePanPreservesNode(page) {
   const canvas = page.locator(".graph-canvas");
+  // The inspector can show the new Query before its node positions are ready.
+  await page.locator('.graph-canvas[data-layout-ready="true"]')
+    .waitFor({ timeout: 60_000 });
   const before = await canvas.evaluate((element) => ({
     modelX: element.getAttribute("data-selected-model-x"),
     modelY: element.getAttribute("data-selected-model-y"),

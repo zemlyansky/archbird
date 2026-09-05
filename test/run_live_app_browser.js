@@ -358,6 +358,7 @@ async function main() {
     const errors = [];
     const consoleErrors = [];
     const hostMethods = [];
+    const metricRequests = [];
     const remoteRequests = [];
     const wasmRequests = [];
     page.on("pageerror", (error) => errors.push(error.stack || error.message));
@@ -375,7 +376,12 @@ async function main() {
       }
       if (target.pathname === "/api/v1/request" && request.method() === "POST") {
         try {
-          hostMethods.push(request.postDataJSON().method);
+          const envelope = request.postDataJSON();
+          hostMethods.push(envelope.method);
+          if (envelope.method === "projections"
+            || (envelope.method === "projection" && envelope.params?.plan?.select === "metrics")) {
+            metricRequests.push(envelope);
+          }
         } catch {
           hostMethods.push("<invalid>");
         }
@@ -461,10 +467,20 @@ async function main() {
     if (await page.locator(".metric-accordion").count() !== 7) {
       throw new Error("live Metrics sidebar does not expose all seven metrics");
     }
-    await page.waitForFunction(() =>
-      [...document.querySelectorAll(".metric-summary-value")]
-        .every((node) => node.textContent !== "loading"),
-    undefined, { timeout: 30_000 });
+    if (metricRequests.length) {
+      throw new Error("initial overview eagerly requested metric evidence");
+    }
+    const complexity = page.locator('[data-metric="source.cyclomatic_complexity"]');
+    await complexity.locator(".metric-summary").click();
+    await complexity.locator(".metric-facts").waitFor({ timeout: 30_000 });
+    if (metricRequests.length !== 1
+      || metricRequests[0].params?.plan?.metric !== "source.cyclomatic_complexity") {
+      throw new Error(`opening one metric requested unrelated evidence: ${JSON.stringify(metricRequests)}`);
+    }
+    await complexity.locator(".metric-summary").click();
+    await complexity.locator(".metric-summary").click();
+    await complexity.locator(".metric-facts").waitFor();
+    if (metricRequests.length !== 1) throw new Error("reopening a metric bypassed its cache");
     await agentRequest(server.url, "query", {
       depth: 0,
       symbols: ["add"],
