@@ -3407,7 +3407,32 @@ render_query_budgeted(ArchbirdEngine *engine, const AbValue *map,
       return status;
     include_routed = length <= budget;
   }
-  /* Keep ranked test witnesses before spending the budget on relation tails. */
+  /* Reserve the focus and nearest ranked context with a test/call witness
+   * before filling relation tails. Explicit context quotas still apply. */
+  if (include_routed && files->as.array.count) {
+    size_t count = files->as.array.count < 2 ? files->as.array.count : 2;
+    QueryRouteBudget minimum_routes = {0};
+    minimum_routes.tests =
+        optional_array(query, "test_matches")->as.array.count ? 1 : 0;
+    minimum_routes.calls =
+        optional_array(query, "symbol_calls")->as.array.count ? 1 : 0;
+    for (; count; count--) {
+      size_t length = 0;
+      status = render_query_budget_length(
+          engine, map, query, verification, budget, count, 1, include_routed,
+          &minimum_routes, view, detail, &length);
+      if (status != ARCHBIRD_OK)
+        return status;
+      if (length <= budget) {
+        visible_count = count;
+        include_neighborhood = 1;
+        routes = minimum_routes;
+        break;
+      }
+    }
+  }
+  /* Keep ranked test witnesses before spending the remaining budget on calls.
+   */
   for (phase = 0; include_routed && phase < 3; phase++) {
     const char *field = phase == 0   ? "test_matches"
                         : phase == 1 ? "symbol_calls"
@@ -3415,16 +3440,16 @@ render_query_budgeted(ArchbirdEngine *engine, const AbValue *map,
     size_t *limit = phase == 0   ? &routes.tests
                     : phase == 1 ? &routes.calls
                                  : &routes.references;
-    size_t low = 1;
+    size_t low = *limit + 1;
     size_t high = optional_array(query, field)->as.array.count;
-    size_t best = 0;
+    size_t best = *limit;
     while (low <= high) {
       size_t middle = low + (high - low) / 2;
       size_t length = 0;
       *limit = middle;
-      status = render_query_budget_length(engine, map, query, verification,
-                                          budget, 0, 0, include_routed, &routes,
-                                          view, detail, &length);
+      status = render_query_budget_length(
+          engine, map, query, verification, budget, visible_count,
+          include_neighborhood, include_routed, &routes, view, detail, &length);
       if (status != ARCHBIRD_OK)
         return status;
       if (length <= budget) {
@@ -3438,15 +3463,15 @@ render_query_budgeted(ArchbirdEngine *engine, const AbValue *map,
   }
   {
     size_t length = 0;
-    status = render_query_budget_length(engine, map, query, verification,
-                                        budget, 0, 1, include_routed, &routes,
-                                        view, detail, &length);
+    status = render_query_budget_length(
+        engine, map, query, verification, budget, visible_count, 1,
+        include_routed, &routes, view, detail, &length);
     if (status != ARCHBIRD_OK)
       return status;
     include_neighborhood = length <= budget;
   }
   if (include_neighborhood && files->as.array.count) {
-    size_t low = 1;
+    size_t low = visible_count + 1;
     size_t high = files->as.array.count;
     while (low <= high) {
       size_t middle = low + (high - low) / 2;
@@ -3549,7 +3574,9 @@ ArchbirdStatus ab_query_report_markdown_view_with_verification(
       high = middle - 1;
     }
   }
-  if (best_count == SIZE_MAX) {
+  if (best_count == SIZE_MAX ||
+      (view != ARCHBIRD_QUERY_VIEW_METRICS && best_count < 2 &&
+       best_count < files->as.array.count)) {
     AbBuffer minimum;
     ab_buffer_init(&minimum, engine);
     status = render_query_once(engine, map, query, verification, 0, view,

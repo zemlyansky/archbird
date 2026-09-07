@@ -47,6 +47,29 @@ api.stats = stats;
 module.exports = api;
 """,
         "cjs/package.json": b'{"name":"cjs","version":"1.0.0"}',
+        "comments/index.js": b"""
+const base = { /* shared */ shared: create };
+module.exports = {
+  // public API
+  create, /* alias */ renamed: create,
+  /* inherited */ ...base,
+  run() { return create(); }, // trailing member
+};
+""",
+        "comments/package.json": b'{"name":"comments","version":"1.0.0"}',
+        "comments-descriptor/index.js": b"""
+const api = {};
+Object.defineProperties(api, {
+  // documented descriptor
+  create: {value: create}, /* trailing descriptor */
+});
+module.exports = api;
+""",
+        "comments-descriptor/package.json": b'{"name":"comments-descriptor","version":"1.0.0"}',
+        "comments-dynamic/index.js": b"""
+module.exports = { /* known */ create, /* unknown */ [getKey()]: create };
+""",
+        "comments-dynamic/package.json": b'{"name":"comments-dynamic","version":"1.0.0"}',
         "callable/index.js": b"""
 class PPO {}
 if (typeof module !== 'undefined') module.exports = PPO;
@@ -263,6 +286,9 @@ test('constructs PPO', () => { new PPO(); });
                 "bridge",
                 "callable",
                 "cjs",
+                "comments",
+                "comments-descriptor",
+                "comments-dynamic",
                 "descriptor",
                 "descriptor-dynamic",
                 "dynamic",
@@ -360,6 +386,22 @@ test('constructs PPO', () => { new PPO(); });
     ], quoted_file["symbols"]
 
     by_package = {row["name"]: row for row in mapped["packages"]}
+    for name, expected in (
+        ("comments", ["create", "renamed", "run", "shared"]),
+        ("comments-descriptor", ["create"]),
+    ):
+        surface = by_package[name]["entrypoint_surfaces"][0]
+        assert surface["exports"] == expected, surface
+        assert surface["evidence_state"] == "complete", surface
+        assert not any(row["path"] == f"{name}/index.js"
+                       for row in mapped["diagnostics"]), mapped["diagnostics"]
+    dynamic_comments = by_package["comments-dynamic"]["entrypoint_surfaces"][0]
+    assert dynamic_comments["exports"] == ["create"], dynamic_comments
+    assert dynamic_comments["evidence_state"] == "partial", dynamic_comments
+    dynamic_diagnostics = [row for row in mapped["diagnostics"]
+                           if row["path"] == "comments-dynamic/index.js"]
+    assert len(dynamic_diagnostics) == 1, dynamic_diagnostics
+    assert "dynamic-property-key" in dynamic_diagnostics[0]["message"], dynamic_diagnostics
     assert by_package["default-main"]["entrypoints"]["main"] == "index.js", (
         by_package["default-main"]
     )

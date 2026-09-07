@@ -7,6 +7,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -81,8 +82,70 @@ def assert_bounded_test_witnesses() -> None:
         assert "test-matches=0/1" in zero
 
 
+def assert_bounded_neighborhood() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory(dir=repository / "build") as directory:
+        root = Path(directory)
+        (root / "src").mkdir()
+        (root / "test").mkdir()
+        helpers = [f"storage_release_residency_helper_{i}" for i in range(32)]
+        (root / "src/core.c").write_text(
+            "".join(f"int {name}(void);\n" for name in helpers) +
+            "int collect(void) { return " +
+            "+".join(f"{name}()" for name in helpers) + "; }\n"
+        )
+        (root / "src/helper.c").write_text(
+            "".join(f"int {name}(void) {{ return {i}; }}\n"
+                    for i, name in enumerate(helpers))
+        )
+        (root / "test/test_core.c").write_text(
+            "#define TEST(suite,name) void test_##suite##_##name(void)\n"
+            "int collect(void);\n" +
+            "".join(f"TEST(gc, verifies_collected_rows_case_{i}) {{ collect(); }}\n"
+                    for i in range(80))
+        )
+        config = {
+            "layers": [{"name": "c", "language": "c", "globs": ["**/*.c"]}],
+            "tests": [{"name": "c", "language": "c", "globs": ["test/*.c"],
+                       "route_to": ["c"], "case_extractors": [
+                           {"kind": "c_macro", "call": "TEST",
+                            "selector_arguments": [0, 1], "separator": "."}]}],
+        }
+        project = Project.from_repository(
+            root, config=json.dumps(config).encode(), jobs=1,
+            cache_max_bytes=0, map_cache=False,
+        )
+        mapped = project.map_json()
+        options = dict(symbols=["src/core.c:collect"], depth=1, test_depth=1)
+        query = json.loads(query_map_json(mapped, **options))
+        assert len(query["files"]) == 3 and len(query["test_matches"]) == 80
+        for budget in (5000, 8000, 12000, 12500):
+            report = query_map_markdown(mapped, **options, max_chars=budget).decode()
+            assert len(report) <= budget
+            assert "d=0 src/core.c " in report, report
+            assert "d=1 src/helper.c " in report, report
+            assert "gc.verifies_collected_rows_case_0 [candidate; source=static]" in report, report
+            emitted = re.search(r"Emitted: files=(\d+)/3 canonical=3; symbol-calls=(\d+)/33;", report)
+            assert emitted and int(emitted[1]) >= 2 and int(emitted[2]) >= 1, report
+        zero = query_map_markdown(
+            mapped, **options, max_chars=5000,
+            context={"quotas": {"files": 0, "test_matches": 0}},
+        ).decode()
+        assert len(zero) <= 5000
+        assert "d=0 src/core.c " not in zero and "d=1 src/helper.c " not in zero
+        assert "gc.verifies_collected_rows_case_" not in zero
+        assert "files=0/3" in zero and "test-matches=0/80" in zero
+        offset = query_map_markdown(
+            mapped, **options, max_chars=5000,
+            context={"quotas": {"files": 1}, "offsets": {"files": 1}},
+        ).decode()
+        assert len(offset) <= 5000
+        assert "d=0 src/core.c " not in offset and "d=1 src/helper.c " in offset, offset
+
+
 def main() -> None:
     assert_bounded_test_witnesses()
+    assert_bounded_neighborhood()
     repository = Path(__file__).resolve().parents[1]
     root = repository / "build/query-evidence-routes"
     shutil.rmtree(root, ignore_errors=True)

@@ -399,6 +399,9 @@ static ArchbirdStatus object_literal(JsModule *module, TSNode node,
     TSNode item = ts_node_named_child(node, index);
     JsSlice key;
     JsSlice origin;
+    /* Comments are named syntax children, not export members. */
+    if (ab_tree_sitter_node_type(item, "comment"))
+      continue;
     if (ab_tree_sitter_node_type(item, "spread_element")) {
       size_t source = SIZE_MAX;
       TSNode value = ts_node_named_child_count(item) == 1
@@ -533,6 +536,8 @@ static ArchbirdStatus object_call(JsModule *module, TSNode call,
                             ? ab_tree_sitter_child(row, "key")
                             : row;
       JsSlice key;
+      if (ab_tree_sitter_node_type(row, "comment"))
+        continue;
       if (static_name(module->scan, key_node, &key))
         status = set_property(module, target, &key, NULL, "define-properties");
       else
