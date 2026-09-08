@@ -175,6 +175,14 @@ try {
   run([
     "config", "show", ".", "--output", ".archbird/resolution.json", "--check",
   ]);
+  const reviewSelector = ["query", ".", "--symbol", "src/core.c:demo_open"];
+  run([...reviewSelector, "--depth", "1", "--test-depth", "1", "--max-chars", "12000", "--check"]);
+  const reviewSource = run([
+    ...reviewSelector, "--view", "source", "--detail", "standard", "--max-chars", "12000", "--check",
+  ]);
+  assert.ok(reviewSource.includes("int demo_open(void)"));
+  assert.ok(!reviewSource.includes("void demo_close(void)"));
+  run(["freshness", "--root", ".", "--snapshot", ".archbird/map.json", "--check"]);
   run([
     "query", "--map", ".archbird/map.json", "--symbol", "demo_open",
     "--depth", "1", "--max-chars", "12000",

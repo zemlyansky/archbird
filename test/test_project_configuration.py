@@ -2845,6 +2845,164 @@ def _assert_symbol_occurrence_projection() -> None:
     shutil.rmtree(root)
 
 
+def _assert_c_type_declarations() -> None:
+    from tempfile import TemporaryDirectory
+
+    source = (
+        "struct Tagged { int field; };\n"
+        "union Payload { int count; double value; };\n"
+        "enum Mode { MODE_A, MODE_B };\n"
+        "typedef struct { int hidden; } Alias;\n"
+        "typedef int Count, *CountPtr;\n"
+        "typedef int (*Callback)(int);\n"
+        "typedef int (/* lead */ *Leading)(int);\n"
+        "typedef int (*Trailing /* tail */)(int);\n"
+        "typedef int (* /* mid */ Middle)(int);\n"
+        "typedef int Array[3], (Function)(int), (*Matrix[3])(int);\n"
+        "struct Forward;\n"
+        "#if FEATURE\nstruct Conditional /* end */;\n"
+        "struct OnlyUsed *conditional_value;\n#endif\n"
+        "struct Tagged *use_tag;\n"
+        "void first(void) { struct Tagged { int local; }; }\n"
+        "void second(void) { struct Tagged { int other; }; }\n"
+        "typedef struct Shared { int shared; } Shared;\n"
+        "struct { int anonymous; } anonymous_value;\n"
+        "void scope(void) { typedef int Local; { typedef float Local; } "
+        "{ typedef double Local; } }\n"
+        "int unrelated(void) { return 0; }\n"
+    )
+    with TemporaryDirectory(prefix="c-types-", dir=ROOT / "build") as temporary:
+        root = Path(temporary)
+        (root / "types.c").write_text(source, encoding="utf-8")
+        # A tag sharing a call's spelling must not manufacture a call edge.
+        (root / "caller.c").write_text("void caller(void) { Tagged(); }\n", encoding="utf-8")
+        project = Project.from_repository(root, jobs=1, map_cache=False)
+        raw = project.map_json()
+        document = json.loads(raw)
+        symbols = next(row for row in document["files"] if row["path"] == "types.c")["symbols"]
+        expected = {
+            ("Tagged", "struct"), ("Payload", "union"), ("Mode", "enum"),
+            ("Alias", "typedef"), ("Count", "typedef"), ("CountPtr", "typedef"),
+            ("Callback", "typedef"), ("Forward", "struct"),
+            ("Leading", "typedef"), ("Trailing", "typedef"), ("Middle", "typedef"),
+            ("Array", "typedef"), ("Function", "typedef"), ("Matrix", "typedef"),
+            ("Conditional", "struct"),
+            ("first.Tagged", "struct"), ("second.Tagged", "struct"),
+            ("Shared", "struct"), ("Shared", "typedef"),
+        }
+        assert expected <= {(row["name"], row["kind"]) for row in symbols}, symbols
+        assert sum(row["name"] == "Tagged" for row in symbols) == 1, symbols
+        assert not any(row["name"] == "anonymous_value" for row in symbols), symbols
+        assert not any(row["name"] == "OnlyUsed" for row in symbols), symbols
+        locals_ = [row for row in symbols if row["name"].startswith("scope.")]
+        assert len(locals_) == 3 and len({row["name"] for row in locals_}) == 3, locals_
+        for symbol in locals_:
+            selection = query_map_json(raw, symbols=(f"types.c:{symbol['name']}",), depth=0, test_depth=0)
+            selected_source = project.source_markdown(artifact_json=selection).decode()
+            assert selected_source.count("typedef ") == 1, selected_source
+        for name, kind in expected:
+            symbol = next(row for row in symbols if row["name"] == name and row["kind"] == kind)
+            assert symbol["extent"]["end"] > symbol["extent"]["start"], symbol
+        query = query_map_json(raw, symbols=("types.c:Tagged",), depth=0, test_depth=0)
+        declaration = project.source_markdown(artifact_json=query).decode()
+        assert "struct Tagged { int field; }" in declaration, declaration
+        assert "int unrelated" not in declaration and "int local" not in declaration, declaration
+        assert not any(
+            edge["source"] == "caller.c" and edge["target"] == "types.c"
+            for edge in document["edges"]
+        ), document["edges"]
+        assert not any(
+            candidate["symbol"] == "Tagged"
+            for call in document["symbol_calls"] for candidate in call["candidates"]
+        ), document["symbol_calls"]
+
+
+def _assert_ordered_module_composition() -> None:
+    from tempfile import TemporaryDirectory
+
+    definition = {"id": "combined", "select": "ordered_rows", "container": "rules.py:combined"}
+
+    def extract(source: str, names: tuple[str, ...] = ("combined",)) -> tuple[dict, dict]:
+        configuration = {
+            "project": "composition",
+            "ordered_containers": [{
+                "language": "python", "paths": ["rules.py"], "names": list(names),
+            }],
+        }
+        with TemporaryDirectory(prefix="ordered-composition-", dir=ROOT / "build") as temporary:
+            root = Path(temporary)
+            (root / "rules.py").write_text(source, encoding="utf-8")
+            project = Project.from_repository(
+                root, config=json.dumps(configuration).encode(), jobs=1, map_cache=False,
+            )
+            raw = project.map_json()
+        return json.loads(raw), json.loads(evaluate_projection_json(raw, definition))
+
+    prefix = (
+        "first = PatternMatcher([('a', callback_a)])\n"
+        "second = PatternMatcher([('b', callback_b)])\n"
+    )
+    source = prefix + "combined = first + second + PatternMatcher([('c', callback_c)])\n"
+    document, projection = extract(source)
+    assert projection["completeness"]["classification"] == "complete", projection
+    rows = sorted(
+        (row for row in document["facts"] if row["domain"] == "ordered-rows"),
+        key=lambda row: row["attributes"]["ordinal"],
+    )
+    assert len(rows) == 3
+    assert [row["attributes"]["ordinal"] for row in rows] == [0, 1, 2]
+    assert [row["attributes"]["origin_container"] for row in rows[:2]] == [
+        "rules.py:first", "rules.py:second",
+    ]
+    assert [row["attributes"]["origin_ordinal"] for row in rows] == [0, 0, 0]
+    assert rows[2]["attributes"]["origin_container"].startswith("rules.py:combined#")
+    # Expanded rows retain the original declaration witnesses, not the use spans.
+    assert [source[row["span"]["start"]:row["span"]["end"]] for row in rows] == [
+        "('a', callback_a)", "('b', callback_b)", "('c', callback_c)",
+    ]
+    assert extract(source) == (document, projection)
+    _, all_containers = extract(source, ("*",))
+    assert all_containers["completeness"]["classification"] == "complete"
+    assert all_containers["fact"]["items"] == projection["fact"]["items"]
+
+    _, repeated = extract(prefix + "pair = first + second\ncombined = pair + first\n")
+    assert repeated["completeness"]["classification"] == "complete"
+    assert sorted(row["value"]["ordinals"] for row in repeated["fact"]["items"]) == [
+        [0, 2], [1],
+    ]
+    for source in (
+        "first = [('a', 1)]\ncombined = first + [('b', 2)]\n",
+        "first: tuple = (('a', 1),)\ncombined = first + (('b', 2),)\n",
+        "combined = [] + []\n",
+    ):
+        _, result = extract(source)
+        assert result["completeness"]["classification"] == "complete", (source, result)
+
+    unsafe = {
+        "reassignment": prefix + "first = PatternMatcher([])\ncombined = first + second\n",
+        "mutation": prefix + "first.append(('x', cb))\ncombined = first + second\n",
+        "alias mutation": prefix + "alias = first\nalias.append(('x', cb))\ncombined = first + second\n",
+        "escaped operand": prefix + "consume(first)\ncombined = first + second\n",
+        "escaped aggregate": prefix + "combined = first + second\nconsume(combined)\n",
+        "conditional binding": "if flag:\n    first = []\ncombined = first + []\n",
+        "forward binding": "combined = first + []\nfirst = []\n",
+        "cycle": "first = second + []\nsecond = first + []\ncombined = first + []\n",
+        "starred": "first = [*external]\ncombined = first + []\n",
+        "mixed sequence kinds": "first = []\ncombined = first + ()\n",
+        "mixed constructors": prefix + "combined = first + OtherMatcher([])\n",
+        "conditional expression": prefix + "combined = first + (second if flag else first)\n",
+        "foreign binding": "from elsewhere import first\ncombined = first + []\n",
+        "operator": prefix + "combined = first | second\n",
+        "nested mutation": prefix + "def mutate():\n    first.append(('x', cb))\ncombined = first + second\n",
+        "expansion limit": "part0 = [('x', cb)]\n" + "".join(
+            f"part{i} = part{i - 1} + part{i - 1}\n" for i in range(1, 16)
+        ) + "combined = part15 + []\n",
+    }
+    for label, source in unsafe.items():
+        _, result = extract(source)
+        assert result["completeness"]["classification"] == "incomplete", (label, result)
+
+
 def _assert_ordered_container_facts() -> None:
     root = ROOT / "build/ordered-container-facts"
     shutil.rmtree(root, ignore_errors=True)
@@ -3380,6 +3538,8 @@ def main() -> None:
     _assert_partial_configuration_overlay()
     _assert_layer_fallback_provenance()
     _assert_symbol_occurrence_projection()
+    _assert_c_type_declarations()
+    _assert_ordered_module_composition()
     _assert_ordered_container_facts()
     project_model = json.loads((ROOT / "archbird.json").read_text())
     project_model.pop("projections", None)

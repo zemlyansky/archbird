@@ -417,6 +417,39 @@ collide. Dynamic, mutated, macro-expanded, or recovered populations remain
 incomplete. `--check=CATEGORIES` applies only to identity Diff; correspondence
 uses bare `--check` because its closure conditions are not Map risk categories.
 
+The Python AST provider also inventories module-level `+` compositions of
+literal sequences or matching constructor forms. Referenced components must
+have a single earlier module binding and no detected mutation or escape from
+composition syntax. Rows retain their original source spans, component
+identities and aggregate ordinals, including repeated components. Mixed forms,
+unresolved bindings and expansion beyond 4,096 rows remain incomplete. This
+describes selected syntax; it does not prove an overloaded operator's runtime
+behavior or cross-language equivalence. A complete aggregate cannot be checked
+against only one constituent on the other side.
+
+C declarations include named struct, union and enum tags, forward declarations,
+and typedefs, including anonymous-type aliases and function-pointer typedefs.
+Function-local types carry the enclosing function name; nested blocks add their
+source byte offset to distinguish shadowed names. These declaration identities
+do not imply complete type-use resolution or callable targets.
+
+For source review, use Query instead of extracting declarations or traversing
+Map edges in a consumer script:
+
+<!-- archbird-example: tested-pass consumer-source-review covers=freshness,query,source -->
+```bash
+archbird query . --symbol 'src/core.c:demo_open' \
+  --depth 1 --test-depth 1 --max-chars 12000 --check
+archbird query . --symbol 'src/core.c:demo_open' \
+  --view source --detail standard --max-chars 12000 --check
+archbird freshness --root . --snapshot .archbird/map.json --check
+```
+
+Only reuse a saved Map after freshness succeeds; otherwise regenerate it before
+querying it with `--map`. Declaration source hashes and normalized row digests
+serve different contracts. Consumer-owned numerical tests, execution evidence
+and reviewed exceptions remain separate from this static workflow.
+
 For a durable CI gate, reuse the same projections and mapping in a constraint:
 
 <!-- archbird-example: template core-correspondence-constraint -->

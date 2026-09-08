@@ -28,6 +28,7 @@ void ab_map_symbol_reference_range(const AbMapSymbolReference *symbols,
 int ab_map_symbol_reference_usable(const AbMapSymbolReference *symbol,
                                    const AbManifestFile *source,
                                    int allow_methods, int allow_declarations);
+int ab_map_symbol_callable(const AbManifestFile *file, const AbFact *fact);
 const AbObjectField *ab_map_fact_attribute(const AbFact *fact,
                                            const char *name);
 const AbString *ab_map_fact_string_attribute(const AbFact *fact,

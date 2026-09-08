@@ -327,7 +327,9 @@ static ArchbirdStatus render_symbol_calls(AbBuffer *buffer, AbMapState *state,
                                     &row->candidate_end);
       for (candidate = row->candidate_start; candidate < row->candidate_end;
            candidate++)
-        if (ab_map_symbol_reference_usable(&symbols[candidate],
+        if (ab_map_symbol_callable(symbols[candidate].file,
+                                   symbols[candidate].fact) &&
+            ab_map_symbol_reference_usable(&symbols[candidate],
                                            row->source_file, 0, 0)) {
           row->candidate_count++;
           sole_candidate = &symbols[candidate];
@@ -411,14 +413,18 @@ static ArchbirdStatus render_symbol_calls(AbBuffer *buffer, AbMapState *state,
            candidate++) {
         size_t next = candidate + 1;
         uint64_t multiplicity = 1;
-        if (!ab_map_symbol_reference_usable(&symbols[candidate],
+        if (!ab_map_symbol_callable(symbols[candidate].file,
+                                    symbols[candidate].fact) ||
+            !ab_map_symbol_reference_usable(&symbols[candidate],
                                             row->source_file, 0, 0))
           continue;
         if (projection) {
           while (next < row->candidate_end &&
                  ab_string_equal(&symbols[candidate].file->path,
                                  &symbols[next].file->path)) {
-            if (ab_map_symbol_reference_usable(&symbols[next], row->source_file,
+            if (ab_map_symbol_callable(symbols[next].file,
+                                       symbols[next].fact) &&
+                ab_map_symbol_reference_usable(&symbols[next], row->source_file,
                                                0, 0))
               multiplicity++;
             next++;

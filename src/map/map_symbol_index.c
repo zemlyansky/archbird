@@ -196,6 +196,14 @@ void ab_map_symbol_reference_range(const AbMapSymbolReference *symbols,
   *out_end = low;
 }
 
+int ab_map_symbol_callable(const AbManifestFile *file, const AbFact *fact) {
+  /* C tags and typedefs are type identities, never constructor calls. Keep
+     them in the shared reference index without admitting them as callees. */
+  return !string_literal(&file->language, "c") ||
+         string_literal(&fact->kind, "function") ||
+         string_literal(&fact->kind, "declaration");
+}
+
 int ab_map_symbol_reference_usable(const AbMapSymbolReference *symbol,
                                    const AbManifestFile *source,
                                    int allow_methods, int allow_declarations) {

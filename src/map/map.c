@@ -2188,6 +2188,8 @@ static ArchbirdStatus definition_candidates(
   for (index = start; index < end; index++) {
     const SymbolReference *symbol = &symbols[index];
     const AbString *scope;
+    if (!ab_map_symbol_callable(symbol->file, symbol->fact))
+      continue;
     if (!bytes_literal(symbol->fact->kind.data, symbol->fact->kind.length,
                        "declaration")) {
       /* A receiver method and a free call merely sharing a leaf name are not

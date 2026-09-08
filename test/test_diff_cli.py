@@ -683,12 +683,13 @@ def main() -> int:
         (ordered_root / "py").mkdir(parents=True)
         (ordered_root / "c").mkdir()
         (ordered_root / "py/rules.py").write_text(
-            "rules = [('first', 1), ('second', 2)]\n",
+            "first = [('first', 1)]\nrules = first + [('second', 2)]\n",
             encoding="utf-8",
         )
         (ordered_root / "c/rules.c").write_text(
             "typedef struct { int value; } Rule;\n"
-            "static Rule rules[] = {{1}, {2}};\n",
+            "static Rule rules[] = {/* POLY_RULE(99, ignored) */ {1}, // first\n"
+            "/* } */ {2} /* trailing */};\n",
             encoding="utf-8",
         )
         ordered_config = {

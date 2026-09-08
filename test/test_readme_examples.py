@@ -576,6 +576,18 @@ def main() -> None:
             "--check",
             cwd=root,
         )
+        review_line = next(
+            row["line"] for row in examples["README.md"]
+            if row["id"] == "consumer-source-review"
+        )
+        review_block = dict(shell_blocks((repository / "README.md").read_text()))[review_line]
+        for command in shell_commands(review_block):
+            arguments = shlex.split(command)
+            assert arguments[0] == "archbird"
+            review = run(*arguments[1:], cwd=root).stdout
+            if "--view" in arguments and "source" in arguments:
+                assert "int demo_open(void)" in review, review
+                assert "void demo_close(void)" not in review, review
         run(
             "query",
             "--map",

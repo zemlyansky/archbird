@@ -1034,6 +1034,38 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             Dict[Tuple[str, str, int], deque[symtable.SymbolTable]],
         ] = {}
         self.ordered_containers = tuple(ordered_containers)
+        self.ordered_bindings: Dict[str, ast.expr] = {}
+        self.ordered_unsafe: set[str] = set()
+        if any(
+            selection.get("language") == "python"
+            and any(_collection_match(facts.path, str(pattern))
+                    for pattern in selection.get("paths", ()))
+            for selection in ordered_containers
+        ):
+            self.ordered_unsafe.update(receivers.unstable)
+            allowed_uses: set[ast.AST] = set()
+            targets: set[ast.AST] = set()
+            for statement in tree.body:
+                assignment = self._class_assignment(statement)
+                if assignment is None:
+                    continue
+                target, value = assignment
+                self.ordered_bindings[target.id] = value
+                targets.add(target)
+                pending = [value]
+                while pending:
+                    operand = pending.pop()
+                    if isinstance(operand, ast.BinOp) and isinstance(operand.op, ast.Add):
+                        pending.extend((operand.left, operand.right))
+                    elif isinstance(operand, ast.Name) and operand is not value:
+                        allowed_uses.add(operand)
+            # A name escaping the explicit composition syntax can be aliased
+            # or mutated by unknown code. Do not claim its population is closed.
+            # This intentionally also rejects uses inside nested scopes.
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id in self.ordered_bindings:
+                    if node not in allowed_uses and node not in targets:
+                        self.ordered_unsafe.add(node.id)
 
     def _documentation(self, node: ast.AST) -> Dict[str, object]:
         body = getattr(node, "body", ())
@@ -1690,6 +1722,93 @@ class _PythonProviderVisitor(ast.NodeVisitor):
         suffix = f"{owner}/{name}" if owner else name
         return f"{self.facts.path}:{suffix}"
 
+    def _ordered_module_composition(
+        self, name: str, expression: ast.expr,
+    ) -> List[Tuple[ast.expr, str, int]] | None:
+        if (
+            self.scope or name in self.ordered_unsafe
+            or self.ordered_bindings.get(name) is not expression
+            or not isinstance(expression, ast.BinOp)
+            or not isinstance(expression.op, ast.Add)
+        ):
+            return None
+        steps = 0
+
+        def expand(
+            operand: ast.expr, owner: str, active: frozenset[str], depth: int,
+        ) -> Tuple[str, List[Tuple[ast.expr, str, int]]] | None:
+            nonlocal steps
+            steps += 1
+            # Repeated components can grow exponentially even in a small file.
+            if depth > 64 or steps > 8192:
+                return None
+            if isinstance(operand, ast.Name):
+                value = self.ordered_bindings.get(operand.id)
+                if (
+                    value is None or operand.id in self.ordered_unsafe
+                    or operand.id in active
+                    or _absolute_span(value, self.starts)[1]
+                    > _absolute_span(operand, self.starts)[0]
+                ):
+                    return None
+                return expand(value, f"{self.facts.path}:{operand.id}",
+                              active | {operand.id}, depth + 1)
+            if isinstance(operand, ast.BinOp) and isinstance(operand.op, ast.Add):
+                left = expand(operand.left, owner, active, depth + 1)
+                right = expand(operand.right, owner, active, depth + 1)
+                if left is None or right is None or left[0] != right[0]:
+                    return None
+                rows = left[1] + right[1]
+                return (left[0], rows) if len(rows) <= 4096 else None
+            sequence = self._ordered_sequence(operand)
+            if sequence is None or sequence[2] or len(sequence[1]) > 4096:
+                return None
+            if isinstance(operand, (ast.List, ast.Tuple)):
+                kind = type(operand).__name__
+            elif isinstance(operand, ast.Call) and isinstance(operand.func, ast.Name):
+                if operand.func.id in self.receivers[0].unstable:
+                    return None
+                kind = ast.dump(operand.func, include_attributes=False)
+            else:
+                return None
+            origin = owner
+            if self.ordered_bindings.get(owner.removeprefix(f"{self.facts.path}:")) is not operand:
+                start, end = _absolute_span(sequence[0], self.starts)
+                origin = f"{owner}#{self.facts.source_offset(start)}:{self.facts.source_offset(end)}"
+            return kind, [(row, origin, ordinal) for ordinal, row in enumerate(sequence[1])]
+
+        result = expand(expression, self._ordered_container_id(name), frozenset({name}), 0)
+        return result[1] if result is not None else None
+
+    def _record_ordered_composition(
+        self, target: ast.Name, expression: ast.expr,
+        rows: Sequence[Tuple[ast.expr, str, int]],
+    ) -> None:
+        container = self._ordered_container_id(target.id)
+        common = {
+            "container": container,
+            "normalization": "python-ast-expression-v1",
+            "state": "current",
+        }
+        self.facts.add(
+            "ordered-containers", "sequence", _absolute_span(expression, self.starts),
+            container, target.id,
+            {**common, "declared_count": len(rows), "population_state": "closed",
+             "line": expression.lineno, "composition": "python-add-syntax-v1"},
+        )
+        for ordinal, (row, origin, origin_ordinal) in enumerate(rows):
+            normalized = ast.dump(row, annotate_fields=True, include_attributes=False)
+            digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            # The same source row may occur several times in an aggregate.
+            # Keep each occurrence distinct while retaining its original span.
+            self.facts.add(
+                "ordered-rows", "row", _absolute_span(row, self.starts),
+                f"{container}:{ordinal}:{digest}", target.id,
+                {**common, "digest": digest, "line": row.lineno, "ordinal": ordinal,
+                 "origin_container": origin, "origin_ordinal": origin_ordinal},
+                correlate_by_span=False,
+            )
+
     def _ordered_container_selected(self, name: str) -> bool:
         owner = "/".join(item[0] for item in self.scope)
         qualified = f"{owner}/{name}" if owner else name
@@ -1715,6 +1834,11 @@ class _PythonProviderVisitor(ast.NodeVisitor):
             return
         sequence_info = self._ordered_sequence(expression)
         if sequence_info is None:
+            if expression is not None:
+                composed = self._ordered_module_composition(target.id, expression)
+                if composed is not None:
+                    self._record_ordered_composition(target, expression, composed)
+                    return
             container = self._ordered_container_id(target.id)
             fragments = self._ordered_composition_fragments(expression)
             declared_count = sum(len(elements) for _, elements, _ in fragments)

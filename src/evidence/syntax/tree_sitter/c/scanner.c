@@ -303,6 +303,8 @@ static ArchbirdStatus add_ordered_array(AbTreeSitterScan *scan,
   child_count = ts_node_named_child_count(value);
   for (index = 0; index < child_count; index++) {
     TSNode row = ts_node_named_child(value, index);
+    if (ab_tree_sitter_node_type(row, "comment"))
+      continue;
     if (ordered_row_dynamic(scan, row))
       dynamic = 1;
     else
@@ -353,13 +355,19 @@ static ArchbirdStatus add_ordered_array(AbTreeSitterScan *scan,
         scan->engine, container_fact, "state",
         (const uint8_t *)(dynamic ? "unknown" : "current"),
         strlen(dynamic ? "unknown" : "current"));
+  row_count = 0;
   for (index = 0; status == ARCHBIRD_OK && index < child_count; index++) {
     TSNode row = ts_node_named_child(value, index);
     AbBuffer key;
     AbFact *row_fact = NULL;
     char digest[65];
-    if (ordered_row_dynamic(scan, row))
+    if (ab_tree_sitter_node_type(row, "comment"))
       continue;
+    /* Comments occupy no sequence position; unsupported rows still do. */
+    if (ordered_row_dynamic(scan, row)) {
+      row_count++;
+      continue;
+    }
     status = syntax_digest(scan, row, digest);
     ab_buffer_init(&key, scan->engine);
     if (status == ARCHBIRD_OK)
@@ -389,13 +397,14 @@ static ArchbirdStatus add_ordered_array(AbTreeSitterScan *scan,
           (const uint8_t *)"tree-sitter-c-syntax-v1",
           strlen("tree-sitter-c-syntax-v1"));
     if (status == ARCHBIRD_OK)
-      status =
-          ab_fact_add_u64_attribute(scan->engine, row_fact, "ordinal", index);
+      status = ab_fact_add_u64_attribute(scan->engine, row_fact, "ordinal",
+                                         row_count);
     if (status == ARCHBIRD_OK)
       status = ab_fact_add_string_attribute(scan->engine, row_fact, "state",
                                             (const uint8_t *)"current",
                                             strlen("current"));
     ab_buffer_free(&key);
+    row_count++;
   }
   ab_buffer_free(&identity);
   return status;
@@ -447,6 +456,123 @@ static ArchbirdStatus add_symbol(AbTreeSitterScan *scan, TSNode owner,
     *out_fact = fact;
   }
   return status;
+}
+
+static TSNode type_declarator_name(TSNode node) {
+  size_t depth;
+  for (depth = 0; depth < 32 && !ts_node_is_null(node); depth++) {
+    if (ab_tree_sitter_node_type(node, "type_identifier"))
+      return node;
+    if (ab_tree_sitter_node_type(node, "parenthesized_declarator")) {
+      uint32_t index;
+      TSNode declarator = (TSNode){0};
+      for (index = 0; index < ts_node_named_child_count(node); index++) {
+        TSNode candidate = ts_node_named_child(node, index);
+        if (ab_tree_sitter_node_type(candidate, "comment"))
+          continue;
+        if (!ts_node_is_null(declarator))
+          return (TSNode){0};
+        declarator = candidate;
+      }
+      node = declarator;
+    } else
+      node = ab_tree_sitter_child(node, "declarator");
+  }
+  return (TSNode){0};
+}
+
+static ArchbirdStatus add_type_symbol(AbTreeSitterScan *scan,
+                                      const AbTreeSitterFrame *frame,
+                                      TSNode owner, TSNode name,
+                                      const char *kind) {
+  AbBuffer qualified;
+  AbFact *fact = NULL;
+  size_t start;
+  size_t end;
+  ArchbirdStatus status = ARCHBIRD_OK;
+  if (!ab_tree_sitter_node_slice(scan, name, &start, &end) || start == end)
+    return ARCHBIRD_OK;
+  ab_buffer_init(&qualified, scan->engine);
+  if (frame->has_enclosing) {
+    TSNode scope = ts_node_parent(owner);
+    status =
+        ab_buffer_append(&qualified, frame->enclosing, frame->enclosing_length);
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&qualified, ".");
+    while (!ts_node_is_null(scope) &&
+           !ab_tree_sitter_node_type(scope, "compound_statement") &&
+           !ab_tree_sitter_node_type(scope, "function_definition"))
+      scope = ts_node_parent(scope);
+    /* Unnamed nested blocks need source-bound identities so shadowed types
+       remain separately selectable. The function body uses its named scope. */
+    if (ab_tree_sitter_node_type(scope, "compound_statement") &&
+        !ab_tree_sitter_node_type(ts_node_parent(scope),
+                                  "function_definition")) {
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&qualified, "block@");
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_u64(&qualified, ts_node_start_byte(scope));
+      if (status == ARCHBIRD_OK)
+        status = ab_buffer_literal(&qualified, ".");
+    }
+  }
+  if (status == ARCHBIRD_OK)
+    status = ab_buffer_append(&qualified, scan->source + start, end - start);
+  if (status == ARCHBIRD_OK)
+    status = ab_bundle_builder_add_fact(
+        scan->builder, "symbols", kind, "syntax-structure", start, end,
+        qualified.data, qualified.length, qualified.data, qualified.length,
+        &fact);
+  if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_add_line(scan, fact, name);
+  if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_add_symbol_extent(scan, fact, owner);
+  if (status == ARCHBIRD_OK)
+    status = ab_tree_sitter_track_fact_region(scan, fact, owner);
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(
+        scan->engine, fact, "scope",
+        (const uint8_t *)(frame->has_enclosing ? "local" : "global"),
+        frame->has_enclosing ? 5 : 6);
+  if (status == ARCHBIRD_OK)
+    status = ab_fact_add_string_attribute(scan->engine, fact, "syntax_kind",
+                                          (const uint8_t *)ts_node_type(owner),
+                                          strlen(ts_node_type(owner)));
+  ab_buffer_free(&qualified);
+  return status;
+}
+
+static ArchbirdStatus add_type_declarations(AbTreeSitterScan *scan,
+                                            const AbTreeSitterFrame *frame) {
+  TSNode owner = frame->node;
+  if (ab_tree_sitter_node_type(owner, "type_definition")) {
+    uint32_t index;
+    ArchbirdStatus status = ARCHBIRD_OK;
+    for (index = 0; status == ARCHBIRD_OK && index < ts_node_child_count(owner);
+         index++) {
+      const char *field = ts_node_field_name_for_child(owner, index);
+      if (field && !strcmp(field, "declarator"))
+        status = add_type_symbol(
+            scan, frame, owner,
+            type_declarator_name(ts_node_child(owner, index)), "typedef");
+    }
+    return status;
+  }
+  if (ts_node_is_null(ab_tree_sitter_child(owner, "body"))) {
+    TSNode next = ts_node_next_sibling(owner);
+    /* Bare tag declarations are evidence; a tag mentioned by a variable,
+       parameter or typedef is only a type use. The semicolon also identifies
+       bare declarations nested inside preprocessor branches. */
+    while (ab_tree_sitter_node_type(next, "comment"))
+      next = ts_node_next_sibling(next);
+    if (!ab_tree_sitter_node_type(next, ";"))
+      return ARCHBIRD_OK;
+  }
+  return add_type_symbol(
+      scan, frame, owner, ab_tree_sitter_child(owner, "name"),
+      ab_tree_sitter_node_type(owner, "struct_specifier")  ? "struct"
+      : ab_tree_sitter_node_type(owner, "union_specifier") ? "union"
+                                                           : "enum");
 }
 
 static ArchbirdStatus add_call(AbTreeSitterScan *scan,
@@ -610,6 +736,11 @@ static ArchbirdStatus visit_c(AbTreeSitterScan *scan,
     status = add_symbol(scan, frame->node, "declaration", &name, &fact);
   } else if (ab_tree_sitter_node_type(frame->node, "call_expression")) {
     status = add_call(scan, frame);
+  } else if (ab_tree_sitter_node_type(frame->node, "type_definition") ||
+             ab_tree_sitter_node_type(frame->node, "struct_specifier") ||
+             ab_tree_sitter_node_type(frame->node, "union_specifier") ||
+             ab_tree_sitter_node_type(frame->node, "enum_specifier")) {
+    status = add_type_declarations(scan, frame);
   } else if (ab_tree_sitter_node_type(frame->node, "preproc_include")) {
     status = add_include(scan, frame->node);
   } else if (ab_tree_sitter_node_type(frame->node, "preproc_def") ||
@@ -653,7 +784,8 @@ ArchbirdStatus ab_scan_tree_sitter_c_file(
        "arguments, and returns; target identity remains unresolved syntax "
        "evidence"},
       {"symbols",
-       "function definitions and top-level function declarations; recovered "
+       "function definitions, top-level function declarations, named C tags "
+       "and typedef declarations; recovered "
        "ranges reduce coverage to partial"}};
   static const AbTreeSitterDescriptor descriptor = {
       "archbird-tree-sitter-c",
