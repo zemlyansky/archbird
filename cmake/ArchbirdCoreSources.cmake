@@ -126,6 +126,7 @@ set(ARCHBIRD_DECLARED_CORE_SOURCE_PATHS
   src/map/map_named_entries.c
   src/map/map_packages.c
   src/map/map_parity.c
+  src/map/map_preprocessor.c
   src/map/map_references.c
   src/map/map_symbol_calls.c
   src/map/map_symbol_index.c

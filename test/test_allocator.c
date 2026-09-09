@@ -30,6 +30,7 @@ typedef struct TestAllocator {
   TestAllocationHeader *head;
   int failed;
   int corrupted;
+  int poison_new;
   char error[512];
 } TestAllocator;
 
@@ -85,6 +86,8 @@ static void *test_allocate(void *user_data, size_t size) {
   allocator->head = header;
   allocator->outstanding++;
   allocator->bytes += size;
+  if (allocator->poison_new)
+    memset(header + 1, 0xff, size);
   return header + 1;
 }
 
@@ -120,6 +123,8 @@ static void *test_reallocate(void *user_data, void *pointer, size_t size) {
   *link = resized;
   allocator->bytes -= old_size;
   allocator->bytes += size;
+  if (allocator->poison_new && size > old_size)
+    memset((uint8_t *)(resized + 1) + old_size, 0xff, size - old_size);
   return resized + 1;
 }
 
@@ -439,6 +444,76 @@ static ArchbirdStatus exercise_map(TestAllocator *allocator) {
   archbird_project_destroy(project);
   archbird_engine_destroy(engine);
   return status;
+}
+
+static void test_dirty_import_allocation(void) {
+  static const char source[] = "import './b.js';\n";
+  static const char config[] =
+      "{\"project\":\"dirty-import\",\"layers\":[{\"name\":\"core\","
+      "\"language\":\"javascript\",\"globs\":[\"*.js\"]}]}";
+  TestAllocator allocator = {.poison_new = 1};
+  ArchbirdStatus status;
+  ArchbirdEngine *engine = create_engine(&allocator, &status);
+  ArchbirdProject *project = NULL;
+  FixedOutput output = {{0}, 0};
+  uint8_t digest[32];
+  char source_sha[65];
+  char empty_sha[65];
+  char manifest[1024];
+  int length;
+  if (!engine) {
+    fail("dirty-import-allocation", "cannot create engine");
+    return;
+  }
+  (void)archbird_sha256((const uint8_t *)source, sizeof(source) - 1, digest);
+  archbird_sha256_hex(digest, source_sha);
+  (void)archbird_sha256((const uint8_t *)"", 0, digest);
+  archbird_sha256_hex(digest, empty_sha);
+  length = snprintf(
+      manifest, sizeof(manifest),
+      "{\"artifact\":\"archbird-source-manifest\",\"files\":["
+      "{\"bytes\":%zu,\"language\":\"javascript\",\"layer\":\"core\","
+      "\"path\":\"a.js\",\"roles\":[\"source\"],\"sha256\":\"%s\"},"
+      "{\"bytes\":0,\"language\":\"javascript\",\"layer\":\"core\","
+      "\"path\":\"b.js\",\"roles\":[\"source\"],\"sha256\":\"%s\"}],"
+      "\"producer\":{\"implementation_sha256\":\"%s\",\"name\":\"dirty-"
+      "import\","
+      "\"version\":\"1\"},\"project\":\"dirty-import\",\"schema_version\":1}",
+      sizeof(source) - 1, source_sha, empty_sha, empty_sha);
+  if (length < 0 || (size_t)length >= sizeof(manifest))
+    status = ARCHBIRD_LIMIT_EXCEEDED;
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_create(engine, (const uint8_t *)manifest,
+                                     (size_t)length, &project);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_add_source(engine, project, "a.js", 4,
+                                         (const uint8_t *)source,
+                                         sizeof(source) - 1);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_add_source(engine, project, "b.js", 4,
+                                         (const uint8_t *)"", 0);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_finalize_sources(engine, project);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_set_config(
+        engine, project, (const uint8_t *)config, sizeof(config) - 1);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_scan_builtin(engine, project,
+                                           ARCHBIRD_PROVIDER_PRIMARY);
+  if (status == ARCHBIRD_OK)
+    status = archbird_project_finalize_providers(engine, project);
+  if (status == ARCHBIRD_OK)
+    status =
+        archbird_project_render_map(engine, project, 0, fixed_write, &output);
+  if (status != ARCHBIRD_OK ||
+      !strstr((const char *)output.bytes,
+              "\"source\":\"a.js\",\"target\":\"b.js\""))
+    fail("dirty-import-allocation",
+         "JavaScript import lost with nonzero allocations");
+  archbird_project_destroy(project);
+  archbird_engine_destroy(engine);
+  if (allocator.outstanding || allocator.corrupted)
+    fail("dirty-import-allocation", "allocator ownership changed");
 }
 
 static void test_provider_merge_retry(void) {
@@ -1138,6 +1213,7 @@ int main(void) {
     return 1;
   }
   test_invalid_options();
+  test_dirty_import_allocation();
   test_invalid_okf_layer_cleanup();
   test_path_writer_failures();
   test_projection_writer_failures();

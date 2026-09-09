@@ -67,6 +67,10 @@ int main(void) {
                 "#define fake() 1\n/* fake(); */\nint api(int x) { return x; }",
                 AB_LEX_C_PREPROCESSOR, c_values, c_lines,
                 sizeof(c_values) / sizeof(c_values[0]));
+  expect_tokens(engine, "c-preprocessor-continuation",
+                "#define fake() \\\n  ignored();\nint api(int x) { return x; }",
+                AB_LEX_C_PREPROCESSOR, c_values, c_lines,
+                sizeof(c_values) / sizeof(c_values[0]));
   expect_tokens(engine, "javascript-regex",
                 "input.replace(/https?:\\/\\//g, ''); left / right;",
                 AB_LEX_JAVASCRIPT, js_values, js_lines,

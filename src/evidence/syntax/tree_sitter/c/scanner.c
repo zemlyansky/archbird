@@ -4,6 +4,9 @@
 
 #include "base/render_internal.h"
 #include "base/sha256.h"
+/* Reuse token boundaries for grammar preparation instead of a second C lexer.
+ */
+#include "evidence/lexical/tokenizer.h"
 
 #include <string.h>
 
@@ -33,14 +36,18 @@ static int macro_name_contains(const AbTreeSitterScan *scan, TSNode node) {
   return 0;
 }
 
-static ArchbirdStatus macro_name_add(AbTreeSitterScan *scan, TSNode node) {
+static ArchbirdStatus macro_name_add_span(AbTreeSitterScan *scan, size_t start,
+                                          size_t end) {
   AbCMacroNames *names = (AbCMacroNames *)scan->language_data;
   AbString *resized;
-  size_t start;
-  size_t end;
+  size_t index;
   ArchbirdStatus status;
-  if (!ab_tree_sitter_node_slice(scan, node, &start, &end) || start == end)
+  if (start == end)
     return ARCHBIRD_OK;
+  for (index = 0; names && index < names->count; index++)
+    if (names->items[index].length == end - start &&
+        !memcmp(names->items[index].data, scan->source + start, end - start))
+      return ARCHBIRD_OK;
   if (!names) {
     names = (AbCMacroNames *)ab_calloc(scan->engine, 1, sizeof(*names));
     if (!names)
@@ -70,6 +77,14 @@ static ArchbirdStatus macro_name_add(AbTreeSitterScan *scan, TSNode node) {
   return status;
 }
 
+static ArchbirdStatus macro_name_add(AbTreeSitterScan *scan, TSNode node) {
+  size_t start;
+  size_t end;
+  return ab_tree_sitter_node_slice(scan, node, &start, &end)
+             ? macro_name_add_span(scan, start, end)
+             : ARCHBIRD_OK;
+}
+
 static void cleanup_c(AbTreeSitterScan *scan) {
   AbCMacroNames *names = (AbCMacroNames *)scan->language_data;
   size_t index;
@@ -80,6 +95,162 @@ static void cleanup_c(AbTreeSitterScan *scan) {
   ab_free(scan->engine, names->items);
   ab_free(scan->engine, names);
   scan->language_data = NULL;
+}
+
+static ArchbirdStatus c_parse_view(AbTreeSitterScan *scan) {
+  if (scan->parse_source)
+    return ARCHBIRD_OK;
+  scan->parse_source = ab_malloc(scan->engine, scan->source_length);
+  if (!scan->parse_source)
+    return ARCHBIRD_OUT_OF_MEMORY;
+  memcpy(scan->parse_source, scan->source, scan->source_length);
+  return ARCHBIRD_OK;
+}
+
+static void c_blank(AbTreeSitterScan *scan, size_t start, size_t end) {
+  for (; start < end; start++)
+    if (scan->parse_source[start] != '\r' && scan->parse_source[start] != '\n')
+      scan->parse_source[start] = ' ';
+}
+
+static size_t c_closing(const AbTokenList *tokens, size_t start,
+                        const char *open, const char *close) {
+  size_t depth = 1;
+  size_t index;
+  for (index = start + 1; index < tokens->count; index++) {
+    if (ab_token_equals(tokens, index, open))
+      depth++;
+    else if (ab_token_equals(tokens, index, close) && !--depth)
+      return index;
+  }
+  return SIZE_MAX;
+}
+
+static int c_macro_spelling(const AbTreeSitterScan *scan,
+                            const AbTokenList *tokens, size_t index) {
+  const AbToken *token = &tokens->items[index];
+  size_t byte;
+  int letter = 0;
+  const AbCMacroNames *names = scan->language_data;
+  if (token->kind != AB_TOKEN_IDENTIFIER)
+    return 0;
+  for (byte = 0; names && byte < names->count; byte++)
+    if (names->items[byte].length == token->end - token->start &&
+        !memcmp(names->items[byte].data, tokens->source + token->start,
+                token->end - token->start))
+      return 1;
+  for (byte = token->start; byte < token->end; byte++) {
+    unsigned char ch = tokens->source[byte];
+    if (ch >= 'A' && ch <= 'Z')
+      letter = 1;
+    else if (ch != '_' && !(ch >= '0' && ch <= '9'))
+      return 0;
+  }
+  return letter;
+}
+
+static ArchbirdStatus prepare_c(AbTreeSitterScan *scan) {
+  AbTokenList tokens = {0};
+  size_t index;
+  size_t braces = 0;
+  int declaration_boundary = 1;
+  ArchbirdStatus status =
+      ab_tokenize(scan->engine, scan->source, scan->source_length, 0, &tokens);
+  if (status != ARCHBIRD_OK)
+    return status;
+  for (index = 0; status == ARCHBIRD_OK && index + 3 < tokens.count; index++)
+    if (ab_token_equals(&tokens, index, "#") &&
+        (!index || tokens.items[index - 1].line != tokens.items[index].line) &&
+        ab_token_equals(&tokens, index + 1, "define") &&
+        tokens.items[index + 2].kind == AB_TOKEN_IDENTIFIER &&
+        ab_token_equals(&tokens, index + 3, "(") &&
+        tokens.items[index + 2].end == tokens.items[index + 3].start)
+      status = macro_name_add_span(scan, tokens.items[index + 2].start,
+                                   tokens.items[index + 2].end);
+  ab_token_list_free(&tokens);
+  if (status != ARCHBIRD_OK)
+    return status;
+  status = ab_tokenize(scan->engine, scan->source, scan->source_length,
+                       AB_LEX_C_PREPROCESSOR, &tokens);
+  if (status != ARCHBIRD_OK)
+    return status;
+  for (index = 0; status == ARCHBIRD_OK && index < tokens.count; index++) {
+    size_t close;
+    if (ab_token_equals(&tokens, index, "_Thread_local")) {
+      status = c_parse_view(scan);
+      if (status == ARCHBIRD_OK) {
+        /* C11 and C23 spellings are equivalent storage classes. Only the
+         * grammar view changes; all fact slices retain their original bytes. */
+        memcpy(scan->parse_source + tokens.items[index].start, "thread_local ",
+               13);
+      }
+    }
+    if (!braces && ab_token_equals(&tokens, index, "extern") &&
+        ab_token_equals(&tokens, index + 1, "\"C\"") &&
+        ab_token_equals(&tokens, index + 2, "{")) {
+      close = c_closing(&tokens, index + 2, "{", "}");
+      if (close != SIZE_MAX) {
+        status = c_parse_view(scan);
+        if (status != ARCHBIRD_OK)
+          break;
+        /* A linkage wrapper is transparent for C declarations. Pair it before
+         * parsing so split __cplusplus guards cannot corrupt the file tree. */
+        c_blank(scan, tokens.items[index].start, tokens.items[index + 2].end);
+        c_blank(scan, tokens.items[close].start, tokens.items[close].end);
+        index += 2;
+        continue;
+      }
+    }
+    if (!braces && declaration_boundary &&
+        c_macro_spelling(scan, &tokens, index) &&
+        ab_token_equals(&tokens, index + 1, "(")) {
+      size_t inner;
+      int body_argument = 0;
+      close = c_closing(&tokens, index + 1, "(", ")");
+      if (close != SIZE_MAX) {
+        for (inner = index + 2; inner < close; inner++)
+          if (ab_token_equals(&tokens, inner, "{"))
+            body_argument = 1;
+        if (body_argument || ab_token_equals(&tokens, close + 1, "{")) {
+          status = c_parse_view(scan);
+          if (status != ARCHBIRD_OK)
+            break;
+          /* Do not synthesize a function from a declaration macro, or parse a
+           * foreign macro argument as C. Following C blocks still contribute
+           * syntax calls, and the original tokens remain available to harness
+           * extraction. Expansion and generated identities remain unknown. */
+          c_blank(scan, tokens.items[index].start, tokens.items[close].end);
+          scan->opaque_count++;
+          if (scan->opaque_count == 1)
+            status = ab_bundle_builder_add_diagnostic(
+                scan->builder, "warning", "c-macro-expansion-unknown",
+                "macro-shaped declaration or body argument requires expansion; "
+                "generated symbols and macro argument semantics are unknown",
+                tokens.items[index].start, tokens.items[close].end, 1);
+          index = close;
+          declaration_boundary = 1;
+          continue;
+        }
+      }
+    }
+    if (ab_token_equals(&tokens, index, "{"))
+      braces++;
+    else if (ab_token_equals(&tokens, index, "}") && braces)
+      braces--;
+    declaration_boundary = !braces && (ab_token_equals(&tokens, index, "}") ||
+                                       ab_token_equals(&tokens, index, ";"));
+  }
+  ab_token_list_free(&tokens);
+  /* Preparation may inspect later definitions to recognize a macro shape.
+   * Value-reference extraction must still see definitions in source order. */
+  {
+    AbCMacroNames *names = scan->language_data;
+    for (index = 0; names && index < names->count; index++)
+      ab_string_free(scan->engine, &names->items[index]);
+    if (names)
+      names->count = 0;
+  }
+  return status;
 }
 
 static int logical_operator(TSNode node) {
@@ -515,6 +686,18 @@ static ArchbirdStatus add_type_symbol(AbTreeSitterScan *scan,
       if (status == ARCHBIRD_OK)
         status = ab_buffer_literal(&qualified, ".");
     }
+  } else if (frame->context & AB_TS_CONTEXT_FUNCTION) {
+    TSNode scope = ts_node_parent(owner);
+    while (!ts_node_is_null(scope) &&
+           !ab_tree_sitter_node_type(scope, "compound_statement"))
+      scope = ts_node_parent(scope);
+    status = ab_buffer_literal(&qualified, "block@");
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_u64(&qualified, ts_node_is_null(scope)
+                                             ? ts_node_start_byte(owner)
+                                             : ts_node_start_byte(scope));
+    if (status == ARCHBIRD_OK)
+      status = ab_buffer_literal(&qualified, ".");
   }
   if (status == ARCHBIRD_OK)
     status = ab_buffer_append(&qualified, scan->source + start, end - start);
@@ -532,8 +715,13 @@ static ArchbirdStatus add_type_symbol(AbTreeSitterScan *scan,
   if (status == ARCHBIRD_OK)
     status = ab_fact_add_string_attribute(
         scan->engine, fact, "scope",
-        (const uint8_t *)(frame->has_enclosing ? "local" : "global"),
-        frame->has_enclosing ? 5 : 6);
+        (const uint8_t *)((frame->has_enclosing ||
+                           (frame->context & AB_TS_CONTEXT_FUNCTION))
+                              ? "local"
+                              : "global"),
+        (frame->has_enclosing || (frame->context & AB_TS_CONTEXT_FUNCTION))
+            ? 5
+            : 6);
   if (status == ARCHBIRD_OK)
     status = ab_fact_add_string_attribute(scan->engine, fact, "syntax_kind",
                                           (const uint8_t *)ts_node_type(owner),
@@ -723,6 +911,8 @@ static ArchbirdStatus visit_c(AbTreeSitterScan *scan,
   TSNode name = (TSNode){0};
   AbFact *fact = NULL;
   ArchbirdStatus status = ARCHBIRD_OK;
+  if (ab_tree_sitter_node_type(frame->node, "compound_statement"))
+    child_frame->context |= AB_TS_CONTEXT_FUNCTION;
   if (ab_tree_sitter_node_type(frame->node, "function_definition")) {
     status = add_symbol(scan, frame->node, "function", &name, &fact);
     child_frame->context |= AB_TS_CONTEXT_FUNCTION;
@@ -797,7 +987,7 @@ ArchbirdStatus ab_scan_tree_sitter_c_file(
       capabilities,
       sizeof(capabilities) / sizeof(capabilities[0]),
       visit_c,
-      NULL,
+      prepare_c,
       cleanup_c,
       "source.control-flow.c-v1",
       classify_c_metric,

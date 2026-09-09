@@ -69,6 +69,9 @@ typedef struct AbMapNamedReference {
   const AbManifestFile *exact_target;
   const AbString *exact_target_symbol;
   size_t exact_count;
+  /* 2: structural only, 0: unknown build activity, 1: active in all supplied
+   * contexts, -1: inactive in all. */
+  int preprocessing;
 } AbMapNamedReference;
 
 typedef struct AbMapEdgeMention {
@@ -200,6 +203,8 @@ typedef struct AbMapCompileCommand {
   const AbString *database;
   AbMapCompileRoot *roots;
   size_t root_count;
+  AbStringArray preprocessing_options;
+  int preprocessing_unknown;
   size_t context_id;
 } AbMapCompileCommand;
 
@@ -576,5 +581,8 @@ ab_map_resolve_import(ArchbirdEngine *engine, const AbSourceManifest *manifest,
                       const AbString *imported, const AbManifestFile **out);
 
 ArchbirdStatus ab_map_run_diagnostics(AbMapState *state);
+ArchbirdStatus ab_map_condition_imports(AbMapState *state,
+                                        AbMapNamedReference *imports,
+                                        size_t count);
 
 #endif

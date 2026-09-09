@@ -449,6 +449,13 @@ if(ARCHBIRD_TREE_SITTER_ENABLED)
         list(APPEND ARCHBIRD_TREE_SITTER_PACK_IDENTITY_FILES
              ${ARCHBIRD_PYTHON_SYNTAX_IDENTITY_FILES})
       endif()
+      if(ARCHBIRD_TREE_SITTER_PACK STREQUAL "C")
+        list(APPEND ARCHBIRD_TREE_SITTER_PACK_IDENTITY_FILES
+             src/evidence/lexical/tokenizer.c
+             src/evidence/lexical/tokenizer.h
+             src/base/utf8.c
+             src/base/utf8.h)
+      endif()
       if(ARCHBIRD_TREE_SITTER_PACK STREQUAL "TSX")
         file(GLOB ARCHBIRD_TREE_SITTER_TYPESCRIPT_IDENTITY_FILES
           RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS

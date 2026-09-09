@@ -1212,7 +1212,9 @@ static const char *tree_sitter_read(void *payload, uint32_t byte_index,
   }
   remaining = scan->source_length - byte_index;
   *bytes_read = remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
-  return (const char *)scan->source + byte_index;
+  return (const char *)(scan->parse_source ? scan->parse_source
+                                           : scan->source) +
+         byte_index;
 }
 
 static bool tree_sitter_cancelled(TSParseState *state) {
@@ -1373,6 +1375,9 @@ static ArchbirdStatus add_recovery_evidence(AbTreeSitterScan *scan) {
   if (status == ARCHBIRD_OK)
     status = ab_fact_add_u64_attribute(scan->engine, summary, "missing_nodes",
                                        scan->missing_count);
+  if (status == ARCHBIRD_OK && scan->opaque_count)
+    status = ab_fact_add_u64_attribute(scan->engine, summary, "opaque_regions",
+                                       scan->opaque_count);
   if (status == ARCHBIRD_OK)
     status = ab_fact_add_string_attribute(
         scan->engine, summary, "language",
@@ -1587,7 +1592,8 @@ ArchbirdStatus ab_tree_sitter_scan_file(
     const AbTreeSitterCapabilitySpec *capability =
         &descriptor->capabilities[index];
     const char *coverage =
-        scan.error_count || scan.missing_count ? "partial" : "bounded";
+        scan.error_count || scan.missing_count || scan.opaque_count ? "partial"
+                                                                    : "bounded";
     status = ab_bundle_builder_add_capability(&builder, capability->domain,
                                               coverage, "syntax-structure",
                                               capability->boundary);
@@ -1604,6 +1610,7 @@ done:
   ab_free(engine, scan.recoveries);
   ab_free(engine, scan.fact_regions);
   ab_free(engine, scan.metric_scopes);
+  ab_free(engine, scan.parse_source);
   ab_bundle_builder_abort(&builder);
   return status;
 }

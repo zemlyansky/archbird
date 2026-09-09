@@ -1644,6 +1644,17 @@ candidate evidence but does not establish the import. An authored
 `import_roots` entry or agreeing compilation-database evidence promotes the
 same connection to current.
 
+For files explicitly listed in a compilation database, Map also evaluates
+bounded include conditions using ordered `-D`/`-U` (or `/D`/`/U`) options,
+local literal definitions, `defined`, `!`, `&&`, `||`, and conditional directives.
+An include inactive in every supplied variant is omitted from the dependency
+graph. Disagreement, unsupported expressions, forced headers, and macro state
+after an include remain unknown and retain uncertain edges with diagnostics.
+Files without direct compile commands retain structural include evidence;
+propagated search paths do not establish a header's active macro environment.
+Symbols and source snippets remain build-independent. This does not expand
+macros or execute a compiler.
+
 The block above is mirrored by
 [`examples/minimal.archbird.json`](examples/minimal.archbird.json). A complete
 native/Python/TypeScript/package/build/test example is
@@ -1676,6 +1687,13 @@ can contribute without erasing provenance or blindly unioning contradictions.
 Tree-sitter recovery is fact-local. Semantic indexes retain producer, document
 coverage, source anchoring, and freshness. Provider conflicts, ambiguity, and
 unresolved targets remain explicit.
+
+The C syntax provider accepts C11 `_Thread_local` and shared-header `extern "C"`
+wrappers without changing source bytes or offsets. At file scope, macro-shaped
+declarations and brace-containing macro arguments are isolated from ordinary C declarations:
+generated symbols and argument semantics remain unknown, with explicit partial
+coverage. C bodies following declaration macros still contribute syntax;
+embedded JavaScript arguments are not reported as C functions or calls.
 
 ## Interchange and command surface
 

@@ -203,6 +203,7 @@ static void compile_command_free(ArchbirdEngine *engine,
   for (index = 0; index < command->root_count; index++)
     ab_string_free(engine, &command->roots[index].path);
   ab_free(engine, command->roots);
+  string_array_free(engine, &command->preprocessing_options);
   memset(command, 0, sizeof(*command));
 }
 

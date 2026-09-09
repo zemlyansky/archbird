@@ -89,6 +89,10 @@ struct AbTreeSitterScan {
   const AbMapConfig *config;
   const uint8_t *source;
   size_t source_length;
+  /* Optional byte-preserving grammar view. Facts and source locks always use
+   * source; the shared scanner owns and frees this allocation. */
+  uint8_t *parse_source;
+  size_t opaque_count;
   void *language_data;
   const char *inapplicable_code;
   const char *inapplicable_message;

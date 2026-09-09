@@ -1072,6 +1072,11 @@
           {
             "source": "syntax",
             "kind": "*",
+            "target": "lexical-common"
+          },
+          {
+            "source": "syntax",
+            "kind": "*",
             "target": "python-syntax-common"
           },
           {

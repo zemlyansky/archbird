@@ -1509,10 +1509,65 @@ static ArchbirdStatus collect_compile_roots(AbMapState *state,
     return ARCHBIRD_OK;
   }
   for (index = 1; status == ARCHBIRD_OK && index < arguments->count; index++) {
+    const AbString *argument = &arguments->items[index];
     AbMapCompileRootKind kind;
     const char *path;
     size_t path_length;
     int next;
+    if (argument->length && argument->data[0] == '@')
+      command->preprocessing_unknown = 1;
+    if ((argument->length >= 4 && !memcmp(argument->data, "-Wp,", 4)) ||
+        (argument->length == 14 &&
+         !memcmp(argument->data, "-Xpreprocessor", 14)) ||
+        (argument->length >= 3 && (!memcmp(argument->data, "/FI", 3) ||
+                                   !memcmp(argument->data, "/Yu", 3))))
+      command->preprocessing_unknown = 1;
+    if (argument->length >= 8 && (!memcmp(argument->data, "-include", 8) ||
+                                  !memcmp(argument->data, "-imacros", 8)))
+      command->preprocessing_unknown = 1;
+    if (argument->length >= 2 &&
+        (argument->data[0] == '-' || argument->data[0] == '/') &&
+        (argument->data[1] == 'D' || argument->data[1] == 'U')) {
+      AbStringArray *options = &command->preprocessing_options;
+      char operation = argument->data[1];
+      const char *value = argument->data + 2;
+      size_t length = argument->length - 2;
+      AbString *resized;
+      if (!length && ++index < arguments->count) {
+        value = arguments->items[index].data;
+        length = arguments->items[index].length;
+      }
+      if (!length) {
+        command->preprocessing_unknown = 1;
+        continue;
+      }
+      if (options->count >= SIZE_MAX / sizeof(*options->items) - 1) {
+        status = ARCHBIRD_LIMIT_EXCEEDED;
+        break;
+      }
+      resized = ab_realloc(state->engine, options->items,
+                           (options->count + 1) * sizeof(*options->items));
+      if (!resized) {
+        status = ARCHBIRD_OUT_OF_MEMORY;
+        break;
+      }
+      options->items = resized;
+      memset(&options->items[options->count], 0, sizeof(*options->items));
+      {
+        AbString *option = &options->items[options->count];
+        option->data = ab_malloc(state->engine, length + 2);
+        if (!option->data) {
+          status = ARCHBIRD_OUT_OF_MEMORY;
+          break;
+        }
+        option->data[0] = operation;
+        memcpy(option->data + 1, value, length);
+        option->data[length + 1] = '\0';
+        option->length = length + 1;
+        options->count++;
+      }
+      continue;
+    }
     if (!compile_include_option(&arguments->items[index], &kind, &path,
                                 &path_length, &next))
       continue;

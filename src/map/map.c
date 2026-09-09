@@ -587,6 +587,7 @@ static ArchbirdStatus collect_named_domain(ArchbirdEngine *engine,
     file = fact_file(manifest, fact);
     if (!file || !file->has_layer)
       continue;
+    items[count] = (NamedReference){.preprocessing = 2};
     items[count].file = file;
     items[count].fact = fact;
     items[count].fact_id = &fact->id;
@@ -1099,6 +1100,14 @@ static void named_reference_file_range(const NamedReference *imports,
 static int same_compile_context(const AbMapCompileCommand *left,
                                 const AbMapCompileCommand *right) {
   AbMapCompileRootKind kind;
+  size_t option;
+  if (left->preprocessing_unknown != right->preprocessing_unknown ||
+      left->preprocessing_options.count != right->preprocessing_options.count)
+    return 0;
+  for (option = 0; option < left->preprocessing_options.count; option++)
+    if (!ab_string_equal(&left->preprocessing_options.items[option],
+                         &right->preprocessing_options.items[option]))
+      return 0;
   if (left->root_count != right->root_count)
     return 0;
   for (kind = AB_MAP_COMPILE_ROOT_QUOTE; kind <= AB_MAP_COMPILE_ROOT_AFTER;
@@ -1130,6 +1139,19 @@ static int same_compile_context(const AbMapCompileCommand *left,
 static uint64_t compile_context_hash(const AbMapCompileCommand *command) {
   uint64_t hash = UINT64_C(1469598103934665603);
   AbMapCompileRootKind kind;
+  size_t option;
+  hash ^= (uint64_t)command->preprocessing_unknown;
+  hash *= UINT64_C(1099511628211);
+  for (option = 0; option < command->preprocessing_options.count; option++) {
+    const AbString *value = &command->preprocessing_options.items[option];
+    size_t byte;
+    hash ^= (uint64_t)value->length;
+    hash *= UINT64_C(1099511628211);
+    for (byte = 0; byte < value->length; byte++) {
+      hash ^= (unsigned char)value->data[byte];
+      hash *= UINT64_C(1099511628211);
+    }
+  }
   for (kind = AB_MAP_COMPILE_ROOT_QUOTE; kind <= AB_MAP_COMPILE_ROOT_AFTER;
        kind++) {
     size_t root_index;
@@ -1335,6 +1357,8 @@ static ArchbirdStatus build_compile_context_membership(
            import_index++) {
         const AbManifestFile *target = NULL;
         size_t target_index;
+        if (imports[import_index].preprocessing == -1)
+          continue;
         status = resolve_compile_context_import(
             state, command, file, imports[import_index].name,
             imports[import_index].import_delimiter_mask, &target);
@@ -1484,18 +1508,20 @@ static ArchbirdStatus build_compile_command_index(AbMapState *state) {
 }
 
 static ArchbirdStatus build_compile_contexts(AbMapState *state,
-                                             const NamedReference *imports,
+                                             NamedReference *imports,
                                              size_t import_count) {
   ArchbirdStatus status;
   if (!state->compile_command_count || !state->manifest->file_count)
-    return ARCHBIRD_OK;
+    return ab_map_condition_imports(state, imports, import_count);
   status = intern_compile_contexts(state);
+  if (status == ARCHBIRD_OK)
+    status = build_compile_file_index(state, 1);
+  if (status == ARCHBIRD_OK)
+    status = ab_map_condition_imports(state, imports, import_count);
   if (status == ARCHBIRD_OK)
     status = build_compile_context_membership(state, imports, import_count);
   if (status == ARCHBIRD_OK)
     status = build_compile_file_index(state, 0);
-  if (status == ARCHBIRD_OK)
-    status = build_compile_file_index(state, 1);
   if (status == ARCHBIRD_OK)
     status = build_compile_command_index(state);
   if (status == ARCHBIRD_OUT_OF_MEMORY)
@@ -2298,6 +2324,15 @@ static ArchbirdStatus add_import_edge(AbMapState *state,
   size_t evidence_start = state->graph.edge_count;
   int direct_commands = has_direct_compile_command(state, imported->file);
   ArchbirdStatus status = ARCHBIRD_OK;
+  if (!imported->preprocessing &&
+      (string_literal(&imported->file->language, "c") ||
+       string_literal(&imported->file->language, "cpp")))
+    return ab_map_graph_add_edge_evidence_named_site(
+        state->engine, &state->graph, "import", &imported->file->path,
+        target->path.data, target->path.length, imported->name, imported->name,
+        imported->fact_id, imported->line, imported->span_start,
+        imported->span_end, "conditional-include", &fallback_provider,
+        &unknown);
   if (compile_evidence == C_IMPORT_CONVENTIONAL) {
     const AbString *provider =
         state->manifest->has_resolution &&
@@ -2493,6 +2528,8 @@ static ArchbirdStatus build_graph(AbMapState *state) {
     size_t namespace_resolved = 0;
     size_t namespace_unresolved = 0;
     int compile_evidence = 0;
+    if (imports[index].preprocessing == -1)
+      continue;
     status = resolve_import(state, imports[index].file, imports[index].name,
                             imports[index].import_delimiter_mask, &target,
                             &compile_evidence);

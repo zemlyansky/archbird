@@ -61,10 +61,79 @@ def build_map(extension, sources: dict[str, bytes], config: dict) -> dict:
     return json.loads(extension.project_map(project))
 
 
+def conditional_includes(extension) -> None:
+    config = {
+        "project": "compile-commands",
+        "layers": [{"name": "core", "language": "c", "globs": ["*.c", "*.h"]}],
+        "builds": [{"kind": "compile_commands", "name": "cc", "path": "compile_commands.json"}],
+    }
+    sources = {
+        "main.c": b'#ifdef FAST\n#include "fast.h"\n#else\n#include "slow.h"\n#endif\n',
+        "fast.h": b"#define VALUE 1\n",
+        "slow.h": b"#define VALUE 2\n",
+    }
+    original = sources["main.c"]
+
+    def check(source: bytes, variants: list[list[str]], expected: set[str],
+              uncertain: bool = False) -> dict:
+        sources["main.c"] = source
+        sources["compile_commands.json"] = canonical([{
+            "directory": "/checkout", "file": "main.c",
+            "arguments": ["cc", *flags, "-c", "main.c"],
+        } for flags in variants])
+        mapped = build_map(extension, sources, config)
+        edges = [e for e in mapped["edges"]
+                 if e["kind"] == "import" and e["source"] == "main.c"]
+        assert {e["target"] for e in edges} == expected, (variants, edges)
+        unknown = [d for d in mapped["diagnostics"]
+                   if d["code"] == "c-preprocessor-unknown"]
+        assert bool(unknown) == uncertain, (source, variants, unknown)
+        if uncertain:
+            assert any(e.get("evidence") for e in edges), edges
+        return mapped
+
+    check(original, [["-DFAST"]], {"fast.h"})
+    check(original, [["-DFAST", "-UFAST"]], {"slow.h"})
+    check(original, [["-DFAST", "-UFAST", "-DFAST"]], {"fast.h"})
+    check(original, [["-D", "FAST=0"]], {"fast.h"})
+    check(original, [["/DFAST", "/U", "FAST"]], {"slow.h"})
+    check(original, [[]], {"fast.h", "slow.h"}, True)
+    check(original, [["-DFAST"], ["-UFAST"]], {"fast.h", "slow.h"}, True)
+    check(original, [["-DFAST", "-include", "flags.h"]], {"fast.h", "slow.h"}, True)
+    check(original, [["-DFAST", "-Xpreprocessor", "-UFAST"]], {"fast.h", "slow.h"}, True)
+    check(b"#define FAST 0\n" + original, [[]], {"fast.h"})
+    check(b"#undef FAST\n" + original, [["-DFAST"]], {"slow.h"})
+    check(original.replace(b"#ifdef FAST", b"#if FAST"), [["-DFAST=0"]], {"slow.h"})
+    check(original.replace(b"#ifdef FAST", b"#if FAST"),
+          [["-DFAST=18446744073709551615ULL"]], {"fast.h"})
+    for invalid_integer in ["18446744073709551616", "0ULUL"]:
+        check(original.replace(b"#ifdef FAST", b"#if FAST"),
+              [["-DFAST=" + invalid_integer]], {"fast.h", "slow.h"}, True)
+    check(original.replace(b"#ifdef FAST", b"#if defined(FAST) && !defined(SLOW)"),
+          [["-DFAST", "-USLOW"]], {"fast.h"})
+    check(original.replace(b"#ifdef FAST", b"#if FAST + UNKNOWN"),
+          [["-DFAST"]], {"fast.h", "slow.h"}, True)
+    check(b'#include "slow.h"\n' + original, [["-DFAST"]], {"fast.h", "slow.h"}, True)
+    check(b'/* #undef FAST */\nconst char *s = "#undef FAST";\n' + original,
+          [["-DFAST"]], {"fast.h"})
+    check(b"#define FAST \\\n  1\n" + original, [[]], {"fast.h"})
+    check(b"// comment \\\n#undef FAST\n" + original, [["-DFAST"]], {"fast.h"})
+    check(b'#if 0\n#include "slow.h"\n#elif defined(FAST)\n#include "fast.h"\n#endif\n',
+          [["-DFAST"]], {"fast.h"})
+    check(b'#define ALIAS FAST\n#undef FAST\n#if ALIAS\n#include "fast.h"\n#else\n#include "slow.h"\n#endif\n',
+          [["-DFAST"]], {"fast.h", "slow.h"}, True)
+    sources["main.c"] = original
+    structural = build_map(extension, sources, {k: v for k, v in config.items() if k != "builds"})
+    assert {e["target"] for e in structural["edges"] if e["kind"] == "import"} == {"fast.h", "slow.h"}
+    assert not [d for d in structural["diagnostics"] if d["code"] == "c-preprocessor-unknown"]
+
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: test_compile_commands.py EXTENSION")
     extension = load_extension(Path(sys.argv[1]).resolve())
+    conditional_includes(extension)
     debug = [
         {
             "arguments": [

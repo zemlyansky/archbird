@@ -317,9 +317,20 @@ ArchbirdStatus ab_tokenize(ArchbirdEngine *engine, const uint8_t *source,
                                 "source is not valid UTF-8");
     }
     if ((flags & AB_LEX_C_PREPROCESSOR) && line_prefix && value == '#') {
-      while (cursor < source_length && source[cursor] != '\r' &&
-             source[cursor] != '\n')
+      while (cursor < source_length) {
+        if (source[cursor] == '\\' && cursor + 1 < source_length &&
+            (source[cursor + 1] == '\n' || source[cursor + 1] == '\r')) {
+          cursor += 2;
+          if (source[cursor - 1] == '\r' && cursor < source_length &&
+              source[cursor] == '\n')
+            cursor++;
+          line++;
+          continue;
+        }
+        if (source[cursor] == '\r' || source[cursor] == '\n')
+          break;
         cursor++;
+      }
       continue;
     }
     if (ascii_space(value)) {
